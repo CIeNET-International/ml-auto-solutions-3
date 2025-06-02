@@ -333,7 +333,6 @@ def clean_up_workload(
         result.exit_code == 0
     ), f"XPK clean-up failed with code {result.exit_code}"
 
-
 @task.sensor(poke_interval=120, timeout=3600, mode="reschedule")
 def wait_for_reach_step_to_interrupt(
     task_id: str,
@@ -382,7 +381,6 @@ def extract_numbers(pod_name: str) -> Tuple[int, int]:
   if match:
     return int(match.group(1)), int(match.group(2))
   return (0, 0)
-
 
 def _find_target_pod_node(
     project_id: str,

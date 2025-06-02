@@ -10,7 +10,7 @@ from airflow.exceptions import AirflowFailException
 from google.cloud import logging as logging_api
 
 from dags.orbax.util import gcs
-
+from xlml.utils import xpk
 
 @task
 def generate_timestamp():
@@ -124,7 +124,7 @@ def validate_log_with_gcs(
     cluster_name: str,
     checkpoint_dir: str,
     namespace: str = "default",
-    pod_pattern: str = "*",
+    pod_pattern: str = ".*",
     container_name: Optional[str] = None,
     text_filter: Optional[str] = None,
     start_time: Optional[datetime] = None,
@@ -243,12 +243,107 @@ def validate_log_with_gcs(
   return max(gcs_save_step_list), max(gcs_save_step_list_bucket)
 
 
+@task
+def validate_log_gcs_without_replicator(
+    project_id: str,
+    location: str,
+    cluster_name: str,
+    checkpoint_dir: str,
+    pod_pattern: str = ".*",
+    container_name: Optional[str] = None,
+    start_time: Optional[datetime] = None,
+    end_time: Optional[datetime] = None,
+) -> None:
+  """
+  Validates workload logs against GCS bucket checkpoints.
+
+  This function first queries logs from a specified GKE cluster to determine the
+  GCS bucket path used for checkpointing. It then retrieves logs related to
+  checkpoint save operations, extracts the step numbers, and verifies that the
+  corresponding checkpoint files exist in the GCS bucket. The function passes if the
+  latest step found in the logs matches the latest step found in the GCS bucket's
+  checkpoint filenames. It raises an exception on failure.
+
+  Args:
+    project_id: The Google Cloud project ID.
+    location: The GKE cluster location.
+    cluster_name: The GKE cluster name.
+    namespace: The Kubernetes namespace. Defaults to "default".
+    pod_pattern: A glob pattern to match pod names. Defaults to "*".
+    container_name: An optional container name to filter logs by.
+    text_filter: An optional string to filter log entries by their `textPayload`.
+    start_time: The start time for log retrieval.
+    end_time: The end time for log retrieval.
+
+  Returns:
+    None. The function completes successfully if all validation steps are found.
+
+  Raises:
+    AirflowFailException: If the bucket path format is invalid, if checkpoint files
+      are missing, if steps cannot be extracted from log lines,if step lists
+      are empty, or if the latest steps do not match.
+  """
+
+  log_pattern = (
+      r'\'step\':\s*(\d+).*?\'event_type\': \'save\'.*?\'directory\':\s*\'(gs:\/\/.*?)\''
+  )
+  complied_pattern = re.compile(log_pattern)
+
+  # Get the entries for the events that were saved in GCS bucket. To later compare
+  # with the real checkppoints saved in GCS Bucket
+  entries = list_log_entries(
+      project_id=project_id,
+      location=location,
+      cluster_name=cluster_name,
+      namespace="default",
+      pod_pattern=pod_pattern,
+      container_name=container_name,
+      text_filter=f'jsonPayload.message=~"{log_pattern}"',
+      start_time=start_time,
+      end_time=end_time,
+  )
+
+  checkpoints_found_gcs_bucket: set[int] = set()
+  checkpoints_found_logs: set[int] = set()
+
+  # Get 'save' steps from 'event_type'" 'save' logged in n-1 node pod.
+  for entry in entries:
+    if not isinstance(entry, logging_api.StructEntry):
+      raise AirflowFailException(
+          "Log entry must be contain a jsonPayload attribute."
+      )
+    message = entry.payload.get("message")
+    if not message:
+      raise AirflowFailException(f"Failed to parse entry {entry}")
+
+    m = complied_pattern.search(message)
+    if m:
+      checkpoints_found_logs.add(int(m.group(1)))
+
+  # Get save steps checkpoints from GCS Bucket.
+  logging.info(f"Querying Bucket from: {checkpoint_dir}")
+  bucket_files = gcs.get_gcs_checkpoint(
+      f"{checkpoint_dir}/checkpoints"
+  )
+  logging.info(f"gcs bucket files lenght: {len(bucket_files)}")
+  # Extract .meta file to future comparision
+  for file in bucket_files:
+    checkpoints_found_gcs_bucket.add(file)
+
+  if len(checkpoints_found_logs) != len(checkpoints_found_gcs_bucket):
+    raise AirflowFailException(
+        f"Checkpoints stored in the GCS bucket does not correspond with "
+        f"logs.  Found on logs: #Checkpoints{checkpoints_found_logs} "
+        f"Found on bucket: #Checkpoints{checkpoints_found_gcs_bucket} "
+    )
+
+
 def list_log_entries(
     project_id: str,
     location: str,
     cluster_name: str,
     namespace: str = "default",
-    pod_pattern: str = "*",
+    pod_pattern: str = ".*",
     container_name: Optional[str] = None,
     text_filter: Optional[str] = None,
     start_time: Optional[datetime] = None,
@@ -298,7 +393,7 @@ def list_log_entries(
       f'resource.labels.location="{location}"',
       f'resource.labels.cluster_name="{cluster_name}"',
       f'resource.labels.namespace_name="{namespace}"',
-      f'resource.labels.pod_name:"{pod_pattern}"',
+      f'resource.labels.pod_name=~"{pod_pattern}"',
       "severity>=DEFAULT",
       f'timestamp>="{start_time_str}"',
       f'timestamp<="{end_time_str}"',
@@ -321,7 +416,7 @@ def validate_log_exist(
     location: str,
     cluster_name: str,
     namespace: str = "default",
-    pod_pattern: str = "*",
+    pod_pattern: str = ".*",
     container_name: Optional[str] = None,
     text_filter: Optional[str] = None,
     start_time: Optional[datetime] = None,
