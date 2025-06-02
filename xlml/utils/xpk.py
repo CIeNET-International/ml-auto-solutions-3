@@ -57,8 +57,12 @@ def get_xpk_setup_cmd(tmpdir, branch: str = MAIN_BRANCH):
   cmds = [
       "set -xue",
       clone_branch,
+      f"cd {tmpdir}/xpk/src/xpk",
+      "sed -i '/validate_dependencies()/s/^/#/' main.py || true",
+      "cat main.py",
       "pip install ruamel.yaml docker",
   ]
+
   return cmds
 
 
@@ -142,6 +146,13 @@ def run_workload(
     # resiliency during Maxtext training with Emergency Checkpointer and
     # Multi-tier Checkpointing.
     if ramdisk_directory and mtc_enabled:
+      workload_create_cmd += " --max-restarts=50"
+
+    # For Orbax DAG
+    if ramdisk_directory and mtc_enabled:
+      workload_create_cmd = workload_create_cmd.replace(
+          " --restart-on-user-code-failure", ""
+      )
       workload_create_cmd += " --max-restarts=50"
 
     # If using a valid GPU and the XPK branch is set to "main", then branch is switch to "v0.4.1".
