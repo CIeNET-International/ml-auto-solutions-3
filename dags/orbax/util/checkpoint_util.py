@@ -121,18 +121,10 @@ def apply_cpc(cpc: CheckpointConfiguration) -> None:
   custom_api = cpc.create_custom_objects_api_client()
   group, version, plural, name, cpc_body = cpc.load_yaml_and_parse_body()
 
-  try:
-    # Here we first try to create a reasource
-    logging.info(f"Attempting to create CheckpointConfiguration '{name}'...")
-    custom_api.create_cluster_custom_object(
-        group=group, version=version, plural=plural, body=cpc_body
-    )
-    logging.info(f"CheckpointConfiguration '{name}' created successfully.")
-
-  except ApiException as api_error:
-    raise AirflowFailException(
-        f"Failed to apply CheckpointConfiguration: {api_error.reason}"
-    )
+  logging.info(f"Attempting to create CheckpointConfiguration '{name}'...")
+  custom_api.create_cluster_custom_object(
+      group=group, version=version, plural=plural, body=cpc_body
+  )
 
 
 def _delete_cpc(cpc: CheckpointConfiguration) -> bool:
@@ -172,6 +164,7 @@ def _delete_cpc(cpc: CheckpointConfiguration) -> bool:
         group=group, version=version, plural=plural, name=name
     )
   except ApiException as e:
+    # A `CheckpointConfiguration not found` error indicates that the deletion was successful.
     return e.status == HTTPStatus.NOT_FOUND
 
 

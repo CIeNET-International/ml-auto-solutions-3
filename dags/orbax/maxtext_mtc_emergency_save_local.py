@@ -27,13 +27,13 @@ from xlml.utils.gke import zone_to_region
 
 SCHEDULE = "0 10 * * *" if composer_env.is_prod_env() else None
 DAG_TEST_NAME = "maxtext_emc_and_mtc_orbax_save_local"
-BASE_OUTPUT_DIR = gcs_bucket.MTC_AUTOMATION_BUCKET
+DEFAULT_BUCKET = gcs_bucket.MTC_AUTOMATION_BUCKET
 
 # Only one version of the Docker image is supported at the moment.
 # Other versions (e.g., "stable") may be introduced later.
 DOCKER_IMAGES = [(
     SetupMode.NIGHTLY,
-    DockerImage.MAXTEXT_TPU_JAX_NIGHTLY,
+    DockerImage.MAXTEXT_TPU_JAX_ORBAX_HEAD,
 )]
 RAM_DISK = "/local"
 
@@ -139,7 +139,7 @@ class TestConfig:
         "python3 -m MaxText.train MaxText/configs/base.yml "
         "remat_policy=full "
         "global_parameter_scale=1 "
-        f"base_output_directory={posixpath.join(BASE_OUTPUT_DIR, out_folder)} "
+        f"base_output_directory={posixpath.join(DEFAULT_BUCKET, out_folder)} "
         "dataset_type=synthetic "
         f"steps={self.step} "
         "per_device_batch_size=1 "
@@ -281,31 +281,28 @@ with models.DAG(
             )
 
             end_time = validation_util.generate_timestamp()
-            vali_step = test_config.step - 1
-            vali_step_list = [
-                i
-                for i in range(0, vali_step, test_config.local_checkpoint_step)
-            ]
-            vali_step_list.append(vali_step)
 
-            validate_log = validation_util.validate_log_with_step(
-                project_id=test_config.cluster.project,
-                location=zone_to_region(test_config.cluster.zone),
-                cluster_name=test_config.cluster.name,
-                text_filter="(blocking + background).",
-                start_time=start_time,
-                end_time=end_time,
-                vali_step_list=vali_step_list,
+            # Here we are looking for the string '(blocking + background)'.
+            # We will compare expected steps with the ones we found when query this
+            # regex. Should be the same
+            view_logs_saved_steps = validation_util.factory_create_validation_config(
+                test_config=test_config,
+                namespace="default",
+                text_filter="Finished async_save \(blocking \+ background\)\.",
+                type_payload="json_payload"
             )
 
+            # Actual Task that would check if local stored steps
+            validate_steps_task = validation_util.validate_log_with_step(view_logs_saved_steps=view_logs_saved_steps, start_time=start_time, end_time=end_time)
+
             (
-                wait_delete_cpc
-                >> apply_cpc
-                >> start_time
-                >> maxtext_chkpt_run_test
-                >> ram_disk_cleanup
-                >> end_time
-                >> validate_log
+              wait_delete_cpc
+              >> apply_cpc
+              >> start_time
+              >> maxtext_chkpt_run_test
+              >> ram_disk_cleanup
+              >> end_time
+              >> validate_steps_task
             )
       # Add to a list of test to chain them sequentially.
       task_groups.append(group)
