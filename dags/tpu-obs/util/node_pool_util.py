@@ -218,8 +218,8 @@ def delete_one_random_node(node_pool: Info) -> None:
       """
 
   process = subprocess.run(
-    command, shell=True, check=True, capture_output=True, text=True
-)
+      command, shell=True, check=True, capture_output=True, text=True
+  )
 
   logger.debug("STDOUT message: %s", process.stdout)
   logger.debug("STDERR message: %s", process.stderr)
@@ -228,17 +228,20 @@ def delete_one_random_node(node_pool: Info) -> None:
 def _query_status_metric(node_pool: Info, poke_interval: int) -> Status:
   """Queries the latest status of a given node pool via the Google Cloud Monitoring API.
 
-  This function constructs a request to read the "status" metric for a GKE node pool.
-  It fetches time series data points from the last 5 minutes and returns the status
-  from the most recent data point.
+  This function constructs a request to read the "status" metric for a GKE
+  node pool. It fetches time series data points from the last 5 minutes and
+  returns the status from the most recent data point.
 
   Args:
-      node_pool: An object containing node pool information (project ID, cluster name, etc.).
-      poke_interval: The retry interval in seconds, used for logging when no data is found.
+      node_pool: An object containing node pool information
+        (project ID, cluster name, etc.).
+      poke_interval: The retry interval in seconds, used for logging
+        when no data is found.
 
   Returns:
       A Status Enum object representing the latest status of the node pool.
   """
+  monitoring_client = monitoring_v3.MetricServiceClient()
   project_name = f"projects/{node_pool.project_id}"
   now = int(time.time())
   request = {
@@ -256,7 +259,14 @@ def _query_status_metric(node_pool: Info, poke_interval: int) -> Status:
       "view": monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.FULL,
   }
 
-  monitoring_client = monitoring_v3.MetricServiceClient()
+  # A single query to the Monitoring API can return multiple TimeSeries objects,
+  # especially if the 'status' label changed within the time window (e.g., from
+  # 'PROVISIONING' to 'RUNNING').
+  #
+  # To robustly find the absolute latest status, this block first aggregates all
+  # data points from all series into a single flat list ('records'). It then
+  # finds the record with the maximum timestamp from this list to ensure the
+  # true latest status is identified.
   time_series_data = monitoring_client.list_time_series(request)
   records = []
   for series in time_series_data:
@@ -265,7 +275,9 @@ def _query_status_metric(node_pool: Info, poke_interval: int) -> Status:
       end_ts_dt = point.interval.end_time
       records.append((end_ts_dt, np_status))
   if not records:
-    logging.info("No records found yet. Retrying in %s seconds...", poke_interval)
+    logging.info(
+        "No records found yet. Retrying in %s seconds...", poke_interval
+    )
     return Status.UNKNOWN
 
   _, latest_status = max(records, key=lambda r: r[0])

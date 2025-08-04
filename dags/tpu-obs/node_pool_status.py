@@ -115,12 +115,19 @@ with models.DAG(
       task_id="wait_for_stopping", trigger_rule="all_done"
   )(node_pool=node_pool_info, status=node_pool.Status.STOPPING)
 
+  # This intentionally creates a node pool in an ERROR state. The GKE NodePool
+  # object is created, but VM provisioning fails because the invalid
+  # 'node_location' prevents a required GCE placement policy from being found or
+  # created, resulting in a "resource not found" error from the GCE API.
+
   # This task must be successful in airflow, if it have some issues
   # next task will go to error state.
   """STEP 1: Creating Error Node Pool."""
   create_problematic_node_pool_info = node_pool.create.override(
       task_id="create_problematic_node_pool_info"
   )(
+      # We ignore the failure is because we intensionally want to validate
+      # that the status of this not created node-pool should be "ERROR"
       node_pool=problematic_node_pool_info, ignore_failure=True
   )
   """STEP 2: Validating Error Status."""
@@ -134,6 +141,8 @@ with models.DAG(
       trigger_rule="all_done"
     )(node_pool=problematic_node_pool_info)
 
+  # Add a final task with trigger_rule=all_success to ensure the DAG's final status
+  # accurately reflects upstream failures.
   """Final Task to ensure the DAG completes."""
   end = EmptyOperator(
       task_id="final_status_check",
