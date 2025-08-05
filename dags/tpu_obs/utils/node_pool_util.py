@@ -1,5 +1,4 @@
-"""
-Manages the lifecycle of a GKE node pool and verifies its status as an Airflow DAG.
+"""Manages the lifecycle of a GKE node pool and verifies its status as an Airflow DAG.
 """
 
 import dataclasses
@@ -9,7 +8,7 @@ import random
 import re
 import subprocess
 import time
-from typing import List
+from typing import List, Tuple
 
 from airflow.decorators import task
 from google import auth
@@ -57,7 +56,6 @@ class Info():
 @task
 def create(node_pool: Info, ignore_failure: bool = False) -> None:
   """Creates the GKE node pool using gcloud command."""
-  command_suffix = " 2>&1 || true" if ignore_failure else ""
 
   command = f"""
                 gcloud container node-pools create {node_pool.node_pool_name} \\
@@ -67,8 +65,11 @@ def create(node_pool: Info, ignore_failure: bool = False) -> None:
                 --node-locations {node_pool.node_locations} \\
                 --num-nodes={node_pool.num_nodes} \\
                 --machine-type={node_pool.machine_type} \\
-                --tpu-topology={node_pool.tpu_topology}{command_suffix}
+                --tpu-topology={node_pool.tpu_topology}
         """
+  if ignore_failure:
+    command += " 2>&1 || true"
+
   process = subprocess.run(
       command, shell=True, check=True, capture_output=True, text=True
   )
@@ -94,20 +95,20 @@ def delete(node_pool: Info) -> None:
   logger.debug("STDERR message: %s", process.stderr)
 
 
-def list_nodes(node_pool: Info) -> List[str]:
+def list_nodes(node_pool: Info) -> Tuple[List[str], str]:
   """Lists all VM instances (nodes) within the specified GKE node pool.
 
   This method queries the Google Cloud Container API and Compute API
   to retrieve details about the nodes belonging to the configured
   node pool. It parses instance group URLs to extract node names and zones.
+
   Args:
       node_pool (Info): An instance of the Info class containing GKE node pool
                    configuration parameters.
   Returns:
-      A dictionary where keys are node names (str) and values are
-            the zones (str) where the nodes are located. Returns an empty
-            dictionary if no nodes are found, if GCP clients are not
-            initialized, or in case of a 404 HttpError (node pool not found).
+      A tuple containing:
+        - A list of node names (strings) in the specified node pool.
+        - The zone where the node pool is located (string).
   Raises:
       RuntimeError: If no instance groups or zone are found for the node pool.
   """
@@ -138,8 +139,11 @@ def list_nodes(node_pool: Info) -> List[str]:
   node_names = []
   zone = None
   for url in instance_group:
-    # URLs will be in the format:
-    # https://www.googleapis.com/compute/v1/projects/{project_id}/zones/{zone}/instanceGroupManagers/{instance_group_name}
+    # Extract the {zone} and {instance_group_name} segments from an URL:
+    #   https://compute.googleapis.com/compute/v1/projects/<project>/zones/<zone>/instanceGroupManagers/<instance_group_name>
+    # Group 1 → zone  (e.g. "us-central1-a")
+    # Group 2 → instance group name
+    # (e.g. "gke-yuna-xpk-v6e-2-yuna-xpk-v6e-2-np--b3a745c7-grp")
     match = re.search(
         r"zones/([\w-]+)/instanceGroupManagers/([\w-]+)", url
     )
@@ -162,8 +166,9 @@ def list_nodes(node_pool: Info) -> List[str]:
 
     for instance_item in instances.get("items", []):
       instance_url = instance_item["instance"]
-      # Regex refined to match GKE node names
-      # (e.g., gke-cluster-node-xxxx)
+      # Extract the {node_name} segments from an URL like this:
+      #   https://www.googleapis.com/compute/v1/projects/<project>/zones/<zone>/instances/<node_name>
+      # (e.g., gke-tpu-b3a745c7-08bk)
       node_name = re.search(r"gke[\w-]+", instance_url).group()
       if node_name:
         node_names.append(node_name)
@@ -190,11 +195,8 @@ def delete_one_random_node(node_pool: Info) -> None:
       node_pool (Info): An instance of the Info class containing GKE node pool
                    configuration parameters.
 
-  Returns:
-      The decorated Airflow task object, ready to be included in a task flow.
-  
   Raises:
-      None
+      ValueError: If no nodes are found in the specified node pool.
   """
 
   nodes_list, zone = list_nodes(node_pool)
@@ -254,8 +256,10 @@ def _query_status_metric(node_pool: Info, poke_interval: int) -> Status:
       ),
       "interval": types.TimeInterval({
           "end_time": {"seconds": now},
-          "start_time": {"seconds": now - 300},
-      }),
+          "start_time": {
+              # find data from the last 5 minutes
+              "seconds": now - 300
+          },}),
       "view": monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.FULL,
   }
 
@@ -292,7 +296,6 @@ def wait_for_status(
     **context,
 ) -> bool:
   """Waits for the node pool to enter the target status."""
-  # Consistent with Airflow's default timeout for sensor tasks.
   poke_interval = context["task"].poke_interval
   timeout = context["task"].timeout
   logging.info(

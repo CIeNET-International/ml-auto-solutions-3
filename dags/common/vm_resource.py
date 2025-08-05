@@ -133,6 +133,7 @@ class Zone(enum.Enum):
   # reserved l4 in cloud-tpu-inference-test
   ASIA_EAST1_A = "asia-east1-a"
   ASIA_EAST1_C = "asia-east1-c"
+  ASIA_NORTHEAST1_B = "asia-northeast1-b"
 
 
 class MachineVersion(enum.Enum):

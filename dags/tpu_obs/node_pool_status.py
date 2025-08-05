@@ -6,17 +6,24 @@ import datetime
 from airflow import models
 from airflow.operators.empty import EmptyOperator
 
-from map_reproducibility.utils import constants
-import util.node_pool_util as node_pool
+from dags.common.vm_resource import Project
+from dags.common.vm_resource import Zone
+from dags.map_reproducibility.utils import constants
+from dags.tpu_obs.utils import node_pool_util as node_pool
 
 with models.DAG(
-    dag_id="gke_node_pool_status",
+    dag_id="gke_node_pool_status_2",
     start_date=datetime.datetime(2025, 7, 30),
     schedule=constants.Schedule.WEEKDAY_PST_6PM_EXCEPT_THURSDAY,
     catchup=False,
     tags=["gke", "tpu-observability", "node-pool-status"],
     description=(
-        "A DAG automates the lifecycle of a GKE node pool for testing purposes."
+        "This DAG tests whether the status of a GKE node pool changes as"
+        " expected according to its lifecycle.It creates a node pool, waits for"
+        " it to be running, deletes a random node to trigger reconciliation,"
+        " waits for it to become running again, and finally cleans up.It also"
+        " tests the error state by creating a node pool with invalid parameters"
+        " and verifies thatthe status changes to ERROR."
     ),
     doc_md="""
     ### GKE Node Pool Status Management DAG
@@ -33,7 +40,7 @@ with models.DAG(
 
   node_pool_info = node_pool.Info(
       project_id=models.Variable.get(
-          "PROJECT_ID", default_var="tpu-prod-env-one-vm"
+          "PROJECT_ID", default_var=Project.TPU_PROD_ENV_ONE_VM.value
       ),
       cluster_name=models.Variable.get(
           "CLUSTER_NAME", default_var="yuna-xpk-v6e-2"
@@ -43,7 +50,7 @@ with models.DAG(
       ),
       location=models.Variable.get("LOCATION", default_var="asia-northeast1"),
       node_locations=models.Variable.get(
-          "NODE_LOCATIONS", default_var="asia-northeast1-b"
+          "NODE_LOCATIONS", default_var=Zone.ASIA_NORTHEAST1_B.value
       ),
       num_nodes=models.Variable.get("NUM_NODES", default_var=4),
       machine_type=models.Variable.get(
@@ -52,15 +59,13 @@ with models.DAG(
       tpu_topology=models.Variable.get("TPU_TOPOLOGY", default_var="4x4"),
   )
 
-  # This is a problematic node pool info for testing the error state.
-  # It will create a node pool with an invalid name to trigger an error state.
   problematic_node_pool_info = node_pool.Info(
       project_id=node_pool_info.project_id,
       cluster_name=node_pool_info.cluster_name,
       node_pool_name=node_pool_info.node_pool_name + "-wrong",
       location=node_pool_info.location,
       # Choosing a region that is different from the cluster location but still
-      # compatible with the specified TPU may cause the cluster creation to fail
+      # compatible with the specified TPU cause the cluster creation to fail
       # due to mismatched node locations.
       node_locations=models.Variable.get(
           "WRONG_NODE_LOCATION", default_var="asia-east1-c"
@@ -81,8 +86,8 @@ with models.DAG(
     status=node_pool.Status.PROVISIONING,)
 
   """STEP 3: Validating Running Status."""
-  wait_for_running_initial = node_pool.wait_for_status.override(
-      task_id="wait_for_running_initial"
+  wait_for_running = node_pool.wait_for_status.override(
+      task_id="wait_for_running"
   )(node_pool=node_pool_info, status=node_pool.Status.RUNNING)
 
   """STEP 4: Deleting a random node to trigger reconciliation."""
@@ -90,13 +95,13 @@ with models.DAG(
       task_id="delete_node")(node_pool=node_pool_info)
 
   """STEP 5: Validating Reconciling Status."""
-  wait_for_reconciling = node_pool.wait_for_status.override(
-      task_id="wait_for_reconciling"
+  wait_for_repair = node_pool.wait_for_status.override(
+      task_id="wait_for_repair"
   )(node_pool=node_pool_info, status=node_pool.Status.RECONCILING)
 
   """STEP 6: Validating Running Status After Repair."""
-  wait_for_running_after_repair = node_pool.wait_for_status.override(
-      task_id="wait_for_running_after_repair"
+  wait_for_repair_completes = node_pool.wait_for_status.override(
+      task_id="wait_for_repair_completes"
   )(node_pool=node_pool_info, status=node_pool.Status.RUNNING)
 
   # TODO: In this DAG, cleaning up and verifying the state is part of the
@@ -141,8 +146,8 @@ with models.DAG(
       trigger_rule="all_done"
     )(node_pool=problematic_node_pool_info)
 
-  # Add a final task with trigger_rule=all_success to ensure the DAG's final status
-  # accurately reflects upstream failures.
+  # Add a final task with trigger_rule=all_success to ensure the DAG's
+  # final status accurately reflects upstream failures.
   """Final Task to ensure the DAG completes."""
   end = EmptyOperator(
       task_id="final_status_check",
@@ -152,18 +157,18 @@ with models.DAG(
   normal_path_flow = (
       create_node_pool
       >> wait_for_provisioning
-      >> wait_for_running_initial
+      >> wait_for_running
       >> delete_node
-      >> wait_for_reconciling
-      >> wait_for_running_after_repair
+      >> wait_for_repair
+      >> wait_for_repair_completes
+      >> delete_node_pool
+      >> wait_for_stopping
+      >> end
   )
-  normal_flow_cleanup = (delete_node_pool >> wait_for_stopping)
 
-  normal_path_flow >> delete_node_pool >> wait_for_stopping >> end
-
-  wrong_flow = (
-      create_problematic_node_pool_info >> wait_for_error
+  wrong_path_flow = (
+      create_problematic_node_pool_info
+      >> wait_for_error
+      >> delete_wrong_node_pool
+      >> end
   )
-  wrong_flow_cleanup = (delete_wrong_node_pool)
-
-  wrong_flow >> wrong_flow_cleanup >> end
