@@ -11,15 +11,21 @@ from airflow.utils.trigger_rule import TriggerRule
 from google.cloud import monitoring_v3
 
 import node_pool_util
+from dags.common.vm_resource import Project
+from dags.map_reproducibility.utils import constants
 
 
-@task
-def check_availability(checking_available: bool) -> bool:
-  """A sensor for multi-host nodepool availability.
+@task.sensor(poke_interval=30, timeout=900, mode="reschedule")
+def check_availability(
+    checking_available: bool, node_pool: node_pool_util.Info
+) -> bool:
+  """Check current multi-host nodepool availability.
 
-  This task polls the node_pool/multi_host/available metric
-  every 60 seconds for 45 minutes. Waiting for the nodepool to become
-  available or unavailable
+  This is a sensor task which runs ever 30s for 900s. The task takes
+  the current list of the multi_host availability outputs for the last 5
+  minutes aggregated to 1 minute intervals. The results are listed, and
+  the most recent result is checked to determine if it matches
+  specified result, True or False.
 
   Args:
     checking_available(bool): True if the function is checking for the
@@ -30,30 +36,21 @@ def check_availability(checking_available: bool) -> bool:
     bool: True if intended event is detected. False if the intended event
     is not detected.
   """
+  now_in_seconds = int(time.time())
 
-  now = time.time()
-
-  # Must be converted to an int for the API
-  seconds = int(now)
-
-  # Look at the previous 60 seconds to see what the "current" state is. 60
-  # seconds is the agregation period.
-  fixed_time_interval = monitoring_v3.TimeInterval({
-      "end_time": {"seconds": seconds},
-      "start_time": {"seconds": seconds - 60},
-  })
-
-  mon_client = monitoring_v3.MetricServiceClient()
-  project_name = f"projects/{PROJECT_ID}"
-  results = mon_client.list_time_series(
+  api_client = monitoring_v3.MetricServiceClient()
+  results = api_client.list_time_series(
       request={
-          "name": project_name,
+          "name": f"projects/{node_pool_info.project_id}",
           "filter": (
               'metric.type="kubernetes.io/node_pool/multi_host/available" '
-              f'AND resource.labels.cluster_name="{Variable.get("CLUSTER_NAME")}" '
-              f'AND resource.labels.node_pool_name="{Variable.get("NODE_POOL_NAME")}"'
+              f'AND resource.labels.cluster_name="{node_pool_info.cluster_name}" '
+              f'AND resource.labels.node_pool_name="{node_pool_info.node_pool_name}"'
           ),
-          "interval": fixed_time_interval,
+          "interval": monitoring_v3.TimeInterval({
+              "end_time": {"seconds": now_in_seconds},
+              "start_time": {"seconds": now_in_seconds - 300},
+          }),
           "view": monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.FULL,
       }
   )
@@ -63,22 +60,27 @@ def check_availability(checking_available: bool) -> bool:
     logging.info("No time series.")
     return False
 
-  # The results must be converted to a list to be iterable.
-  results_list = list(results)
+  state = False
+  for time_series in results:
+    if not time_series.points:
+      break
+    for point in time_series.points:
+      assert isinstance(point.value, monitoring_v3.types.common.TypedValue)
+      if not point.value.bool_value:
+        logging.info("No value.")
+      else:
+        logging.info("Point value: %s", point.value.bool_value)
+        state = point.value.bool_value
+      break
+    break
 
-  # The default sorting is the most recent events first.
-  state = results_list[0].points[0].value.bool_value
-
-  logging.info("Most recent state: %s", state)
-  if checking_available == state:
-    logging.info("Nodepool available: %s", checking_available)
-    return True
-  return False
+  logging.info("Nodepool available: %s", checking_available)
+  return checking_available == state
 
 
 with models.DAG(
     dag_id="multi-host-availability-rollback",
-    schedule="00 06 * * *",
+    schedule=constants.Schedule.WEEKDAY_PST_6PM_EXCEPT_THURSDAY,
     tags=[
         "cloud-ml-auto-solutions",
         "multi-host-availability",
@@ -88,41 +90,36 @@ with models.DAG(
     catchup=False,
 ) as dag:
 
-  PROJECT_ID = Variable.get("PROJECT_ID", default_var="tpu-prod-env-one-vm")
-  CLUSTER_NAME = Variable.get("CLUSTER_NAME", default_var="qmcgarry-auto-test")
-  NODE_POOL_NAME = Variable.get("NODE_POOL_NAME", default_var="nodepool-auto")
-  REGION = Variable.get("LOCATION", default_var="asia-northeast1")
-  NODE_LOCATIONS = Variable.get(
-      "NODE_LOCATIONS", default_var="asia-northeast1-b"
-  )
-  NUM_NODES = Variable.get("NUM_NODES", default_var=4)
-  MACHINE_TYPE = Variable.get("MACHINE_TYPE", default_var="ct6e-standard-4t")
-  TPU_TOPOLOGY = Variable.get("TPU_TOPOLOGY", default_var="4x4")
-
   node_pool_info = node_pool_util.Info(
-      project_id=PROJECT_ID,
-      cluster_name=CLUSTER_NAME,
-      node_pool_name=NODE_POOL_NAME,
-      location=REGION,
-      node_locations=NODE_LOCATIONS,
-      num_nodes=NUM_NODES,
-      machine_type=MACHINE_TYPE,
-      tpu_topology=TPU_TOPOLOGY,
+      project_id=Project.TPU_PROD_ENV_ONE_VM.value,
+      cluster_name=Variable.get(
+          "CLUSTER_NAME", default_var="qmcgarry-auto-test"
+      ),
+      node_pool_name=Variable.get(
+          "NODE_POOL_NAME", default_var="nodepool-auto"
+      ),
+      location=Variable.get("LOCATION", default_var="asia-northeast1"),
+      node_locations=Variable.get(
+          "NODE_LOCATIONS", default_var="asia-northeast1-b"
+      ),
+      num_nodes=Variable.get("NUM_NODES", default_var=4),
+      machine_type=Variable.get("MACHINE_TYPE", default_var="ct6e-standard-4t"),
+      tpu_topology=Variable.get("TPU_TOPOLOGY", default_var="4x4"),
   )
 
   create_node_pool = node_pool_util.create(info=node_pool_info)
 
-  wait_availability = check_availability(True)
+  wait_availability = check_availability(True, node_pool_info)
 
-  wait_unavailability = check_availability(False)
+  wait_unavailability = check_availability(False, node_pool_info)
 
   # Checks if the cluster exists. If not, the DAG will fail.
   check_for_cluster = BashOperator(
       task_id="check_for_cluster",
       bash_command=f"""
-          if gcloud container clusters describe {CLUSTER_NAME} \\
-            --project {PROJECT_ID} --region {REGION} &> /dev/null; then
-            echo "GKE cluster {CLUSTER_NAME} already exists."
+          if gcloud container clusters describe {node_pool_info.cluster_name} \\
+            --project {node_pool_info.project_id} --region {node_pool_info.location} &> /dev/null; then
+            echo "GKE cluster {node_pool_info.cluster_name} already exists."
           else
             echo "ERROR: cluster does not exist."
             exit 1
@@ -134,9 +131,9 @@ with models.DAG(
   run_rollback = BashOperator(
       task_id="run_rollback",
       bash_command=(
-          f"gcloud container node-pools rollback {NODE_POOL_NAME} "
-          f"--project={PROJECT_ID} --cluster={CLUSTER_NAME} "
-          f"--region {REGION} --quiet"
+          "gcloud container node-pools rollback"
+          f" {node_pool_info.node_pool_name} --project={node_pool_info.project_id} --cluster={node_pool_info.cluster_name} --region"
+          f" {node_pool_info.location} --quiet"
       ),
   )
 
