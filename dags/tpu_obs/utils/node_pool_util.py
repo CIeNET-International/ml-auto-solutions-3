@@ -66,7 +66,7 @@ def create(node_pool: Info, ignore_failure: bool = False) -> None:
                 --num-nodes={node_pool.num_nodes} \\
                 --machine-type={node_pool.machine_type} \\
                 --tpu-topology={node_pool.tpu_topology}
-        """
+            """
   if ignore_failure:
     command += " 2>&1 || true"
 
@@ -80,13 +80,14 @@ def create(node_pool: Info, ignore_failure: bool = False) -> None:
 @task
 def delete(node_pool: Info) -> None:
   """Deletes the GKE node pool using gcloud command."""
+
   command = f"""
                 gcloud container node-pools delete {node_pool.node_pool_name} \\
                 --project {node_pool.project_id} \\
                 --cluster {node_pool.cluster_name} \\
                 --location {node_pool.location} \\
                 --quiet
-        """
+            """
 
   process = subprocess.run(
       command, shell=True, check=True, capture_output=True, text=True
@@ -95,7 +96,7 @@ def delete(node_pool: Info) -> None:
   logger.debug("STDERR message: %s", process.stderr)
 
 
-def list_nodes(node_pool: Info) -> Tuple[List[str], str]:
+def list_nodes(node_pool: Info) -> List[str]:
   """Lists all VM instances (nodes) within the specified GKE node pool.
 
   This method queries the Google Cloud Container API and Compute API
@@ -106,9 +107,7 @@ def list_nodes(node_pool: Info) -> Tuple[List[str], str]:
       node_pool (Info): An instance of the Info class containing GKE node pool
                    configuration parameters.
   Returns:
-      A tuple containing:
-        - A list of node names (strings) in the specified node pool.
-        - The zone where the node pool is located (string).
+      A list of node names (strings) in the specified node pool.
   Raises:
       RuntimeError: If no instance groups or zone are found for the node pool.
   """
@@ -137,28 +136,26 @@ def list_nodes(node_pool: Info) -> Tuple[List[str], str]:
     )
 
   node_names = []
-  zone = None
+
   for url in instance_group:
-    # Extract the {zone} and {instance_group_name} segments from an URL:
+    # Extract the {instance_group_name} segments from an URL:
     #   https://compute.googleapis.com/compute/v1/projects/<project>/zones/<zone>/instanceGroupManagers/<instance_group_name>
-    # Group 1 → zone  (e.g. "us-central1-a")
     # Group 2 → instance group name
     # (e.g. "gke-yuna-xpk-v6e-2-yuna-xpk-v6e-2-np--b3a745c7-grp")
     match = re.search(
-        r"zones/([\w-]+)/instanceGroupManagers/([\w-]+)", url
+        r"instanceGroupManagers/([\w-]+)", url
     )
     if not match:
       logging.warning("Could not parse instance group URL: %s", url)
       continue
 
-    zone = match.group(1)
-    ig_name = match.group(2)
+    ig_name = match.group(1)
 
     instances = (
         compute_client.instanceGroups()
         .listInstances(
             project=node_pool.project_id,
-            zone=zone,
+            zone=node_pool.node_locations,
             instanceGroup=ig_name,
             body={"instanceState": "ALL"},
         ).execute()
@@ -176,11 +173,7 @@ def list_nodes(node_pool: Info) -> Tuple[List[str], str]:
         logging.warning(
             "Could not extract node name from URL: %s", instance_url
         )
-  if zone is None:
-    raise RuntimeError(
-        f"No zone found for node pool {node_pool.node_pool_name}."
-    )
-  return node_names, zone
+  return node_names
 
 
 @task
@@ -199,7 +192,7 @@ def delete_one_random_node(node_pool: Info) -> None:
       ValueError: If no nodes are found in the specified node pool.
   """
 
-  nodes_list, zone = list_nodes(node_pool)
+  nodes_list = list_nodes(node_pool)
   if not nodes_list:
     raise ValueError(
         f"No nodes found in node pool '{node_pool.node_pool_name}'. "
@@ -213,11 +206,11 @@ def delete_one_random_node(node_pool: Info) -> None:
   )
 
   command = f"""
-      gcloud compute instances delete {node_to_delete} \\
-          --project={node_pool.project_id} \\
-          --zone={zone} \\
-          --quiet
-      """
+                gcloud compute instances delete {node_to_delete} \\
+                    --project={node_pool.project_id} \\
+                    --zone={node_pool.location} \\
+                    --quiet
+            """
 
   process = subprocess.run(
       command, shell=True, check=True, capture_output=True, text=True
@@ -227,7 +220,7 @@ def delete_one_random_node(node_pool: Info) -> None:
   logger.debug("STDERR message: %s", process.stderr)
 
 
-def _query_status_metric(node_pool: Info, poke_interval: int) -> Status:
+def _query_status_metric(node_pool: Info) -> Status:
   """Queries the latest status of a given node pool via the Google Cloud Monitoring API.
 
   This function constructs a request to read the "status" metric for a GKE
@@ -237,8 +230,8 @@ def _query_status_metric(node_pool: Info, poke_interval: int) -> Status:
   Args:
       node_pool: An object containing node pool information
         (project ID, cluster name, etc.).
-      poke_interval: The retry interval in seconds, used for logging
-        when no data is found.
+      poke_interval: The sensor's retry interval. This value is not used to
+        control logic in this function but is passed down for logging purposes only.
 
   Returns:
       A Status Enum object representing the latest status of the node pool.
@@ -256,10 +249,9 @@ def _query_status_metric(node_pool: Info, poke_interval: int) -> Status:
       ),
       "interval": types.TimeInterval({
           "end_time": {"seconds": now},
-          "start_time": {
-              # find data from the last 5 minutes
-              "seconds": now - 300
-          },}),
+          # find data from the last 300 seconds === 5 minutes
+          "start_time": {"seconds": now - 300},
+        }),
       "view": monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.FULL,
   }
 
@@ -279,9 +271,6 @@ def _query_status_metric(node_pool: Info, poke_interval: int) -> Status:
       end_ts_dt = point.interval.end_time
       records.append((end_ts_dt, np_status))
   if not records:
-    logging.info(
-        "No records found yet. Retrying in %s seconds...", poke_interval
-    )
     return Status.UNKNOWN
 
   _, latest_status = max(records, key=lambda r: r[0])
@@ -296,7 +285,6 @@ def wait_for_status(
     **context,
 ) -> bool:
   """Waits for the node pool to enter the target status."""
-  poke_interval = context["task"].poke_interval
   timeout = context["task"].timeout
   logging.info(
       "Waiting for node pool '%s' status to become '%s' within %s"
@@ -306,7 +294,7 @@ def wait_for_status(
       timeout,
   )
 
-  latest_status = _query_status_metric(node_pool, poke_interval)
+  latest_status = _query_status_metric(node_pool)
   return latest_status == status
 
 

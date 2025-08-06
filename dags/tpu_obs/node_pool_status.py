@@ -1,6 +1,7 @@
 """Manages the lifecycle of a GKE node pool and verifies its status as an Airflow DAG.
 """
 
+import copy
 import datetime
 
 from airflow import models
@@ -12,7 +13,7 @@ from dags.map_reproducibility.utils import constants
 from dags.tpu_obs.utils import node_pool_util as node_pool
 
 with models.DAG(
-    dag_id="gke_node_pool_status_2",
+    dag_id="gke_node_pool_status",
     start_date=datetime.datetime(2025, 7, 30),
     schedule=constants.Schedule.WEEKDAY_PST_6PM_EXCEPT_THURSDAY,
     catchup=False,
@@ -59,47 +60,34 @@ with models.DAG(
       tpu_topology=models.Variable.get("TPU_TOPOLOGY", default_var="4x4"),
   )
 
-  problematic_node_pool_info = node_pool.Info(
-      project_id=node_pool_info.project_id,
-      cluster_name=node_pool_info.cluster_name,
-      node_pool_name=node_pool_info.node_pool_name + "-wrong",
-      location=node_pool_info.location,
-      # Choosing a region that is different from the cluster location but still
-      # compatible with the specified TPU cause the cluster creation to fail
-      # due to mismatched node locations.
-      node_locations=models.Variable.get(
-          "WRONG_NODE_LOCATION", default_var="asia-east1-c"
-      ),
-      num_nodes=node_pool_info.num_nodes,
-      machine_type=node_pool_info.machine_type,
-      tpu_topology=node_pool_info.tpu_topology,
+  problematic_node_pool_info = copy.deepcopy(node_pool_info)
+  problematic_node_pool_info.node_pool_name += "-wrong"
+  # Choosing a region that is different from the cluster location but still
+  # compatible with the specified TPU cause the cluster creation to fail
+  # due to mismatched node locations.
+  problematic_node_pool_info.node_locations = models.Variable.get(
+    "WRONG_NODE_LOCATION", default_var=Zone.ASIA_EAST1_C.value
   )
 
-  """STEP 1: Creates the GKE node pool."""
   create_node_pool = node_pool.create.override(task_id="create_node_pool")(
       node_pool=node_pool_info)
 
-  """STEP 2: Validating Provisioning Status."""
   wait_for_provisioning = node_pool.wait_for_status.override(
       task_id="wait_for_provisioning"
   )(node_pool=node_pool_info,
-    status=node_pool.Status.PROVISIONING,)
+    status=node_pool.Status.PROVISIONING)
 
-  """STEP 3: Validating Running Status."""
   wait_for_running = node_pool.wait_for_status.override(
       task_id="wait_for_running"
   )(node_pool=node_pool_info, status=node_pool.Status.RUNNING)
 
-  """STEP 4: Deleting a random node to trigger reconciliation."""
   delete_node = node_pool.delete_one_random_node.override(
       task_id="delete_node")(node_pool=node_pool_info)
 
-  """STEP 5: Validating Reconciling Status."""
   wait_for_repair = node_pool.wait_for_status.override(
       task_id="wait_for_repair"
   )(node_pool=node_pool_info, status=node_pool.Status.RECONCILING)
 
-  """STEP 6: Validating Running Status After Repair."""
   wait_for_repair_completes = node_pool.wait_for_status.override(
       task_id="wait_for_repair_completes"
   )(node_pool=node_pool_info, status=node_pool.Status.RUNNING)
@@ -110,37 +98,29 @@ with models.DAG(
   # cleanup process fails, the overall task should still be considered
   # successful. Please confirm what the overall task result would be when
   # trigger_rule=ALL_DONE.
-  """STEP 7: Cleaning up - Deleting Node Pool."""
   delete_node_pool = node_pool.delete.override(
       task_id="delete_node_pool", trigger_rule="all_done"
   )(node_pool=node_pool_info)
 
-  """STEP 8: Validating Stopping Status."""
   wait_for_stopping = node_pool.wait_for_status.override(
       task_id="wait_for_stopping", trigger_rule="all_done"
   )(node_pool=node_pool_info, status=node_pool.Status.STOPPING)
 
-  # This intentionally creates a node pool in an ERROR state. The GKE NodePool
-  # object is created, but VM provisioning fails because the invalid
-  # 'node_location' prevents a required GCE placement policy from being found or
-  # created, resulting in a "resource not found" error from the GCE API.
-
-  # This task must be successful in airflow, if it have some issues
-  # next task will go to error state.
-  """STEP 1: Creating Error Node Pool."""
+  # Intentionally create a node pool with problematic configurations
+  # to validate that it enters the ERROR state.
   create_problematic_node_pool_info = node_pool.create.override(
       task_id="create_problematic_node_pool_info"
   )(
-      # We ignore the failure is because we intensionally want to validate
-      # that the status of this not created node-pool should be "ERROR"
+      # The failure is intentionally ignored because we want to validate
+      # that the status of the node pool (which fails to be created) is "ERROR".
       node_pool=problematic_node_pool_info, ignore_failure=True
   )
-  """STEP 2: Validating Error Status."""
+
   wait_for_error = node_pool.wait_for_status.override(task_id="wait_for_error")(
       node_pool=problematic_node_pool_info,
       status=node_pool.Status.ERROR
   )
-  """STEP 3: Cleaning up - Deleting Error Node Pool."""
+
   delete_wrong_node_pool = node_pool.delete.override(
       task_id="delete_wrong_node_pool",
       trigger_rule="all_done"
@@ -148,7 +128,6 @@ with models.DAG(
 
   # Add a final task with trigger_rule=all_success to ensure the DAG's
   # final status accurately reflects upstream failures.
-  """Final Task to ensure the DAG completes."""
   end = EmptyOperator(
       task_id="final_status_check",
       trigger_rule="all_success",
