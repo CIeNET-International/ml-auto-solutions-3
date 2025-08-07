@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 class Status(enum.Enum):
   """Enum for GKE node pool status."""
+
   RUNNING = enum.auto()
   PROVISIONING = enum.auto()
   STOPPING = enum.auto()
@@ -32,17 +33,18 @@ class Status(enum.Enum):
 
   @staticmethod
   def from_str(s: str) -> "Status":
-      """Converts a string to a Status enum member."""
-      status = Status.__members__.get(s)
-      if status is None:
-          logging.warning("Unknown status: %s", s)
-          return Status.UNKNOWN
-      return status
+    """Converts a string to a Status enum member."""
+    status = Status.__members__.get(s)
+    if status is None:
+      logging.warning("Unknown status: %s", s)
+      return Status.UNKNOWN
+    return status
 
 
 @dataclasses.dataclass
-class Info():
-  """Class to hold GKE node pool configuration parameters."""
+class Info:
+  """Class to hold the information of a GKE node pool."""
+
   project_id: str
   cluster_name: str
   node_pool_name: str
@@ -55,7 +57,7 @@ class Info():
 
 @task
 def create(node_pool: Info, ignore_failure: bool = False) -> None:
-  """Creates the GKE node pool using gcloud command."""
+  """Creates a GKE node pool by the given node pool information."""
 
   command = f"""
                 gcloud container node-pools create {node_pool.node_pool_name} \\
@@ -124,7 +126,10 @@ def list_nodes(node_pool: Info) -> List[str]:
       f"/clusters/{node_pool.cluster_name}/nodePools/{node_pool.node_pool_name}"
   )
   nodepool = (
-      container_client.projects().locations().clusters().nodePools()
+      container_client.projects()
+      .locations()
+      .clusters()
+      .nodePools()
       .get(name=nodepool_path)
       .execute()
   )
@@ -142,9 +147,7 @@ def list_nodes(node_pool: Info) -> List[str]:
     #   https://compute.googleapis.com/compute/v1/projects/<project>/zones/<zone>/instanceGroupManagers/<instance_group_name>
     # Group 2 → instance group name
     # (e.g. "gke-yuna-xpk-v6e-2-yuna-xpk-v6e-2-np--b3a745c7-grp")
-    match = re.search(
-        r"instanceGroupManagers/([\w-]+)", url
-    )
+    match = re.search(r"instanceGroupManagers/([\w-]+)", url)
     if not match:
       logging.warning("Could not parse instance group URL: %s", url)
       continue
@@ -158,7 +161,8 @@ def list_nodes(node_pool: Info) -> List[str]:
             zone=node_pool.node_locations,
             instanceGroup=ig_name,
             body={"instanceState": "ALL"},
-        ).execute()
+        )
+        .execute()
     )
 
     for instance_item in instances.get("items", []):
@@ -208,14 +212,13 @@ def delete_one_random_node(node_pool: Info) -> None:
   command = f"""
                 gcloud compute instances delete {node_to_delete} \\
                     --project={node_pool.project_id} \\
-                    --zone={node_pool.location} \\
+                    --zone={node_pool.node_locations} \\
                     --quiet
             """
 
   process = subprocess.run(
       command, shell=True, check=True, capture_output=True, text=True
   )
-
   logger.debug("STDOUT message: %s", process.stdout)
   logger.debug("STDERR message: %s", process.stderr)
 
@@ -239,21 +242,26 @@ def _query_status_metric(node_pool: Info) -> Status:
   monitoring_client = monitoring_v3.MetricServiceClient()
   project_name = f"projects/{node_pool.project_id}"
   now = int(time.time())
-  request = {
-      "name": project_name,
-      "filter": (
+  request = monitoring_v3.ListTimeSeriesRequest(
+      name=project_name,
+      filter=(
           'metric.type="kubernetes.io/node_pool/status" '
           f'resource.labels.project_id = "{node_pool.project_id}" '
           f'resource.labels.cluster_name = "{node_pool.cluster_name}" '
           f'resource.labels.node_pool_name = "{node_pool.node_pool_name}"'
       ),
-      "interval": types.TimeInterval({
-          "end_time": {"seconds": now},
-          # find data from the last 300 seconds === 5 minutes
-          "start_time": {"seconds": now - 300},
-        }),
-      "view": monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.FULL,
-  }
+      interval=types.TimeInterval(
+          {
+              "end_time": {"seconds": now},
+              # Setting start_time to 300 seconds ago to ensure data is
+              # available. Metrics are sampled every 60s, but may not be
+              # available until ~100s later.
+              # Any value >100s is fine; 300 is a safe default.
+              "start_time": {"seconds": now - 300},
+          }
+      ),
+      view="FULL",
+  )
 
   # A single query to the Monitoring API can return multiple TimeSeries objects,
   # especially if the 'status' label changed within the time window (e.g., from
@@ -296,5 +304,3 @@ def wait_for_status(
 
   latest_status = _query_status_metric(node_pool)
   return latest_status == status
-
-
