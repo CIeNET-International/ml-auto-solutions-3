@@ -99,17 +99,17 @@ def delete(node_pool: Info) -> None:
 
 
 def list_nodes(node_pool: Info) -> List[str]:
-  """Lists all VM instances (nodes) within the specified GKE node pool.
+  """Lists all node names in the specified GKE node pool.
 
-  This method queries the Google Cloud Container API and Compute API
-  to retrieve details about the nodes belonging to the configured
-  node pool. It parses instance group URLs to extract node names and zones.
+  It queries GKE and Compute APIs and parses instance group URLs
+  to extract VM instance names.
+
 
   Args:
-      node_pool (Info): An instance of the Info class containing GKE node pool
-                   configuration parameters.
+      node_pool: An instance of the Info class that encapsulates
+                   the configuration and metadata of a GKE node pool.
   Returns:
-      A list of node names (strings) in the specified node pool.
+      A list of node names within the specified GKE node pool.
   Raises:
       RuntimeError: If no instance groups or zone are found for the node pool.
   """
@@ -144,9 +144,8 @@ def list_nodes(node_pool: Info) -> List[str]:
 
   for url in instance_group:
     # Extract the {instance_group_name} segments from an URL:
-    #   https://compute.googleapis.com/compute/v1/projects/<project>/zones/<zone>/instanceGroupManagers/<instance_group_name>
-    # Group 2 → instance group name
-    # (e.g. "gke-yuna-xpk-v6e-2-yuna-xpk-v6e-2-np--b3a745c7-grp")
+    # https://www.googleapis.com/compute/v1/projects/tpu-prod-env-one-vm/zones/asia-northeast1-b/instanceGroups/gke-yuna-xpk-v6e-2-yuna-xpk-v6e-2-np--b3a745c7-grp
+    # Group → instance group name (e.g. "gke-yuna-xpk-v6e-2-yuna-xpk-v6e-2-np--b3a745c7-grp")
     match = re.search(r"instanceGroupManagers/([\w-]+)", url)
     if not match:
       logging.warning("Could not parse instance group URL: %s", url)
@@ -189,8 +188,8 @@ def delete_one_random_node(node_pool: Info) -> None:
   the node listing, selection, and deletion using `gcloud` commands.
 
   Args:
-      node_pool (Info): An instance of the Info class containing GKE node pool
-                   configuration parameters.
+      node_pool: An instance of the Info class that encapsulates
+                   the configuration and metadata of a GKE node pool.
 
   Raises:
       ValueError: If no nodes are found in the specified node pool.
@@ -224,17 +223,13 @@ def delete_one_random_node(node_pool: Info) -> None:
 
 
 def _query_status_metric(node_pool: Info) -> Status:
-  """Queries the latest status of a given node pool via the Google Cloud Monitoring API.
-
-  This function constructs a request to read the "status" metric for a GKE
-  node pool. It fetches time series data points from the last 5 minutes and
-  returns the status from the most recent data point.
+  """Queries the latest status of the specified GKE node pool.
+  This function retrieves the status by querying the metric
+  "kubernetes.io/node_pool/status" via the Google Cloud Monitoring API.
 
   Args:
-      node_pool: An object containing node pool information
-        (project ID, cluster name, etc.).
-      poke_interval: The sensor's retry interval. This value is not used to
-        control logic in this function but is passed down for logging purposes only.
+      node_pool: An instance of the Info class that encapsulates
+                   the configuration and metadata of a GKE node pool.
 
   Returns:
       A Status Enum object representing the latest status of the node pool.
@@ -253,10 +248,12 @@ def _query_status_metric(node_pool: Info) -> Status:
       interval=types.TimeInterval(
           {
               "end_time": {"seconds": now},
-              # Setting start_time to 300 seconds ago to ensure data is
-              # available. Metrics are sampled every 60s, but may not be
-              # available until ~100s later.
-              # Any value >100s is fine; 300 is a safe default.
+              # Metrics are sampled every 60s and stored in the GCP backend,
+              # but it may take up to 2 minutes for the data to become available on the
+              # client side.
+              # Therefore, a longer time interval is necessary.
+              # A 5-minute window is an arbitrary but sufficient choice to ensure we
+              # can retrieve the latest metric data.
               "start_time": {"seconds": now - 300},
           }
       ),
@@ -292,7 +289,12 @@ def wait_for_status(
     status: Status,
     **context,
 ) -> bool:
-  """Waits for the node pool to enter the target status."""
+  """Waits for the node pool to enter the target status.
+
+  This is a task waits for the node pool to enter the target status by querying
+  the status metric and comparing it with the expected status.
+  The default poke_interval and timeout, and document that caller can override them
+  """
   timeout = context["task"].timeout
   logging.info(
       "Waiting for node pool '%s' status to become '%s' within %s"
