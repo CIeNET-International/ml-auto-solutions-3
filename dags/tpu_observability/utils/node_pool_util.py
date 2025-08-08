@@ -310,3 +310,26 @@ def wait_for_status(
 
   latest_status = _query_status_metric(node_pool)
   return latest_status == status
+
+
+@task
+def rollback(node_pool: Info) -> None:
+  """Performs a rollback on given GKE node pool using the gcloud command.
+
+  Args:
+      node_pool: An instance of the Info class that encapsulates the
+        configuration and metadata of a GKE node pool.
+  """
+  command = (
+      f"gcloud container node-pools rollback {node_pool.node_pool_name} "
+      f"--project={node_pool.project_id} "
+      f"--cluster={node_pool.cluster_name} "
+      f"--region={node_pool.location} "
+      f"--quiet"
+  )
+
+  process = subprocess.run(
+      command, shell=True, check=True, capture_output=True, text=True
+  )
+  logger.info("STDOUT message: %s", process.stdout)
+  logger.info("STDERR message: %s", process.stderr)
