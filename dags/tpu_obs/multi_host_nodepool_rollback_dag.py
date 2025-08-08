@@ -1,3 +1,5 @@
+"""Creates a nodepool and runs a rollback command to verify the availability changes correctly.
+"""
 import datetime
 import logging
 import time
@@ -11,14 +13,15 @@ from airflow.providers.standard.operators.bash import BashOperator
 from airflow.utils.trigger_rule import TriggerRule
 from google.cloud import monitoring_v3
 
-from dags.tpu_obs.utils import node_pool_util
 from dags.common.vm_resource import Project
+from dags.common.vm_resource import Zone
 from dags.map_reproducibility.utils import constants
+from dags.tpu_obs.utils import node_pool_util as node_pool
 
 
 @task.sensor(poke_interval=30, timeout=900, mode="reschedule")
 def check_availability(
-    node_pool: node_pool_util.Info, checking_available: bool
+    node_pool: node_pool.Info, checking_available: bool
 ) -> bool:
   """Check current multi-host nodepool availability.
 
@@ -90,7 +93,7 @@ with models.DAG(
     catchup=False,
 ) as dag:
 
-  node_pool_info = node_pool_util.Info(
+  node_pool_info = node_pool.Info(
       project_id=Project.TPU_PROD_ENV_ONE_VM.value,
       cluster_name=Variable.get(
           "CLUSTER_NAME", default_var="qmcgarry-auto-test"
@@ -100,14 +103,14 @@ with models.DAG(
       ),
       location=Variable.get("LOCATION", default_var="asia-northeast1"),
       node_locations=Variable.get(
-          "NODE_LOCATIONS", default_var="asia-northeast1-b"
+          "NODE_LOCATIONS", default_var=default_var=Zone.ASIA_NORTHEAST1_B.value
       ),
       num_nodes=Variable.get("NUM_NODES", default_var=4),
       machine_type=Variable.get("MACHINE_TYPE", default_var="ct6e-standard-4t"),
       tpu_topology=Variable.get("TPU_TOPOLOGY", default_var="4x4"),
   )
 
-  create_node_pool = node_pool_util.create(info=node_pool_info)
+  create_node_pool = node_pool.create(info=node_pool_info)
 
   wait_availability = check_availability(node_pool_info, True)
 
@@ -138,7 +141,7 @@ with models.DAG(
   )
 
   # Cleanup task. Nodepool needs to be deleted.
-  delete_node_pool = node_pool_util.delete.override(
+  delete_node_pool = node_pool.delete.override(
       task_id="delete_node_pool", trigger_rule="all_done"
   )(info=node_pool_info)
 
