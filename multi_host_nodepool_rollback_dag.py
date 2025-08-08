@@ -2,26 +2,27 @@ import datetime
 import logging
 import time
 
+from airflow.operators.python import task, get_current_context
 from airflow import models
 from airflow.decorators import task
 from airflow.models import Variable
-from airflow.operators.dummy import DummyOperator
+from airflow.operators.empty import EmptyOperator
 from airflow.providers.standard.operators.bash import BashOperator
 from airflow.utils.trigger_rule import TriggerRule
 from google.cloud import monitoring_v3
 
-import node_pool_util
+from dags.tpu_obs.utils import node_pool_util
 from dags.common.vm_resource import Project
 from dags.map_reproducibility.utils import constants
 
 
 @task.sensor(poke_interval=30, timeout=900, mode="reschedule")
 def check_availability(
-    checking_available: bool, node_pool: node_pool_util.Info
+    node_pool: node_pool_util.Info, checking_available: bool
 ) -> bool:
   """Check current multi-host nodepool availability.
 
-  This is a sensor task which runs ever 30s for 900s. The task takes
+  This is a sensor task which runs every 30s for 900s. The task takes
   the current list of the multi_host availability outputs for the last 5
   minutes aggregated to 1 minute intervals. The results are listed, and
   the most recent result is checked to determine if it matches
@@ -36,16 +37,19 @@ def check_availability(
     bool: True if intended event is detected. False if the intended event
     is not detected.
   """
-  now_in_seconds = int(time.time())
+  context = get_current_context()
+  ti = context["ti"]
+  now_in_seconds = int(ti.start_date.timestamp())
+  logging.info("start_date: %s", now_in_seconds)
 
   api_client = monitoring_v3.MetricServiceClient()
   results = api_client.list_time_series(
       request={
-          "name": f"projects/{node_pool_info.project_id}",
+          "name": f"projects/{node_pool.project_id}",
           "filter": (
               'metric.type="kubernetes.io/node_pool/multi_host/available" '
-              f'AND resource.labels.cluster_name="{node_pool_info.cluster_name}" '
-              f'AND resource.labels.node_pool_name="{node_pool_info.node_pool_name}"'
+              f'AND resource.labels.cluster_name="{node_pool.cluster_name}" '
+              f'AND resource.labels.node_pool_name="{node_pool.node_pool_name}"'
           ),
           "interval": monitoring_v3.TimeInterval({
               "end_time": {"seconds": now_in_seconds},
@@ -62,15 +66,11 @@ def check_availability(
 
   state = False
   for time_series in results:
-    if not time_series.points:
-      break
     for point in time_series.points:
       assert isinstance(point.value, monitoring_v3.types.common.TypedValue)
-      if not point.value.bool_value:
-        logging.info("No value.")
-      else:
-        logging.info("Point value: %s", point.value.bool_value)
-        state = point.value.bool_value
+      assert isinstance(point.value.bool_value, bool)
+      logging.info("Point value: %s", point.value.bool_value)
+      state = point.value.bool_value
       break
     break
 
@@ -109,9 +109,9 @@ with models.DAG(
 
   create_node_pool = node_pool_util.create(info=node_pool_info)
 
-  wait_availability = check_availability(True, node_pool_info)
+  wait_availability = check_availability(node_pool_info, True)
 
-  wait_unavailability = check_availability(False, node_pool_info)
+  wait_unavailability = check_availability(node_pool_info, False)
 
   # Checks if the cluster exists. If not, the DAG will fail.
   check_for_cluster = BashOperator(
@@ -143,7 +143,7 @@ with models.DAG(
   )(info=node_pool_info)
 
   # This ensures the test will be properly marked as success or failure
-  end = DummyOperator(task_id="end")
+  end = EmptyOperator(task_id="end")
 
   (
       check_for_cluster
