@@ -142,9 +142,9 @@ def list_nodes(node_pool: Info) -> List[str]:
   node_names = []
 
   for url in instance_group:
-    # Extract the {instance_group_name} segments from an URL:
+    # Extract the the name of an instance group from an URL like this:
     # https://www.googleapis.com/compute/v1/projects/tpu-prod-env-one-vm/zones/asia-northeast1-b/instanceGroups/gke-yuna-xpk-v6e-2-yuna-xpk-v6e-2-np--b3a745c7-grp
-    # Group → instance group name (e.g. "gke-yuna-xpk-v6e-2-yuna-xpk-v6e-2-np--b3a745c7-grp")
+    # in which, `gke-yuna-xpk-v6e-2-yuna-xpk-v6e-2-np--b3a745c7-grp` is the of the instance group
     match = re.search(r"instanceGroupManagers/([\w-]+)", url)
     if not match:
       logging.warning("Could not parse instance group URL: %s", url)
