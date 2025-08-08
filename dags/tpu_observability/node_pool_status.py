@@ -5,8 +5,6 @@ import copy
 import datetime
 
 from airflow import models
-from airflow.decorators import task
-from airflow.operators.empty import EmptyOperator
 
 from dags.common.vm_resource import Project
 from dags.common.vm_resource import Zone
@@ -27,14 +25,16 @@ with models.DAG(
     doc_md="""
         ### GKE Node Pool Status Validation DAG
 
-        This DAG automates the lifecycle of a GKE node pool for testing purposes.
-        This test requires an existing cluster, and if there are any other limitations
-        It will create a node-pool under the specified cluster, and clean it up after the tests
+        This DAG automates the process of going through the lifecycle of a GKE
+        node pool and verifies whether the node pool status is reported correctly.
+        This test requires an existing cluster. It will create a node-pool under
+        the specified cluster, and clean it up after the tests.
 
-        It creates a node pool, waits for it to be running, deletes a random node to trigger reconciliation,
-        waits for it to become running again, and finally cleans up.It also
-        tests the error state by creating a node pool with invalid parameters
-        and verifies thatthe status changes to ERROR."
+        It creates a node pool, waits for it from provisioning to be running,
+        deletes a random node to trigger reconciliation, waits for it to become
+        running again, and finally cleans up.
+        It also tests the error state by creating a node pool with invalid
+        parameters and verifies that the status changes to error.
     """,
 ) as dag:
 

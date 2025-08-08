@@ -8,7 +8,7 @@ import random
 import re
 import subprocess
 import time
-from typing import List, Tuple
+from typing import List
 
 from airflow.decorators import task
 from google import auth
@@ -43,7 +43,7 @@ class Status(enum.Enum):
 
 @dataclasses.dataclass
 class Info:
-  """Class to hold the information of a GKE node pool."""
+  """Encapsulates information related to a GKE node pool and represents a specific node pool."""
 
   project_id: str
   cluster_name: str
@@ -103,7 +103,6 @@ def list_nodes(node_pool: Info) -> List[str]:
 
   It queries GKE and Compute APIs and parses instance group URLs
   to extract VM instance names.
-
 
   Args:
       node_pool: An instance of the Info class that encapsulates
@@ -167,8 +166,8 @@ def list_nodes(node_pool: Info) -> List[str]:
     for instance_item in instances.get("items", []):
       instance_url = instance_item["instance"]
       # Extract the {node_name} segments from an URL like this:
-      #   https://www.googleapis.com/compute/v1/projects/<project>/zones/<zone>/instances/<node_name>
-      # (e.g., gke-tpu-b3a745c7-08bk)
+      # https://www.googleapis.com/compute/v1/projects/<project>/zones/<zone>/instances/<node_name>
+      # in which, `gke-tpu-b3a745c7-08bk` is the name of the node
       node_name = re.search(r"gke[\w-]+", instance_url).group()
       if node_name:
         node_names.append(node_name)
@@ -181,11 +180,10 @@ def list_nodes(node_pool: Info) -> List[str]:
 
 @task
 def delete_one_random_node(node_pool: Info) -> None:
-  """Defines an Airflow task to delete a random node from the GKE node pool.
+  """Delete one random node from the specified GKE node pool.
 
-  This function uses Airflow's `@task` decorator to create a Python callable
-  that will be executed as an Airflow task. The callable itself performs
-  the node listing, selection, and deletion using `gcloud` commands.
+  This function first lists all nodes under the given node pool,
+  then randomly selects one node and deletes it.
 
   Args:
       node_pool: An instance of the Info class that encapsulates
@@ -224,6 +222,7 @@ def delete_one_random_node(node_pool: Info) -> None:
 
 def _query_status_metric(node_pool: Info) -> Status:
   """Queries the latest status of the specified GKE node pool.
+
   This function retrieves the status by querying the metric
   "kubernetes.io/node_pool/status" via the Google Cloud Monitoring API.
 
@@ -232,7 +231,7 @@ def _query_status_metric(node_pool: Info) -> Status:
                    the configuration and metadata of a GKE node pool.
 
   Returns:
-      A Status Enum object representing the latest status of the node pool.
+      A `Status` enum representing the latest status of the node pool.
   """
   monitoring_client = monitoring_v3.MetricServiceClient()
   project_name = f"projects/{node_pool.project_id}"
@@ -249,11 +248,11 @@ def _query_status_metric(node_pool: Info) -> Status:
           {
               "end_time": {"seconds": now},
               # Metrics are sampled every 60s and stored in the GCP backend,
-              # but it may take up to 2 minutes for the data to become available on the
-              # client side.
+              # but it may take up to 2 minutes for the data to become
+              # available on the client side.
               # Therefore, a longer time interval is necessary.
-              # A 5-minute window is an arbitrary but sufficient choice to ensure we
-              # can retrieve the latest metric data.
+              # A 5-minute window is an arbitrary but sufficient choice to
+              # ensure we can retrieve the latest metric data.
               "start_time": {"seconds": now - 300},
           }
       ),
@@ -293,7 +292,15 @@ def wait_for_status(
 
   This is a task waits for the node pool to enter the target status by querying
   the status metric and comparing it with the expected status.
-  The default poke_interval and timeout, and document that caller can override them
+  defaults task poke interval to 60 seconds and timeout to 600 seconds.
+
+  Args:
+      node_pool: An instance of the Info class that encapsulates
+                   the configuration and metadata of a GKE node pool.
+      status: The target status to wait for, represented as a `Status` enum.
+      context: The Airflow context dictionary, which includes task metadata.
+  Returns:
+      A boolean indicating whether the node pool has reached the target status.
   """
   timeout = context["task"].timeout
   logging.info(
