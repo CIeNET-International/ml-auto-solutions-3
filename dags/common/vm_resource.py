@@ -298,7 +298,7 @@ class XpkClusters:
       zone=Zone.US_EAST5_A.value,
   )
   GPU_A3PLUS_CLUSTER = XpkClusterConfig(
-      name="a3plus-benchmark",
+      name="a3mega-benchmark",
       device_version=GpuVersion.XPK_H100_MEGA,
       core_count=8,
       project=Project.SUPERCOMPUTER_TESTING.value,

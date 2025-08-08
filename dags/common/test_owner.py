@@ -73,12 +73,21 @@ DEPP_L = "ooops678"
 ORTI_B = "ortibazar"
 
 # Sparsity & Diffusion DevX
+<<<<<<< HEAD
 RAN_R = "RissyRan"
 PARAM_B = "parambole"
 KUNJAN_P = "coolkp"
 MICHELLE_Y = "michelle-yooh"
 SHUNING_J = "shuningjin"
 ROHAN_B = "Rohan-Bierneni"
+=======
+RAN_R = "Ran R."
+PARAM_B = "Param B."
+KUNJAN_P = "Kunjan P."
+MICHELLE_Y = "Michelle Y."
+SHUNING_J = "Shuning J."
+ROHAN_B = "Rohan B."
+>>>>>>> 981dc93 (Removed Stable tests from JAII DAG and updated GPU cluster)
 
 # Inference
 ANDY_Y = "Andy Y."
