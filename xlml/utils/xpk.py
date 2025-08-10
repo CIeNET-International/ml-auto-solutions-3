@@ -28,6 +28,10 @@ from dags.common.vm_resource import GpuVersion
 
 # b/411426745 - Setting branch to 0.4.1 till the depdency issue is resolved.
 MAIN_BRANCH = "v0.4.1"
+
+# b/437817546 - Orbax test need to use a branch to bypass the `validate_dependencies()` crash issue
+BRANCH_ABHINAV_MTC = "abhinav-mtc"
+
 # Duration = past 7 days
 LOGGING_URL_FORMAT = (
     "https://pantheon.corp.google.com/logs/query;"
@@ -51,12 +55,8 @@ def get_xpk_setup_cmd(tmpdir, branch: str = MAIN_BRANCH):
   cmds = [
       "set -xue",
       clone_branch,
-      f"cd {tmpdir}/xpk/src/xpk",
-      "sed -i '/validate_dependencies()/s/^/#/' main.py || true",
-      "cat main.py",
       "pip install ruamel.yaml docker",
   ]
-
   return cmds
 
 
@@ -118,19 +118,25 @@ def run_workload(
         f" --{multi_keyword}={num_slices} --docker-image={docker_image}"
         f" --project={cluster_project} --zone={zone}"
         f" --env {metric_config.SshEnvVars.GCS_OUTPUT.name}={gcs_path}"
-        " --restart-on-user-code-failure"
     )
     if ramdisk_directory:
       workload_create_cmd += f" --ramdisk-directory={ramdisk_directory}"
-    if mtc_enabled:
-      workload_create_cmd += " --mtc-enabled"
 
-    # For Orbax DAG
+    # For now using abhinav-mtc branch with "mtc_enabled" since 0.4.1 does not support this flag and version > 0.4.1 pod crash b/437817546
+    if mtc_enabled:
+      if xpk_branch == BRANCH_ABHINAV_MTC:
+        workload_create_cmd += " --mtc_enabled"
+      else:
+        workload_create_cmd += " --mtc-enabled"
+
+    # For Orbax DAG add flag '--max-restars=50' need it to make it work for xpk version > 0.4.1
+    # For non-orbax runs add flag ' --restart-on-user-code-failure' xpk 0.4.1
     if ramdisk_directory and mtc_enabled:
-      workload_create_cmd = workload_create_cmd.replace(
-          " --restart-on-user-code-failure", ""
-      )
       workload_create_cmd += " --max-restarts=50"
+
+    # Only add restart-on-user-code-failure for v0.4.1
+    if xpk_branch == "v0.4.1":
+      workload_create_cmd += " --restart-on-user-code-failure"
 
     # If using a valid GPU and the XPK branch is set to "main", then branch is switch to "v0.4.1".
     if is_valid_gpu_version(accelerator_type) and xpk_branch == MAIN_BRANCH:
