@@ -11,7 +11,6 @@ from google.cloud import logging as logging_api
 
 from dags.orbax.util import gcs
 
-
 @task
 def generate_timestamp():
   return datetime.now(timezone.utc)
@@ -64,7 +63,7 @@ def validate_log_with_step(
       namespace=namespace,
       pod_pattern=pod_pattern,
       container_name=container_name,
-      text_filter=text_filter,
+      text_filter=f'jsonPayload.message=~"{text_filter}"',
       start_time=start_time,
       end_time=end_time,
   )
@@ -104,36 +103,37 @@ def validate_log_with_gcs(
     text_filter: Optional[str] = None,
     start_time: Optional[datetime] = None,
     end_time: Optional[datetime] = None,
-) -> bool:
+) -> None:
   """
-  Validates workload logs to ensure correct training steps are present.
+  Validates workload logs against GCS bucket checkpoints.
 
-  This function retrieves log entries from a specified GKE cluster and checks
-  if a list of validation steps (`vali_step_list`) is present in the logs.
-  It specifically looks for lines containing `directory=/local/` followed by
-  the step number. If the number of found steps matches the expected number,
-  the validation passes. Otherwise, it raises an `AirflowFailException`.
+  This function first queries logs from a specified GKE cluster to determine the
+  GCS bucket path used for checkpointing. It then retrieves logs related to
+  checkpoint save operations, extracts the step numbers, and verifies that the
+  corresponding checkpoint files exist in the GCS bucket. The function passes if the
+  latest step found in the logs matches the latest step found in the GCS bucket's
+  checkpoint filenames. It raises an exception on failure.
 
   Args:
-    project_id (str): The Google Cloud project ID.
-    location (str): The GKE cluster location.
-    cluster_name (str): The GKE cluster name.
-    namespace (str, optional): The Kubernetes namespace. Defaults to "default".
-    pod_pattern (str, optional): A glob pattern to match pod names. Defaults to "*".
-    container_name (Optional[str], optional): The container name to filter logs by.
-    text_filter (Optional[str], optional): A comma-separated string to
-      filter log entries by their `textPayload` content.
-    start_time (Optional[datetime], optional): The start time for log retrieval.
-      Defaults to 12 hours ago.
-    end_time (Optional[datetime], optional): The end time for log retrieval.
-      Defaults to the current time.
-    vali_step_list (Optional[list], optional): A list of step numbers to validate.
+    project_id: The Google Cloud project ID.
+    location: The GKE cluster location.
+    cluster_name: The GKE cluster name.
+    namespace: The Kubernetes namespace. Defaults to "default".
+    pod_pattern: A glob pattern to match pod names. Defaults to "*".
+    container_name: An optional container name to filter logs by.
+    text_filter: An optional string to filter log entries by their `textPayload`.
+    start_time: The start time for log retrieval.
+    end_time: The end time for log retrieval.
 
   Returns:
-    bool:
+    None. The function completes successfully if all validation steps are found.
+
+  Raises:
+    AirflowFailException: If the bucket path format is invalid, if checkpoint files
+      are missing, if steps cannot be extracted from log lines,if step lists
+      are empty, or if the latest steps do not match.
   """
 
-  # We need to match the original run_name to the run_name in the gcs bucket.
   # Dues to datetime.datetime.now().strftime("%Y-%m-%d-%H-%M") behaviour
   # is better to get the run_name from already executed pod (post mortem)
   gcs_bucket_run_name = None
@@ -143,7 +143,7 @@ def validate_log_with_gcs(
       cluster_name=cluster_name,
       namespace="default",
       pod_pattern="*",
-      text_filter="Config param checkpoint_dir:",
+      text_filter=f'textPayload=~"Config param checkpoint_dir:"',
       start_time=start_time,
       end_time=end_time,
   )
@@ -171,7 +171,7 @@ def validate_log_with_gcs(
       namespace=namespace,
       pod_pattern=pod_pattern,
       container_name=container_name,
-      text_filter=text_filter,
+      text_filter=f'textPayload=~"{text_filter}"',
       start_time=start_time,
       end_time=end_time,
   )
@@ -218,7 +218,9 @@ def validate_log_with_gcs(
           # Add it to a global list that we will use later to compare with bucket
           gcs_save_step_list.append(int(step))
         else:
-          return False
+          raise AirflowFailException(
+            f"Could not find gcs_checkpoint_path or step in line: {line}"
+        )
 
   # Compare last step found in replicator logs and last (only one)
   # step extracted from filename bucket
@@ -234,13 +236,12 @@ def validate_log_with_gcs(
     last_step_bucket = match.group(0)[1:]
     if int(last_step_bucket) == max(gcs_save_step_list):
       logging.info("Validate success")
-      return True
   else:
-      raise AirflowFailException(
+    raise AirflowFailException(
         f"Steps in bucket or replicator logs are empty. "
         f"GCS bucket steps found: {len(gcs_save_step_list_bucket)}. "
         f"Replicator log steps found: {len(gcs_save_step_list)}."
-      )
+    )
   return max(gcs_save_step_list), max(gcs_save_step_list_bucket)
 
 
@@ -254,7 +255,7 @@ def list_log_entries(
     text_filter: Optional[str] = None,
     start_time: Optional[datetime] = None,
     end_time: Optional[datetime] = None,
-) -> list:
+) -> list[logging_api.LogEntry]:
   """
   List log entries for the specified Google Cloud project.
   This function connects to Google Cloud Logging,
@@ -294,26 +295,23 @@ def list_log_entries(
   start_time_str = start_time.strftime("%Y-%m-%dT%H:%M:%SZ")
   end_time_str = end_time.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-  # Construct the log filter
-  log_filter = (
-      f'resource.labels.project_id="{project_id}" '
-      f'resource.labels.location="{location}" '
-      f'resource.labels.cluster_name="{cluster_name}" '
-      f'resource.labels.namespace_name="{namespace}" '
-      f'resource.labels.pod_name:"{pod_pattern}" '
-      "severity>=DEFAULT "
-      f'timestamp>="{start_time_str}" '
-      f'timestamp<="{end_time_str}"'
-  )
+  conditions = [
+      f'resource.labels.project_id="{project_id}"',
+      f'resource.labels.location="{location}"',
+      f'resource.labels.cluster_name="{cluster_name}"',
+      f'resource.labels.namespace_name="{namespace}"',
+      f'resource.labels.pod_name:"{pod_pattern}"',
+      "severity>=DEFAULT",
+      f'timestamp>="{start_time_str}"',
+      f'timestamp<="{end_time_str}"',
+  ]
 
   if container_name:
-    log_filter += f' resource.labels.container_name="{container_name}"'
-
+    conditions.append(f'resource.labels.container_name="{container_name}"')
   if text_filter:
-    log_filter += f' "{text_filter}"'
+    conditions.append(f"{text_filter}")
 
-  # Retrieve log entries matching the filter
+  log_filter = " AND ".join(conditions)
+
   logging.info(f"Log filter constructed: {log_filter}")
-  entries = logging_client.list_entries(filter_=log_filter)
-
-  return entries
+  return list(logging_client.list_entries(filter_=log_filter))
