@@ -1,8 +1,20 @@
+<<<<<<< HEAD
+<<<<<<< HEAD
 """Utility functions for managing GKE node pools."""
 
 import dataclasses
 import enum
 import json
+=======
+"""Manages the lifecycle of a GKE node pool and verifies its status as an Airflow DAG.
+"""
+=======
+"""Utility functions for managing GKE node pools."""
+>>>>>>> 53cb7eb (1. Replace generic RuntimeError with AirflowFailException for better)
+
+import dataclasses
+import enum
+>>>>>>> e611b9d (Add a new DAG that tests the status of node pool are reported correctly)
 import logging
 import random
 import re
@@ -11,9 +23,23 @@ import time
 from typing import List
 
 from airflow.decorators import task
+<<<<<<< HEAD
+<<<<<<< HEAD
 from airflow.exceptions import AirflowFailException
 from google.cloud import monitoring_v3
 from google.cloud.monitoring_v3 import types
+=======
+=======
+from airflow.exceptions import AirflowFailException
+>>>>>>> 53cb7eb (1. Replace generic RuntimeError with AirflowFailException for better)
+from google import auth
+from google.cloud import monitoring_v3
+from google.cloud.monitoring_v3 import types
+from googleapiclient import discovery
+
+
+logger = logging.getLogger(__name__)
+>>>>>>> e611b9d (Add a new DAG that tests the status of node pool are reported correctly)
 
 
 class Status(enum.Enum):
@@ -40,6 +66,7 @@ class Status(enum.Enum):
 class Info:
   """Encapsulates information related to a GKE node pool and represents a specific node pool."""
 
+<<<<<<< HEAD
   project_id: str = None
   cluster_name: str = None
   node_pool_name: str = None
@@ -76,18 +103,57 @@ def create(
 
   if ignore_failure:
     command += "2>&1 || true "
+=======
+  project_id: str
+  cluster_name: str
+  node_pool_name: str
+  location: str
+  node_locations: str
+  machine_type: str
+  num_nodes: int
+  tpu_topology: str
+
+
+@task
+def create(node_pool: Info, ignore_failure: bool = False) -> None:
+  """Creates a GKE node pool by the given node pool information."""
+
+  command = f"""
+                gcloud container node-pools create {node_pool.node_pool_name} \\
+                --project={node_pool.project_id} \\
+                --cluster={node_pool.cluster_name} \\
+                --location={node_pool.location} \\
+                --node-locations {node_pool.node_locations} \\
+                --num-nodes={node_pool.num_nodes} \\
+                --machine-type={node_pool.machine_type} \\
+                --tpu-topology={node_pool.tpu_topology}
+            """
+  if ignore_failure:
+    command += " 2>&1 || true"
+>>>>>>> e611b9d (Add a new DAG that tests the status of node pool are reported correctly)
 
   process = subprocess.run(
       command, shell=True, check=True, capture_output=True, text=True
   )
+<<<<<<< HEAD
+<<<<<<< HEAD
   logging.info("STDOUT message: %s", process.stdout)
   logging.info("STDERR message: %s", process.stderr)
+=======
+  logger.debug("STDOUT message: %s", process.stdout)
+  logger.debug("STDERR message: %s", process.stderr)
+>>>>>>> e611b9d (Add a new DAG that tests the status of node pool are reported correctly)
+=======
+  logger.info("STDOUT message: %s", process.stdout)
+  logger.info("STDERR message: %s", process.stderr)
+>>>>>>> 53cb7eb (1. Replace generic RuntimeError with AirflowFailException for better)
 
 
 @task
 def delete(node_pool: Info) -> None:
   """Deletes the GKE node pool using gcloud command."""
 
+<<<<<<< HEAD
   command = (
       f"gcloud container node-pools delete {node_pool.node_pool_name} "
       f"--project={node_pool.project_id} "
@@ -95,12 +161,31 @@ def delete(node_pool: Info) -> None:
       f"--location={node_pool.location} "
       "--quiet"
   )
+=======
+  command = f"""
+                gcloud container node-pools delete {node_pool.node_pool_name} \\
+                --project {node_pool.project_id} \\
+                --cluster {node_pool.cluster_name} \\
+                --location {node_pool.location} \\
+                --quiet
+            """
+>>>>>>> e611b9d (Add a new DAG that tests the status of node pool are reported correctly)
 
   process = subprocess.run(
       command, shell=True, check=True, capture_output=True, text=True
   )
+<<<<<<< HEAD
+<<<<<<< HEAD
   logging.info("STDOUT message: %s", process.stdout)
   logging.info("STDERR message: %s", process.stderr)
+=======
+  logger.debug("STDOUT message: %s", process.stdout)
+  logger.debug("STDERR message: %s", process.stderr)
+>>>>>>> e611b9d (Add a new DAG that tests the status of node pool are reported correctly)
+=======
+  logger.info("STDOUT message: %s", process.stdout)
+  logger.info("STDERR message: %s", process.stderr)
+>>>>>>> 53cb7eb (1. Replace generic RuntimeError with AirflowFailException for better)
 
 
 def list_nodes(node_pool: Info) -> List[str]:
@@ -110,13 +195,19 @@ def list_nodes(node_pool: Info) -> List[str]:
   to extract VM instance names.
 
   Args:
+<<<<<<< HEAD
       node_pool: An instance of the Info class that encapsulates the
         configuration and metadata of a GKE node pool.
+=======
+      node_pool: An instance of the Info class that encapsulates
+                   the configuration and metadata of a GKE node pool.
+>>>>>>> e611b9d (Add a new DAG that tests the status of node pool are reported correctly)
   Returns:
       A list of node names within the specified GKE node pool.
   Raises:
       RuntimeError: If no instance groups or zone are found for the node pool.
   """
+<<<<<<< HEAD
   instance_group_urls_key = "instanceGroupUrls"
   process = subprocess.run(
       (
@@ -137,21 +228,64 @@ def list_nodes(node_pool: Info) -> List[str]:
   )
   if not instance_group_urls_val:
     raise AirflowFailException(
+=======
+  credentials, _ = auth.default()
+  container_client = discovery.build(
+      "container", "v1", credentials=credentials, cache_discovery=False
+  )
+  compute_client = discovery.build(
+      "compute", "v1", credentials=credentials, cache_discovery=False
+  )
+
+  nodepool_path = (
+      f"projects/{node_pool.project_id}/locations/{node_pool.location}"
+      f"/clusters/{node_pool.cluster_name}/nodePools/{node_pool.node_pool_name}"
+  )
+  nodepool = (
+      container_client.projects()
+      .locations()
+      .clusters()
+      .nodePools()
+      .get(name=nodepool_path)
+      .execute()
+  )
+
+  instance_group = nodepool.get("instanceGroupUrls", [])
+  if not instance_group:
+<<<<<<< HEAD
+    raise RuntimeError(
+>>>>>>> e611b9d (Add a new DAG that tests the status of node pool are reported correctly)
+=======
+    raise AirflowFailException(
+>>>>>>> 53cb7eb (1. Replace generic RuntimeError with AirflowFailException for better)
         f"No instance groups found for node pool {node_pool.node_pool_name}."
     )
 
   node_names = []
 
+<<<<<<< HEAD
   for url in instance_group_urls_val:
     # Extract the {instance_group_name} segments from an URL:
     # https://www.googleapis.com/compute/v1/projects/tpu-prod-env-one-vm/zones/asia-northeast1-b/instanceGroups/gke-yuna-xpk-v6e-2-yuna-xpk-v6e-2-np--b3a745c7-grp
     # in which, `gke-yuna-xpk-v6e-2-yuna-xpk-v6e-2-np--b3a745c7-grp`
     # is the of the instance group
+=======
+  for url in instance_group:
+    # Extract the {instance_group_name} segments from an URL:
+    # https://www.googleapis.com/compute/v1/projects/tpu-prod-env-one-vm/zones/asia-northeast1-b/instanceGroups/gke-yuna-xpk-v6e-2-yuna-xpk-v6e-2-np--b3a745c7-grp
+<<<<<<< HEAD
+    # in which, `gke-yuna-xpk-v6e-2-yuna-xpk-v6e-2-np--b3a745c7-grp` is the of the instance group
+>>>>>>> e611b9d (Add a new DAG that tests the status of node pool are reported correctly)
+=======
+    # in which, `gke-yuna-xpk-v6e-2-yuna-xpk-v6e-2-np--b3a745c7-grp`
+    # is the of the instance group
+>>>>>>> 53cb7eb (1. Replace generic RuntimeError with AirflowFailException for better)
     match = re.search(r"instanceGroupManagers/([\w-]+)", url)
     if not match:
       logging.warning("Could not parse instance group URL: %s", url)
       continue
 
+<<<<<<< HEAD
     instance_group_name = match.group(1)
 
     process = subprocess.run(
@@ -170,6 +304,22 @@ def list_nodes(node_pool: Info) -> List[str]:
     instances = json.loads(process.stdout)
 
     for instance_item in instances:
+=======
+    ig_name = match.group(1)
+
+    instances = (
+        compute_client.instanceGroups()
+        .listInstances(
+            project=node_pool.project_id,
+            zone=node_pool.node_locations,
+            instanceGroup=ig_name,
+            body={"instanceState": "ALL"},
+        )
+        .execute()
+    )
+
+    for instance_item in instances.get("items", []):
+>>>>>>> e611b9d (Add a new DAG that tests the status of node pool are reported correctly)
       instance_url = instance_item["instance"]
       # Extract the {node_name} segments from an URL like this:
       # https://www.googleapis.com/compute/v1/projects/<project>/zones/<zone>/instances/<node_name>
@@ -193,7 +343,11 @@ def delete_one_random_node(node_pool: Info) -> None:
 
   Args:
       node_pool: An instance of the Info class that encapsulates
+<<<<<<< HEAD
         the configuration and metadata of a GKE node pool.
+=======
+                   the configuration and metadata of a GKE node pool.
+>>>>>>> e611b9d (Add a new DAG that tests the status of node pool are reported correctly)
 
   Raises:
       ValueError: If no nodes are found in the specified node pool.
@@ -201,7 +355,15 @@ def delete_one_random_node(node_pool: Info) -> None:
 
   nodes_list = list_nodes(node_pool)
   if not nodes_list:
+<<<<<<< HEAD
+<<<<<<< HEAD
     raise AirflowFailException(
+=======
+    raise ValueError(
+>>>>>>> e611b9d (Add a new DAG that tests the status of node pool are reported correctly)
+=======
+    raise AirflowFailException(
+>>>>>>> 53cb7eb (1. Replace generic RuntimeError with AirflowFailException for better)
         f"No nodes found in node pool '{node_pool.node_pool_name}'. "
         "Cannot proceed with node deletion."
     )
@@ -212,18 +374,37 @@ def delete_one_random_node(node_pool: Info) -> None:
       node_to_delete,
   )
 
+<<<<<<< HEAD
   command = (
       f"gcloud compute instances delete {node_to_delete} "
       f"--project={node_pool.project_id} "
       f"--zone={node_pool.node_locations} "
       "--quiet"
   )
+=======
+  command = f"""
+                gcloud compute instances delete {node_to_delete} \\
+                    --project={node_pool.project_id} \\
+                    --zone={node_pool.node_locations} \\
+                    --quiet
+            """
+>>>>>>> e611b9d (Add a new DAG that tests the status of node pool are reported correctly)
 
   process = subprocess.run(
       command, shell=True, check=True, capture_output=True, text=True
   )
+<<<<<<< HEAD
+<<<<<<< HEAD
   logging.info("STDOUT message: %s", process.stdout)
   logging.info("STDERR message: %s", process.stderr)
+=======
+  logger.debug("STDOUT message: %s", process.stdout)
+  logger.debug("STDERR message: %s", process.stderr)
+>>>>>>> e611b9d (Add a new DAG that tests the status of node pool are reported correctly)
+=======
+  logger.info("STDOUT message: %s", process.stdout)
+  logger.info("STDERR message: %s", process.stderr)
+>>>>>>> 53cb7eb (1. Replace generic RuntimeError with AirflowFailException for better)
 
 
 def _query_status_metric(node_pool: Info) -> Status:
@@ -250,6 +431,10 @@ def _query_status_metric(node_pool: Info) -> Status:
           f'resource.labels.cluster_name = "{node_pool.cluster_name}" '
           f'resource.labels.node_pool_name = "{node_pool.node_pool_name}"'
       ),
+<<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> 53cb7eb (1. Replace generic RuntimeError with AirflowFailException for better)
       interval=types.TimeInterval({
           "end_time": {"seconds": now},
           # Metrics are sampled every 60s and stored in the GCP backend,
@@ -260,6 +445,23 @@ def _query_status_metric(node_pool: Info) -> Status:
           # ensure we can retrieve the latest metric data.
           "start_time": {"seconds": now - 300},
       }),
+<<<<<<< HEAD
+=======
+      interval=types.TimeInterval(
+          {
+              "end_time": {"seconds": now},
+              # Metrics are sampled every 60s and stored in the GCP backend,
+              # but it may take up to 2 minutes for the data to become
+              # available on the client side.
+              # Therefore, a longer time interval is necessary.
+              # A 5-minute window is an arbitrary but sufficient choice to
+              # ensure we can retrieve the latest metric data.
+              "start_time": {"seconds": now - 300},
+          }
+      ),
+>>>>>>> e611b9d (Add a new DAG that tests the status of node pool are reported correctly)
+=======
+>>>>>>> 53cb7eb (1. Replace generic RuntimeError with AirflowFailException for better)
       view="FULL",
   )
 
@@ -300,7 +502,29 @@ def wait_for_status(
 
   Args:
       node_pool: An instance of the Info class that encapsulates
+<<<<<<< HEAD
         the configuration and metadata of a GKE node pool.
+<<<<<<< HEAD
+<<<<<<< HEAD
+=======
+<<<<<<< HEAD
+                   the configuration and metadata of a GKE node pool.
+>>>>>>> e611b9d (Add a new DAG that tests the status of node pool are reported correctly)
+=======
+>>>>>>> e24232a (Revert "Add a new DAG that tests the status of node pool are reported correctly (#810)")
+=======
+<<<<<<< HEAD
+                   the configuration and metadata of a GKE node pool.
+=======
+        the configuration and metadata of a GKE node pool.
+>>>>>>> 70fb727 (Add a new DAG that tests the status of node pool are reported correctly (#810))
+>>>>>>> 13333fc (Add a new DAG that tests the status of node pool are reported correctly (#810))
+<<<<<<< HEAD
+>>>>>>> 464fdcd (Add a new DAG that tests the status of node pool are reported correctly (#810))
+=======
+>>>>>>> 478dec4 (Add a new DAG that tests the status of node pool are reported correctly (#810))
+=======
+>>>>>>> e24232a (Revert "Add a new DAG that tests the status of node pool are reported correctly (#810)")
       status: The target status to wait for, represented as a `Status` enum.
       context: The Airflow context dictionary, which includes task metadata.
   Returns:
@@ -317,6 +541,7 @@ def wait_for_status(
 
   latest_status = _query_status_metric(node_pool)
   return latest_status == status
+<<<<<<< HEAD
 
 
 @task
@@ -415,3 +640,5 @@ def wait_for_availability(
       timeout,
   )
   return availability == state
+=======
+>>>>>>> e611b9d (Add a new DAG that tests the status of node pool are reported correctly)
