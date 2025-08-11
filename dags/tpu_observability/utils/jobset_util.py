@@ -14,11 +14,14 @@ from typing import Final
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from google.cloud.monitoring_v3 import types
+import google.auth.transport.requests
+import kubernetes
 
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.tpu_observability.utils.gcp_util import query_time_series
 from dags.tpu_observability.utils.time_util import TimeUtil
+from xlml.utils import gke
 
 
 class Workload:
@@ -30,6 +33,7 @@ class Workload:
   JAX_TPU_BENCHMARK = json.dumps(
       textwrap.dedent(
           """
+          pip install jax[k8s] libtpu
           python -c '
           import jax
           import jax.numpy as jnp
@@ -247,6 +251,90 @@ class Command:
     ])
 
 
+def get_replica_num(
+    replica_type: str, job_name: str, node_pool: node_pool.Info
+) -> int:
+  """Get the number of a certain type of replicas from a running jobset.
+
+  This uses the Kubernetes API to connect to a desired cluster and returns
+  the number of replicas in a certain status.
+
+  Args:
+    replica_type: The type of replica being searched for.
+    job_name: The name of the job replica which is run from the jobset.
+    node_pool: The Info object containing the cluster information needed for
+    the kubernetes API to connect to it.
+  Returns:
+    The number of replicas of the specific type in the jobset.
+  """
+  api_client = gke.get_authenticated_client(
+      node_pool.project_id, node_pool.region, node_pool.cluster_name
+  )
+
+  api = kubernetes.client.CustomObjectsApi(api_client)
+
+  jobsets = api.list_namespaced_custom_object(
+      group="jobset.x-k8s.io",
+      version="v1alpha2",
+      namespace="default",
+      plural="jobsets",
+  )
+
+  try:
+    replica_job_status = jobsets["items"][0]["status"]["replicatedJobsStatus"]
+    name = replica_job_status[0]["name"]
+    replicas = replica_job_status[0][replica_type]
+    logging.info("Found %s replicas", replicas)
+
+  except (KeyError, IndexError, TypeError) as e:
+    logging.error("Error in getting jobset satus: %s", e)
+    return 0
+
+  if name != job_name:
+    raise AirflowFailException(
+        f"Jobset found '{name}' does not match jobset name given '{job_name}'"
+    )
+
+  return replicas
+
+
+def get_running_pods(node_pool: node_pool.Info, namespace="default") -> list:
+  """Get a list of pods which are in the "running" state.
+
+  Args:
+    node_pool: The Info object containing the cluster information needed for
+    the kubernetes API to connect to it.
+    namespace: The kubernetes namespace which is being searched for running
+    pods.
+  Returns:
+    A list of all the pods in the "running" state.
+  """
+  with tempfile.TemporaryDirectory() as tmpdir:
+    kube_dir = tmpdir + "/kubeconfig"
+    env = os.environ.copy()
+    env["KUBECONFIG"] = kube_dir
+
+    cmd = " && ".join([
+        Command.get_credentials_command(node_pool),
+        (f"kubectl get pods -n {namespace} -o json"),
+    ])
+
+    stdout = subprocess.run_exec(cmd, env=env)
+    logging.info("Command Execute:\n %s", cmd)
+
+    data = json.loads(stdout)
+
+    running_pods = [
+        item["metadata"]["name"]
+        for item in data.get("items", [])
+        if item.get("status", {}).get("phase") == "Running"
+    ]
+
+    logging.info("Running pods: %s", running_pods)
+
+  return running_pods
+
+
 @task
 def run_workload(
     node_pool: node_pool.Info, yaml_config: str, namespace: str
@@ -397,3 +485,71 @@ def wait_for_jobset_started(
   ]
 
   return all(p > threshold_value for p in last_n_data_points)
+
+
+@task.sensor(poke_interval=60, timeout=3600, mode="reschedule")
+def wait_for_jobset_ttr(node_pool: node_pool.Info) -> bool:
+  """Polls the jobset time_between_interruptions metric.
+
+  A sensor task which polls the jobset time_between_interruptions metric
+  every 60 seconds for 60 minutes. 60 minutes is used here since this
+  metric does have a long latency before appearing in monitoring, typically
+  between 30-45 minutes. While it may be possible for this latency to be
+  longer than 60 minutes, it would be exceedingly rare, and it would be
+  impractical for the test to run longer.
+
+  Args:
+    info(Info): An instance of the Info class that encapsulates
+    the configuration and metadata of a GKE node pool and workload.
+  """
+  now = datetime.datetime.now()
+  end_time = TimeUtil.from_datetime(now)
+  start_time = TimeUtil.from_datetime(now - datetime.timedelta(minutes=60))
+
+  logging.info("Now %s", now)
+  logging.info("End time %s", end_time)
+  logging.info("Start time %s", start_time)
+
+  time_series = query_time_series(
+      node_pool.project_id,
+      (
+          'metric.type="kubernetes.io/jobset/times_to_recover" '
+          f'resource.labels.cluster_name="{node_pool.cluster_name}" '
+      ),
+      start_time=start_time,
+      end_time=end_time,
+  )
+
+  # We just need to know that the event happened at all
+  if len(time_series) > 0:
+    logging.info("Event detected at %s", now)
+    return True
+  logging.info("No time series found at %s. Continuing...", now)
+  return False
+
+
+@task.sensor(poke_interval=30, timeout=600, mode="reschedule")
+def wait_for_jobset_status_occurrence(
+    replica_type: str, job_name: str, node_pool: node_pool.Info
+):
+  """A sensor which checks if are any jobset replicas in a status type.
+
+  Args:
+    replica_type(str): The type of status being checked for.
+    job_name(str): The name of the job replica which is run from the jobset.
+    node_pool(Info): The Info object containing the cluster information needed
+    for the kubernetes API to connect to it.
+  """
+  logging.info("Checking for number of replicas of type: %s", replica_type)
+  ready_replicas = get_replica_num(
+      replica_type=replica_type,
+      job_name=job_name,
+      node_pool=node_pool,
+  )
+  return ready_replicas > 0
+
+
+@task.sensor(poke_interval=30, timeout=600, mode="reschedule")
+def wait_for_all_pods_running(num_pods: int, node_pool: node_pool.Info):
+  num_running = len(get_running_pods(node_pool=node_pool, namespace="default"))
+  return num_running == num_pods
