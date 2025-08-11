@@ -7,6 +7,7 @@ with HNS (Hierarchical Namespace)
 import datetime
 from airflow import models
 from dataclasses import dataclass
+from typing import Optional
 
 from dags import composer_env, gcs_bucket
 from dags.common import test_owner
@@ -58,8 +59,8 @@ class Testconfig:
   replicator_min: int
   step: int
   local_checkpoint_step: int
-  checkpoint_step: int
   ram_disk_mi: str
+  checkpoint_step: Optional[int] = None
 
 
 with models.DAG(
@@ -85,11 +86,10 @@ with models.DAG(
           accelerator="v5p-128",
           slices=[2],
           model_name="llama2-7b",
-          short_id="max-sv",
-          replicator_min=30,
-          step=100,
+          short_id="max-sv-gcs",
+          replicator_min=1,
+          step=200,
           local_checkpoint_step=20,
-          checkpoint_step=25,
           ram_disk_mi="800000Mi",
       ),
   ]
@@ -122,7 +122,7 @@ with models.DAG(
             f"global_parameter_scale=1 base_output_directory={BASE_OUTPUT_DIRECTORY} "
             f"dataset_type=synthetic steps={test_config.step} per_device_batch_size=1 "
             f"max_target_length=256 model_name={test_config.model_name} per_device_batch_size=2 "
-            f"reuse_example_batch=1 enable_emergency_checkpoint=true checkpoint_period={test_config.checkpoint_step} "
+            f"reuse_example_batch=1 enable_emergency_checkpoint=true "
             f"local_checkpoint_directory={RAM_DISK} local_checkpoint_period={test_config.local_checkpoint_step} "
             f"use_replicator_service={USE_REPLICATOR} replicator_backup_interval_minutes={test_config.replicator_min} "
             f"run_name={run_name}",
@@ -137,7 +137,7 @@ with models.DAG(
             test_name=f"{test_config.short_id}-mtc",
             run_model_cmds=workload_command,
             docker_image=image.value,
-            test_owner=test_owner.CAMILO,
+            test_owner=test_owner.CAMILO_Q,
         ).run(
             ramdisk_directory=RAM_DISK,
             mtc_enabled=True,
@@ -153,7 +153,7 @@ with models.DAG(
             test_name=f"{test_config.short_id}-cleanup",
             run_model_cmds=cleanup_command,
             docker_image=image.value,
-            test_owner=test_owner.CAMILO,
+            test_owner=test_owner.CAMILO_Q,
         ).run(
             ramdisk_directory=RAM_DISK,
             mtc_enabled=True,

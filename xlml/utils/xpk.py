@@ -30,7 +30,6 @@ from dags.common.vm_resource import GpuVersion
 BRANCH_V0_4_1 = "v0.4.1"
 MAIN_BRANCH = BRANCH_V0_4_1
 
-
 # b/437817546 - Orbax test need to use a branch to bypass the `validate_dependencies()` crash issue
 BRANCH_ABHINAV_MTC = "abhinav-mtc"
 
