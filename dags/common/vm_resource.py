@@ -90,10 +90,7 @@ class Region(enum.Enum):
   # used for GKE
   US_CENTRAL1 = "us-central1"
   ASIA_NORTHEAST1 = "asia-northeast1"
-<<<<<<< HEAD
   US_EAST5 = "us-east5"
-=======
->>>>>>> e611b9d (Add a new DAG that tests the status of node pool are reported correctly)
 
 
 class Zone(enum.Enum):
