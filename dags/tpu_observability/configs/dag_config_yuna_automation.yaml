@@ -1,0 +1,109 @@
+# ==============================================================================
+# CONFIGURATION INHERITANCE & PRIORITY:
+# This file follows a layered override pattern. Values are merged in this order:
+# 1. 'env' section (Lowest Priority): Base defaults for prod or dev.
+# 2. 'dag' section (Medium Priority): Overrides specific to a DAG name.
+# 3. Python Task (Highest Priority): Manual overrides passed in code.
+#
+# NOTE: If a key exists in both 'env' and 'dag', the 'dag' value will be used.
+# ==============================================================================
+
+env:
+  # Base settings applied to all DAGs running in 'dev' mode
+  dev:
+    project_id: "cienet-cmcs"
+    cluster_name: "yuna-automation"
+    location: "us-central1"
+    region: "us-central1"
+    node_locations: "us-central1-b"
+    zone: "us-central1-b"
+    reservation: ""
+    num_nodes: 4
+
+  # Base settings applied to all DAGs running in 'prod' mode
+  prod:
+    project_id: "cienet-cmcs"
+    cluster_name: "yuna-automation"
+    location: "us-central1"
+    region: "us-central1"
+    node_locations: "us-central1-b"
+    zone: "us-central1-b"
+    reservation: ""
+    num_nodes: 4
+
+dag:
+  # The following keys must match the 'dag_name' parameter in the Python task.
+  # Values defined here will overwrite the corresponding values in the 'env' section.
+
+  gke_node_pool_status:
+    node_pool_name: "node-pool-status-v6e-autotest"
+    wrong_node_location: "asia-east1-c"
+
+  gke_node_pool_label_update:
+    node_pool_name: "update-node-pool-label-v6e-autotest"
+
+  multi_host_nodepool_rollback:
+    node_pool_name: "multi-host-nodepool-rollback-auto"
+
+  tpu_info_format_validation_dag:
+    region: "us-central1"
+    node_pool_name: "tpu-info-format-test-v6e"
+    node_pool_name_2: "tpu-info-format-test-v6e-2"
+
+  jobset_rollback_ttr:
+    node_pool_name: "jobset-ttr-rollback-v6e"
+
+  node_pool_ttr_update_label:
+    node_pool_name: "node-pool-ttr-update-label"
+
+  node_pool_ttr_disk_size:
+    node_pool_name: "node-pool-ttr-disk-size"
+
+  jobset_uptime_validation:
+    node_pool_name: "jobset-uptime-validation-v6e"
+
+  jobset_healthiness_ready:
+    node_pool_name: "jobset-healthiness-ready-v6e"
+    node_pool_name_2: "jobset-healthiness-ready-v6e-2"
+
+  jobset_ttr_pod_delete:
+    node_pool_name: "jobset-ttr-pod-delete-v6e"
+
+  tpu_sdk_monitoring_validation:
+    node_pool_name: "jobset-sdk-monitoring-v6e"
+
+  jobset_ttr_pod_oom:
+    node_pool_name: "jobset-ttr-pod-oom-v6e"
+
+  jobset_ttr_node_pool_resize:
+    node_pool_name: "jobset-ttr-node-pool-resize-v6e"
+
+  tpu_info_metrics_verification:
+    node_pool_name: "tpu-info-metrics-verification-v6e"
+    node_pool_name_2: "tpu-info-metrics-verification-v6e-2"
+
+  tpu_sdk_monitoring_data_validation:
+    node_pool_name: "jobset-sdk-data_val-v6e"
+    node_pool_name_2: "jobset-sdk-data_val-v6e-2"
+
+  jobset_ttr_kill_process:
+    node_pool_name: "jobset-ttr-kill-process-v6e"
+
+  jobset_ttr_node_pool_resize_exist:
+    node_pool_name: "jobset-ttr-node-pool-resize-exist-v6e"
+
+  jobset_ttr_pod_delete_exist:
+    node_pool_name: "jobset-ttr-pod-delete-exist-v6e"
+
+  jobset_rollback_ttr_exist:
+    node_pool_name: "jobset-ttr-rollback-exist-v6e"
+
+  tpu_info_format_validation_dag_exist:
+    node_pool_name: "tpu_info_format_validation_dag_exist-v6e"
+
+  tpu_info_metrics_verification_exist:
+    node_pool_name: "tpu-info-metrics-verification-exist-v6e"
+    node_pool_name_2: "tpu-info-metrics-verification-exist-v6e-2"
+
+  chips_capacity_validation_dag:
+    node_pool_name: "chips-capacity-validation-dag-v6e"
