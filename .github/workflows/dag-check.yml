@@ -3,7 +3,9 @@ name: DAG Check
 
 on:
   pull_request:
-    branches: [master]
+    branch:
+      - tpu-obs/user/**
+      - orbax/user/**
     types: [opened, synchronize, edited]
 
   push:
