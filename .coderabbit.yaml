@@ -1,0 +1,25 @@
+language: "en-US"
+reviews:
+  profile: "assertive"
+  request_changes_workflow: false
+  high_level_summary: true
+  high_level_summary_in_walkthrough: true
+  high_level_summary_instructions: |
+    Keep the summary concise.
+    Use normal bullet points only.
+    Never use checkboxes, task lists, `- [ ]`, or `- [x]`.
+  poem: false
+  # https://docs.coderabbit.ai/reference/configuration#param-review-status
+  # Post review status messages (e.g., when a review is skipped) in the walkthrough summary comment.
+  review_status: false
+  review_details: true
+  path_filters:
+    - "!.github/workflows/**"
+    - "!scripts/code-style.sh"
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - "coderabbit"
+chat:
+  auto_reply: true
