@@ -3,7 +3,8 @@ name: DAG Check
 
 on:
   pull_request:
-    branches: [master]
+    branch:
+      - maxtext/dev/**
     types: [opened, synchronize, edited]
 
   push:
