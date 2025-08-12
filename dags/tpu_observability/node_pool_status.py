@@ -38,7 +38,6 @@ with models.DAG(
         parameters and verifies that the status changes to error.
     """,
 ) as dag:
-
   node_pool_info = node_pool.Info(
       project_id=models.Variable.get(
           "PROJECT_ID", default_var=Project.TPU_PROD_ENV_ONE_VM.value
