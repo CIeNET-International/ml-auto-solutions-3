@@ -110,31 +110,32 @@ def list_nodes(node_pool: Info) -> List[str]:
   Raises:
       RuntimeError: If no instance groups or zone are found for the node pool.
   """
-  get_instance_group_command = (
-      "gcloud container node-pools describe "
-      f"{node_pool.node_pool_name} --project={node_pool.project_id} "
-      f"--cluster={node_pool.cluster_name} "
-      f"--location={node_pool.location} "
-      "--format='json(instanceGroupUrls)'"
-  )
-  instance_group_process = subprocess.run(
-      get_instance_group_command,
+  instance_group_urls_key = "instanceGroupUrls"
+  process = subprocess.run(
+      (
+          f"gcloud container node-pools describe {node_pool.node_pool_name} "
+          f"--project={node_pool.project_id} "
+          f"--cluster={node_pool.cluster_name} "
+          f"--location={node_pool.location} "
+          f"--format='json({instance_group_urls_key})'"
+      ),
       shell=True,
       check=True,
       capture_output=True,
       text=True,
   )
-  instance_group_urls = json.loads(instance_group_process.stdout).get(
-      "instanceGroupUrls", []
+
+  instance_group_urls_val = json.loads(process.stdout).get(
+      instance_group_urls_key, []
   )
-  if not instance_group_urls:
+  if not instance_group_urls_val:
     raise AirflowFailException(
         f"No instance groups found for node pool {node_pool.node_pool_name}."
     )
 
   node_names = []
 
-  for url in instance_group_urls:
+  for url in instance_group_urls_val:
     # Extract the {instance_group_name} segments from an URL:
     # https://www.googleapis.com/compute/v1/projects/tpu-prod-env-one-vm/zones/asia-northeast1-b/instanceGroups/gke-yuna-xpk-v6e-2-yuna-xpk-v6e-2-np--b3a745c7-grp
     # in which, `gke-yuna-xpk-v6e-2-yuna-xpk-v6e-2-np--b3a745c7-grp`
@@ -146,21 +147,20 @@ def list_nodes(node_pool: Info) -> List[str]:
 
     instance_group_name = match.group(1)
 
-    instances_command = (
-        "gcloud compute instance-groups list-instances "
-        f"{instance_group_name} "
-        f"--project={node_pool.project_id} "
-        f"--zone={node_pool.node_locations} "
-        "--format='json(instance)'"
-    )
-    instances_process = subprocess.run(
-        instances_command,
+    process = subprocess.run(
+        (
+            "gcloud compute instance-groups list-instances"
+            f" {instance_group_name} "
+            f"--project={node_pool.project_id} "
+            f"--zone={node_pool.node_locations} "
+            "--format='json(instance)'"
+        ),
         shell=True,
         check=True,
         capture_output=True,
         text=True,
     )
-    instances = json.loads(instances_process.stdout)
+    instances = json.loads(process.stdout)
 
     for instance_item in instances:
       instance_url = instance_item["instance"]
