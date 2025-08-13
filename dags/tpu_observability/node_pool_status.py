@@ -34,7 +34,7 @@ with models.DAG(
       running again, and finally cleans up.
       It also tests the error state by creating a node pool with invalid
       parameters and verifies that the status changes to error.
-  """,
+    """,
 ) as dag:
   node_pool_info = node_pool.Info(
       project_id=models.Variable.get(

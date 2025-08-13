@@ -115,11 +115,14 @@ def list_nodes(node_pool: Info) -> List[str]:
       f"{node_pool.node_pool_name} --project={node_pool.project_id} "
       f"--cluster={node_pool.cluster_name} "
       f"--location={node_pool.location} "
-      "--format=\'json(instanceGroupUrls)\'"
+      "--format='json(instanceGroupUrls)'"
   )
   instance_group_process = subprocess.run(
       get_instance_group_command,
-      shell=True, check=True, capture_output=True, text=True,
+      shell=True,
+      check=True,
+      capture_output=True,
+      text=True,
   )
   instance_group_urls = json.loads(instance_group_process.stdout).get(
       "instanceGroupUrls", []
@@ -148,11 +151,14 @@ def list_nodes(node_pool: Info) -> List[str]:
         f"{instance_group_name} "
         f"--project={node_pool.project_id} "
         f"--zone={node_pool.node_locations} "
-        "--format=\'json(instance)\'"
+        "--format='json(instance)'"
     )
     instances_process = subprocess.run(
         instances_command,
-        shell=True, check=True, capture_output=True, text=True
+        shell=True,
+        check=True,
+        capture_output=True,
+        text=True,
     )
     instances = json.loads(instances_process.stdout)
 
