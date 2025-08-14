@@ -298,11 +298,15 @@ class XpkClusters:
       zone=Zone.US_EAST5_A.value,
   )
   GPU_A3PLUS_CLUSTER = XpkClusterConfig(
-      name="a3mega-benchmark",
+      name="a3plus-benchmark",
       device_version=GpuVersion.XPK_H100_MEGA,
       core_count=8,
       project=Project.SUPERCOMPUTER_TESTING.value,
+<<<<<<< HEAD
       zone=Zone.US_EAST5_A.value,
+=======
+      zone=Zone.AUSTRALIA_SOUTHEAST1_C.value,
+>>>>>>> 39a5bd9 (Revert A3plus cluster update since incompatible with xpk)
   )
   CPU_M1_MEGAMEM_96_CLUSTER = XpkClusterConfig(
       name="m1-megamem-96-shared",
