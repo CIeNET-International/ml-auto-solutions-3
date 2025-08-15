@@ -16,9 +16,6 @@ from google.cloud import monitoring_v3
 from google.cloud.monitoring_v3 import types
 
 
-logger = logging.getLogger(__name__)
-
-
 class Status(enum.Enum):
   """Enum for GKE node pool status."""
 
@@ -73,8 +70,8 @@ def create(node_pool: Info, ignore_failure: bool = False) -> None:
   process = subprocess.run(
       command, shell=True, check=True, capture_output=True, text=True
   )
-  logger.info("STDOUT message: %s", process.stdout)
-  logger.info("STDERR message: %s", process.stderr)
+  logging.info("STDOUT message: %s", process.stdout)
+  logging.info("STDERR message: %s", process.stderr)
 
 
 @task
@@ -92,8 +89,8 @@ def delete(node_pool: Info) -> None:
   process = subprocess.run(
       command, shell=True, check=True, capture_output=True, text=True
   )
-  logger.info("STDOUT message: %s", process.stdout)
-  logger.info("STDERR message: %s", process.stderr)
+  logging.info("STDOUT message: %s", process.stdout)
+  logging.info("STDERR message: %s", process.stderr)
 
 
 def list_nodes(node_pool: Info) -> List[str]:
@@ -215,8 +212,8 @@ def delete_one_random_node(node_pool: Info) -> None:
   process = subprocess.run(
       command, shell=True, check=True, capture_output=True, text=True
   )
-  logger.info("STDOUT message: %s", process.stdout)
-  logger.info("STDERR message: %s", process.stderr)
+  logging.info("STDOUT message: %s", process.stdout)
+  logging.info("STDERR message: %s", process.stderr)
 
 
 def _query_status_metric(node_pool: Info) -> Status:
@@ -243,16 +240,18 @@ def _query_status_metric(node_pool: Info) -> Status:
           f'resource.labels.cluster_name = "{node_pool.cluster_name}" '
           f'resource.labels.node_pool_name = "{node_pool.node_pool_name}"'
       ),
-      interval=types.TimeInterval({
-          "end_time": {"seconds": now},
-          # Metrics are sampled every 60s and stored in the GCP backend,
-          # but it may take up to 2 minutes for the data to become
-          # available on the client side.
-          # Therefore, a longer time interval is necessary.
-          # A 5-minute window is an arbitrary but sufficient choice to
-          # ensure we can retrieve the latest metric data.
-          "start_time": {"seconds": now - 300},
-      }),
+      interval=types.TimeInterval(
+          {
+              "end_time": {"seconds": now},
+              # Metrics are sampled every 60s and stored in the GCP backend,
+              # but it may take up to 2 minutes for the data to become
+              # available on the client side.
+              # Therefore, a longer time interval is necessary.
+              # A 5-minute window is an arbitrary but sufficient choice to
+              # ensure we can retrieve the latest metric data.
+              "start_time": {"seconds": now - 300},
+          }
+      ),
       view="FULL",
   )
 
