@@ -240,18 +240,16 @@ def _query_status_metric(node_pool: Info) -> Status:
           f'resource.labels.cluster_name = "{node_pool.cluster_name}" '
           f'resource.labels.node_pool_name = "{node_pool.node_pool_name}"'
       ),
-      interval=types.TimeInterval(
-          {
-              "end_time": {"seconds": now},
-              # Metrics are sampled every 60s and stored in the GCP backend,
-              # but it may take up to 2 minutes for the data to become
-              # available on the client side.
-              # Therefore, a longer time interval is necessary.
-              # A 5-minute window is an arbitrary but sufficient choice to
-              # ensure we can retrieve the latest metric data.
-              "start_time": {"seconds": now - 300},
-          }
-      ),
+      interval=types.TimeInterval({
+          "end_time": {"seconds": now},
+          # Metrics are sampled every 60s and stored in the GCP backend,
+          # but it may take up to 2 minutes for the data to become
+          # available on the client side.
+          # Therefore, a longer time interval is necessary.
+          # A 5-minute window is an arbitrary but sufficient choice to
+          # ensure we can retrieve the latest metric data.
+          "start_time": {"seconds": now - 300},
+      }),
       view="FULL",
   )
 
