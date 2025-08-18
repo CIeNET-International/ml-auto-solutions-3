@@ -65,6 +65,7 @@ def create(
       f"--project={node_pool.project_id} "
       f"--cluster={node_pool.cluster_name} "
       f"--location={node_pool.location} "
+<<<<<<< HEAD
       f"--node-locations={node_pool.node_locations} "
       f"--num-nodes={node_pool.num_nodes} "
       f"--machine-type={node_pool.machine_type} "
@@ -74,6 +75,13 @@ def create(
   if reservation:
     command += f" --reservation-affinity=specific --reservation={reservation}"
 
+=======
+      f"--node-locations {node_pool.node_locations} "
+      f"--num-nodes={node_pool.num_nodes} "
+      f"--machine-type={node_pool.machine_type} "
+      f"--tpu-topology={node_pool.tpu_topology}"
+  )
+>>>>>>> ac58b17 (Add a new DAG that tests the status of node pool are reported correctly (#810))
   if ignore_failure:
     command += "2>&1 || true "
 
