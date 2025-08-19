@@ -8,6 +8,7 @@ from typing import List
 
 from airflow import models
 from airflow.decorators import task
+from airflow.operators.python import PythonOperator
 from dags.common.vm_resource import Project
 from dags.map_reproducibility.utils.constants import Schedule
 from dags.multipod.configs.common import Platform
@@ -19,6 +20,12 @@ import pytz
 
 
 _UNKNOWN_RESOURCE_NAME = 'Unknown'
+_XCOM_EVENT_RECORDS_KEY = 'event_records'
+_XCOM_PROPER_TIME_RANGE_KEY = 'proper_time_range'
+_DECIDE_TIME_WINDOW_TASK_ID = 'decide_time_window'
+_UPDATE_METRIC_RECORDS_TASK_ID = 'update_metric_records'
+_UPDATE_LOG_RECORDS_TASK_ID = 'update_log_records'
+_CHECK_EVENT_COUNT_MATCH_TASK_ID = 'check_event_count_match'
 
 
 @dataclasses.dataclass
@@ -66,41 +73,66 @@ class InterruptionReason(str, enum.Enum):
   def log_filter(self) -> str:
     """Returns the log filter for the interruption reason."""
 
+    filters = []
     match self:
-      case InterruptionReason.DEFRAGMENTATION | InterruptionReason.EVICTION:
-        return 'protoPayload.methodName="compute.instances.preempted" '
-      case InterruptionReason.HOST_ERROR:
-        return 'protoPayload.methodName="compute.instances.hostError" '
-      case InterruptionReason.MIGRATE_ON_HWSW_MAINTENANCE:
-        return 'protoPayload.methodName="compute.instances.migrateOnHostMaintenance" '
-      case InterruptionReason.HW_SW_MAINTENANCE:
-        return 'protoPayload.methodName="compute.instances.terminateOnHostMaintenance" '
-      case InterruptionReason.BARE_METAL_PREEMPTION:
-        return 'protoPayload.methodName="compute.instances.baremetalCaretakerPreempted" '
-      case InterruptionReason.OTHER:
-        parts = [
-            'compute.instances.guestTerminate',
-            'compute.instances.instanceManagerHaltForRestart',
-            'compute.instances.stoppedDueToPdDoubleServe',
-            'compute.instances.kmsKeyError',
-            'compute.instances.shredmillKeyError',
-            'compute.instances.invalidVmImage',
-            'compute.instances.scratchDiskCreationFailed',
-            'compute.instances.localSsdInitializationError',
-            'compute.instances.localSsdInitializationKeyError',
-            'compute.instances.localSsdVerifyTarError',
-            'compute.instances.localSsdRecoveryAttempting',
-            'compute.instances.localSsdRecoveryTimeoutError',
-            'compute.instances.localSsdRecoveryFailedError',
-        ]
-        return ' OR '.join(f'protoPayload.methodName="{p}"' for p in parts) + ' '
-      case _:
-        raise ValueError(f'Unmapped interruption reason: {self}')
+        case InterruptionReason.DEFRAGMENTATION | InterruptionReason.EVICTION:
+          filters = ['compute.instances.preempted']
+        case InterruptionReason.HOST_ERROR:
+          filters = ['compute.instances.hostError']
+        case InterruptionReason.MIGRATE_ON_HWSW_MAINTENANCE:
+          filters = ['compute.instances.migrateOnHostMaintenance']
+        case InterruptionReason.HW_SW_MAINTENANCE:
+          filters = ['compute.instances.terminateOnHostMaintenance']
+        case InterruptionReason.BARE_METAL_PREEMPTION:
+          filters = ['compute.instances.baremetalCaretakerPreempted']
+        case InterruptionReason.OTHER:
+          filters = [
+              'compute.instances.guestTerminate',
+              'compute.instances.instanceManagerHaltForRestart',
+              'compute.instances.stoppedDueToPdDoubleServe',
+              'compute.instances.kmsKeyError',
+              'compute.instances.shredmillKeyError',
+              'compute.instances.invalidVmImage',
+              'compute.instances.scratchDiskCreationFailed',
+              'compute.instances.localSsdInitializationError',
+              'compute.instances.localSsdInitializationKeyError',
+              'compute.instances.localSsdVerifyTarError',
+              'compute.instances.localSsdRecoveryAttempting',
+              'compute.instances.localSsdRecoveryTimeoutError',
+              'compute.instances.localSsdRecoveryFailedError',
+          ]
+        case _:
+          raise ValueError(f'Unmapped interruption reason: {self}')
+    return (
+        ' OR '.join(f'protoPayload.methodName="{filter}"' for filter in filters)
+    )
 
 
 @dataclasses.dataclass
 class Configs:
-  """Validation configuration."""
+  """Validation configuration.
+
+  Attributes:
+      initial_start_time: The initial start time for the validation. This time
+        is used as a starting point to determine the proper time range for
+        validation, which will be adjusted based on the available metric data.
+      initial_end_time: The initial end time for the validation. This time
+        is used as a starting point to determine the proper time range for
+        validation, which will be adjusted based on the available metric data.
+      project_id: The ID of the GCP project.
+      max_time_diff_sec: The maximum allowed time difference between a metric
+        and its corresponding log event, in seconds. The corresponding log event
+        will be considered valid if it is within `max_time_diff_sec` seconds
+        before or after the metric event.
+      max_log_results: The maximum number of log results to fetch in a single
+        query. This is to avoid fetching too many logs.
+      metric_aggregation: The aggregation method to use when querying metrics.
+      platform: The platform (GCE or GKE) where the validation is performed.
+      interruption_reason: The specific interruption reason to validate.
+      max_start_time_rewind_sec: The maximum number of seconds the validation
+        start time can be rewound to find a proper start time, relative to the
+        initial start time.
+  """
 
   initial_start_time: datetime.datetime
   initial_end_time: datetime.datetime
@@ -133,18 +165,24 @@ class EventRecord:
   log_events_timestamps: List[str] = dataclasses.field(default_factory=list)
 
 
-def query_metric_data_by_api(
+def fetch_metric_timeseries_by_api(
     configs: Configs,
-    start_time: datetime.datetime,
-    end_time: datetime.datetime,
+    start_time: datetime.datetime = None,
+    end_time: datetime.datetime = None,
+    **context,
 ) -> List[EventRecord]:
   """Queries the monitoring API for a given validation_conf and time range to retrieve the timeseries data for each resource.
+
+  This function will be called by the airflow task or decide_time_window().
+  If start_time and end_time are not provided, it means it's called by the
+  airflow task and we use the proper time range from the context.
 
   Args:
       configs: The configuration object containing the parameters for the
         validation.
-      start_time: The start of the time interval.
-      end_time: The end of the time interval.
+      start_time: The start of the time interval when it's not an airflow task.
+      end_time: The end of the time interval when it's not an airflow task.
+      **context: The airflow context.
 
   Returns:
       A List of EventRecord objects. Each eventRecord must contain the metric
@@ -173,7 +211,22 @@ def query_metric_data_by_api(
   )
 
   project_name = f'projects/{project_id}'
+  # key: resource_name, value: EventRecord
   events_records: dict[str, EventRecord] = {}
+
+  # If start_time (and end_time) is not provided, it means it's an airflow task
+  # and we use the proper time range from the context.
+  is_airflow_task = not start_time
+  if is_airflow_task:
+    proper_time_range: ProperTimeRange = context['ti'].xcom_pull(
+        task_ids=_DECIDE_TIME_WINDOW_TASK_ID, key=_XCOM_PROPER_TIME_RANGE_KEY
+    )
+    start_time = datetime.datetime.fromisoformat(
+        proper_time_range.proper_start_time
+    )
+    end_time = datetime.datetime.fromisoformat(
+        proper_time_range.proper_end_time
+    )
 
   start_timestamp = timestamp_pb2.Timestamp()
   start_timestamp.FromDatetime(start_time)
@@ -181,8 +234,7 @@ def query_metric_data_by_api(
   end_timestamp.FromDatetime(end_time)
 
   interval = monitoring_v3.TimeInterval(
-      start_time=start_timestamp,
-      end_time=end_timestamp
+      start_time=start_timestamp, end_time=end_timestamp
   )
 
   request = monitoring_v3.ListTimeSeriesRequest(
@@ -255,7 +307,7 @@ def query_metric_data_by_api(
         # at the same time.
         # We need to add each event separately to the list of metric points.
         events_records[resource_name].metric_points_timestamps.extend(
-            [aware_timestamp.isoformat()*event_count]
+            [aware_timestamp.isoformat() * event_count]
         )
 
   if not events_records:
@@ -265,221 +317,22 @@ def query_metric_data_by_api(
     )
     raise RuntimeError('No metric events found in the specified time range.')
 
+  if is_airflow_task:
+    context['ti'].xcom_push(
+        key=_XCOM_EVENT_RECORDS_KEY, value=list(events_records.values())
+    )
   return list(events_records.values())
 
 
-@task
-def decide_time_window(
+def fetch_log_entries_by_api(
     configs: Configs,
     **context,
-) -> List[EventRecord]:
-  """Adjusts the proper time range for the validation and fetches the metric data with the proper time range.
-
-  It will adjust the start_time and end_time to ensure there is idle_time_buffer
-  before the earliest metric record and after the latest metric record, by
-  querying the metric data with the monitoring API. This adjustment is crucial
-  to capture all relevant log events, as logs might appear slightly earlier or
-  later than the corresponding metric points due to delays (max_time_diff_sec)
-  in their generation or transmission.
-  The function iteratively refines the time range until no further adjustment is
-  needed, or a maximum rewind limit is reached.
-  In edge cases, the retrieved logs might not belong to the current time range,
-  so it is important to ensure that the time range is wide enough to capture all
-  the relevant logs.
-
-  If the difference between the initial start_time and the adjusted start_time
-  is more than max_start_time_rewind_seconds, it will raise a RuntimeError.
-
-  This function performs the following steps:
-  1.  Queries the monitoring API to fetch interruption metric timestamps within
-      the current time range.
-  2.  Determines the earliest and latest metric record timestamps.
-  3.  Calculates a new start time by subtracting `idle_time_buffer` from the
-      earliest metric record timestamp.
-  4.  Calculates a new end time by adding `idle_time_buffer` to the latest
-      metric record timestamp.
-  5.  Adjusts the new end time to ensure it does not exceed the current end time
-      or the previous last record time.
-  6.  If the new time range is different from the current time range, updates
-      the current time range and repeats from step 1.
-  7.  If the time range has stabilized (no further adjustment is needed), it
-      updates the `proper_time_range` with a refined time range (removing half
-      of the idle_time_buffer from each side) and returns the metric records.
-  8. If the start time rewind has reached the maximum limit, it will raise a
-      RuntimeError.
-
-  Args:
-      configs: The configuration object containing the parameters for the
-        validation.
-      **context: The airflow context.
-
-  Returns:
-      A List of EventRecord objects.
-
-  Raises:
-      RuntimeError: If the start time rewind has reached the maximum limit or
-      if all records have been removed during the end time adjustment.
-  """
-  max_time_diff_sec = configs.max_time_diff_sec
-  max_start_time_rewind_sec = configs.max_start_time_rewind_sec
-  initial_start_time = configs.initial_start_time
-  initial_end_time = configs.initial_end_time
-
-  current_start_time = initial_start_time
-  current_end_time = initial_end_time
-
-  # The `idle_time_buffer` is set to 2x `max_time_diff_sec` (D) to handle
-  # potential boundary issues in our time-range queries.
-  #
-  # Let's consider a `max_time_diff_sec` of 120s.
-  # A metric event at 12:05 might have a log event anywhere from 12:03 to 12:07.
-  #
-  # If we only used a 1x buffer (120s), our query window would end at 12:05 + 120s = 12:07.
-  #
-  # What if a metric event happens at 12:08? Its corresponding log could be at 12:06.
-  # Our log query (ending at 12:07) would capture this log, but the metric event
-  # itself would be outside the metric query's range.
-  #
-  # By using a 2x buffer, we ensure that the time range is wide enough to
-  # consistently capture both the metric and its corresponding log event,
-  # regardless of where they fall relative to the initial query boundaries.
-  idle_time_buffer = datetime.timedelta(seconds=max_time_diff_sec * 2)
-  max_rewind_delta = datetime.timedelta(seconds=max_start_time_rewind_sec)
-
-  # Continue to adjust the time range until the time range has stabilized or
-  # the start time rewind has reached the maximum limit.
-  while True:
-    print(
-        '\n current range:'
-        f' {current_start_time.isoformat()} to {current_end_time.isoformat()}'
-    )
-
-    # Query metric data for the current time range by API.
-    metric_records = query_metric_data_by_api(
-        configs,
-        current_start_time,
-        current_end_time,
-    )
-
-    total_metric_timestamps = []
-    for record in metric_records:
-      total_metric_timestamps.extend(record.metric_points_timestamps)
-    total_metric_timestamps.sort(
-        key=lambda timestamp: (datetime.datetime.fromisoformat(timestamp))
-    )
-
-    first_record_time = datetime.datetime.fromisoformat(
-        total_metric_timestamps[0]
-    )
-    last_record_time = datetime.datetime.fromisoformat(
-        total_metric_timestamps[-1]
-    )
-
-    # Adjust start time (ensure there is idle_time_buffer before the earliest
-    # record).
-    calculated_new_start_time = first_record_time - idle_time_buffer
-
-    # Allow current_start_time to be pushed forward as long as it does not
-    # exceed max_rewind_delta. Update only when calculated_new_start_time is
-    # earlier than current_start_time.
-    new_start_time = min(current_start_time, calculated_new_start_time).replace(
-        microsecond=0
-    )
-    new_end_time = current_end_time
-
-    temp_records = total_metric_timestamps.copy()
-
-    # If the previous_last_record_time is max, then potential_new_end >
-    # previous_last_record_time will always be false. (for the first iteration)
-    previous_last_record_time = datetime.datetime.max.replace(
-        tzinfo=datetime.timezone.utc
-    )
-
-    while temp_records:
-      current_last_record = datetime.datetime.fromisoformat(temp_records[-1])
-      potential_new_end = current_last_record + idle_time_buffer
-
-      # If potential_new_end is still later than current_end_time or the
-      # previous last record time (except for the first iteration), this means
-      # that even if the current last record is taken as the basis, the buffer
-      # exceeds current_end_time or the previous last record time.
-      # Since end_time cannot be extended, this current_last_record cannot be
-      # our final last record.
-      # We need to remove the current_last_record and try again.
-      if (
-          potential_new_end > current_end_time
-          or potential_new_end > previous_last_record_time
-      ):
-        print(
-            f'The last record time {current_last_record.isoformat()} + buffer'
-            f' {idle_time_buffer} exceeds the current end_time'
-            f' {current_end_time.isoformat()} or the previous last record time'
-            ' {previous_last_record_time.isoformat()}. Removing this record'
-            ' and recalculating.'
-        )
-        previous_last_record_time = datetime.datetime.fromisoformat(
-            temp_records.pop()
-        )
-
-        if not temp_records:
-          raise RuntimeError(
-              'All records have been removed, and a suitable end_time cannot'
-              ' be found.'
-          )
-      else:
-        # If potential_new_end is less than or equal to current_end_time
-        # This means that based on the current last record, the buffer does not
-        # exceed current_end_time.
-        # This is the new end_time we want.
-        new_end_time = potential_new_end.replace(microsecond=0)
-        break
-
-    print(f'Earliest record time: {first_record_time.isoformat()}')
-    print(f'Latest record time: {last_record_time.isoformat()}')
-    print(f'Calculated new start time: {new_start_time.isoformat()}')
-    print(f'Calculated new end time: {new_end_time.isoformat()}')
-
-    # confirm whether the time range has stabilized
-    if (
-        new_start_time == current_start_time
-        and new_end_time == current_end_time
-    ):
-      print('Time range has stabilized, no need to adjust again.')
-
-      # Update the proper_time_range with the new start_time and end_time.
-      proper_time_range = ProperTimeRange(
-          proper_start_time=current_start_time + idle_time_buffer / 2,
-          proper_end_time=current_end_time - idle_time_buffer / 2
-      )
-      context['ti'].xcom_push(key='proper_time_range', value=proper_time_range)
-
-      return metric_records
-    else:
-      current_start_time = new_start_time
-      current_end_time = new_end_time
-      print('Time range has been adjusted, need to check again.')
-
-    if (initial_start_time - current_start_time) > max_rewind_delta:
-      print(
-          'Start time rewind has reached the maximum limit'
-          f' ({max_start_time_rewind_sec} seconds), terminating adjustment.'
-      )
-      raise RuntimeError('Start time rewind has reached the maximum limit.')
-
-
-@task
-def fetch_interruption_logs_timestamps(
-    configs: Configs,
-    event_records: List[EventRecord],
-    **context,
-) -> List[EventRecord]:
+):
   """This function queries the Logging API for a given validation_conf and time range to fetch the log entries.
 
   Args:
       configs: The configuration object containing the parameters for the
         validation.
-      event_records: A list of EventRecord objects, containing metric events
-        grouped by resource name.
       **context: The airflow context.
 
   Returns:
@@ -487,7 +340,10 @@ def fetch_interruption_logs_timestamps(
       events timestamps for the resource name.
   """
   proper_time_range: ProperTimeRange = context['ti'].xcom_pull(
-      task_ids='decide_time_window', key='proper_time_range'
+      task_ids=_DECIDE_TIME_WINDOW_TASK_ID, key=_XCOM_PROPER_TIME_RANGE_KEY
+  )
+  event_records: List[EventRecord] = context['ti'].xcom_pull(
+      task_ids=_UPDATE_METRIC_RECORDS_TASK_ID, key=_XCOM_EVENT_RECORDS_KEY
   )
 
   project_id = configs.project_id
@@ -556,39 +412,222 @@ def fetch_interruption_logs_timestamps(
         'Consider increasing max_results or narrowing the time range.'
     )
 
-  return list(event_records.values())
+  context['ti'].xcom_push(
+      key=_XCOM_EVENT_RECORDS_KEY, value=list(event_records.values())
+  )
 
 
-@task
+def decide_time_window(
+    configs: Configs,
+    **context,
+):
+  """Adjusts the proper time range for the validation and fetches the metric data with the proper time range.
+
+  It will adjust the start_time and end_time to ensure there is idle_time_buffer
+  before the earliest metric record and after the latest metric record, by
+  querying the metric data with the monitoring API. This adjustment is crucial
+  to capture all relevant log events, as logs might appear slightly earlier or
+  later than the corresponding metric points due to delays (max_time_diff_sec)
+  in their generation or transmission.
+  The function iteratively refines the time range until no further adjustment is
+  needed, or a maximum rewind limit is reached.
+  In edge cases, the retrieved logs might not belong to the current time range,
+  so it is important to ensure that the time range is wide enough to capture all
+  the relevant logs.
+
+  If the difference between the initial start_time and the adjusted start_time
+  is more than max_start_time_rewind_seconds, it will raise a RuntimeError.
+
+  This function performs the following steps:
+  1.  Queries the monitoring API to fetch interruption metric timestamps within
+      the current time range.
+  2.  Determines the earliest and latest metric record timestamps.
+  3.  Calculates a new start time by subtracting `idle_time_buffer` from the
+      earliest metric record timestamp.
+  4.  Calculates a new end time by adding `idle_time_buffer` to the latest
+      metric record timestamp.
+  5.  Adjusts the new end time to ensure it does not exceed the current end time
+      or the previous last record time.
+  6.  If the new time range is different from the current time range, updates
+      the current time range and repeats from step 1.
+  7.  If the time range has stabilized (no further adjustment is needed), it
+      updates the `proper_time_range` with a refined time range (removing half
+      of the idle_time_buffer from each side) and returns the metric records.
+  8. If the start time rewind has reached the maximum limit, it will raise a
+      RuntimeError.
+
+  Args:
+      configs: The configuration object containing the parameters for the
+        validation.
+      **context: The airflow context.
+
+  Returns:
+      A List of EventRecord objects.
+
+  Raises:
+      RuntimeError: If the start time rewind has reached the maximum limit or
+      if all records have been removed during the end time adjustment.
+  """
+  max_time_diff_sec = configs.max_time_diff_sec
+  max_start_time_rewind_sec = configs.max_start_time_rewind_sec
+  initial_start_time = configs.initial_start_time
+  initial_end_time = configs.initial_end_time
+
+  current_start_time = initial_start_time
+  current_end_time = initial_end_time
+
+  # The max idle time buffer is 2 * max_time_diff_sec. Here's why we need this buffer:
+  #
+  # A 1x buffer is used to capture the last relevant metric event. This ensures
+  # we can correlate it with its corresponding log event, even if the log event
+  # occurs up to max_time_diff_sec later, allowing us to find event pairs at the
+  # very edge of the query window.
+  #
+  # The second 1x buffer is crucial for preventing a different issue: it
+  # explicitly excludes the next metric event. This is to avoid an incorrect
+  # correlation, as the log for that next metric event might fall within our
+  # query window, leading to misleading associations.
+  idle_time_buffer = datetime.timedelta(seconds=max_time_diff_sec * 2)
+  max_rewind_delta = datetime.timedelta(seconds=max_start_time_rewind_sec)
+
+  while True:
+    print(
+        'Adjust start time, current time range:'
+        f' {current_start_time.isoformat()} to {current_end_time.isoformat()}'
+    )
+
+    # Query metric data for the current time range by API.
+    metric_records = fetch_metric_timeseries_by_api(
+        configs,
+        current_start_time,
+        current_end_time,
+    )
+
+    total_metric_timestamps = []
+    for record in metric_records:
+      total_metric_timestamps.extend(record.metric_points_timestamps)
+    total_metric_timestamps.sort(
+        key=lambda timestamp: (datetime.datetime.fromisoformat(timestamp))
+    )
+
+    first_record_time = datetime.datetime.fromisoformat(
+        total_metric_timestamps[0]
+    )
+
+    # Adjust start time (ensure there is idle_time_buffer before the earliest
+    # record).
+    calculated_new_start_time = (first_record_time - idle_time_buffer).replace(
+        microsecond=0
+    )
+
+    print(f'The earliest record time: {first_record_time.isoformat()}')
+    print(f'Calculated new start time: {calculated_new_start_time.isoformat()}')
+
+    if calculated_new_start_time >= current_start_time:
+      print('Start time has stabilized, no need to adjust again.')
+      break
+
+    # Allow current_start_time to be pushed forward as long as it does not
+    # exceed max_rewind_delta. Update only when calculated_new_start_time is
+    # earlier than current_start_time.
+    # We need to adjust the start time and check again.
+    current_start_time = calculated_new_start_time
+    print('Start time has been adjusted, need to check again.')
+
+    if (initial_start_time - current_start_time) > max_rewind_delta:
+      print(
+          'Start time rewind has reached the maximum limit'
+          f' ({max_start_time_rewind_sec} seconds), terminating adjustment.'
+      )
+      raise RuntimeError('Start time rewind has reached the maximum limit.')
+
+  print(
+      'Adjust end time, current time range:'
+      f' {current_start_time.isoformat()} to {current_end_time.isoformat()}'
+  )
+
+  # If the previous_last_record_time is max, then calculated_new_end_time >
+  # previous_last_record_time will always be false. (for the first iteration)
+  previous_last_record_time = datetime.datetime.max.replace(
+      tzinfo=datetime.timezone.utc
+  )
+
+  while total_metric_timestamps:
+    last_record = datetime.datetime.fromisoformat(total_metric_timestamps[-1])
+    print(f'The latest record time: {last_record.isoformat()}')
+    calculated_new_end_time = last_record + idle_time_buffer
+
+    # If calculated_new_end_time is still later than current_end_time or the
+    # previous last record time (except for the first iteration), this means
+    # that even if the current last record is taken as the basis, the buffer
+    # exceeds current_end_time or the previous last record time. Since end_time
+    # cannot be extended to the future, this last_record cannot be our
+    # final last record.
+    # We need to remove the last_record and try again.
+    if (
+        calculated_new_end_time > current_end_time
+        or calculated_new_end_time > previous_last_record_time
+    ):
+      print(
+          f'The last record time {last_record.isoformat()} + buffer'
+          f' {idle_time_buffer} exceeds the current end_time'
+          f' {current_end_time.isoformat()} or the previous last record time'
+          ' {previous_last_record_time.isoformat()}. Removing this record'
+          ' and recalculating.'
+      )
+      previous_last_record_time = datetime.datetime.fromisoformat(
+          total_metric_timestamps.pop()
+      )
+
+      if not total_metric_timestamps:
+        raise RuntimeError(
+            'All records have been removed, and a suitable end_time cannot'
+            ' be found.'
+        )
+    else:
+      # If calculated_new_end_time is less than or equal to current_end_time
+      # This means that based on the current last record, the buffer does not
+      # exceed current_end_time.
+      # This is the new end_time we want.
+      current_end_time = calculated_new_end_time.replace(microsecond=0)
+      break
+
+  print(f'Stabilized time range: {current_start_time.isoformat()} to {current_end_time.isoformat()}')
+
+  # Update the proper_time_range with the new start_time and end_time.
+  proper_time_range = ProperTimeRange(
+      proper_start_time=current_start_time + idle_time_buffer / 2,
+      proper_end_time=current_end_time - idle_time_buffer / 2,
+  )
+  context['ti'].xcom_push(
+      key=_XCOM_PROPER_TIME_RANGE_KEY, value=proper_time_range
+  )
+
+
 def check_event_count_match(
-    event_records: List[EventRecord],
-) -> List[EventRecord]:
+    **context,
+):
   """Checks if the number of metric events matches the number of log events for each resource.
 
   Args:
-      event_records: A list of EventRecord objects, containing metric and log
-        events grouped by resource name.
+      **context: The airflow context.
 
   Returns:
       A list of EventRecord objects, containing the updated validation results.
   """
-  # We are primarily concerned with validating that the number of metric events
-  # matches the number of log events.
-  for event_record in event_records:
-    # Check event count match first
-    num_metric_events = len(event_record.metric_points_timestamps)
-    num_log_events = len(event_record.log_events_timestamps)
-
-    if num_metric_events != num_log_events:
-      # If any mismatch is found, we will raise an error and terminate the DAG.
-      raise RuntimeError(
-          f'Event count mismatch. Expected {num_metric_events} metric'
-          f' events but found {num_log_events} log events for node'
-          f' "{event_record.resource_name}". One-to-one correspondence not'
-          ' possible.'
-      )
-
-  return event_records
+  event_records: List[EventRecord] = context['ti'].xcom_pull(
+      task_ids=_UPDATE_LOG_RECORDS_TASK_ID, key=_XCOM_EVENT_RECORDS_KEY
+  )
+  count_diff_records = [
+      event_record
+      for event_record in event_records
+      if len(event_record.metric_points_timestamps) != len(event_record.log_events_timestamps)
+  ]
+  if count_diff_records:
+    raise RuntimeError(
+        'Event count mismatch for this following event records:'
+        f' {count_diff_records}'
+    )
 
 
 with models.DAG(
@@ -614,41 +653,51 @@ with models.DAG(
       initial_start_time=initial_start_time,
       initial_end_time=initial_end_time,
       project_id=models.Variable.get(
-          'INTERRUPTION_PROJECT_ID', default_var=Project.TPU_PROD_ENV_ONE_VM.value,
+          'INTERRUPTION_PROJECT_ID',
+          default_var=Project.TPU_PROD_ENV_ONE_VM.value,
       ),
-      max_time_diff_sec=int(models.Variable.get(
-          'INTERRUPTION_MAX_TIME_DIFF_SEC', default_var=150
-      )),
-      max_log_results=int(models.Variable.get(
-          'INTERRUPTION_MAX_LOG_RESULTS', default_var=1000
-      )),
+      max_time_diff_sec=int(
+          models.Variable.get('INTERRUPTION_MAX_TIME_DIFF_SEC', default_var=150)
+      ),
+      max_log_results=int(
+          models.Variable.get('INTERRUPTION_MAX_LOG_RESULTS', default_var=1000)
+       ),
       metric_aggregation=models.Variable.get(
           'INTERRUPTION_METRIC_AGGREGATION', default_var=None
       ),
       platform=Platform.GKE,
-      interruption_reason=InterruptionReason.HOST_ERROR,
-      max_start_time_rewind_sec=int(models.Variable.get(
-          'INTERRUPTION_MAX_START_TIME_REWIND_SECONDS', default_var=3600
-      )),
+      interruption_reason=InterruptionReason.MIGRATE_ON_HWSW_MAINTENANCE,
+      max_start_time_rewind_sec=int(
+          models.Variable.get(
+              'INTERRUPTION_MAX_START_TIME_REWIND_SECONDS', default_var=3600
+          )
+      ),
   )
 
-  event_records_after_get_metrics = decide_time_window(
-      configs=configs,
+  decide_time_window_task = PythonOperator(
+      task_id=_DECIDE_TIME_WINDOW_TASK_ID,
+      python_callable=decide_time_window,
+      op_kwargs={'configs': configs},
+  )
+  update_metric_records_task = PythonOperator(
+      task_id=_UPDATE_METRIC_RECORDS_TASK_ID,
+      python_callable=fetch_metric_timeseries_by_api,
+      op_kwargs={'configs': configs},
+  )
+  update_log_records_task = PythonOperator(
+      task_id=_UPDATE_LOG_RECORDS_TASK_ID,
+      python_callable=fetch_log_entries_by_api,
+      op_kwargs={'configs': configs},
+  )
+  check_event_count_match_task = PythonOperator(
+      task_id=_CHECK_EVENT_COUNT_MATCH_TASK_ID,
+      python_callable=check_event_count_match,
+      op_kwargs={'configs': configs},
   )
 
-  event_records_after_get_logs_and_metrics = fetch_interruption_logs_timestamps(
-      configs=configs,
-      event_records=event_records_after_get_metrics,
-  )
-  event_records_after_check_count_match = check_event_count_match(
-      event_records_after_get_logs_and_metrics
-  )
-
-  # --- Task Workflow ---
   (
-      event_records_after_get_metrics
-      >> event_records_after_get_logs_and_metrics
-      >> event_records_after_check_count_match
+      decide_time_window_task
+      >> update_metric_records_task
+      >> update_log_records_task
+      >> check_event_count_match_task
   )
-
-
