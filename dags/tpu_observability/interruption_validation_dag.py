@@ -75,36 +75,36 @@ class InterruptionReason(str, enum.Enum):
 
     filters = []
     match self:
-        case InterruptionReason.DEFRAGMENTATION | InterruptionReason.EVICTION:
-          filters = ['compute.instances.preempted']
-        case InterruptionReason.HOST_ERROR:
-          filters = ['compute.instances.hostError']
-        case InterruptionReason.MIGRATE_ON_HWSW_MAINTENANCE:
-          filters = ['compute.instances.migrateOnHostMaintenance']
-        case InterruptionReason.HW_SW_MAINTENANCE:
-          filters = ['compute.instances.terminateOnHostMaintenance']
-        case InterruptionReason.BARE_METAL_PREEMPTION:
-          filters = ['compute.instances.baremetalCaretakerPreempted']
-        case InterruptionReason.OTHER:
-          filters = [
-              'compute.instances.guestTerminate',
-              'compute.instances.instanceManagerHaltForRestart',
-              'compute.instances.stoppedDueToPdDoubleServe',
-              'compute.instances.kmsKeyError',
-              'compute.instances.shredmillKeyError',
-              'compute.instances.invalidVmImage',
-              'compute.instances.scratchDiskCreationFailed',
-              'compute.instances.localSsdInitializationError',
-              'compute.instances.localSsdInitializationKeyError',
-              'compute.instances.localSsdVerifyTarError',
-              'compute.instances.localSsdRecoveryAttempting',
-              'compute.instances.localSsdRecoveryTimeoutError',
-              'compute.instances.localSsdRecoveryFailedError',
-          ]
-        case _:
-          raise ValueError(f'Unmapped interruption reason: {self}')
-    return (
-        ' OR '.join(f'protoPayload.methodName="{filter}"' for filter in filters)
+      case InterruptionReason.DEFRAGMENTATION | InterruptionReason.EVICTION:
+        filters = ['compute.instances.preempted']
+      case InterruptionReason.HOST_ERROR:
+        filters = ['compute.instances.hostError']
+      case InterruptionReason.MIGRATE_ON_HWSW_MAINTENANCE:
+        filters = ['compute.instances.migrateOnHostMaintenance']
+      case InterruptionReason.HW_SW_MAINTENANCE:
+        filters = ['compute.instances.terminateOnHostMaintenance']
+      case InterruptionReason.BARE_METAL_PREEMPTION:
+        filters = ['compute.instances.baremetalCaretakerPreempted']
+      case InterruptionReason.OTHER:
+        filters = [
+            'compute.instances.guestTerminate',
+            'compute.instances.instanceManagerHaltForRestart',
+            'compute.instances.stoppedDueToPdDoubleServe',
+            'compute.instances.kmsKeyError',
+            'compute.instances.shredmillKeyError',
+            'compute.instances.invalidVmImage',
+            'compute.instances.scratchDiskCreationFailed',
+            'compute.instances.localSsdInitializationError',
+            'compute.instances.localSsdInitializationKeyError',
+            'compute.instances.localSsdVerifyTarError',
+            'compute.instances.localSsdRecoveryAttempting',
+            'compute.instances.localSsdRecoveryTimeoutError',
+            'compute.instances.localSsdRecoveryFailedError',
+        ]
+      case _:
+        raise ValueError(f'Unmapped interruption reason: {self}')
+    return ' OR '.join(
+        f'protoPayload.methodName="{filter}"' for filter in filters
     )
 
 
@@ -158,6 +158,7 @@ class EventRecord:
       log_events_timestamps: A list of timestamps for log events related to
         the resource.
   """
+
   resource_name: str
   interruption_reason: str = ''
   log_filter: str = ''
@@ -353,12 +354,8 @@ def fetch_log_entries_by_api(
 
   logging_api_client = logging.Client(project=project_id)
 
-  start_time_str = (
-      proper_time_range.proper_start_time.replace('+00:00', 'Z')
-  )
-  end_time_str = (
-      proper_time_range.proper_end_time.replace('+00:00', 'Z')
-  )
+  start_time_str = proper_time_range.proper_start_time.replace('+00:00', 'Z')
+  end_time_str = proper_time_range.proper_end_time.replace('+00:00', 'Z')
   time_range_str = (
       f'timestamp>="{start_time_str}" AND timestamp<="{end_time_str}"'
   )
@@ -592,7 +589,9 @@ def decide_time_window(
       current_end_time = calculated_new_end_time.replace(microsecond=0)
       break
 
-  print(f'Stabilized time range: {current_start_time.isoformat()} to {current_end_time.isoformat()}')
+  print(
+      f'Stabilized time range: {current_start_time.isoformat()} to {current_end_time.isoformat()}'
+  )
 
   # Update the proper_time_range with the new start_time and end_time.
   proper_time_range = ProperTimeRange(
@@ -621,7 +620,8 @@ def check_event_count_match(
   count_diff_records = [
       event_record
       for event_record in event_records
-      if len(event_record.metric_points_timestamps) != len(event_record.log_events_timestamps)
+      if len(event_record.metric_points_timestamps)
+      != len(event_record.log_events_timestamps)
   ]
   if count_diff_records:
     raise RuntimeError(
@@ -661,7 +661,7 @@ with models.DAG(
       ),
       max_log_results=int(
           models.Variable.get('INTERRUPTION_MAX_LOG_RESULTS', default_var=1000)
-       ),
+      ),
       metric_aggregation=models.Variable.get(
           'INTERRUPTION_METRIC_AGGREGATION', default_var=None
       ),
