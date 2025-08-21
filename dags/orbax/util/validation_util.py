@@ -3,10 +3,13 @@
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 from absl import logging
+import re
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from google.cloud import logging as logging_api
+
+from dags.orbax.util import gcs
 
 
 @task
@@ -88,6 +91,159 @@ def validate_log_with_step(
         f"{len(vali_step_list)} saves are expected,"
         f"but got {len(new_step_list)}"
     )
+
+
+@task
+def validate_log_with_gcs(
+    project_id: str,
+    location: str,
+    cluster_name: str,
+    namespace: str = "default",
+    pod_pattern: str = "*",
+    container_name: Optional[str] = None,
+    text_filter: Optional[str] = None,
+    start_time: Optional[datetime] = None,
+    end_time: Optional[datetime] = None,
+) -> None:
+  """
+  Validates workload logs against GCS bucket checkpoints.
+
+  This function first queries logs from a specified GKE cluster to determine the
+  GCS bucket path used for checkpointing. It then retrieves logs related to
+  checkpoint save operations, extracts the step numbers, and verifies that the
+  corresponding checkpoint files exist in the GCS bucket. The function passes if the
+  latest step found in the logs matches the latest step found in the GCS bucket's
+  checkpoint filenames. It raises an exception on failure.
+
+  Args:
+    project_id: The Google Cloud project ID.
+    location: The GKE cluster location.
+    cluster_name: The GKE cluster name.
+    namespace: The Kubernetes namespace. Defaults to "default".
+    pod_pattern: A glob pattern to match pod names. Defaults to "*".
+    container_name: An optional container name to filter logs by.
+    text_filter: An optional string to filter log entries by their `textPayload`.
+    start_time: The start time for log retrieval.
+    end_time: The end time for log retrieval.
+
+  Returns:
+    None. The function completes successfully if all validation steps are found.
+
+  Raises:
+    AirflowFailException: If the bucket path format is invalid, if checkpoint files
+      are missing, if steps cannot be extracted from log lines,if step lists
+      are empty, or if the latest steps do not match.
+  """
+
+  # Dues to datetime.datetime.now().strftime("%Y-%m-%d-%H-%M") behaviour
+  # is better to get the run_name from already executed pod (post mortem)
+  gcs_bucket_run_name = None
+  entries = list_log_entries(
+      project_id=project_id,
+      location=location,
+      cluster_name=cluster_name,
+      namespace="default",
+      pod_pattern="*",
+      text_filter=f'textPayload=~"Config param checkpoint_dir:"',
+      start_time=start_time,
+      end_time=end_time,
+  )
+  for entry in entries:
+    if entry.payload is not None:
+      payload_str = str(entry.payload)
+      for line in payload_str.split("\n"):
+        if "Config param checkpoint_dir" in line:
+          gcs_run_name_pattern = re.search(r"(gs:\/\/.*)\/checkpoints\/", line)
+          if gcs_run_name_pattern:
+            full_gcs_path = gcs_run_name_pattern.group(1)
+            split_path = full_gcs_path.split("/")
+            split_path.pop(3)
+            gcs_bucket_run_name = "/".join(split_path)
+            break
+          else:
+            raise AirflowFailException(f"Bucket path format invalid: {line}")
+
+  # Get the entries for the backup steps in the bucket. To later compare the
+  # latest stored step in bucket with the latest recorded step in training pod.
+  entries = list_log_entries(
+      project_id=project_id,
+      location=location,
+      cluster_name=cluster_name,
+      namespace=namespace,
+      pod_pattern=pod_pattern,
+      container_name=container_name,
+      text_filter=f'textPayload=~"{text_filter}"',
+      start_time=start_time,
+      end_time=end_time,
+  )
+  gcs_save_step_list = []
+  gcs_save_step_list_bucket = []
+  for entry in entries:
+    if entry.payload is not None:
+      payload_str = str(entry.payload)
+      for line in payload_str.split("\n"):
+        # Extract the gcs bucket path from replicator logs
+        gcs_pattern = r"\d{4}-\d{2}-\d{2}_\d{2}-\d{2,}"
+        step_pattern = r"step (\d+)"
+        match_gcs = re.search(gcs_pattern, line)
+        match_step = re.search(step_pattern, line)
+        validate_check_gcs = False
+
+        # If could not found those valuses eg. gcs=2025-08-10_12-09 and step=60.
+        if match_gcs and match_step and gcs_bucket_run_name:
+          gcs_checkpoint_path = match_gcs.group(0)
+          step = match_step.group(1)
+          logging.info(f"get gcs path from: {gcs_checkpoint_path}")
+          bucket_files = gcs.get_gcs_checkpoint(
+              f"{gcs_bucket_run_name}/{gcs_checkpoint_path}/"
+          )
+          logging.info(f"gcs bucket files lenght: {len(bucket_files)}")
+          if len(bucket_files) > 0:
+            # Extract .meta file to future comparision
+            for file in bucket_files:
+              if ".meta" in file:
+                gcs_save_step_list_bucket.append(file)
+                break
+
+            # Check for correct format .data
+            for file in bucket_files:
+              if ".data" in file:
+                validate_check_gcs = True
+                break
+
+          if not validate_check_gcs:
+            raise AirflowFailException(
+                f"Checkpoint files can not found in {gcs_checkpoint_path}"
+            )
+
+          # Add it to a global list that we will use later to compare with bucket
+          gcs_save_step_list.append(int(step))
+        else:
+          raise AirflowFailException(
+              f"Could not find gcs_checkpoint_path or step in line: {line}"
+          )
+
+  # Compare last step found in replicator logs and last (only one)
+  # step extracted from filename bucket
+  if len(gcs_save_step_list_bucket) > 0 and len(gcs_save_step_list) > 0:
+    # Extract s60 from  file name with extension .meta
+    pattern_bucket_step = r"s(\d+)"
+    raw_str_filename = gcs_save_step_list_bucket[-1]
+    match = re.search(pattern_bucket_step, raw_str_filename)
+    if match is None:
+      raise AirflowFailException(
+          f"Could not extract step from filename: {raw_str_filename}"
+      )
+    last_step_bucket = match.group(0)[1:]
+    if int(last_step_bucket) == max(gcs_save_step_list):
+      logging.info("Validate success")
+  else:
+    raise AirflowFailException(
+        f"Steps in bucket or replicator logs are empty. "
+        f"GCS bucket steps found: {len(gcs_save_step_list_bucket)}. "
+        f"Replicator log steps found: {len(gcs_save_step_list)}."
+    )
+  return max(gcs_save_step_list), max(gcs_save_step_list_bucket)
 
 
 def list_log_entries(
