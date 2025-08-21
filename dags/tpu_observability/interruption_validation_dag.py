@@ -20,8 +20,6 @@ import pytz
 
 
 _UNKNOWN_RESOURCE_NAME = 'Unknown'
-_XCOM_EVENT_RECORDS_KEY = 'event_records'
-_XCOM_PROPER_TIME_RANGE_KEY = 'proper_time_range'
 _DECIDE_TIME_WINDOW_TASK_ID = 'decide_time_window'
 _UPDATE_METRIC_RECORDS_TASK_ID = 'update_metric_records'
 _UPDATE_LOG_RECORDS_TASK_ID = 'update_log_records'
@@ -29,29 +27,11 @@ _CHECK_EVENT_COUNT_MATCH_TASK_ID = 'check_event_count_match'
 
 
 @dataclasses.dataclass
-class ProperTimeRange:
+class TimeRange:
   """Class containing proper time range for the validation."""
 
-  proper_start_time: str
-  proper_end_time: str
-
-  def __init__(
-      self,
-      proper_start_time: datetime.datetime | str,
-      proper_end_time: datetime.datetime | str,
-  ):
-    if isinstance(proper_start_time, str):
-      self.proper_start_time = proper_start_time
-    elif isinstance(proper_start_time, datetime.datetime):
-      self.proper_start_time = proper_start_time.astimezone(
-          datetime.timezone.utc
-      ).isoformat()
-    if isinstance(proper_end_time, str):
-      self.proper_end_time = proper_end_time
-    elif isinstance(proper_end_time, datetime.datetime):
-      self.proper_end_time = proper_end_time.astimezone(
-          datetime.timezone.utc
-      ).isoformat()
+  start: int
+  end: int
 
 
 class InterruptionReason(str, enum.Enum):
@@ -61,7 +41,7 @@ class InterruptionReason(str, enum.Enum):
   EVICTION = 'Eviction'
   HOST_ERROR = 'HostError'
   MIGRATE_ON_HWSW_MAINTENANCE = 'Migrate on HW/SW Maintenance'
-  HW_SW_MAINTENANCE = 'HW/SW Maintenance'
+  HWSW_MAINTENANCE = 'HW/SW Maintenance'
   BARE_METAL_PREEMPTION = 'Bare Metal Preemption'
   OTHER = 'Other'
 
@@ -81,7 +61,7 @@ class InterruptionReason(str, enum.Enum):
         filters = ['compute.instances.hostError']
       case InterruptionReason.MIGRATE_ON_HWSW_MAINTENANCE:
         filters = ['compute.instances.migrateOnHostMaintenance']
-      case InterruptionReason.HW_SW_MAINTENANCE:
+      case InterruptionReason.HWSW_MAINTENANCE:
         filters = ['compute.instances.terminateOnHostMaintenance']
       case InterruptionReason.BARE_METAL_PREEMPTION:
         filters = ['compute.instances.baremetalCaretakerPreempted']
@@ -113,12 +93,6 @@ class Configs:
   """Validation configuration.
 
   Attributes:
-      initial_start_time: The initial start time for the validation. This time
-        is used as a starting point to determine the proper time range for
-        validation, which will be adjusted based on the available metric data.
-      initial_end_time: The initial end time for the validation. This time
-        is used as a starting point to determine the proper time range for
-        validation, which will be adjusted based on the available metric data.
       project_id: The ID of the GCP project.
       max_time_diff_sec: The maximum allowed time difference between a metric
         and its corresponding log event, in seconds. The corresponding log event
@@ -126,7 +100,6 @@ class Configs:
         before or after the metric event.
       max_log_results: The maximum number of log results to fetch in a single
         query. This is to avoid fetching too many logs.
-      metric_aggregation: The aggregation method to use when querying metrics.
       platform: The platform (GCE or GKE) where the validation is performed.
       interruption_reason: The specific interruption reason to validate.
       max_start_time_rewind_sec: The maximum number of seconds the validation
@@ -134,12 +107,9 @@ class Configs:
         initial start time.
   """
 
-  initial_start_time: datetime.datetime
-  initial_end_time: datetime.datetime
   project_id: str
   max_time_diff_sec: int
   max_log_results: int
-  metric_aggregation: str
   platform: Platform
   interruption_reason: InterruptionReason
   max_start_time_rewind_sec: int
@@ -151,8 +121,6 @@ class EventRecord:
 
   Attributes:
       resource_name: The name of the resource (e.g., node or instance).
-      interruption_reason: The reason for the interruption event.
-      log_filter: The log query filter used to fetch log events.
       metric_points_timestamps: A list of timestamps for metric points related
         to the resource.
       log_events_timestamps: A list of timestamps for log events related to
@@ -160,8 +128,6 @@ class EventRecord:
   """
 
   resource_name: str
-  interruption_reason: str = ''
-  log_filter: str = ''
   metric_points_timestamps: List[str] = dataclasses.field(default_factory=list)
   log_events_timestamps: List[str] = dataclasses.field(default_factory=list)
 
@@ -192,7 +158,6 @@ def fetch_metric_timeseries_by_api(
   project_id = configs.project_id
   interruption_reason = configs.interruption_reason.metric_label()
   platform = configs.platform
-  aggregation = configs.metric_aggregation
 
   match platform:
     case Platform.GCE:
@@ -215,18 +180,22 @@ def fetch_metric_timeseries_by_api(
   # key: resource_name, value: EventRecord
   events_records: dict[str, EventRecord] = {}
 
-  # If start_time (and end_time) is not provided, it means it's an airflow task
-  # and we use the proper time range from the context.
-  is_airflow_task = not start_time
+  # If context contains 'dag', it's an Airflow task; otherwise, it's {}.
+  try:
+    _ = context['dag']
+    is_airflow_task = True
+  except KeyError:
+    is_airflow_task = False
+
   if is_airflow_task:
-    proper_time_range: ProperTimeRange = context['ti'].xcom_pull(
-        task_ids=_DECIDE_TIME_WINDOW_TASK_ID, key=_XCOM_PROPER_TIME_RANGE_KEY
+    proper_time_range: TimeRange = context['ti'].xcom_pull(
+        task_ids=_DECIDE_TIME_WINDOW_TASK_ID
     )
-    start_time = datetime.datetime.fromisoformat(
-        proper_time_range.proper_start_time
+    start_time = datetime.datetime.fromtimestamp(
+        proper_time_range.start, tz=datetime.timezone.utc
     )
-    end_time = datetime.datetime.fromisoformat(
-        proper_time_range.proper_end_time
+    end_time = datetime.datetime.fromtimestamp(
+        proper_time_range.end, tz=datetime.timezone.utc
     )
 
   start_timestamp = timestamp_pb2.Timestamp()
@@ -245,10 +214,6 @@ def fetch_metric_timeseries_by_api(
       view=monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.FULL,
   )
 
-  # If aggregation is provided, add it to the request arguments
-  if aggregation:
-    request.aggregation = aggregation
-
   monitoring_api_client = monitoring_v3.MetricServiceClient()
   # Here should raise the exception from the API. We don't catch it, just let
   # it raise to Airflow.
@@ -258,18 +223,20 @@ def fetch_metric_timeseries_by_api(
     match platform:
       case Platform.GKE:
         resource_key = 'node_name'
+        resource_name = time_series.resource.labels.get(
+            resource_key, _UNKNOWN_RESOURCE_NAME
+        )
       case Platform.GCE:
         resource_key = 'instance_name'
+        resource_name = time_series.metric.labels.get(
+            resource_key, _UNKNOWN_RESOURCE_NAME
+        )
       case _:
         print(f"Warning: Unknown platform '{platform.value}'.")
         raise RuntimeError(
             f"Unsupported platform '{platform.value}'. "
             'Please check the scenario configuration.'
         )
-
-    resource_name = time_series.resource.labels.get(
-        resource_key, _UNKNOWN_RESOURCE_NAME
-    )
 
     # Ensure we actually got a name before proceeding
     if resource_name == _UNKNOWN_RESOURCE_NAME:
@@ -302,7 +269,6 @@ def fetch_metric_timeseries_by_api(
         if resource_name not in events_records:
           events_records[resource_name] = EventRecord(
               resource_name=resource_name,
-              interruption_reason=interruption_reason,
           )
         # The event_count represents a count of interruption events occurring
         # at the same time.
@@ -318,10 +284,6 @@ def fetch_metric_timeseries_by_api(
     )
     raise RuntimeError('No metric events found in the specified time range.')
 
-  if is_airflow_task:
-    context['ti'].xcom_push(
-        key=_XCOM_EVENT_RECORDS_KEY, value=list(events_records.values())
-    )
   return list(events_records.values())
 
 
@@ -340,22 +302,27 @@ def fetch_log_entries_by_api(
       A list of EventRecord objects. Each EventRecord must contain the log
       events timestamps for the resource name.
   """
-  proper_time_range: ProperTimeRange = context['ti'].xcom_pull(
-      task_ids=_DECIDE_TIME_WINDOW_TASK_ID, key=_XCOM_PROPER_TIME_RANGE_KEY
+  proper_time_range: TimeRange = context['ti'].xcom_pull(
+      task_ids=_DECIDE_TIME_WINDOW_TASK_ID
+  )
+  start_time = datetime.datetime.fromtimestamp(
+      proper_time_range.start, tz=datetime.timezone.utc
+  )
+  end_time = datetime.datetime.fromtimestamp(
+      proper_time_range.end, tz=datetime.timezone.utc
   )
   event_records: List[EventRecord] = context['ti'].xcom_pull(
-      task_ids=_UPDATE_METRIC_RECORDS_TASK_ID, key=_XCOM_EVENT_RECORDS_KEY
+      task_ids=_UPDATE_METRIC_RECORDS_TASK_ID,
   )
 
   project_id = configs.project_id
-  interruption_reason = configs.interruption_reason
   log_filter_query = configs.interruption_reason.log_filter()
   max_results = configs.max_log_results
 
   logging_api_client = logging.Client(project=project_id)
 
-  start_time_str = proper_time_range.proper_start_time.replace('+00:00', 'Z')
-  end_time_str = proper_time_range.proper_end_time.replace('+00:00', 'Z')
+  start_time_str = start_time.isoformat().replace('+00:00', 'Z')
+  end_time_str = end_time.isoformat().replace('+00:00', 'Z')
   time_range_str = (
       f'timestamp>="{start_time_str}" AND timestamp<="{end_time_str}"'
   )
@@ -395,9 +362,7 @@ def fetch_log_entries_by_api(
       if log_node_name not in event_records:
         event_records[log_node_name] = EventRecord(
             resource_name=log_node_name,
-            interruption_reason=interruption_reason,
         )
-      event_records[log_node_name].log_filter = log_filter_query
       event_records[log_node_name].log_events_timestamps.append(
           aware_timestamp.isoformat()
       )
@@ -409,9 +374,7 @@ def fetch_log_entries_by_api(
         'Consider increasing max_results or narrowing the time range.'
     )
 
-  context['ti'].xcom_push(
-      key=_XCOM_EVENT_RECORDS_KEY, value=list(event_records.values())
-  )
+  return list(event_records.values())
 
 
 def decide_time_window(
@@ -467,8 +430,10 @@ def decide_time_window(
   """
   max_time_diff_sec = configs.max_time_diff_sec
   max_start_time_rewind_sec = configs.max_start_time_rewind_sec
-  initial_start_time = configs.initial_start_time
-  initial_end_time = configs.initial_end_time
+
+  now = datetime.datetime.now(pytz.utc)
+  initial_start_time = now - datetime.timedelta(hours=12)
+  initial_end_time = now
 
   current_start_time = initial_start_time
   current_end_time = initial_end_time
@@ -594,13 +559,11 @@ def decide_time_window(
   )
 
   # Update the proper_time_range with the new start_time and end_time.
-  proper_time_range = ProperTimeRange(
-      proper_start_time=current_start_time + idle_time_buffer / 2,
-      proper_end_time=current_end_time - idle_time_buffer / 2,
+  proper_time_range = TimeRange(
+      start=int((current_start_time + idle_time_buffer / 2).timestamp()),
+      end=int((current_end_time - idle_time_buffer / 2).timestamp()),
   )
-  context['ti'].xcom_push(
-      key=_XCOM_PROPER_TIME_RANGE_KEY, value=proper_time_range
-  )
+  return proper_time_range
 
 
 def check_event_count_match(
@@ -615,7 +578,7 @@ def check_event_count_match(
       A list of EventRecord objects, containing the updated validation results.
   """
   event_records: List[EventRecord] = context['ti'].xcom_pull(
-      task_ids=_UPDATE_LOG_RECORDS_TASK_ID, key=_XCOM_EVENT_RECORDS_KEY
+      task_ids=_UPDATE_LOG_RECORDS_TASK_ID,
   )
   count_diff_records = [
       event_record
@@ -630,74 +593,86 @@ def check_event_count_match(
     )
 
 
-with models.DAG(
-    dag_id='interruption_event_validation_dag',
-    start_date=datetime.datetime(2025, 7, 20),
-    schedule=Schedule.WEEKDAY_PST_6PM_EXCEPT_THURSDAY,
-    catchup=False,
-    tags=['gke', 'gce', 'tpu-observability', 'interruption_validation'],
-    description=(
-        'This DAG validates the interruption event metrics and logs for GKE and GCE'
-    ),
-    doc_md="""
-    ### Interruption Event Validation DAG
-    This DAG automatically validates the consistency of interruption events between metrics and logs for both GKE and GCE environments.
-    """,
-) as dag:
-  # Define time range for data fetching
-  now = datetime.datetime.now(pytz.utc)
-  initial_start_time = now - datetime.timedelta(hours=12)
-  initial_end_time = now
+def create_interruption_dag(
+    dag_id: str,
+    platform: Platform,
+    interruption_reason: InterruptionReason,
+) -> models.DAG:
+  """Generates a single interruption event validation DAG.
+  """
 
-  configs = Configs(
-      initial_start_time=initial_start_time,
-      initial_end_time=initial_end_time,
-      project_id=models.Variable.get(
-          'INTERRUPTION_PROJECT_ID',
-          default_var=Project.TPU_PROD_ENV_ONE_VM.value,
+  with models.DAG(
+      dag_id=dag_id,
+      start_date=datetime.datetime(2025, 7, 20),
+      schedule=Schedule.WEEKDAY_PST_6PM_EXCEPT_THURSDAY,
+      catchup=False,
+      tags=['gke', 'gce', 'tpu-observability', 'interruption_validation'],
+      description=(
+          'This DAG validates the interruption event metrics and logs for GKE and GCE'
       ),
-      max_time_diff_sec=int(
-          models.Variable.get('INTERRUPTION_MAX_TIME_DIFF_SEC', default_var=150)
-      ),
-      max_log_results=int(
-          models.Variable.get('INTERRUPTION_MAX_LOG_RESULTS', default_var=1000)
-      ),
-      metric_aggregation=models.Variable.get(
-          'INTERRUPTION_METRIC_AGGREGATION', default_var=None
-      ),
-      platform=Platform.GKE,
-      interruption_reason=InterruptionReason.MIGRATE_ON_HWSW_MAINTENANCE,
-      max_start_time_rewind_sec=int(
-          models.Variable.get(
-              'INTERRUPTION_MAX_START_TIME_REWIND_SECONDS', default_var=3600
-          )
-      ),
-  )
+      doc_md="""
+      ### Interruption Event Validation DAG
+      This DAG automatically validates the consistency of interruption events between metrics and logs for both GKE and GCE environments.
+      """,
+  ) as dag:
+    configs = Configs(
+        project_id=models.Variable.get(
+            'INTERRUPTION_PROJECT_ID',
+            default_var=Project.TPU_PROD_ENV_ONE_VM.value,
+        ),
+        max_time_diff_sec=int(
+            models.Variable.get('INTERRUPTION_MAX_TIME_DIFF_SEC', default_var=150)
+        ),
+        max_log_results=int(
+            models.Variable.get('INTERRUPTION_MAX_LOG_RESULTS', default_var=1000)
+        ),
+        platform=platform,
+        interruption_reason=interruption_reason,
+        max_start_time_rewind_sec=int(
+            models.Variable.get(
+                'INTERRUPTION_MAX_START_TIME_REWIND_SECONDS', default_var=3600
+            )
+        ),
+    )
 
-  decide_time_window_task = PythonOperator(
-      task_id=_DECIDE_TIME_WINDOW_TASK_ID,
-      python_callable=decide_time_window,
-      op_kwargs={'configs': configs},
-  )
-  update_metric_records_task = PythonOperator(
-      task_id=_UPDATE_METRIC_RECORDS_TASK_ID,
-      python_callable=fetch_metric_timeseries_by_api,
-      op_kwargs={'configs': configs},
-  )
-  update_log_records_task = PythonOperator(
-      task_id=_UPDATE_LOG_RECORDS_TASK_ID,
-      python_callable=fetch_log_entries_by_api,
-      op_kwargs={'configs': configs},
-  )
-  check_event_count_match_task = PythonOperator(
-      task_id=_CHECK_EVENT_COUNT_MATCH_TASK_ID,
-      python_callable=check_event_count_match,
-      op_kwargs={'configs': configs},
-  )
+    decide_time_window_task = PythonOperator(
+        task_id=_DECIDE_TIME_WINDOW_TASK_ID,
+        python_callable=decide_time_window,
+        op_kwargs={'configs': configs},
+    )
+    update_metric_records_task = PythonOperator(
+        task_id=_UPDATE_METRIC_RECORDS_TASK_ID,
+        python_callable=fetch_metric_timeseries_by_api,
+        op_kwargs={'configs': configs},
+    )
+    update_log_records_task = PythonOperator(
+        task_id=_UPDATE_LOG_RECORDS_TASK_ID,
+        python_callable=fetch_log_entries_by_api,
+        op_kwargs={'configs': configs},
+    )
+    check_event_count_match_task = PythonOperator(
+        task_id=_CHECK_EVENT_COUNT_MATCH_TASK_ID,
+        python_callable=check_event_count_match,
+        op_kwargs={'configs': configs},
+    )
 
-  (
-      decide_time_window_task
-      >> update_metric_records_task
-      >> update_log_records_task
-      >> check_event_count_match_task
-  )
+    (
+        decide_time_window_task
+        >> update_metric_records_task
+        >> update_log_records_task
+        >> check_event_count_match_task
+    )
+
+    return dag
+
+
+dag_id_prefix = 'interruption_validation'
+for platform in [Platform.GCE, Platform.GKE]:
+  for reason in InterruptionReason:
+    reason_value = reason.value.replace(' ', '_').replace('/', '').lower()
+    dag_id = f'{dag_id_prefix}_{platform.value}_{reason_value}'
+    _ = create_interruption_dag(
+        dag_id,
+        platform,
+        reason
+    )
