@@ -119,7 +119,7 @@ def run_workload(
         f" --{multi_keyword}={num_slices} --docker-image={docker_image}"
         f" --project={cluster_project} --zone={zone}"
         f" --env {metric_config.SshEnvVars.GCS_OUTPUT.name}={gcs_path}"
-        f" --restart-on-user-code-failure"
+        " --restart-on-user-code-failure"
     )
 
     if ramdisk_directory:
