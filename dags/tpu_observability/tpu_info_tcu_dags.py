@@ -6,14 +6,12 @@ This is done by comparing data from Cloud Logging and Cloud Monitoring.
 import dataclasses
 import datetime
 import logging
-import pathlib
 import re
 from typing import List
 
 from airflow import models
 from airflow.decorators import task
 from airflow.exceptions import AirflowException
-from airflow.providers.standard.operators.bash import BashOperator
 from airflow.utils.trigger_rule import TriggerRule
 from google.cloud import logging_v2 as gcp_logging
 from google.cloud import monitoring_v3
@@ -25,26 +23,27 @@ from dags.common.vm_resource import Project, Region, Zone
 @dataclasses.dataclass
 class Info:
   """Configuration for the GKE Node Pool and Monitoring."""
+
   project_id: str
   region: str
   zone: str
   cluster_name: str
   container_name: str
   yaml_file_name: str
-  yaml_path: str
+  bucket_path: str
 
 
-def compare_utilization_values(
+def compare_tensorcore_utilization_values(
     log_values: List[float],
     monitoring_values: List[float],
-    tolerance: float = 1.0
+    tolerance: float = 1.0,
 ) -> bool:
   """Compares two sets of utilization values and returns the comparison result."""
   if len(log_values) != len(monitoring_values):
-    raise AirflowException(f"Data count mismatch. Data count mismatch. Logs have {log_values} values, "
+    raise AirflowException(
+        f"Data count mismatch. Data count mismatch. Logs have {log_values} values, "
         f"Monitoring has {monitoring_values}."
     )
-
 
   logging.info("--- Comparison Results ---")
   logging.info("Tolerance: %s", tolerance)
@@ -66,12 +65,61 @@ def compare_utilization_values(
       all_passed = False
     logging.info(
         "%-12s %-12.2f %-15.2f %-12.2f %-10s",
-        f"Device {i}", log_val, mon_val, diff, 'PASS' if passed else 'FAIL'
+        f"Device {i}",
+        log_val,
+        mon_val,
+        diff,
+        "PASS" if passed else "FAIL",
     )
 
   logging.info("-" * 65)
 
   return all_passed
+
+
+@task.bash()
+def run_workload(info: Info):
+  return f"""
+        export KUBECONFIG=/tmp/kubeconfig
+        gsutil cp {info.bucket_path}{info.yaml_file_name} \\
+                /tmp/{info.yaml_file_name}
+
+        gcloud container clusters get-credentials {info.cluster_name} \
+            --region {info.region} \
+            --project {info.project_id}
+
+        kubectl --kubeconfig $KUBECONFIG apply -f /tmp/{info.yaml_file_name} -n default
+
+        echo $(date -u +"%Y-%m-%dT%H:%M:%S.%3N%:z")
+        """
+
+
+@task.bash()
+def end_workload(info: Info):
+  return f"""
+        export KUBECONFIG=/tmp/kubeconfig
+
+        gcloud container clusters get-credentials {info.cluster_name} \\
+            --region {info.region} \\
+            --project {info.project_id} \\
+
+        kubectl delete jobsets --all -n default --timeout=60s # Add a timeout for deletion
+        """
+
+
+@task.bash()
+def get_active_nodes_bash(info: Info):
+  return f"""
+    export KUBECONFIG=/tmp/kubeconfig
+
+    echo "Configuring kubectl to connect to cluster: {info.cluster_name}"
+    gcloud container clusters get-credentials {info.cluster_name} \
+        --region {info.region} \
+        --project {info.project_id}
+
+    NODE_LIST_JSON=$(kubectl get pods -n default -o jsonpath='{{.items[*].spec.nodeName}}' | tr ' ' '\\n')
+    echo $NODE_LIST_JSON
+    """
 
 
 @task.sensor(poke_interval=30, timeout=600, mode="reschedule")
@@ -170,10 +218,14 @@ def verify_tensorcore_utilization(
           f' resource.labels.cluster_name = "{info.cluster_name}" AND'
           f' resource.labels.node_name = "{node_name}"'
       ),
-      interval=types.TimeInterval({
-          "end_time": {"seconds": int(end_time_utc.timestamp())},
-          "start_time": {"seconds": int(datetime_job_apply_time.timestamp())},
-      }),
+      interval=types.TimeInterval(
+          {
+              "end_time": {"seconds": int(end_time_utc.timestamp())},
+              "start_time": {
+                  "seconds": int(datetime_job_apply_time.timestamp())
+              },
+          }
+      ),
       view="FULL",
   )
   time_series_data = mon_client.list_time_series(request)
@@ -198,7 +250,7 @@ def verify_tensorcore_utilization(
           metric_values.keys(), key=lambda x: int(x.split("-")[-1])
       )
   ]
-  return compare_utilization_values(util_values, monitoring_values)
+  return compare_tensorcore_utilization_values(util_values, monitoring_values)
 
 
 @task
@@ -228,7 +280,7 @@ def summarize_results(
 
 
 with models.DAG(
-    dag_id="tp_info_tensorcore_utilization_dag",
+    dag_id="tpu_info_tensorcore_utilization_dag",
     start_date=datetime.datetime(2025, 8, 15),
     schedule=None,
     catchup=False,
@@ -258,86 +310,41 @@ with models.DAG(
       yaml_file_name=models.Variable.get(
           "YAML_FILE_NAME", default_var="v6e-tpu-info-workload.yaml"
       ),
-      yaml_path=models.Variable.get(
-          "YAML_PATH",
-          default_var=str(
-              pathlib.Path(__file__).parent.resolve()
-              / "v6e-tpu-info-workload.yaml"
-          ),
+      bucket_path=models.Variable.get(
+          "BUCKET_PATH",
+          default_var="gs://us-east1-dennis-airflow-tes-a24588e9-bucket/data/",
       ),
       container_name=models.Variable.get(
           "CONTAINER_NAME", default_var="jax-tpu-job"
       ),
   )
 
-  run_workload = BashOperator(
-      task_id="run_workload",
-      # Set KUBECONFIG to an isolated path to prevent race conditions on a
-      # shared Airflow worker. This forces gcloud and kubectl to use a
-      # temporary, task-specific config file instead of the default
-      # ~/.kube/config, ensuring this task connects to the correct cluster
-      # without conflicts.
-      bash_command=f"""
+  apply_time = run_workload.override(task_id="run_workload")(info=cluster_info)
 
-        export KUBECONFIG=/tmp/kubeconfig
-        gsutil cp gs://us-east1-dennis-airflow-tes-a24588e9-bucket/data/{cluster_info.yaml_file_name} \\
-                /tmp/{cluster_info.yaml_file_name}
+  wait_for_job_start = wait_for_jobset_start_logs.override(
+      task_id="wait_for_job_start"
+  )(cluster_info, job_apply_time_str=apply_time)
 
-        gcloud container clusters get-credentials {cluster_info.cluster_name} \
-            --region {cluster_info.region} \
-            --project {cluster_info.project_id}
+  raw_node_names_str = get_active_nodes_bash.override(
+      task_id="get_raw_node_names"
+  )(info=cluster_info)
 
-        kubectl --kubeconfig $KUBECONFIG apply -f /tmp/{cluster_info.yaml_file_name} -n default
+  active_node = format_node_list(bash_output=raw_node_names_str)
 
-        echo $(date -u +"%Y-%m-%dT%H:%M:%S.%3N%:z")
-        """,
+  verify_utilization_per_node = (
+      verify_tensorcore_utilization.override(
+          task_id="verify_utilization_per_node"
+      )
+      .partial(info=cluster_info, job_apply_time=apply_time)
+      .expand(node_name=active_node)
   )
 
-  get_active_nodes_bash = BashOperator(
-      task_id="get_active_nodes_bash",
-      bash_command=f"""
-    export KUBECONFIG=/tmp/kubeconfig
+  clean_up = end_workload.override(
+      task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
+  )(info=cluster_info)
 
-    echo "Configuring kubectl to connect to cluster: {cluster_info.cluster_name}"
-    gcloud container clusters get-credentials {cluster_info.cluster_name} \
-        --region {cluster_info.region} \
-        --project {cluster_info.project_id}
+  summary = summarize_results(verify_utilization_per_node, active_node)
 
-    NODE_LIST_JSON=$(kubectl get pods -n default -o jsonpath='{{.items[*].spec.nodeName}}' | tr ' ' '\\n')
-    echo $NODE_LIST_JSON
-    """,
-      do_xcom_push=True,
-  )
+  apply_time >> wait_for_job_start >> raw_node_names_str >> active_node
 
-  end_workload = BashOperator(
-      task_id="end_workload",
-      depends_on_past=False,
-      trigger_rule=TriggerRule.ALL_DONE,
-      bash_command=f"""
-        export KUBECONFIG=/tmp/kubeconfig
-
-        gcloud container clusters get-credentials {cluster_info.cluster_name} \\
-            --region {cluster_info.region} \\
-            --project {cluster_info.project_id} \\
-
-        kubectl delete jobsets --all -n default --timeout=60s # Add a timeout for deletion
-        """,
-  )
-
-  job_apply_time = run_workload.output
-
-  logs_are_ready = wait_for_jobset_start_logs(
-      cluster_info, job_apply_time_str=job_apply_time
-  )
-
-  active_node_list = format_node_list(bash_output=get_active_nodes_bash.output)
-
-  run_workload >> logs_are_ready >> get_active_nodes_bash >> active_node_list
-
-  verification_outcomes = verify_tensorcore_utilization.partial(
-      info=cluster_info, job_apply_time=job_apply_time
-  ).expand(node_name=active_node_list)
-
-  summary_task = summarize_results(verification_outcomes, active_node_list)
-
-  summary_task >> end_workload
+  summary >> clean_up
