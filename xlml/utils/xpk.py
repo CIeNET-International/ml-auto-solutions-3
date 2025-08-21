@@ -29,8 +29,14 @@ from dags.common.vm_resource import GpuVersion
 # b/411426745 - Setting branch to 0.4.1 till the depdency issue is resolved.
 MAIN_BRANCH = "v0.4.1"
 
+<<<<<<< HEAD
 # TODO(b/437817546): Switch back to the main branch after the issue is resolved.
 # This branch includes changes fixing the `validate_dependencies()` crash issue.
+=======
+# TODO:For the usage of MTC and EMC features after fixing b/437817546 which is a
+# dependecy issue, we should be able to use main branch instead of this custom
+# 'abhinav-mtc' branch. More info in b/437817546.
+>>>>>>> ed41435 (Fix: Adding the TODO comment on b/437817546 for Abhinov branch.)
 BRANCH_ABHINAV_MTC = "abhinav-mtc"
 
 # Duration = past 7 days
