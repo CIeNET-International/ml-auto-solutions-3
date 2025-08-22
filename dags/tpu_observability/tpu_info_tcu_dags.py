@@ -18,11 +18,22 @@ from google.cloud import monitoring_v3
 from google.cloud.monitoring_v3 import types
 
 from dags.common.vm_resource import Project, Region, Zone
+from dags.map_reproducibility.utils import constants
 
 
 @dataclasses.dataclass
 class Info:
-  """Configuration for the GKE Node Pool and Monitoring."""
+  """Configuration for the GKE Node Pool and Monitoring.
+
+  Attributes:
+    project_id: The Google Cloud project ID.
+    region: The region of the GKE cluster.
+    zone: The zone of the GKE cluster.
+    cluster_name: The name of the GKE cluster.
+    container_name: The name of the container running the workload.
+    yaml_file_name: The name of the YAML file defining the Kubernetes job.
+    bucket_path: The GCS bucket path where the YAML file is stored.
+  """
 
   project_id: str
   region: str
@@ -38,7 +49,25 @@ def compare_tensorcore_utilization_values(
     monitoring_values: List[float],
     tolerance: float = 1.0,
 ) -> bool:
-  """Compares two sets of utilization values and returns the comparison result."""
+  """Compares two lists of utilization values within a given tolerance.
+
+  This function iterates through two lists of floating-point numbers,
+  representing utilization metrics from logs and monitoring systems. It checks
+  if the absolute difference between each corresponding pair of values is
+  within the specified tolerance.
+
+  Args:
+    log_values: A list of utilization values extracted from Cloud Logging.
+    monitoring_values: A list of utilization values from Cloud Monitoring.
+    tolerance: The maximum allowed absolute difference between corresponding
+      values for the comparison to be considered a "PASS".
+
+  Returns:
+    True if all value pairs are within the tolerance, False otherwise.
+
+  Raises:
+    AirflowException: If the lengths of the two input lists do not match.
+  """
   if len(log_values) != len(monitoring_values):
     raise AirflowException(
         f"Data count mismatch. Data count mismatch. Logs have {log_values} values, "
@@ -79,36 +108,73 @@ def compare_tensorcore_utilization_values(
 
 @task.bash()
 def run_workload(info: Info):
+  """Applies the workload YAML to the GKE cluster and returns the start time.
+
+  This task executes a bash script that performs the following steps:
+  1. Copies the workload YAML file from GCS to a temporary local path.
+  2. Authenticates `gcloud` with the specified GKE cluster.
+  3. Applies the YAML file to the `default` namespace using `kubectl`.
+  4. Echoes the current UTC time, which serves as the job's start time.
+
+  Args:
+    info: Configuration object with cluster and workload details.
+
+  Returns:
+    The UTC timestamp (ISO 8601 format) of when the job was applied.
+  """
   return f"""
-        export KUBECONFIG=/tmp/kubeconfig
-        gsutil cp {info.bucket_path}{info.yaml_file_name} \\
-                /tmp/{info.yaml_file_name}
+    export KUBECONFIG=/tmp/kubeconfig
+    gsutil cp {info.bucket_path}{info.yaml_file_name} \\
+            /tmp/{info.yaml_file_name}
 
-        gcloud container clusters get-credentials {info.cluster_name} \
-            --region {info.region} \
-            --project {info.project_id}
+    gcloud container clusters get-credentials {info.cluster_name} \
+        --region {info.region} \
+        --project {info.project_id}
 
-        kubectl --kubeconfig $KUBECONFIG apply -f /tmp/{info.yaml_file_name} -n default
+    kubectl --kubeconfig $KUBECONFIG apply -f /tmp/{info.yaml_file_name} -n default
 
-        echo $(date -u +"%Y-%m-%dT%H:%M:%S.%3N%:z")
-        """
+    echo $(date -u +"%Y-%m-%dT%H:%M:%S.%3N%:z")
+    """
 
 
 @task.bash()
 def end_workload(info: Info):
+  """Deletes all JobSets from the GKE cluster to clean up resources.
+
+  This task executes a bash script to:
+  1. Authenticate `gcloud` with the specified GKE cluster.
+  2. Delete all JobSets in the `default` namespace using `kubectl`.
+
+  Args:
+    info: Configuration object with cluster details.
+  """
   return f"""
-        export KUBECONFIG=/tmp/kubeconfig
+    export KUBECONFIG=/tmp/kubeconfig
 
-        gcloud container clusters get-credentials {info.cluster_name} \\
-            --region {info.region} \\
-            --project {info.project_id} \\
+    gcloud container clusters get-credentials {info.cluster_name} \
+        --region {info.region} \
+        --project {info.project_id}
 
-        kubectl delete jobsets --all -n default --timeout=60s # Add a timeout for deletion
-        """
+    kubectl delete jobsets --all -n default --timeout=60s # Add a timeout for deletion
+    """
 
 
 @task.bash()
 def get_active_nodes_bash(info: Info):
+  """Retrieves a list of GKE nodes where the workload pods are running.
+
+  This task executes a bash script to:
+  1. Authenticate `gcloud` with the specified GKE cluster.
+  2. Use `kubectl` to get the names of the nodes for all pods in the
+     `default` namespace.
+  3. Formats the output as a space-separated string of node names.
+
+  Args:
+    info: Configuration object with cluster details.
+
+  Returns:
+    A string containing the names of the active nodes, separated by spaces.
+  """
   return f"""
     export KUBECONFIG=/tmp/kubeconfig
 
@@ -134,6 +200,10 @@ def wait_for_jobset_start_logs(info: Info, job_apply_time_str: str) -> bool:
     info: An Info dataclass instance containing project and cluster details.
     job_apply_time_str: The ISO formatted string of the time the job was
       applied.
+
+  Returns:
+    True if the start log is found, otherwise it will raise an Airflow timeout
+    exception.
   """
   log_client = gcp_logging.Client(project=info.project_id)
   datetime_job_apply_time = datetime.datetime.fromisoformat(job_apply_time_str)
@@ -157,7 +227,14 @@ def wait_for_jobset_start_logs(info: Info, job_apply_time_str: str) -> bool:
 
 @task
 def format_node_list(bash_output: str) -> List[str]:
-  """Converts multi-line BashOperator output into a Python list of strings."""
+  """Converts a space-separated string of node names into a Python list.
+
+  Args:
+    bash_output: The raw string output from the `get_active_nodes_bash` task.
+
+  Returns:
+    A list of node name strings. Returns an empty list if the input is empty.
+  """
   if not bash_output or not bash_output.strip():
     logging.warning("Received empty node list from bash task.")
     return []
@@ -171,7 +248,22 @@ def format_node_list(bash_output: str) -> List[str]:
 def verify_tensorcore_utilization(
     info: Info, node_name: str, job_apply_time: str
 ) -> bool:
-  """Fetches utilization from logs and monitoring for a single node and compares them."""
+  """Fetches and compares TensorCore utilization from logs and monitoring.
+
+  For a single GKE node, this function queries both Cloud Logging and Cloud
+  Monitoring to retrieve TensorCore utilization metrics that were generated
+  after the job started. It then compares these two sets of data to verify
+  their consistency.
+
+  Args:
+    info: Configuration object with project and cluster details.
+    node_name: The name of the GKE node to verify.
+    job_apply_time: The ISO timestamp string indicating when the workload began.
+
+  Returns:
+    True if the utilization values from logs and monitoring match within the
+    defined tolerance, False otherwise.
+  """
   datetime_job_apply_time = datetime.datetime.fromisoformat(job_apply_time)
   end_time_utc = datetime_job_apply_time + datetime.timedelta(minutes=10)
 
@@ -218,14 +310,12 @@ def verify_tensorcore_utilization(
           f' resource.labels.cluster_name = "{info.cluster_name}" AND'
           f' resource.labels.node_name = "{node_name}"'
       ),
-      interval=types.TimeInterval(
-          {
-              "end_time": {"seconds": int(end_time_utc.timestamp())},
-              "start_time": {
-                  "seconds": int(datetime_job_apply_time.timestamp())
-              },
-          }
-      ),
+      interval=types.TimeInterval({
+          "end_time": {"seconds": int(end_time_utc.timestamp())},
+          "start_time": {
+              "seconds": int(datetime_job_apply_time.timestamp())
+          },
+      }),
       view="FULL",
   )
   time_series_data = mon_client.list_time_series(request)
@@ -259,13 +349,17 @@ def summarize_results(
 ):
   """Summarizes the results of the TensorCore utilization verification.
 
-  This function logs the number of nodes verified, how many passed, and raises
-  an AirflowException if any node failed the verification.
+  This function logs the number of nodes verified, how many passed, and returns
+  a boolean indicating the overall success of the verification process.
 
   Args:
     verification_results: A list of booleans, where each boolean indicates
       whether the verification passed (True) or failed (False) for a node.
     active_nodes: A list of node names that were included in the verification.
+
+  Returns:
+    True if all nodes passed verification, False otherwise. If no nodes were
+    active, the task is skipped and does not affect the DAG's final state.
   """
   if not active_nodes:
     logging.info("No active nodes were found. Grand Result: SKIPPED")
@@ -282,7 +376,7 @@ def summarize_results(
 with models.DAG(
     dag_id="tpu_info_tensorcore_utilization_dag",
     start_date=datetime.datetime(2025, 8, 15),
-    schedule=None,
+    schedule=constants.Schedule.WEEKDAY_PST_6_30PM_EXCEPT_THURSDAY,
     catchup=False,
     tags=["gke", "tpu-info", "tensorcore-utilization"],
     description=(
@@ -293,7 +387,6 @@ with models.DAG(
       # TensorCore Utilization Verification DAG
       # This DAG verifies TensorCore utilization metrics by comparing data from Cloud Logging and Cloud Monitoring.""",
 ) as dag:
-
   cluster_info = Info(
       project_id=models.Variable.get(
           "TCU_PROJECT_ID", default_var=Project.TPU_PROD_ENV_ONE_VM.value
@@ -318,6 +411,11 @@ with models.DAG(
           "CONTAINER_NAME", default_var="jax-tpu-job"
       ),
   )
+  # Clean up any pre-existing workloads to ensure a clean environment for the
+  # test.
+  start_cleanup = end_workload.override(
+      task_id="start_cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
+  )(info=cluster_info)
 
   apply_time = run_workload.override(task_id="run_workload")(info=cluster_info)
 
