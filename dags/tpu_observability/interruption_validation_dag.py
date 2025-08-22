@@ -1,4 +1,7 @@
-"""This script validates the consistency of interruption events between metrics and logs."""
+"""
+A DAG to validate the consistency of interruption events between
+metrics and logs.
+"""
 
 import dataclasses
 import datetime
@@ -41,12 +44,12 @@ class InterruptionReason(str, enum.Enum):
   OTHER = 'Other'
 
   def metric_label(self) -> str:
-    """Returns the metric label for the interruption reason."""
+    """Returns the corresponding metric label for the interruption reason."""
 
     return self.value
 
   def log_filter(self) -> str:
-    """Returns the log filter for the interruption reason."""
+    """Returns the corresponding filter for the interruption reason."""
 
     filters = []
     match self:
@@ -89,25 +92,16 @@ class Configs:
 
   Attributes:
       project_id: The ID of the GCP project.
-      max_time_diff_sec: The maximum allowed time difference between a metric
-        and its corresponding log event, in seconds. The corresponding log event
-        will be considered valid if it is within `max_time_diff_sec` seconds
-        before or after the metric event.
       max_log_results: The maximum number of log results to fetch in a single
         query. This is to avoid fetching too many logs.
       platform: The platform (GCE or GKE) where the validation is performed.
       interruption_reason: The specific interruption reason to validate.
-      max_start_time_rewind_sec: The maximum number of seconds the validation
-        start time can be rewound to find a proper start time, relative to the
-        initial start time.
   """
 
   project_id: str
-  max_time_diff_sec: int
   max_log_results: int
   platform: Platform
   interruption_reason: InterruptionReason
-  max_start_time_rewind_sec: int
 
 
 @dataclasses.dataclass
@@ -132,36 +126,41 @@ def fetch_metric_timeseries_by_api(
     start_time: int,
     end_time: int,
 ) -> List[EventRecord]:
-  """Queries the monitoring API for a given validation_conf and time range to retrieve the timeseries data for each resource.
+  """Retrieve the metrics from Cloud Monitoring API and group them.
 
-  This function will be called by the airflow task or decide_time_window().
-  If start_time and end_time are not provided, it means it's called by the
-  airflow task and we use the proper time range from the context.
+  This function fetches time series data for interruption events based on the
+  provided configuration and time range. It is used to identify when and on
+  which resources interruptions have occurred.
 
   Args:
-      configs: The configuration object containing the parameters for the
-        validation.
-      start_time: The start of the time interval when it's not an airflow task.
-      end_time: The end of the time interval when it's not an airflow task.
-      **context: The airflow context.
+      configs: The configuration contains the parameters for validation.
+      start_time: The start of the time interval to query for metrics.
+      end_time: The end of the time interval to query for metrics.
 
   Returns:
-      A List of EventRecord objects. Each eventRecord must contain the metric
+      A List of EventRecord objects. Each eventRecord must contains the metric
       points timestamps for the resource name.
+
+  Raises:
+      RuntimeError: If no metric events are found in the specified time range or
+        if the resource name cannot be determined from the time series data.
   """
   project_id = configs.project_id
   interruption_reason = configs.interruption_reason.metric_label()
-  platform = configs.platform
 
-  match platform:
+  match configs.platform:
     case Platform.GCE:
       metric_type = 'tpu.googleapis.com/instance/interruption_count'
       resource_type = 'tpu.googleapis.com/GceTpuWorker'
+      resource_label_key = 'instance_name'
+      time_series_type = 'metric'
     case Platform.GKE:
       metric_type = 'kubernetes.io/node/interruption_count'
       resource_type = 'k8s_node'
+      resource_label_key = 'node_name'
+      time_series_type = 'resource'
     case _:
-      raise ValueError(f'Unsupported platform: {platform.value}')
+      raise ValueError(f'Unsupported platform: {configs.platform.value}')
 
   metric_filter = (
       f'resource.labels.project_id = "{project_id}" '
@@ -191,34 +190,16 @@ def fetch_metric_timeseries_by_api(
   )
 
   monitoring_api_client = monitoring_v3.MetricServiceClient()
-  # Here should raise the exception from the API. We don't catch it, just let
-  # it raise to Airflow.
   response = monitoring_api_client.list_time_series(request=request)
 
   for time_series in response:
-    match platform:
-      case Platform.GKE:
-        resource_key = 'node_name'
-        resource_name = time_series.resource.labels.get(
-            resource_key, _UNKNOWN_RESOURCE_NAME
-        )
-      case Platform.GCE:
-        resource_key = 'instance_name'
-        resource_name = time_series.metric.labels.get(
-            resource_key, _UNKNOWN_RESOURCE_NAME
-        )
-      case _:
-        raise RuntimeError(
-            f"Unsupported platform '{platform.value}'. "
-            'Please check the scenario configuration.'
-        )
-
-    # Ensure we actually got a name before proceeding
+    resource = getattr(time_series, time_series_type)
+    resource_name = resource.labels.get(
+        resource_label_key, _UNKNOWN_RESOURCE_NAME
+    )
     if resource_name == _UNKNOWN_RESOURCE_NAME:
       raise RuntimeError(
-          'Could not determine node/instance name for time series. '
-          f'Failed to extract name for resource type "{platform.value}". '
-          f'Time series data: {time_series}'
+          f'Failed to extract resource name from "{time_series}"'
       )
 
     for point in time_series.points:
@@ -231,25 +212,22 @@ def fetch_metric_timeseries_by_api(
         case 'double_value':
           event_count = int(point.value.double_value)
         case _:
-          raise RuntimeError(
-              'Unexpected TypedValue:'
-              f" {monitoring_v3.TypedValue.pb(point.value).WhichOneof('value')}."
-              f' Full point data: {point}'
-          )
+          raise RuntimeError(f'Unexpected TypedValue: {point}')
 
-      # Process the event only if the event_count is greater than 0, meaning
-      # that an interruption occurred at this time.
-      if event_count > 0:
-        if resource_name not in events_records:
-          events_records[resource_name] = EventRecord(
-              resource_name=resource_name,
-          )
-        # The event_count represents a count of interruption events occurring
-        # at the same time.
-        # We need to add each event separately to the list of metric points.
-        events_records[resource_name].metric_points_timestamps.extend(
-            [int(end_time_obj.timestamp()) * event_count]
+      # Value 0 indicates the interruption didn't occur at this timestamp.
+      if event_count == 0:
+        continue
+
+      if resource_name not in events_records:
+        events_records[resource_name] = EventRecord(
+            resource_name=resource_name,
         )
+      # The event_count represents a count of interruption events occurring
+      # at the same time.
+      # We need to add each event separately to the list of metric points.
+      events_records[resource_name].metric_points_timestamps.extend(
+          [int(end_time_obj.timestamp())] * event_count
+      )
 
   if not events_records:
     raise RuntimeError('No metric events found in the specified time range.')
@@ -259,25 +237,34 @@ def fetch_metric_timeseries_by_api(
 
 @task
 def fetch_log_entries_by_api(
-    proper_time_range: TimeRange,
+    time_range: TimeRange,
     event_records: List[EventRecord],
     configs: Configs,
 ) -> List[EventRecord]:
-  """This function queries the Logging API for a given validation_conf and time range to fetch the log entries.
+  """Retrieve log entries from Cloud Logging API and update the event record.
+
+  This function fetches log entries related to interruption events that occurred
+  within a specified time range for a given set of resources.
 
   Args:
-      configs: The configuration object containing the parameters for the
-        validation.
+      time_range: The time range (start and end) to query for log entries.
+      event_records: A list of EventRecord objects that contains the resource
+        names to filter on.
+      configs: The configuration contains the parameters for validation.
 
   Returns:
-      A list of EventRecord objects. Each EventRecord must contain the log
-      events timestamps for the resource name.
+      A list of EventRecord objects, updated with the timestamps of the log
+      events for each resource.
+
+  Raises:
+      RuntimeError: If no log entries are found in the specified time range or
+        if the number of log entries reaches the `max_log_results` limit.
   """
   start_time = datetime.datetime.fromtimestamp(
-      proper_time_range.start, tz=datetime.timezone.utc
+      time_range.start, tz=datetime.timezone.utc
   )
   end_time = datetime.datetime.fromtimestamp(
-      proper_time_range.end, tz=datetime.timezone.utc
+      time_range.end, tz=datetime.timezone.utc
   )
 
   project_id = configs.project_id
@@ -333,11 +320,7 @@ def fetch_log_entries_by_api(
       )
 
   if entry_count == max_results:
-    raise RuntimeError(
-        f'Log entries limit reached ({max_results} entries). '
-        'This might indicate we are missing data. '
-        'Consider increasing max_results or narrowing the time range.'
-    )
+    raise RuntimeError(f'Log entries limit reached ({max_results} entries).')
 
   return list(event_records.values())
 
@@ -346,20 +329,28 @@ def fetch_log_entries_by_api(
 def determinate_time_range(
     configs: Configs,
 ) -> TimeRange:
-  """Determines the time range for the validation.
+  """Determines an optimal time range for interruption event validation.
 
-  The function aims to find a time window [start, end] such that there are no
-  metric events within `allowed_gap` of either the start or end boundaries.
-  This ensures that all metric events within the determined time range can be
-  properly correlated with log events, considering a potential time difference
-  between metric and log timestamps.
+  This function identifies a time window that is free of metric events near its
+  boundaries. This "quiet" period, defined by `allowed_gap`, ensures that all
+  metric events within the window can be reliably correlated with their
+  corresponding log entries without ambiguity from events outside the window.
+
+  The function starts with a recent time window and expands it backwards in
+  time until a suitable window is found.
 
   Args:
-      configs: The configuration object containing the parameters for the
-        validation.
+      configs: The configuration object containing the necessary parameters for
+        fetching metrics.
 
   Returns:
-      A TimeRange object representing the determined start and end times.
+      TimeRange object representing the start and end of the optimal validation
+      window.
+
+  Raises:
+      RuntimeError: If a suitable time window cannot be found within a
+        reasonable number of attempts, indicating that the metric data is too
+        dense.
   """
   # We assume the max shift of the log is 30 minutes. (call it max_shift)
   # The allowed_gap should be 2 * 30 minutes. Here's why we need this buffer:
@@ -385,7 +376,7 @@ def determinate_time_range(
   task_start_time = int(ti.start_date.timestamp())
 
   right_bound = task_start_time
-  left_bound = right_bound - 2 * time_window_step
+  left_bound = task_start_time - 2 * time_window_step
 
   found_right = False
   while not found_right:
@@ -419,7 +410,7 @@ def determinate_time_range(
 
     if not found_right:
       left_bound -= time_window_step
-      continue  # Back to while-loop.
+      continue
     else:
       # Right bound is determined.
       # We need to add an additional allowed_gap / 2 to the right bound,
@@ -435,7 +426,9 @@ def determinate_time_range(
     # However, since the left bound keeps shifting and the time window keeps
     # expanding, validating the interruption count over such a long duration
     # might not make sense.
-    if right_bound-left_bound > int(datetime.timedelta(days=5).total_seconds()):
+    if right_bound - left_bound > int(
+        datetime.timedelta(days=5).total_seconds()
+    ):
       raise RuntimeError('the time window has been too long')
 
     # Call API to obtain metrics.
@@ -460,12 +453,10 @@ def determinate_time_range(
       left_bound = r
 
     if not found_left or (right_bound - left_bound) < min_time_window:
-      # If a proper left bound is not found after iterating through all records,
-      # the current left bound is equal to the rightmost record.
-      # Expand the search window. The initial window size was 2 * time_window_step.
-      # We extend the search by an additional time_window_step.
-      left_bound -= (2 + iteration_count) * time_window_step
-      continue  # Back to while-loop.
+      # The initial left bound is 2 * time_window_step before task_start_tim.
+      # Extend the time range by additional time_window_step.
+      left_bound = task_start_time - (2 + iteration_count) * time_window_step
+      continue
     else:
       # Left bound is determined.
       # We need to add an additional allowed_gap / 2 to the left bound,
@@ -480,11 +471,18 @@ def determinate_time_range(
 def check_event_count_match(
     event_records: List[EventRecord],
 ):
-  """Checks if the number of metric events matches the number of log events for each resource.
+  """Verifies that the metric and log event counts match for each resource.
+
+  This function compares the number of interruption events found in the metrics
+  with the number of events found in the logs for each resource.
 
   Args:
       event_records: A list of EventRecord objects containing metric and log
-        timestamps.
+        timestamps for a specific resource.
+
+  Raises:
+      RuntimeError: If there is a mismatch between the metric and log event
+        counts for any resource.
   """
 
   count_diff_records = [
@@ -505,9 +503,19 @@ def create_interruption_dag(
     platform: Platform,
     interruption_reason: InterruptionReason,
 ) -> models.DAG:
-  """Generates a single interruption event validation DAG.
-  """
+  """Creates an Airflow DAG for interruption event validation.
 
+  This function generates a DAG that validates the consistency of interruption
+  events between metrics and logs for a specific platform and interruption
+  reason.
+
+  Args:
+      dag_id: The unique identifier for the DAG.
+      platform: The platform (GCE or GKE) to validate.
+      interruption_reason: The specific interruption reason to validate.
+
+  Returns:
+      An Airflow DAG object."""
   with models.DAG(
       dag_id=dag_id,
       start_date=datetime.datetime(2025, 7, 20),
@@ -515,11 +523,22 @@ def create_interruption_dag(
       catchup=False,
       tags=['gke', 'gce', 'tpu-observability', 'interruption_validation'],
       description=(
-          'This DAG validates the interruption event metrics and logs for GKE and GCE'
+          'This DAG tests whether the interruption events from metrics and '
+          'logs are consistent.'
       ),
       doc_md="""
-      ### Interruption Event Validation DAG
-      This DAG automatically validates the consistency of interruption events between metrics and logs for both GKE and GCE environments.
+        # Interruption Event Validation DAG
+
+        ### Description
+        This DAG automates the process of validating the consistency of
+        interruption events between metrics and logs for both GKE and GCE
+        environments.
+
+        ### Procedures
+        This DAG first determines a time range for validation, then fetches the
+        interruption events from both the Cloud Monitoring API (metrics) and the
+        Cloud Logging API (logs). Finally, it compares the number of events from
+        both sources to ensure they match.
       """,
   ) as dag:
     configs = Configs(
@@ -527,19 +546,13 @@ def create_interruption_dag(
             'INTERRUPTION_PROJECT_ID',
             default_var=Project.TPU_PROD_ENV_ONE_VM.value,
         ),
-        max_time_diff_sec=int(
-            models.Variable.get('INTERRUPTION_MAX_TIME_DIFF_SEC', default_var=150)
-        ),
         max_log_results=int(
-            models.Variable.get('INTERRUPTION_MAX_LOG_RESULTS', default_var=1000)
+            models.Variable.get(
+                'INTERRUPTION_MAX_LOG_RESULTS', default_var=1000
+            )
         ),
         platform=platform,
         interruption_reason=interruption_reason,
-        max_start_time_rewind_sec=int(
-            models.Variable.get(
-                'INTERRUPTION_MAX_START_TIME_REWIND_SECONDS', default_var=3600
-            )
-        ),
     )
 
     @task
@@ -580,8 +593,4 @@ for platform in [Platform.GCE, Platform.GKE]:
   for reason in InterruptionReason:
     reason_value = reason.value.replace(' ', '_').replace('/', '').lower()
     dag_id = f'{dag_id_prefix}_{platform.value}_{reason_value}'
-    _ = create_interruption_dag(
-        dag_id,
-        platform,
-        reason
-    )
+    _ = create_interruption_dag(dag_id, platform, reason)
