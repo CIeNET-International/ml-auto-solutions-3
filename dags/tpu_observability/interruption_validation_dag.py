@@ -1,7 +1,4 @@
-"""
-A DAG to validate the consistency of interruption events between
-metrics and logs.
-"""
+"""A DAG to validate the accuracy of interruption counts from metrics"""
 
 import dataclasses
 import datetime
@@ -50,8 +47,8 @@ class InterruptionReason(str, enum.Enum):
   def log_filter(self) -> str:
     """Returns the corresponding filter for the interruption reason.
 
-    These filters are set according to the information from:
-    https://source.corp.google.com/piper///depot/google3/java/com/google/cloud/cluster/manager/compute/services/instancemanagerevent/InstanceEventNotificationAction.java;bpv=1;bpt=1;rcl=798959602;l=266
+    These filters are in accordance with the defintions in this file from Google3:
+    //depot/google3/java/com/google/cloud/cluster/manager/compute/services/instancemanagerevent/InstanceEventNotificationAction.java
     """
 
     filters = []
@@ -95,14 +92,11 @@ class Configs:
 
   Attributes:
     project_id: The ID of the GCP project.
-    max_log_results: The maximum number of log results to fetch in a single
-      query. This is to avoid fetching too many logs.
     platform: The platform (GCE or GKE) where the validation is performed.
     interruption_reason: The specific interruption reason to validate.
   """
 
   project_id: str
-  max_log_results: int
   platform: Platform
   interruption_reason: InterruptionReason
 
@@ -264,7 +258,6 @@ def fetch_gcp_logs(
 
   project_id = configs.project_id
   log_filter_query = configs.interruption_reason.log_filter()
-  max_results = configs.max_log_results
 
   logging_api_client = logging.Client(project=project_id)
 
@@ -274,6 +267,7 @@ def fetch_gcp_logs(
       f'timestamp>="{start_time_str}" AND timestamp<="{end_time_str}"'
   )
 
+  max_results = 1000  # Avoid fetching too many logs.
   log_entries = logging_api_client.list_entries(
       filter_=f'({time_range_str}) AND ({log_filter_query})',
       order_by=logging.DESCENDING,
@@ -501,7 +495,7 @@ def create_interruption_dag(
 ) -> models.DAG:
   """Creates an Airflow DAG for interruption event validation.
 
-  This function generates a DAG that validates the consistency of interruption
+  This function generates a DAG that validates the accuracy of interruption
   events between metrics and logs for a specific platform and interruption
   reason.
 
@@ -519,16 +513,16 @@ def create_interruption_dag(
       catchup=False,
       tags=['gke', 'gce', 'tpu-observability', 'interruption_validation'],
       description=(
-          'This DAG tests whether the interruption events from metrics and '
-          'logs are consistent.'
+          'This DAG validates the accuracy of the interruption count metric by '
+          'comparing it against logs.'
       ),
       doc_md="""
         # Interruption Event Validation DAG
 
         ### Description
-        This DAG automates the process of validating the consistency of
-        interruption events between metrics and logs for both GKE and GCE
-        environments.
+        This DAG automates the validation of the interruption count metric.
+        It compares the number of interruption events from the logs with the
+        number of events from the metrics to ensure accuracy.
 
         ### Procedures
         This DAG first determines a time range for validation, then fetches the
@@ -541,11 +535,6 @@ def create_interruption_dag(
         project_id=models.Variable.get(
             'INTERRUPTION_PROJECT_ID',
             default_var=Project.TPU_PROD_ENV_ONE_VM.value,
-        ),
-        max_log_results=int(
-            models.Variable.get(
-                'INTERRUPTION_MAX_LOG_RESULTS', default_var=1000
-            )
         ),
         platform=platform,
         interruption_reason=interruption_reason,
