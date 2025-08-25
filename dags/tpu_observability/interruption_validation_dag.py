@@ -11,7 +11,6 @@ from typing import List
 
 from airflow import models
 from airflow.decorators import task
-from airflow.operators.python import get_current_context
 from dags.common.vm_resource import Project
 from dags.map_reproducibility.utils.constants import Schedule
 from dags.multipod.configs.common import Platform
@@ -49,7 +48,11 @@ class InterruptionReason(str, enum.Enum):
     return self.value
 
   def log_filter(self) -> str:
-    """Returns the corresponding filter for the interruption reason."""
+    """Returns the corresponding filter for the interruption reason.
+
+    These filters are set according to the information from:
+    https://source.corp.google.com/piper///depot/google3/java/com/google/cloud/cluster/manager/compute/services/instancemanagerevent/InstanceEventNotificationAction.java;bpv=1;bpt=1;rcl=798959602;l=266
+    """
 
     filters = []
     match self:
@@ -91,11 +94,11 @@ class Configs:
   """Validation configuration.
 
   Attributes:
-      project_id: The ID of the GCP project.
-      max_log_results: The maximum number of log results to fetch in a single
-        query. This is to avoid fetching too many logs.
-      platform: The platform (GCE or GKE) where the validation is performed.
-      interruption_reason: The specific interruption reason to validate.
+    project_id: The ID of the GCP project.
+    max_log_results: The maximum number of log results to fetch in a single
+      query. This is to avoid fetching too many logs.
+    platform: The platform (GCE or GKE) where the validation is performed.
+    interruption_reason: The specific interruption reason to validate.
   """
 
   project_id: str
@@ -106,25 +109,21 @@ class Configs:
 
 @dataclasses.dataclass
 class EventRecord:
-  """Represents lists of metric points and log events for a single resource.
+  """Represents lists of metric points or log events for a single resource.
 
   Attributes:
-      resource_name: The name of the resource (e.g., node or instance).
-      metric_points_timestamps: A list of timestamps for metric points related
-        to the resource.
-      log_events_timestamps: A list of timestamps for log events related to
-        the resource.
+    resource_name: The name of the resource (e.g., node or instance).
+    record_timestamps: A list of timestamps for metric points or log events
+     related to the resource.
   """
 
   resource_name: str
-  metric_points_timestamps: List[int] = dataclasses.field(default_factory=list)
-  log_events_timestamps: List[int] = dataclasses.field(default_factory=list)
+  record_timestamps: List[int] = dataclasses.field(default_factory=list)
 
 
-def fetch_metric_timeseries_by_api(
+def fetch_gcp_metrics(
     configs: Configs,
-    start_time: int,
-    end_time: int,
+    time_range: TimeRange,
 ) -> List[EventRecord]:
   """Retrieve the metrics from Cloud Monitoring API and group them.
 
@@ -133,17 +132,16 @@ def fetch_metric_timeseries_by_api(
   which resources interruptions have occurred.
 
   Args:
-      configs: The configuration contains the parameters for validation.
-      start_time: The start of the time interval to query for metrics.
-      end_time: The end of the time interval to query for metrics.
+    configs: The configuration contains the parameters for validation.
+    time_range: The time range to query for metrics.
 
   Returns:
-      A List of EventRecord objects. Each eventRecord must contains the metric
-      points timestamps for the resource name.
+    A List of EventRecord objects. Each eventRecord must contains the metric
+    points timestamps for the resource name.
 
   Raises:
-      RuntimeError: If no metric events are found in the specified time range or
-        if the resource name cannot be determined from the time series data.
+    RuntimeError: If no metric events are found in the specified time range or
+      if the resource name cannot be determined from the time series data.
   """
   project_id = configs.project_id
   interruption_reason = configs.interruption_reason.metric_label()
@@ -171,12 +169,12 @@ def fetch_metric_timeseries_by_api(
 
   project_name = f'projects/{project_id}'
   # key: resource_name, value: EventRecord
-  events_records: dict[str, EventRecord] = {}
+  event_records: dict[str, EventRecord] = {}
 
   start_timestamp = timestamp_pb2.Timestamp()
-  start_timestamp.FromSeconds(start_time)
+  start_timestamp.FromSeconds(time_range.start)
   end_timestamp = timestamp_pb2.Timestamp()
-  end_timestamp.FromSeconds(end_time)
+  end_timestamp.FromSeconds(time_range.end)
 
   interval = monitoring_v3.TimeInterval(
       start_time=start_timestamp, end_time=end_timestamp
@@ -218,28 +216,27 @@ def fetch_metric_timeseries_by_api(
       if event_count == 0:
         continue
 
-      if resource_name not in events_records:
-        events_records[resource_name] = EventRecord(
+      if resource_name not in event_records:
+        event_records[resource_name] = EventRecord(
             resource_name=resource_name,
         )
       # The event_count represents a count of interruption events occurring
       # at the same time.
       # We need to add each event separately to the list of metric points.
-      events_records[resource_name].metric_points_timestamps.extend(
+      event_records[resource_name].record_timestamps.extend(
           [int(end_time_obj.timestamp())] * event_count
       )
 
-  if not events_records:
+  if not event_records:
     raise RuntimeError('No metric events found in the specified time range.')
 
-  return list(events_records.values())
+  return list(event_records.values())
 
 
 @task
-def fetch_log_entries_by_api(
-    time_range: TimeRange,
-    event_records: List[EventRecord],
+def fetch_gcp_logs(
     configs: Configs,
+    time_range: TimeRange,
 ) -> List[EventRecord]:
   """Retrieve log entries from Cloud Logging API and update the event record.
 
@@ -247,18 +244,16 @@ def fetch_log_entries_by_api(
   within a specified time range for a given set of resources.
 
   Args:
-      time_range: The time range (start and end) to query for log entries.
-      event_records: A list of EventRecord objects that contains the resource
-        names to filter on.
-      configs: The configuration contains the parameters for validation.
+    configs: The configuration contains the parameters for validation.
+    time_range: The time range (start and end) to query for log entries.
 
   Returns:
-      A list of EventRecord objects, updated with the timestamps of the log
-      events for each resource.
+    A list of EventRecord objects, updated with the timestamps of the log
+    events for each resource.
 
   Raises:
-      RuntimeError: If no log entries are found in the specified time range or
-        if the number of log entries reaches the `max_log_results` limit.
+    RuntimeError: If no log entries are found in the specified time range or
+      if the number of log entries reaches the `max_log_results` limit.
   """
   start_time = datetime.datetime.fromtimestamp(
       time_range.start, tz=datetime.timezone.utc
@@ -279,17 +274,6 @@ def fetch_log_entries_by_api(
       f'timestamp>="{start_time_str}" AND timestamp<="{end_time_str}"'
   )
 
-  resource_filter_query = None
-  event_records = {record.resource_name: record for record in event_records}
-  if event_records:
-    resource_filter_query = ' OR '.join(
-        f'protoPayload.resourceName=~"^projects/[\\w-]+/zones/[\\w-]+/instances/{name}$"'
-        for name in event_records
-    )
-
-  if resource_filter_query:
-    log_filter_query = f'{log_filter_query} AND ({resource_filter_query})'
-
   log_entries = logging_api_client.list_entries(
       filter_=f'({time_range_str}) AND ({log_filter_query})',
       order_by=logging.DESCENDING,
@@ -299,13 +283,17 @@ def fetch_log_entries_by_api(
   if not log_entries:
     raise RuntimeError('No log entries found in the specified time range.')
 
+  # key: resource_name, value: EventRecord
+  event_records: dict[str, EventRecord] = {}
   entry_count = 0
   for entry in log_entries:
     entry_count += 1
-    # The 'resourceName' in the log entry payload typically looks like:
-    # "projects/{project_id}/zones/{zone}/instances/{node_name}"
-    regex_pattern = r'^projects/[\w-]+/zones/[\w-]+/instances/([\w-]+)$'
+    # Obtain the text segment contains information of resourceName from payload.
     resource_name = entry.payload.get('resourceName', '')
+
+    # Extract the resource name from a text like this:
+    # "projects/{project_id}/zones/{zone}/instances/{resource_name}"
+    regex_pattern = r'^projects/[\w-]+/zones/[\w-]+/instances/([\w-]+)$'
     match = re.match(regex_pattern, resource_name)
     if match:
       log_node_name = match.group(1)
@@ -315,7 +303,7 @@ def fetch_log_entries_by_api(
         event_records[log_node_name] = EventRecord(
             resource_name=log_node_name,
         )
-      event_records[log_node_name].log_events_timestamps.append(
+      event_records[log_node_name].record_timestamps.append(
           int(aware_timestamp.timestamp())
       )
 
@@ -328,6 +316,7 @@ def fetch_log_entries_by_api(
 @task
 def determinate_time_range(
     configs: Configs,
+    **context,
 ) -> TimeRange:
   """Determines an optimal time range for interruption event validation.
 
@@ -340,17 +329,17 @@ def determinate_time_range(
   time until a suitable window is found.
 
   Args:
-      configs: The configuration object containing the necessary parameters for
-        fetching metrics.
+    configs: The configuration object containing the necessary parameters for
+      fetching metrics.
+    context: The Airflow context dictionary, which includes task metadata.
 
   Returns:
-      TimeRange object representing the start and end of the optimal validation
-      window.
+    TimeRange object representing the start and end of the optimal validation
+    window.
 
   Raises:
-      RuntimeError: If a suitable time window cannot be found within a
-        reasonable number of attempts, indicating that the metric data is too
-        dense.
+    RuntimeError: If a suitable time window cannot be found within a
+      reasonable time range, indicating that the metric data is too dense.
   """
   # We assume the max shift of the log is 30 minutes. (call it max_shift)
   # The allowed_gap should be 2 * 30 minutes. Here's why we need this buffer:
@@ -371,9 +360,8 @@ def determinate_time_range(
   min_time_window = int(datetime.timedelta(days=1).total_seconds())
   time_window_step = min_time_window
 
-  context = get_current_context()
-  ti = context['ti']
-  task_start_time = int(ti.start_date.timestamp())
+  task_instance = context['ti']
+  task_start_time = int(task_instance.start_date.timestamp())
 
   right_bound = task_start_time
   left_bound = task_start_time - 2 * time_window_step
@@ -387,22 +375,18 @@ def determinate_time_range(
     ):
       raise RuntimeError('the data has been too dense in past few days')
 
-    # Call API to obtain metrics.
-    metric_records = fetch_metric_timeseries_by_api(
-        configs,
-        left_bound,
-        right_bound,
+    metric_records = fetch_gcp_metrics(
+        configs, TimeRange(start=left_bound, end=right_bound)
     )
 
     total_metric_timestamps = []
     for record in metric_records:
-      total_metric_timestamps.extend(record.metric_points_timestamps)
-    # Use the timestamp (in second) to sort the data.
-    total_metric_timestamps.sort()
+      total_metric_timestamps.extend(record.record_timestamps)
+    total_metric_timestamps.sort(reverse=True)  # Newest to oldest.
 
     # Find the right-most data that has a sufficient gap from the
     # right boundary.
-    for r in reversed(total_metric_timestamps):
+    for r in total_metric_timestamps:
       if abs(r - right_bound) > allowed_gap:
         found_right = True
         break
@@ -431,18 +415,14 @@ def determinate_time_range(
     ):
       raise RuntimeError('the time window has been too long')
 
-    # Call API to obtain metrics.
-    metric_records = fetch_metric_timeseries_by_api(
-        configs,
-        left_bound,
-        right_bound,
+    metric_records = fetch_gcp_metrics(
+        configs, TimeRange(start=left_bound, end=right_bound)
     )
 
     total_metric_timestamps = []
     for record in metric_records:
-      total_metric_timestamps.extend(record.metric_points_timestamps)
-    # Use the timestamp (in second) to sort the data.
-    total_metric_timestamps.sort()
+      total_metric_timestamps.extend(record.record_timestamps)
+    total_metric_timestamps.sort()  # Oldest to newest.
 
     # Find the left-most data that has a sufficient gap from the
     # left boundary.
@@ -469,7 +449,8 @@ def determinate_time_range(
 
 @task
 def check_event_count_match(
-    event_records: List[EventRecord],
+    metric_records: List[EventRecord],
+    log_records: List[EventRecord],
 ):
   """Verifies that the metric and log event counts match for each resource.
 
@@ -477,20 +458,35 @@ def check_event_count_match(
   with the number of events found in the logs for each resource.
 
   Args:
-      event_records: A list of EventRecord objects containing metric and log
-        timestamps for a specific resource.
+    metric_records: A list of EventRecord objects containing metric timestamps
+      for a specific resource.
+    log_records: A list of EventRecord objects containing log timestamps for
+      a specific resource.
 
   Raises:
-      RuntimeError: If there is a mismatch between the metric and log event
-        counts for any resource.
+    RuntimeError: If there is a mismatch between the metric and log event
+      counts for any resource.
   """
 
-  count_diff_records = [
-      event_record
-      for event_record in event_records
-      if len(event_record.metric_points_timestamps)
-      != len(event_record.log_events_timestamps)
-  ]
+  count_diff_records = []
+  for metric in metric_records:
+    resource_name = metric.resource_name
+    found_match = False
+    log_timestamps = []
+    for log in log_records:
+      if log.resource_name == resource_name:
+        if len(log.record_timestamps) == len(metric.record_timestamps):
+          found_match = True
+        else:
+          log_timestamps = log.record_timestamps
+        break
+
+    if not found_match:
+      count_diff_records.append({
+          'resource_name': resource_name,
+          'metric_records': metric.record_timestamps,
+          'log_records': log_timestamps,
+      })
   if count_diff_records:
     raise RuntimeError(
         'Event count mismatch for this following event records:'
@@ -510,12 +506,12 @@ def create_interruption_dag(
   reason.
 
   Args:
-      dag_id: The unique identifier for the DAG.
-      platform: The platform (GCE or GKE) to validate.
-      interruption_reason: The specific interruption reason to validate.
+    dag_id: The unique identifier for the DAG.
+    platform: The platform (GCE or GKE) to validate.
+    interruption_reason: The specific interruption reason to validate.
 
   Returns:
-      An Airflow DAG object."""
+    An Airflow DAG object."""
   with models.DAG(
       dag_id=dag_id,
       start_date=datetime.datetime(2025, 7, 20),
@@ -556,34 +552,24 @@ def create_interruption_dag(
     )
 
     @task
-    def fetch_metric_timeseries_by_api_task(
-        proper_time_range: TimeRange,
+    def fetch_gcp_metrics_task(
         configs: Configs,
+        proper_time_range: TimeRange,
     ) -> List[EventRecord]:
-      return fetch_metric_timeseries_by_api(
-          configs,
-          proper_time_range.start,
-          proper_time_range.end,
-      )
+      return fetch_gcp_metrics(configs, proper_time_range)
 
     proper_time_range = determinate_time_range(configs)
-    records_updated_with_metric_data = fetch_metric_timeseries_by_api_task(
-        proper_time_range,
+    metric_records = fetch_gcp_metrics_task(
         configs,
-    )
-    records_updated_with_log_data = fetch_log_entries_by_api(
         proper_time_range,
-        records_updated_with_metric_data,
-        configs,
     )
-    check_event_count = check_event_count_match(records_updated_with_log_data)
+    log_records = fetch_gcp_logs(
+        configs,
+        proper_time_range,
+    )
+    check_event_count = check_event_count_match(metric_records, log_records)
 
-    (
-        proper_time_range
-        >> records_updated_with_metric_data
-        >> records_updated_with_log_data
-        >> check_event_count
-    )
+    proper_time_range >> [metric_records, log_records] >> check_event_count
 
     return dag
 
@@ -591,6 +577,6 @@ def create_interruption_dag(
 dag_id_prefix = 'interruption_validation'
 for platform in [Platform.GCE, Platform.GKE]:
   for reason in InterruptionReason:
-    reason_value = reason.value.replace(' ', '_').replace('/', '').lower()
+    reason_value = reason.name.lower()
     dag_id = f'{dag_id_prefix}_{platform.value}_{reason_value}'
     _ = create_interruption_dag(dag_id, platform, reason)
