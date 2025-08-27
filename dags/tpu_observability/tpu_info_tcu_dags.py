@@ -6,19 +6,22 @@ This is done by comparing data from Cloud Logging and Cloud Monitoring.
 import dataclasses
 import datetime
 import logging
+import os
 import re
+import subprocess
 from typing import List
 
 from airflow import models
 from airflow.decorators import task
 from airflow.exceptions import AirflowException
 from airflow.utils.trigger_rule import TriggerRule
+from dags.common.vm_resource import Project
+from dags.common.vm_resource import Region
+from dags.common.vm_resource import Zone
+from dags.map_reproducibility.utils import constants
 from google.cloud import logging_v2 as gcp_logging
 from google.cloud import monitoring_v3
 from google.cloud.monitoring_v3 import types
-
-from dags.common.vm_resource import Project, Region, Zone
-from dags.map_reproducibility.utils import constants
 
 
 @dataclasses.dataclass
@@ -70,8 +73,8 @@ def compare_tensorcore_utilization_values(
   """
   if len(log_values) != len(monitoring_values):
     raise AirflowException(
-        f"Data count mismatch. Data count mismatch. Logs have {log_values} values, "
-        f"Monitoring has {monitoring_values}."
+        "Data count mismatch. Data count mismatch. Logs have"
+        f" {log_values} values, Monitoring has {monitoring_values}."
     )
 
   logging.info("--- Comparison Results ---")
@@ -100,45 +103,73 @@ def compare_tensorcore_utilization_values(
         diff,
         "PASS" if passed else "FAIL",
     )
-
   logging.info("-" * 65)
 
   return all_passed
 
 
-@task.bash()
-def run_workload(info: Info):
-  """Applies the workload YAML to the GKE cluster and returns the start time.
+@task
+def run_workload(info: Info, kubeconfig: str, yaml_path: str):
+  """Applies the workload YAML to the GKE cluster using subprocess.
 
-  This task executes a bash script that performs the following steps:
-  1. Copies the workload YAML file from GCS to a temporary local path.
-  2. Authenticates `gcloud` with the specified GKE cluster.
-  3. Applies the YAML file to the `default` namespace using `kubectl`.
-  4. Echoes the current UTC time, which serves as the job's start time.
+  This task executes a series of shell commands using Python's subprocess
+  module to perform the following steps:
+  1. Defines temporary paths for kubeconfig and the YAML file.
+  2. Copies the workload YAML file from GCS to the local temp path.
+  3. Authenticates gcloud and gets credentials for the specified GKE cluster,
+      storing them in the temporary kubeconfig file.
+  4. Applies the YAML file to the `default` namespace using kubectl, pointing
+      to the temporary kubeconfig.
+  5. Returns the current UTC time as the job's start time, generated in Python.
 
   Args:
-    info: Configuration object with cluster and workload details.
+      info: Configuration object with cluster and workload details.
+      kubeconfig: The path to the kubeconfig file.
+      yaml_path: The local path where the YAML file will be copied.
 
   Returns:
-    The UTC timestamp (ISO 8601 format) of when the job was applied.
+      The UTC timestamp (ISO 8601 format) of when the job was applied.
   """
-  return f"""
-    export KUBECONFIG=/tmp/kubeconfig
-    gsutil cp {info.bucket_path}{info.yaml_file_name} \\
-            /tmp/{info.yaml_file_name}
+  env = os.environ.copy()
+  env["KUBECONFIG"] = kubeconfig
 
-    gcloud container clusters get-credentials {info.cluster_name} \
-        --region {info.region} \
-        --project {info.project_id}
+  gsutil_cmd = f"gsutil cp {info.bucket_path}{info.yaml_file_name} {yaml_path}"
+  process = subprocess.run(
+      gsutil_cmd, shell=True, check=True, capture_output=True, text=True
+  )
+  logging.info("STDOUT message: %s", process.stdout)
+  logging.info("STDERR message: %s", process.stderr)
 
-    kubectl --kubeconfig $KUBECONFIG apply -f /tmp/{info.yaml_file_name} -n default
+  gcloud_cmd = (
+      f"gcloud container clusters get-credentials {info.cluster_name} "
+      f"--region={info.region} "
+      f"--project={info.project_id} "
+  )
 
-    echo $(date -u +"%Y-%m-%dT%H:%M:%S.%3N%:z")
-    """
+  subprocess.run(
+      gcloud_cmd,
+      shell=True,
+      check=True,
+      env=env,
+      capture_output=True,
+      text=True,
+  )
+  print(f"Successfully got credentials for cluster {info.cluster_name}.")
+
+  kubectl_cmd = (
+      f"kubectl --kubeconfig={kubeconfig} apply -f {yaml_path} " "-n default"
+  )
+  subprocess.run(
+      kubectl_cmd, shell=True, check=True, capture_output=True, text=True
+  )
+
+  current_time_utc = datetime.datetime.now(datetime.timezone.utc)
+  current_time_utc_format = current_time_utc.isoformat(timespec="milliseconds")
+  return current_time_utc_format
 
 
-@task.bash()
-def end_workload(info: Info):
+@task
+def end_workload(info: Info, kubeconfig: str):
   """Deletes all JobSets from the GKE cluster to clean up resources.
 
   This task executes a bash script to:
@@ -147,45 +178,78 @@ def end_workload(info: Info):
 
   Args:
     info: Configuration object with cluster details.
+    kubeconfig: The path to the kubeconfig file.
   """
-  return f"""
-    export KUBECONFIG=/tmp/kubeconfig
+  env = os.environ.copy()
+  env["KUBECONFIG"] = kubeconfig
 
-    gcloud container clusters get-credentials {info.cluster_name} \
-        --region {info.region} \
-        --project {info.project_id}
+  gcloud_cmd = (
+      f"gcloud container clusters get-credentials {info.cluster_name} "
+      f"--region={info.region} "
+      f"--project={info.project_id} "
+  )
 
-    kubectl delete jobsets --all -n default --timeout=60s # Add a timeout for deletion
-    """
+  subprocess.run(
+      gcloud_cmd,
+      shell=True,
+      check=True,
+      env=env,
+      capture_output=True,
+      text=True,
+  )
+
+  kubectl_cmd = (
+      f"kubectl --kubeconfig={kubeconfig} delete jobsets --all -n default"
+      " --timeout=60s --ignore-not-found=true"
+  )
+  subprocess.run(
+      kubectl_cmd, shell=True, check=True, capture_output=True, text=True
+  )
 
 
-@task.bash()
-def get_active_nodes_bash(info: Info):
-  """Retrieves a list of GKE nodes where the workload pods are running.
+@task
+def get_active_nodes(info: Info, kubeconfig: str):
+  """Deletes all JobSets from the GKE cluster to clean up resources.
 
   This task executes a bash script to:
   1. Authenticate `gcloud` with the specified GKE cluster.
-  2. Use `kubectl` to get the names of the nodes for all pods in the
-     `default` namespace.
-  3. Formats the output as a space-separated string of node names.
+  2. Delete all JobSets in the `default` namespace using `kubectl`.
 
   Args:
     info: Configuration object with cluster details.
-
-  Returns:
-    A string containing the names of the active nodes, separated by spaces.
+    kubeconfig: The path to the kubeconfig file.
   """
-  return f"""
-    export KUBECONFIG=/tmp/kubeconfig
+  env = os.environ.copy()
+  env["KUBECONFIG"] = kubeconfig
 
-    echo "Configuring kubectl to connect to cluster: {info.cluster_name}"
-    gcloud container clusters get-credentials {info.cluster_name} \
-        --region {info.region} \
-        --project {info.project_id}
+  gcloud_cmd = (
+      f"gcloud container clusters get-credentials {info.cluster_name} "
+      f"--region={info.region} "
+      f"--project={info.project_id} "
+  )
 
-    NODE_LIST_JSON=$(kubectl get pods -n default -o jsonpath='{{.items[*].spec.nodeName}}' | tr ' ' '\\n')
-    echo $NODE_LIST_JSON
-    """
+  subprocess.run(
+      gcloud_cmd,
+      shell=True,
+      check=True,
+      env=env,
+      capture_output=True,
+      text=True,
+  )
+
+  kubectl_cmd = (
+      f"kubectl --kubeconfig={kubeconfig} get pods -n default -o"
+      " jsonpath={.items[*].spec.nodeName}"
+  )
+  process = subprocess.run(
+      kubectl_cmd, shell=True, check=True, capture_output=True, text=True
+  )
+  if not process or not process.stdout.strip():
+    logging.warning("Received empty node list from bash task.")
+    raise AirflowException("Received empty node list from bash task.")
+
+  node_list = process.stdout.strip().split()
+  return node_list
 
 
 @task.sensor(poke_interval=30, timeout=600, mode="reschedule")
@@ -223,25 +287,6 @@ def wait_for_jobset_start_logs(info: Info, job_apply_time_str: str) -> bool:
   latest_entry = next(iter(response_iterator), None)
 
   return latest_entry and latest_entry.timestamp > datetime_job_apply_time
-
-
-@task
-def format_node_list(bash_output: str) -> List[str]:
-  """Converts a space-separated string of node names into a Python list.
-
-  Args:
-    bash_output: The raw string output from the `get_active_nodes_bash` task.
-
-  Returns:
-    A list of node name strings. Returns an empty list if the input is empty.
-  """
-  if not bash_output or not bash_output.strip():
-    logging.warning("Received empty node list from bash task.")
-    return []
-
-  node_list = bash_output.strip().split()
-
-  return node_list
 
 
 @task
@@ -311,11 +356,11 @@ def verify_tensorcore_utilization(
           f' resource.labels.node_name = "{node_name}"'
       ),
       interval=types.TimeInterval({
-          "end_time": {"seconds": int(end_time_utc.timestamp())},
-          "start_time": {
-              "seconds": int(datetime_job_apply_time.timestamp())
-          },
-      }),
+              "end_time": {"seconds": int(end_time_utc.timestamp())},
+              "start_time": {
+                  "seconds": int(datetime_job_apply_time.timestamp())
+              },
+          }),
       view="FULL",
   )
   time_series_data = mon_client.list_time_series(request)
@@ -331,8 +376,7 @@ def verify_tensorcore_utilization(
       metric_values[accelerator_id] = round(closest_point.value.double_value, 2)
 
   if not metric_values:
-    logging.error("No matching monitoring data found for node %s.", node_name)
-    return False
+    raise AirflowException("No matching monitoring data found for node %s.")
 
   monitoring_values = [
       metric_values[key]
@@ -370,7 +414,12 @@ def summarize_results(
   logging.info("Total nodes verified: %d", len(active_nodes))
   logging.info("Nodes that passed verification: %d", total_successful_nodes)
 
-  return total_successful_nodes == len(active_nodes)
+  if total_successful_nodes != len(active_nodes):
+    raise AirflowException(
+        "Grand Result: FAILURE - The number of passed comparisons "
+        f"({total_successful_nodes}) did not meet the threshold of "
+        f"{len(active_nodes)}. Active nodes: {active_nodes}"
+    )
 
 
 with models.DAG(
@@ -411,23 +460,28 @@ with models.DAG(
           "CONTAINER_NAME", default_var="jax-tpu-job"
       ),
   )
+
+  kubeconfig_path = "/tmp/kubeconfig"
+  local_yaml_path = f"/tmp/{cluster_info.yaml_file_name}"
   # Clean up any pre-existing workloads to ensure a clean environment for the
   # test.
   start_cleanup = end_workload.override(
       task_id="start_cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
-  )(info=cluster_info)
+  )(info=cluster_info, kubeconfig=kubeconfig_path)
 
-  apply_time = run_workload.override(task_id="run_workload")(info=cluster_info)
+  apply_time = run_workload.override(task_id="run_workload")(
+      info=cluster_info,
+      kubeconfig=kubeconfig_path,
+      yaml_path=local_yaml_path,
+  )
 
   wait_for_job_start = wait_for_jobset_start_logs.override(
       task_id="wait_for_job_start"
   )(cluster_info, job_apply_time_str=apply_time)
 
-  raw_node_names_str = get_active_nodes_bash.override(
-      task_id="get_raw_node_names"
-  )(info=cluster_info)
-
-  active_node = format_node_list(bash_output=raw_node_names_str)
+  active_node = get_active_nodes.override(task_id="get_active_node")(
+      info=cluster_info, kubeconfig=kubeconfig_path
+  )
 
   verify_utilization_per_node = (
       verify_tensorcore_utilization.override(
@@ -439,10 +493,10 @@ with models.DAG(
 
   clean_up = end_workload.override(
       task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
-  )(info=cluster_info)
+  )(info=cluster_info, kubeconfig=kubeconfig_path)
 
   summary = summarize_results(verify_utilization_per_node, active_node)
 
-  apply_time >> wait_for_job_start >> raw_node_names_str >> active_node
+  (start_cleanup >> apply_time >> wait_for_job_start >> active_node)
 
   summary >> clean_up
