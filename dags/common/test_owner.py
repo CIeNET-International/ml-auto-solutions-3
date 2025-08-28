@@ -66,7 +66,6 @@ BRANDEN_V = "bvandermoon"
 ABHINAV_S = "abhinavclemson"
 XUEFENG_G = "xuefgu"
 CAMILO_Q = "camiloCienet"
-Jacky_F = "RexBearIU"
 
 # MLCompass
 ORTI_B = "ortibazar"

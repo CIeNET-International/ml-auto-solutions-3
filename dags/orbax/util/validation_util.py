@@ -8,8 +8,6 @@ from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from google.cloud import logging as logging_api
 
-import dags.orbax.util.gcs_util as gcs_util
-
 
 @task
 def generate_timestamp():
@@ -90,43 +88,6 @@ def validate_log_with_step(
         f"{len(vali_step_list)} saves are expected,"
         f"but got {len(new_step_list)}"
     )
-
-@task
-def validate_bucket_with_step(
-    bucket_name: str,
-    vali_step_list: Optional[list] = None,
-) -> None:
-    """
-    Validates that a GCS bucket contains the expected checkpoint files.
-
-    This function checks the specified GCS bucket for files matching the
-    expected naming pattern for each step in the validation list.
-
-    Args:
-        project_id: The Google Cloud project ID
-        location: GKE cluster location
-        cluster_name: GKE cluster name
-        namespace: Kubernetes namespace (defaults to "default")
-        bucket_name: The name of the GCS bucket to check
-        vali_step_list: Optional list of steps to validate
-    """
-    if vali_step_list is None:
-        return
-
-    found_steps = []
-    checkpoint_files = gcs_util.get_gcs_checkpoint(bucket_name)
-    
-    for step in vali_step_list:
-        if str(step) in checkpoint_files:
-            found_steps.append(step)
-
-    if len(vali_step_list) == len(found_steps):
-        logging.info("Validate success")
-    else:
-        raise AirflowFailException(
-            f"{len(vali_step_list)} saves are expected,"
-            f"but got {len(found_steps)}"
-        )
 
 
 def list_log_entries(

@@ -21,7 +21,7 @@ from dags.multipod.configs import gke_config
 from dags.multipod.configs.common import SetupMode
 from dags.orbax.util import validation_util
 from dags.orbax.util import checkpoint_util
-from xlml.utils.xpk import MAIN_BRANCH
+from xlml.utils.xpk import BRANCH_ABHINAV_MTC
 from xlml.utils.gke import zone_to_region
 
 SCHEDULE = "0 10 * * *" if composer_env.is_prod_env() else None
@@ -34,6 +34,21 @@ DOCKER_IMAGES = [(
     SetupMode.NIGHTLY,
     DockerImage.MAXTEXT_TPU_JAX_NIGHTLY,
 )]
+
+
+@dataclass
+class Checkpointing:
+  """
+  Represents the information of a checkpointing mechanism.
+
+  Attributes:
+    name: A unique name for the checkpointing configuration.
+    use_replicator: Indicates whether a replicator is enabled.
+  """
+
+  name: str
+  use_replicator: bool
+
 
 @dataclass
 class TestConfig:
@@ -109,11 +124,13 @@ class TestConfig:
 
   def generate_workload_command(
       self,
+      cp: Checkpointing,
+      checkpoint_dir: str,
       out_folder: str,
       slice_number: int,
   ) -> str:
     run_time = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M")
-    run_name = f"{self.short_id}-regular-{slice_number}x-{self.accelerator}-{run_time}"
+    run_name = f"{self.short_id}-{cp.name}-{slice_number}x-{self.accelerator}-{run_time}"
     return (
         "export TPU_PREMAPPED_BUFFER_SIZE=52428800000 && "
         "export TPU_PREMAPPED_BUFFER_TRANSFER_THRESHOLD_BYTES=52428800000 && "
@@ -128,6 +145,11 @@ class TestConfig:
         f"model_name={self.model_name} "
         "per_device_batch_size=2 "
         "reuse_example_batch=1 "
+        "enable_emergency_checkpoint=true "
+        f"local_checkpoint_directory={checkpoint_dir} "
+        f"local_checkpoint_period={self.local_checkpoint_step} "
+        f"use_replicator_service={cp.use_replicator} "
+        f"replicator_backup_interval_minutes={self.replicator_backup_time} "
         f"run_name={run_name}",
     )
 
@@ -174,6 +196,7 @@ with models.DAG(
       Checkpoint Manager job runs because their local checkpoint saving
       behavior is similar. This is why a single validation task is used for both.
     """,
+    concurrency=2,
 ) as dag:
   # Only one set of test configurations (e.g., v5p-128) is supported at the moment.
   # Other configurations (e.g., v5e and/or v6e) may be introduced later.
@@ -192,17 +215,33 @@ with models.DAG(
       ),
   ]
 
-  checkpointing_mode = "regular"  # Regular Checkpointing
+  task_groups = []
 
-  with TaskGroup(
-      group_id=f"maxtext_{checkpointing_mode}_orbax_save_local",
-  ) as group:
+  for checkpointing in [
+      Checkpointing(
+          name="mtc",  # Multi-tier Checkpointing
+          use_replicator=True,
+      ),
+      Checkpointing(
+          name="emc",  # Emergency Checkpointing
+          use_replicator=False,
+      ),
+  ]:
+    with TaskGroup(
+        group_id=f"maxtext_{checkpointing.name}_orbax_save_local",
+    ) as group:
       for mode, image in DOCKER_IMAGES:
         for test_config in test_configs:
           for slice_num in test_config.slices:
             # We conditionally set the trigger_rule on the first task.
             # If first task group failed the next one can execute.
+            wait_delete_cpc = checkpoint_util.wait_for_cpc_deletion.override(
+                trigger_rule="all_done"
+            )(test_config.cpc_config)
+            apply_cpc = checkpoint_util.apply_cpc(test_config.cpc_config)
             workload_command = test_config.generate_workload_command(
+                cp=checkpointing,
+                checkpoint_dir=RAM_DISK,
                 out_folder=group.group_id,
                 slice_number=slice_num,
             )
@@ -212,12 +251,30 @@ with models.DAG(
                 num_slices=slice_num,
                 cluster=test_config.cluster,
                 time_out_in_min=60,
-                test_name=f"{test_config.short_id}-{checkpointing_mode}",
+                test_name=f"{test_config.short_id}-{checkpointing.name}",
                 run_model_cmds=workload_command,
                 docker_image=image.value,
-                test_owner=test_owner.Jacky_F,
+                test_owner=test_owner.CAMILO_Q,
             ).run(
-                xpk_branch=MAIN_BRANCH,
+                ramdisk_directory=RAM_DISK,
+                mtc_enabled=True,
+                xpk_branch=BRANCH_ABHINAV_MTC,
+                skip_post_process=True,
+            )
+
+            cleanup_command = (f"rm -rf {RAM_DISK}/*",)
+            ram_disk_cleanup = gke_config.get_gke_config(
+                num_slices=slice_num,
+                cluster=test_config.cluster,
+                time_out_in_min=60,
+                test_name=f"{test_config.short_id}-cl",
+                run_model_cmds=cleanup_command,
+                docker_image=image.value,
+                test_owner=test_owner.CAMILO_Q,
+            ).run(
+                ramdisk_directory=RAM_DISK,
+                mtc_enabled=True,
+                xpk_branch=BRANCH_ABHINAV_MTC,
                 skip_post_process=True,
             )
 
@@ -239,15 +296,18 @@ with models.DAG(
                 vali_step_list=vali_step_list,
             )
 
-            validate_bucket = validation_util.validate_bucket_with_step(
-                bucket_name=posixpath.join(BASE_OUTPUT_DIR, group.group_id),
-                vali_step_list=vali_step_list,
-            )
-
             (
-                start_time
+                wait_delete_cpc
+                >> apply_cpc
+                >> start_time
                 >> maxtext_chkpt_run_test
+                >> ram_disk_cleanup
                 >> end_time
                 >> validate_log
-                >> validate_bucket
             )
+      # Add to a list of test to chain them sequentially.
+      task_groups.append(group)
+
+  # Chain all task groups sequentially.
+  for idx in range(len(task_groups) - 1):
+    task_groups[idx] >> task_groups[idx + 1]
