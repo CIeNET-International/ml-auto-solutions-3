@@ -169,32 +169,29 @@ with models.DAG(
     ],
     description="A DAG to run MaxText multi-tier checkpointing tests.",
     doc_md="""
-      # Emergency Checkpoint Manager and Multi-tier Checkpoint Validation DAG
+      # MaxText Regular Checkpointing Validation DAG
 
       ### Description
       This DAG (Directed Acyclic Graph) automates the process of validating
-      checkpoint saving when using both **Emergency Checkpoint Manager**
-      and **Multi-tier Checkpoint** features. The flag that controls the
-      behaviour of using MTC or EMC is **user_replicatior**.
-      Also the steps flag controls how many steps the job will run.
+      regular checkpoint saving for the MaxText model. The DAG runs a single
+      MaxText training job and validates that checkpoints are saved correctly
+      at specified intervals.
 
       ### Prerequisites
-      To run this test, you need an existing cluster with the Multi-tier
-      Checkpointing configuration enabled, as well as a bucket with HNS
-      (Hierarchical Namespace) enabled.
+      To run this test, you need an existing TPU cluster configured for
+      MaxText training.
 
       ### Procedures
-      1.  **Apply Configuration:** A Checkpoint Configuration YAML file is
-      applied to the cluster, enabling Multi-tier Checkpoint (MTC) features.
-      2.  **Run Maxtext Jobsets:** The DAG runs a Maxtext jobset twice.
-      One run has `replicator_enabled` set to `True` (for MTC), and the
-      other has it set to `False` (for Emergency Checkpoint Manager).
-      3.  **Validate Checkpoints:** The DAG validates that **local checkpoints**
-      are being saved correctly in the `local/` directory for both job runs.
+      1.  **Run MaxText Job:** The DAG runs a MaxText training job for a
+      specified number of steps with regular checkpointing enabled.
+      2.  **Validate Logs:** The DAG validates that checkpoint saving logs
+      appear correctly in the cluster logs with the expected "(blocking + background)"
+      pattern at each checkpoint step.
+      3.  **Validate Bucket:** The DAG validates that checkpoint files are
+      properly saved to the GCS bucket for each expected checkpoint step.
 
-      4.  The validation logic is the same for both the MTC and Emergency
-      Checkpoint Manager job runs because their local checkpoint saving
-      behavior is similar. This is why a single validation task is used for both.
+      The validation ensures that both the logging and file saving aspects
+      of regular checkpointing are working correctly.
     """,
     concurrency=2,
 ) as dag:
