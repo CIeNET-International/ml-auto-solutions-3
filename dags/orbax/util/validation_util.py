@@ -18,6 +18,50 @@ def generate_timestamp():
 
 
 @task
+def validate_log_exist(
+    project_id: str,
+    location: str,
+    cluster_name: str,
+    namespace: str = "default",
+    pod_pattern: str = "*",
+    container_name: Optional[str] = None,
+    text_filter: Optional[str] = None,
+    start_time: Optional[datetime] = None,
+    end_time: Optional[datetime] = None,
+) -> None:
+  """Validate the workload log `text filter` it is found during training."""
+
+  entries = list_log_entries(
+      project_id=project_id,
+      location=location,
+      cluster_name=cluster_name,
+      namespace=namespace,
+      pod_pattern=pod_pattern,
+      container_name=container_name,
+      text_filter=text_filter,
+      start_time=start_time,
+      end_time=end_time,
+  )
+
+  log_found = False
+
+  for entry in entries:
+    if entry.payload is not None and text_filter in str(entry.payload):
+      payload_str = str(entry.payload)
+      log_found = True
+      for line in payload_str.split("\n"):
+        logging.info("├─ Timestamp: %s", entry.timestamp)
+        logging.info("└─ Payload:")
+        logging.info("   %s", line)
+
+  if log_found:
+    logging.info("Validate success")
+    return
+
+  raise AirflowFailException("The log history is empty!")
+
+
+@task
 def validate_log_with_step(
     project_id: str,
     location: str,
@@ -69,7 +113,7 @@ def validate_log_with_step(
       end_time=end_time,
   )
   if vali_step_list is None:
-    return False
+    return
   new_step_list = []
   for entry in entries:
     if not entry.payload:
@@ -85,7 +129,7 @@ def validate_log_with_step(
           new_step_list.append(step)
   if len(vali_step_list) == len(new_step_list):
     logging.info("Validate success")
-    return True
+    return
   else:
     raise AirflowFailException(
         f"{len(vali_step_list)} saves are expected,"
