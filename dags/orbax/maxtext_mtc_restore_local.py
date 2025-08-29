@@ -25,7 +25,7 @@ from xlml.utils.gke import zone_to_region
 from dags.orbax.util import orbax
 
 DAG_TEST_NAME = "maxtext_mtc_orbax_res_local"
-SCHEDULE = "0 23 * * *" if composer_env.is_prod_env() else None
+SCHEDULE = "0 14 * * *" if composer_env.is_prod_env() else None
 
 # Only one version of the Docker image is supported at the moment.
 # Other versions (e.g., "stable") may be introduced later.
@@ -72,7 +72,7 @@ with models.DAG(
 ) as dag:
   test_configs = [
       orbax.TestConfig(
-          cluster=XpkClusters.TPU_V5P_128_CLUSTER_ORBAX,
+          cluster=XpkClusters.TPU_V5P_128_CLUSTER,
           machine_type="ct5p-hightpu-4t",
           accelerator="v5p-128",
           slices=[2],
@@ -172,6 +172,11 @@ with models.DAG(
             steps_to_validate=steps_to_validate,
         )
 
+        # Final CPC cleanup to ensure symmetric start/end
+        wait_delete_cpc_final = checkpoint_util.wait_for_cpc_deletion.override(
+            trigger_rule="all_done", task_id="wait_delete_cpc_final"
+        )(test_config.cpc_config).as_teardown(setups=apply_cpc)
+
         (
             wait_delete_cpc
             >> apply_cpc
@@ -182,4 +187,5 @@ with models.DAG(
             >> validate_is_restoring
             >> validate_restored_source
             >> validate_log
+            >> wait_delete_cpc_final
         )

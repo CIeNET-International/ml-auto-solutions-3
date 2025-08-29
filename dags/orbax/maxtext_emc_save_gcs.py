@@ -72,12 +72,12 @@ with models.DAG(
   )
   test_configs = [
       orbax.TestConfig(
-          cluster=XpkClusters.TPU_V5P_128_CLUSTER_ORBAX,
+          cluster=XpkClusters.TPU_V5P_128_CLUSTER,
           machine_type="ct5p-hightpu-4t",
           accelerator="v5p-128",
           slices=[2],
           model_name="llama2-7b",
-          short_id="max-sv-loc",
+          short_id="max-sv-gcs",
           replicator_backup_time=30,
           step=75,
           local_checkpoint_step=20,
@@ -151,6 +151,11 @@ with models.DAG(
             steps_to_validate=steps_to_validate,
         )
 
+        # Final CPC cleanup to ensure symmetric start/end
+        wait_delete_cpc_final = checkpoint_util.wait_for_cpc_deletion.override(
+            trigger_rule="all_done", task_id="wait_delete_cpc_final"
+        )(test_config.cpc_config).as_teardown(setups=apply_cpc)
+
         (
             wait_delete_cpc
             >> apply_cpc
@@ -160,4 +165,5 @@ with models.DAG(
             >> end_time
             >> validate_steps
             >> validate_checkpoints_steps_gcs
+            >> wait_delete_cpc_final
         )

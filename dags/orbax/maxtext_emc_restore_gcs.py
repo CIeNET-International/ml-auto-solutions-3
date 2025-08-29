@@ -1,5 +1,6 @@
 """A DAG to run MaxText EMC.
-Validates the local checkpoints are restored as expected
+
+Validates the GCS checkpoints are restored as expected
 """
 
 import datetime
@@ -18,8 +19,8 @@ from dags.orbax.util import validation_util
 from xlml.utils.gke import zone_to_region
 from xlml.utils.xpk import BRANCH_ABHINAV_MTC
 
-DAG_TEST_NAME = "maxtext_emc_orbax_res_local"
-SCHEDULE = "0 11 * * *" if composer_env.is_prod_env() else None
+DAG_TEST_NAME = "maxtext_emc_orbax_res_gcs"
+SCHEDULE = "0 10 * * *" if composer_env.is_prod_env() else None
 
 # Only one version of the Docker image is supported at the moment.
 # Other versions (e.g., "stable") may be introduced later.
@@ -40,34 +41,34 @@ with models.DAG(
         "nightly",
         "orbax",
     ],
-    description="DAG to verify MaxText's emergency restore from local checkpoints after a node interruption.",
+    description="DAG to verify MaxText's emergency restore from GCS checkpoints after a full cluster interruption.",
     doc_md="""
-      # MaxText Emergency Restore from Local Checkpoint Validation DAG
+      # MaxText Emergency Restore from GCS Validation DAG
 
       ### Description
-      This DAG validates the emergency restore capability of MaxText from local
-      checkpoints. It simulates a node failure during a training job and verifies
-      that the job can successfully resume from the last saved local checkpoint.
-      This test is critical for ensuring the resilience of long-running training
-      jobs against hardware failures.
+      This DAG validates the emergency restore capability of MaxText from
+      Google Cloud Storage (GCS) checkpoints. It simulates a full cluster
+      failure during a training job and verifies that the job can successfully
+      resume from the last saved GCS checkpoint. This test is critical for
+      ensuring the resilience of long-running training jobs against catastrophic
+      failures where local checkpoints are lost.
 
       ### Prerequisites
       - An existing GKE cluster with the Multi-tier Checkpointing (MTC)
         configuration enabled, which provides the necessary CSI driver for
         RAM disk (`/local`).
-      - A GCS bucket for storing logs and base model outputs.
+      - A GCS bucket for storing logs and checkpoints.
 
       ### Procedures
       1.  **Apply MTC Configuration:** A `CheckpointingPolicyConfiguration` (CPC)
           is applied to the cluster to set up the MTC environment.
       2.  **Run MaxText with Interruption:** A MaxText training job is initiated.
-          During its execution, a node interruption is simulated to trigger the
-          emergency restore mechanism.
+          During its execution, the last node is deleted to simulate a full
+          cluster interruption, triggering the emergency restore mechanism from GCS.
       3.  **Validate Restore:** The DAG inspects the application logs to confirm
-          that an `'emergency_restore'` event occurred.
+          that an `'emergency_restore'` event occurred from a GCS source.
       4.  **Validate Checkpoint Integrity:** It then verifies that the training job
-          resumed and continued to save checkpoints correctly after the restore,
-          ensuring no data was lost.
+          resumed and continued to save checkpoints correctly after the restore.
       """,
     concurrency=2,
 ) as dag:
@@ -81,7 +82,7 @@ with models.DAG(
           accelerator="v5p-128",
           slices=[2],
           model_name="llama2-7b",
-          short_id="max-res-loc",
+          short_id="max-res-gcs",
           replicator_backup_time=30,
           step=150,
           checkpoint_step=20,
@@ -111,7 +112,7 @@ with models.DAG(
         workload_command = test_config.generate_workload_command(
             checkpoint_dir=orbax.DEFAULT_RAM_DISK,
             run_name=run_name,
-            out_folder="maxtext_emc_orbax_res_local",
+            out_folder="maxtext_emc_orbax_res_gcs",
             enable_multi_tier_checkp=checkpointing.enable_multi_tier_checkpointing,
         )
 
@@ -132,6 +133,7 @@ with models.DAG(
             mtc_enabled=True,
             xpk_branch=BRANCH_ABHINAV_MTC,
             skip_post_process=True,
+            last_node=True,
         )
 
         end_time = validation_util.generate_timestamp.override(
@@ -152,10 +154,10 @@ with models.DAG(
         log_filters = [
             "jsonPayload.message:\"'event_type': 'emergency_restore'\"",
             "jsonPayload.message:\"'is_restoring_slice': True\"",
-            "jsonPayload.message:\"'directory': '/local/\"",
+            "jsonPayload.message:\"'directory': 'gs://\"",
         ]
         validate_restored_source = validation_util.validate_log_exist.override(
-            task_id="validate_emc_restored_from_local"
+            task_id="validate_emc_restored_from_gcs"
         )(
             project_id=test_config.cluster.project,
             location=zone_to_region(test_config.cluster.zone),
@@ -165,7 +167,9 @@ with models.DAG(
             end_time=end_time,
         )
 
-        steps_to_validate = test_config.generate_step_to_validate(is_local=True)
+        steps_to_validate = test_config.generate_step_to_validate(
+            is_local=False
+        )
 
         validate_log = validation_util.validate_checkpoint_at_steps_are_saved(
             project_id=test_config.cluster.project,

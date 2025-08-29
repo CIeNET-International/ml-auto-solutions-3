@@ -23,7 +23,7 @@ from xlml.utils.xpk import BRANCH_ABHINAV_MTC
 from xlml.utils.gke import zone_to_region
 from dags.orbax.util import orbax
 
-SCHEDULE = "0 10 * * *" if composer_env.is_prod_env() else None
+SCHEDULE = "0 13 * * *" if composer_env.is_prod_env() else None
 DAG_TEST_NAME = "maxtext_emc_and_mtc_orbax_save_local"
 
 # Only one version of the Docker image is supported at the moment.
@@ -82,7 +82,7 @@ with models.DAG(
   # Other configurations (e.g., v5e and/or v6e) may be introduced later.
   test_configs = [
       orbax.TestConfig(
-          cluster=XpkClusters.TPU_V5P_128_CLUSTER_ORBAX,
+          cluster=XpkClusters.TPU_V5P_128_CLUSTER,
           machine_type="ct5p-hightpu-4t",
           accelerator="v5p-128",
           slices=[2],
@@ -170,6 +170,12 @@ with models.DAG(
                     steps_to_validate=steps_to_validate,
                 )
             )
+            # Final CPC cleanup to ensure symmetric start/end
+            wait_delete_cpc_final = (
+                checkpoint_util.wait_for_cpc_deletion.override(
+                    trigger_rule="all_done", task_id="wait_delete_cpc_final"
+                )(test_config.cpc_config).as_teardown(setups=apply_cpc)
+            )
 
             (
                 wait_delete_cpc
@@ -179,6 +185,7 @@ with models.DAG(
                 >> maxtext_chkpt_run_test
                 >> end_time
                 >> validate_local_check_steps
+                >> wait_delete_cpc_final
             )
       # Add to a list of test to chain them sequentially.
       task_groups.append(group)
