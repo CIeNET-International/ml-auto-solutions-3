@@ -4,59 +4,58 @@ import dataclasses
 import datetime
 import logging
 import subprocess
+import tempfile
 import time
 
 from airflow import models
 from airflow.decorators import task
 from airflow.models import Variable
 from airflow.utils.trigger_rule import TriggerRule
-from dags.common.vm_resource import Project, Region
+from dags.common.vm_resource import Project, Region, Zone
 from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from google.cloud import monitoring_v3
 
 
 @dataclasses.dataclass
-class Info:
+class InfoWithYaml(node_pool.Info):
   """Encapsulates information related to a GKE node pool and jobset file."""
 
-  project_id: str
-  cluster_name: str
-  node_pool_name: str
-  location: str
   yaml_file_name: str
-  bucket_path: str
+  yaml_path: str
 
 
 @task
-def run_workload(info: Info):
+def run_workload(info: InfoWithYaml):
   """Runs a kubectl workload in the designated cluster.
 
   Downloads the file at the fiven path to a temporary folder.
   Gets the credentials for the cluster specified in the info
   input. Runs the workload on the cluster and waits 150s to
-  let the workload initilize
+  let the workload initilize.
 
   Args:
     info(Info): Configuration object with cluster
     and workload details.
   """
-  command = (
-      "export KUBECONFIG=/tmp/kubeconfig && "
-      f"gsutil cp {info.bucket_path}{info.yaml_file_name} "
-      f"/tmp/{info.yaml_file_name} && "
-      f"gcloud container clusters get-credentials {info.cluster_name} "
-      f"--region {info.location} --project {info.project_id} && "
-      f"kubectl --kubeconfig $KUBECONFIG apply -f "
-      f"/tmp/{info.yaml_file_name} -n default"
-  )
+  with tempfile.TemporaryDirectory() as tmpdir:
 
-  process = subprocess.run(
-      command, shell=True, check=True, capture_output=True, text=True
-  )
+    command = (
+        "export KUBECONFIG=/tmp/kubeconfig && "
+        f"gsutil cp {info.yaml_path}{info.yaml_file_name} "
+        f"{tmpdir}/{info.yaml_file_name} && "
+        f"gcloud container clusters get-credentials {info.cluster_name} "
+        f"--region {info.location} --project {info.project_id} && "
+        f"kubectl --kubeconfig $KUBECONFIG apply -f "
+        f"{tmpdir}/{info.yaml_file_name} -n default"
+    )
 
-  logging.info("STDOUT message: %s", process.stdout)
-  logging.info("STDERR message: %s", process.stderr)
+    process = subprocess.run(
+        command, shell=True, check=True, capture_output=True, text=True
+    )
+
+    logging.info("STDOUT message: %s", process.stdout)
+    logging.info("STDERR message: %s", process.stderr)
 
 
 @task
@@ -78,7 +77,7 @@ def wait(seconds: int):
 
 
 @task
-def end_workload(info: Info):
+def end_workload(info: InfoWithYaml):
   """Deletes all JobSets from the GKE cluster to clean up resources.
 
   This task executes a bash script to:
@@ -104,7 +103,7 @@ def end_workload(info: Info):
 
 
 @task.sensor(poke_interval=60, timeout=3600, mode="reschedule")
-def wait_for_jobset_ttr(info: Info) -> bool:
+def wait_for_jobset_ttr(info: InfoWithYaml) -> bool:
   """A sensor task which polls the jobset time_between_interruptions metric
   every 60 seconds for 60 minutes.
 
@@ -133,7 +132,7 @@ def wait_for_jobset_ttr(info: Info) -> bool:
   )
   page_result = api_client.list_time_series(request=request)
 
-  # We just need to know that the even happened at all
+  # We just need to know that the event happened at all
   if page_result.time_series:
     logging.info("Event detected at %s", now)
     return True
@@ -179,7 +178,7 @@ with models.DAG(
   updated, resulting in a success, or timeout, and fail.
   """,
 ) as dag:
-  cluster_info = Info(
+  cluster_info = InfoWithYaml(
       project_id=Project.TPU_PROD_ENV_ONE_VM.value,
       cluster_name=Variable.get(
           "CLUSTER_NAME", default_var="qmcgarry-auto-test"
@@ -190,6 +189,12 @@ with models.DAG(
       location=Variable.get(
           "LOCATION", default_var=Region.ASIA_NORTHEAST1.value
       ),
+      node_locations=Variable.get(
+          "NODE_LOCATIONS", default_var=Zone.ASIA_NORTHEAST1_B.value
+      ),
+      num_nodes=Variable.get("NUM_NODES", default_var=4),
+      machine_type=Variable.get("MACHINE_TYPE", default_var="ct6e-standard-4t"),
+      tpu_topology=Variable.get("TPU_TOPOLOGY", default_var="4x4"),
       yaml_file_name=Variable.get(
           "YAML_FILE_NAME", default_var="workload.yaml"
       ),
