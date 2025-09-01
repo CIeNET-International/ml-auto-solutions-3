@@ -331,9 +331,7 @@ def get_tpu_info_from_pod(kubeconfig: str, pod_name: str) -> str:
 
 @task
 def get_monitoring_data(
-    info: Info,
-    pod_name: str,
-    job_apply_time: str
+    info: Info, pod_name: str, job_apply_time: str
 ) -> List[dict[str, Any]]:
   """Gets Cloud Monitoring data for a specific pod."""
   logging.info("Getting monitoring data for pod: %s...", pod_name)
