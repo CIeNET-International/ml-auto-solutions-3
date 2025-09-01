@@ -9,7 +9,8 @@ import logging
 import os
 import re
 import subprocess
-from typing import List
+from typing import Any, List, Tuple
+import random
 
 from airflow import models
 from airflow.decorators import task
@@ -48,64 +49,52 @@ class Info:
 
 
 def compare_tensorcore_utilization_values(
-    log_values: List[float],
+    cmd_values: List[float],
     monitoring_values: List[float],
+    pod_name: str,
     tolerance: float = 1.0,
-) -> bool:
-  """Compares two lists of utilization values within a given tolerance.
-
-  This function iterates through two lists of floating-point numbers,
-  representing utilization metrics from logs and monitoring systems. It checks
-  if the absolute difference between each corresponding pair of values is
-  within the specified tolerance.
-
-  Args:
-    log_values: A list of utilization values extracted from Cloud Logging.
-    monitoring_values: A list of utilization values from Cloud Monitoring.
-    tolerance: The maximum allowed absolute difference between corresponding
-      values for the comparison to be considered a "PASS".
-
-  Returns:
-    True if all value pairs are within the tolerance, False otherwise.
-
-  Raises:
-    AirflowException: If the lengths of the two input lists do not match.
-  """
-  if len(log_values) != len(monitoring_values):
+):
+  """Compares two lists of utilization values within a given tolerance."""
+  """Compares two lists of utilization values within a given tolerance."""
+  if len(cmd_values) != len(monitoring_values):
     raise AirflowException(
-        "Data count mismatch. Data count mismatch. Logs have"
-        f" {log_values} values, Monitoring has {monitoring_values}."
+        f"For pod {pod_name}, data count mismatch. TPU-Info has"
+        f" {len(cmd_values)} values, Monitoring has {len(monitoring_values)}."
     )
 
-  logging.info("--- Comparison Results ---")
-  logging.info("Tolerance: %s", tolerance)
+  logging.info("--- Comparison Results for pod: %s ---", pod_name)
   logging.info(
-      "%s%s%s%s%s",
-      f"{'Device':<12}",
-      f"{'Log Value':<12}",
-      f"{'Monitor Value':<15}",
-      f"{'Difference':<12}",
-      f"{'Result':<10}",
+      "%-12s%-15s%-17s%-12s%-10s",
+      "Device",
+      "TPU-Info Val",
+      "Monitoring Val",
+      "Difference",
+      "Result",
   )
-  logging.info("-" * 65)
+  logging.info("-" * 70)
 
   all_passed = True
-  for i, (log_val, mon_val) in enumerate(zip(log_values, monitoring_values)):
+  for i, (log_val, mon_val) in enumerate(zip(cmd_values, monitoring_values)):
     diff = abs(log_val - mon_val)
-    passed = diff < tolerance
+    passed = diff <= tolerance
     if not passed:
       all_passed = False
     logging.info(
-        "%-12s %-12.2f %-15.2f %-12.2f %-10s",
+        "%-12s%-15.2f%-17.2f%-12.2f%-10s",
         f"Device {i}",
         log_val,
         mon_val,
         diff,
         "PASS" if passed else "FAIL",
     )
-  logging.info("-" * 65)
+  logging.info("-" * 70)
 
-  return all_passed
+  if not all_passed:
+    raise AirflowException(
+        f"Overall Result for Pod {pod_name}: FAIL - Utilization values do not"
+        " match within tolerance."
+    )
+  logging.info("Overall Result for Pod %s: PASS", pod_name)
 
 
 @task
@@ -154,15 +143,13 @@ def run_workload(info: Info, kubeconfig: str, yaml_path: str):
       capture_output=True,
       text=True,
   )
-  print(f"Successfully got credentials for cluster {info.cluster_name}.")
-
   kubectl_cmd = (
       f"kubectl --kubeconfig={kubeconfig} apply -f {yaml_path} " "-n default"
   )
   subprocess.run(
       kubectl_cmd, shell=True, check=True, capture_output=True, text=True
   )
-
+  logging.info("STDOUT message: %s", process.stdout)
   current_time_utc = datetime.datetime.now(datetime.timezone.utc)
   current_time_utc_format = current_time_utc.isoformat(timespec="milliseconds")
   return current_time_utc_format
@@ -208,7 +195,7 @@ def end_workload(info: Info, kubeconfig: str):
 
 
 @task
-def get_active_nodes(info: Info, kubeconfig: str):
+def get_active_pods(info: Info, kubeconfig: str):
   """Deletes all JobSets from the GKE cluster to clean up resources.
 
   This task executes a bash script to:
@@ -239,21 +226,23 @@ def get_active_nodes(info: Info, kubeconfig: str):
 
   kubectl_cmd = (
       f"kubectl --kubeconfig={kubeconfig} get pods -n default -o"
-      " jsonpath={.items[*].spec.nodeName}"
+      " jsonpath={.items[*].metadata.name}"
   )
   process = subprocess.run(
       kubectl_cmd, shell=True, check=True, capture_output=True, text=True
   )
   if not process or not process.stdout.strip():
-    logging.warning("Received empty node list from bash task.")
-    raise AirflowException("Received empty node list from bash task.")
+    logging.warning("Received empty pod list from bash task.")
+    raise AirflowException("Received empty pod list from bash task.")
 
-  node_list = process.stdout.strip().split()
-  return node_list
+  pod_list = process.stdout.strip().split()
+  return pod_list
 
 
-@task.sensor(poke_interval=30, timeout=600, mode="reschedule")
-def wait_for_jobset_start_logs(info: Info, job_apply_time_str: str) -> bool:
+@task.sensor(poke_interval=30, timeout=900, mode="reschedule")
+def query_to_wait_for_jobset_start(
+    info: Info, pod_name_list: str, job_apply_time: str
+) -> bool:
   """Waits for the first log entry indicating the job has started.
 
   This task polls Cloud Logging for a specific log pattern that appears
@@ -262,90 +251,17 @@ def wait_for_jobset_start_logs(info: Info, job_apply_time_str: str) -> bool:
 
   Args:
     info: An Info dataclass instance containing project and cluster details.
-    job_apply_time_str: The ISO formatted string of the time the job was
-      applied.
+    pod_name_list: A list of pod names.
+    job_apply_time: The ISO formatted string of the time the job was applied.
 
   Returns:
     True if the start log is found, otherwise it will raise an Airflow timeout
     exception.
   """
-  log_client = gcp_logging.Client(project=info.project_id)
-  datetime_job_apply_time = datetime.datetime.fromisoformat(job_apply_time_str)
 
-  lql_query = (
-      f'logName="projects/{info.project_id}/logs/stdout" AND '
-      'resource.type="k8s_container" AND '
-      f'resource.labels.cluster_name="{info.cluster_name}" AND '
-      f'resource.labels.container_name="{info.container_name}" AND '
-      'textPayload =~ "printTimestamp.*"'
-  )
-  full_filter = f'timestamp>="{job_apply_time_str}" AND ({lql_query})'
-
-  response_iterator = log_client.list_entries(
-      filter_=full_filter, order_by=gcp_logging.DESCENDING, max_results=1
-  )
-  latest_entry = next(iter(response_iterator), None)
-
-  return latest_entry and latest_entry.timestamp > datetime_job_apply_time
-
-
-@task
-def verify_tensorcore_utilization(
-    info: Info, node_name: str, job_apply_time: str
-) -> bool:
-  """Fetches and compares TensorCore utilization from logs and monitoring.
-
-  For a single GKE node, this function queries both Cloud Logging and Cloud
-  Monitoring to retrieve TensorCore utilization metrics that were generated
-  after the job started. It then compares these two sets of data to verify
-  their consistency.
-
-  Args:
-    info: Configuration object with project and cluster details.
-    node_name: The name of the GKE node to verify.
-    job_apply_time: The ISO timestamp string indicating when the workload began.
-
-  Returns:
-    True if the utilization values from logs and monitoring match within the
-    defined tolerance, False otherwise.
-  """
   datetime_job_apply_time = datetime.datetime.fromisoformat(job_apply_time)
   end_time_utc = datetime_job_apply_time + datetime.timedelta(minutes=10)
-
-  log_client = gcp_logging.Client(project=info.project_id)
-
-  lql_query = (
-      f'logName="projects/{info.project_id}/logs/stdout" AND '
-      'resource.type="k8s_container" AND '
-      f'resource.labels.cluster_name="{info.cluster_name}" AND '
-      f'resource.labels.container_name="{info.container_name}" AND '
-      f'labels."compute.googleapis.com/resource_name":"{node_name}"'
-  )
-  full_filter = f'timestamp>="{job_apply_time}" AND ({lql_query})'
-  logging.info("Executing log query for node %s:%s", node_name, full_filter)
-
-  response_iterator = log_client.list_entries(
-      filter_=full_filter, order_by=gcp_logging.ASCENDING
-  )
-  util_values, search_timestamp, in_tensorcore_section = [], None, False
-  for entry in response_iterator:
-    log_text = entry.payload
-    if not isinstance(log_text, str):
-      continue
-    if not search_timestamp:
-      ts_match = re.search(r"printTimestamp:\s*(\d+)", log_text)
-      if ts_match:
-        search_timestamp = int(ts_match.group(1))
-    if "TensorCore Utilization" in log_text:
-      in_tensorcore_section = True
-      continue
-    if in_tensorcore_section:
-      match = re.search(r"│\s*\d+\s*│\s*([\d.]+)%", log_text)
-      if match:
-        util_values.append(float(match.group(1)))
-    if len(util_values) == 4:
-      break
-
+  pod_name = random.choice(pod_name_list)
   mon_client = monitoring_v3.MetricServiceClient()
   request = monitoring_v3.ListTimeSeriesRequest(
       name=f"projects/{info.project_id}",
@@ -353,30 +269,119 @@ def verify_tensorcore_utilization(
           "metric.type ="
           ' "kubernetes.io/node/accelerator/tensorcore_utilization" AND'
           f' resource.labels.cluster_name = "{info.cluster_name}" AND'
-          f' resource.labels.node_name = "{node_name}"'
+          f' resource.labels.node_name = "{pod_name}"'
       ),
       interval=types.TimeInterval({
               "end_time": {"seconds": int(end_time_utc.timestamp())},
-              "start_time": {
-                  "seconds": int(datetime_job_apply_time.timestamp())
-              },
+              "start_time": {"seconds": int(datetime_job_apply_time.timestamp())},
           }),
       view="FULL",
   )
   time_series_data = mon_client.list_time_series(request)
+  time_series_data_list = list(time_series_data)
+
+  # Retrieve the last three records to ensure stable workload startup.
+  if not time_series_data_list or len(time_series_data_list[0].points) < 3:
+    return False
+  last_n_data_points = [
+      round(point.value.double_value, 2)
+      for point in time_series_data_list[0].points[0:3]
+  ]
+  minimal_activity_threshold = 1.0
+  return all(p > minimal_activity_threshold for p in last_n_data_points)
+
+
+@task
+def get_tpu_info_from_pod(kubeconfig: str, pod_name: str) -> str:
+  """Executes the 'tpu-info' command within a specified pod and returns its output.
+
+  This task uses kubectl to run the 'tpu-info' command inside the given pod
+  in the 'default' namespace. The output of the command is captured and
+  returned.
+
+  Args:
+    kubeconfig: The path to the kubeconfig file.
+    pod_name: The name of the pod to execute the command in.
+
+  Returns:
+    The standard output from the 'tpu-info' command.
+  """
+  env = os.environ.copy()
+  env["KUBECONFIG"] = kubeconfig
+
+  command_string = (
+      f"kubectl --kubeconfig={kubeconfig} "
+      f"exec {pod_name} -n default "
+      f"-- "
+      f"tpu-info"
+  )
+
+  result = subprocess.run(
+      command_string,
+      shell=True,
+      # Since tpu-info feature still has some issues, so the command will
+      # inevitably throw an error. To avoid marking the task as failed,
+      # I set check to False so that the task status does not show as failed.
+      check=False,
+      capture_output=True,
+      text=True,
+  )
+  print("STDOUT:", result.stdout)
+  return result.stdout
+
+
+@task
+def get_monitoring_data(
+    info: Info, pod_name: str, job_apply_time: str
+) -> List[dict[str, Any]]:
+  """Gets Cloud Monitoring data for a specific pod."""
+  logging.info("Getting monitoring data for pod: %s...", pod_name)
+  mon_client = monitoring_v3.MetricServiceClient()
+  datetime_job_apply_time = datetime.datetime.fromisoformat(job_apply_time)
+  end_time_utc = datetime_job_apply_time + datetime.timedelta(minutes=10)
+
+  request = monitoring_v3.ListTimeSeriesRequest(
+      name=f"projects/{info.project_id}",
+      filter=(
+          "metric.type = "
+          '"kubernetes.io/container/accelerator/tensorcore_utilization" AND '
+          f'resource.labels.cluster_name = "{info.cluster_name}" AND '
+          f'resource.labels.pod_name = "{pod_name}"'
+      ),
+      interval=types.TimeInterval(
+          end_time={"seconds": int(end_time_utc.timestamp())},
+          start_time={"seconds": int(datetime_job_apply_time.timestamp())},
+      ),
+      view="FULL",
+  )
+  time_series_data = mon_client.list_time_series(request)
+  ts_list = list(time_series_data)
+  if not ts_list or not all(ts.points for ts in ts_list):
+    raise AirflowException(
+        f"Could not retrieve valid monitoring data for pod {pod_name}."
+    )
+
+  return [monitoring_v3.TimeSeries.to_dict(ts) for ts in ts_list]
+
+
+@task
+def parse_and_compare_utilization(comparison_data: tuple) -> bool:
+  """Parses outputs from Monitoring and tpu-info, then compares them."""
+  monitoring_data_dicts, tpu_info_text, pod_name = comparison_data
+  time_series_data = [
+      monitoring_v3.TimeSeries(**ts_dict) for ts_dict in monitoring_data_dicts
+  ]
   metric_values = {}
   for ts in time_series_data:
     accelerator_id = ts.metric.labels["accelerator_id"]
-    closest_point, min_diff = None, float("inf")
-    for point in ts.points:
-      diff = abs(point.interval.end_time.timestamp() - search_timestamp)
-      if diff < min_diff:
-        min_diff, closest_point = diff, point
-    if closest_point:
-      metric_values[accelerator_id] = round(closest_point.value.double_value, 2)
+    if ts.points:
+      point = ts.points[0]
+      metric_values[accelerator_id] = round(point.value.double_value, 2)
 
   if not metric_values:
-    raise AirflowException("No matching monitoring data found for node %s.")
+    raise AirflowException(
+        f"Failed to extract metric values from monitoring data for pod {pod_name}."
+    )
 
   monitoring_values = [
       metric_values[key]
@@ -384,13 +389,31 @@ def verify_tensorcore_utilization(
           metric_values.keys(), key=lambda x: int(x.split("-")[-1])
       )
   ]
-  return compare_tensorcore_utilization_values(util_values, monitoring_values)
+
+  util_values = []
+  in_tensorcore_section = False
+  for line in tpu_info_text.strip().split("\n"):
+    if "TensorCore Utilization" in line:
+      in_tensorcore_section = True
+      continue
+    if in_tensorcore_section:
+      match = re.search(r"│\s*\d+\s*│\s*([\d.]+)%", line)
+      if match:
+        util_values.append(float(match.group(1)))
+
+  if not util_values:
+    raise AirflowException(
+        f"Failed to parse TensorCore utilization from tpu-info output for pod {pod_name}."
+    )
+
+  compare_tensorcore_utilization_values(
+      util_values, monitoring_values, pod_name
+  )
+  return True
 
 
 @task
-def summarize_results(
-    verification_results: List[bool], active_nodes: List[str]
-):
+def summarize_results(verification_results: List[bool], active_pods: List[str]):
   """Summarizes the results of the TensorCore utilization verification.
 
   This function logs the number of nodes verified, how many passed, and returns
@@ -399,32 +422,36 @@ def summarize_results(
   Args:
     verification_results: A list of booleans, where each boolean indicates
       whether the verification passed (True) or failed (False) for a node.
-    active_nodes: A list of node names that were included in the verification.
+    active_pods: A list of pod names that were included in the verification.
 
   Returns:
     True if all nodes passed verification, False otherwise. If no nodes were
     active, the task is skipped and does not affect the DAG's final state.
   """
-  if not active_nodes:
+  if not active_pods:
     logging.info("No active nodes were found. Grand Result: SKIPPED")
     return
+  total_successful_pods = len(verification_results)
+  total_expected_pods = len(active_pods)
 
-  total_successful_nodes = sum(1 for result in verification_results if result)
+  logging.info("--- Overall Verification Summary ---")
+  logging.info("Total pods scheduled for verification: %d", total_expected_pods)
+  logging.info(
+      "Pods that passed verification (succeeded): %d", total_successful_pods
+  )
 
-  logging.info("Total nodes verified: %d", len(active_nodes))
-  logging.info("Nodes that passed verification: %d", total_successful_nodes)
-
-  if total_successful_nodes != len(active_nodes):
+  if total_successful_pods != len(active_pods):
     raise AirflowException(
         "Grand Result: FAILURE - The number of passed comparisons "
-        f"({total_successful_nodes}) did not meet the threshold of "
-        f"{len(active_nodes)}. Active nodes: {active_nodes}"
+        f"({total_successful_pods}) did not meet the threshold of "
+        f"{len(active_pods)}. Active pods: {active_pods}"
     )
 
 
 with models.DAG(
     dag_id="tpu_info_tensorcore_utilization_dag",
     start_date=datetime.datetime(2025, 8, 15),
+    default_args={"retries": 0},
     schedule=constants.Schedule.WEEKDAY_PST_6_30PM_EXCEPT_THURSDAY,
     catchup=False,
     tags=["gke", "tpu-info", "tensorcore-utilization"],
@@ -475,28 +502,49 @@ with models.DAG(
       yaml_path=local_yaml_path,
   )
 
-  wait_for_job_start = wait_for_jobset_start_logs.override(
-      task_id="wait_for_job_start"
-  )(cluster_info, job_apply_time_str=apply_time)
-
-  active_node = get_active_nodes.override(task_id="get_active_node")(
+  active_pods = get_active_pods.override(task_id="get_active_pod")(
       info=cluster_info, kubeconfig=kubeconfig_path
   )
 
-  verify_utilization_per_node = (
-      verify_tensorcore_utilization.override(
-          task_id="verify_utilization_per_node"
-      )
-      .partial(info=cluster_info, job_apply_time=apply_time)
-      .expand(node_name=active_node)
+  wait_for_job_start = query_to_wait_for_jobset_start.override(
+      task_id="wait_for_job_start"
+  )(cluster_info, pod_name_list=active_pods, job_apply_time=apply_time)
+
+  monitoring_data = get_monitoring_data.partial(
+      info=cluster_info, job_apply_time=apply_time
+  ).expand(pod_name=active_pods)
+
+  tpu_info_outputs = (
+      get_tpu_info_from_pod.override(task_id="get_tpu_info")
+      .partial(kubeconfig=kubeconfig_path)
+      .expand(pod_name=active_pods)
   )
+
+  verify_utilization_per_pod = parse_and_compare_utilization.expand(
+      comparison_data=monitoring_data.zip(
+          tpu_info_outputs,
+          active_pods,
+      )
+  )
+
+  summary = summarize_results.override(
+      task_id="summarize_results", trigger_rule=TriggerRule.ALL_DONE
+  )(verify_utilization_per_pod, active_pods)
 
   clean_up = end_workload.override(
       task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
-  )(info=cluster_info, kubeconfig=kubeconfig_path)
+  )(info=cluster_info, kubeconfig=kubeconfig_path).as_teardown(
+      setups=apply_time
+  )
 
-  summary = summarize_results(verify_utilization_per_node, active_node)
-
-  (start_cleanup >> apply_time >> wait_for_job_start >> active_node)
+  (
+      start_cleanup
+      >> apply_time
+      >> active_pods
+      >> wait_for_job_start
+      >> monitoring_data
+      >> tpu_info_outputs
+      >> verify_utilization_per_pod
+  )
 
   summary >> clean_up
