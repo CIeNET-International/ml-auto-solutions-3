@@ -55,7 +55,6 @@ def compare_tensorcore_utilization_values(
     tolerance: float = 1.0,
 ):
   """Compares two lists of utilization values within a given tolerance."""
-  """Compares two lists of utilization values within a given tolerance."""
   if len(cmd_values) != len(monitoring_values):
     raise AirflowException(
         f"For pod {pod_name}, data count mismatch. TPU-Info has"
@@ -272,9 +271,9 @@ def query_to_wait_for_jobset_start(
           f' resource.labels.node_name = "{pod_name}"'
       ),
       interval=types.TimeInterval({
-              "end_time": {"seconds": int(end_time_utc.timestamp())},
-              "start_time": {"seconds": int(datetime_job_apply_time.timestamp())},
-          }),
+          "end_time": {"seconds": int(end_time_utc.timestamp())},
+          "start_time": {"seconds": int(datetime_job_apply_time.timestamp())},
+      }),
       view="FULL",
   )
   time_series_data = mon_client.list_time_series(request)
@@ -332,7 +331,9 @@ def get_tpu_info_from_pod(kubeconfig: str, pod_name: str) -> str:
 
 @task
 def get_monitoring_data(
-    info: Info, pod_name: str, job_apply_time: str
+    info: Info,
+    pod_name: str,
+    job_apply_time: str
 ) -> List[dict[str, Any]]:
   """Gets Cloud Monitoring data for a specific pod."""
   logging.info("Getting monitoring data for pod: %s...", pod_name)
@@ -380,7 +381,8 @@ def parse_and_compare_utilization(comparison_data: tuple) -> bool:
 
   if not metric_values:
     raise AirflowException(
-        f"Failed to extract metric values from monitoring data for pod {pod_name}."
+        "Failed to extract metric values from monitoring data for pod"
+        f" {pod_name}."
     )
 
   monitoring_values = [
@@ -403,7 +405,8 @@ def parse_and_compare_utilization(comparison_data: tuple) -> bool:
 
   if not util_values:
     raise AirflowException(
-        f"Failed to parse TensorCore utilization from tpu-info output for pod {pod_name}."
+        "Failed to parse TensorCore utilization from tpu-info output for pod"
+        f" {pod_name}."
     )
 
   compare_tensorcore_utilization_values(
@@ -440,11 +443,11 @@ def summarize_results(verification_results: List[bool], active_pods: List[str]):
       "Pods that passed verification (succeeded): %d", total_successful_pods
   )
 
-  if total_successful_pods != len(active_pods):
+  if total_successful_pods != total_expected_pods:
     raise AirflowException(
         "Grand Result: FAILURE - The number of passed comparisons "
         f"({total_successful_pods}) did not meet the threshold of "
-        f"{len(active_pods)}. Active pods: {active_pods}"
+        f"{total_expected_pods}. Active pods: {active_pods}"
     )
 
 
@@ -461,7 +464,8 @@ with models.DAG(
     ),
     doc_md="""
       # TensorCore Utilization Verification DAG
-      # This DAG verifies TensorCore utilization metrics by comparing data from Cloud Logging and Cloud Monitoring.""",
+      # This DAG verifies TensorCore utilization metrics by comparing data from
+      # Cloud Logging and Cloud Monitoring.""",
 ) as dag:
   cluster_info = Info(
       project_id=models.Variable.get(
