@@ -265,10 +265,10 @@ def query_to_wait_for_jobset_start(
   request = monitoring_v3.ListTimeSeriesRequest(
       name=f"projects/{info.project_id}",
       filter=(
-          "metric.type ="
-          ' "kubernetes.io/node/accelerator/tensorcore_utilization" AND'
-          f' resource.labels.cluster_name = "{info.cluster_name}" AND'
-          f' resource.labels.node_name = "{pod_name}"'
+          "metric.type = "
+          '"kubernetes.io/container/accelerator/tensorcore_utilization" AND '
+          f'resource.labels.cluster_name = "{info.cluster_name}" AND '
+          f'resource.labels.pod_name = "{pod_name}"'
       ),
       interval=types.TimeInterval({
           "end_time": {"seconds": int(end_time_utc.timestamp())},
