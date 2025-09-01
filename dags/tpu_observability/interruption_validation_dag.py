@@ -222,13 +222,6 @@ def fetch_gcp_metrics(
           [int(end_time_obj.timestamp())] * event_count
       )
 
-  if not event_records:
-    # If there are no metric events in this time range, skip this task and all subsequent ones.
-    # The state of all the task will be marked as `skipped`.
-    raise AirflowSkipException(
-        'No metric events found in the specified time range.'
-    )
-
   return list(event_records.values())
 
 
@@ -377,6 +370,12 @@ def determinate_time_range(
     metric_records = fetch_gcp_metrics(
         configs, TimeRange(start=left_bound, end=right_bound)
     )
+    if not metric_records:
+      # If there are no metric events in this time range, skip this task and all subsequent ones.
+      # The state of all the task will be marked as `skipped`.
+      raise AirflowSkipException(
+          'No metric events found in the specified time range.'
+      )
 
     total_metric_timestamps = []
     for record in metric_records:
