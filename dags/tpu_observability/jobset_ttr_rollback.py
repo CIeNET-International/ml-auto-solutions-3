@@ -1,10 +1,8 @@
 """A DAG to test the jobset time-to-recover metric from a node pool rollback."""
 
-import dataclasses
 import datetime
 import logging
 import subprocess
-import tempfile
 import time
 
 from airflow import models
@@ -17,16 +15,8 @@ from dags.tpu_observability.utils import node_pool_util as node_pool
 from google.cloud import monitoring_v3
 
 
-@dataclasses.dataclass
-class InfoWithYaml(node_pool.Info):
-  """Encapsulates information related to a GKE node pool and jobset file."""
-
-  yaml_file_name: str
-  yaml_path: str
-
-
 @task
-def run_workload(info: InfoWithYaml):
+def run_workload(info: node_pool.Info, workload_file: str):
   """Runs a kubectl workload in the designated cluster.
 
   Downloads the file at the fiven path to a temporary folder.
@@ -35,27 +25,22 @@ def run_workload(info: InfoWithYaml):
   let the workload initilize.
 
   Args:
-    info(Info): Configuration object with cluster
-    and workload details.
+    info(Info): Configuration object with cluster details.
+    workload_file(str): Name of the workload file to be run.
   """
-  with tempfile.TemporaryDirectory() as tmpdir:
+  command = (
+      "export KUBECONFIG=/tmp/kubeconfig && "
+      f"gcloud container clusters get-credentials {info.cluster_name} "
+      f"--region {info.location} --project {info.project_id} && "
+      f"kubectl --kubeconfig $KUBECONFIG apply -f "
+      f"utils/{workload_file} -n default"
+  )
+  process = subprocess.run(
+      command, shell=True, check=True, capture_output=True, text=True
+  )
 
-    command = (
-        "export KUBECONFIG=/tmp/kubeconfig && "
-        f"gsutil cp {info.yaml_path}{info.yaml_file_name} "
-        f"{tmpdir}/{info.yaml_file_name} && "
-        f"gcloud container clusters get-credentials {info.cluster_name} "
-        f"--region {info.location} --project {info.project_id} && "
-        f"kubectl --kubeconfig $KUBECONFIG apply -f "
-        f"{tmpdir}/{info.yaml_file_name} -n default"
-    )
-
-    process = subprocess.run(
-        command, shell=True, check=True, capture_output=True, text=True
-    )
-
-    logging.info("STDOUT message: %s", process.stdout)
-    logging.info("STDERR message: %s", process.stderr)
+  logging.info("STDOUT message: %s", process.stdout)
+  logging.info("STDERR message: %s", process.stderr)
 
 
 @task
@@ -65,7 +50,6 @@ def wait(seconds: int):
   Args:
     seconds(int): The number of seconds to sleep for.
   """
-
   command = f"sleep {seconds}"
 
   process = subprocess.run(
@@ -77,7 +61,7 @@ def wait(seconds: int):
 
 
 @task
-def end_workload(info: InfoWithYaml):
+def end_workload(info: node_pool.Info):
   """Deletes all JobSets from the GKE cluster to clean up resources.
 
   This task executes a bash script to:
@@ -103,7 +87,7 @@ def end_workload(info: InfoWithYaml):
 
 
 @task.sensor(poke_interval=60, timeout=3600, mode="reschedule")
-def wait_for_jobset_ttr(info: InfoWithYaml) -> bool:
+def wait_for_jobset_ttr(info: node_pool.Info) -> bool:
   """A sensor task which polls the jobset time_between_interruptions metric
   every 60 seconds for 60 minutes.
 
@@ -111,7 +95,6 @@ def wait_for_jobset_ttr(info: InfoWithYaml) -> bool:
       info(Info): An instance of the Info class that encapsulates
       the configuration and metadata of a GKE node pool and workload.
   """
-
   now = int(time.time())
   api_client = monitoring_v3.MetricServiceClient()
   request = monitoring_v3.ListTimeSeriesRequest(
@@ -178,7 +161,7 @@ with models.DAG(
   updated, resulting in a success, or timeout, and fail.
   """,
 ) as dag:
-  cluster_info = InfoWithYaml(
+  cluster_info = node_pool.Info(
       project_id=Project.TPU_PROD_ENV_ONE_VM.value,
       cluster_name=Variable.get(
           "CLUSTER_NAME", default_var="qmcgarry-auto-test"
@@ -195,18 +178,13 @@ with models.DAG(
       num_nodes=Variable.get("NUM_NODES", default_var=4),
       machine_type=Variable.get("MACHINE_TYPE", default_var="ct6e-standard-4t"),
       tpu_topology=Variable.get("TPU_TOPOLOGY", default_var="4x4"),
-      yaml_file_name=Variable.get(
-          "YAML_FILE_NAME", default_var="workload.yaml"
-      ),
-      yaml_path=Variable.get(
-          "YAML_PATH",
-          default_var="gs://cienet-tpu-observability-airflow/workloads/",
-      ),
   )
 
   create_node_pool = node_pool.create(node_pool=cluster_info)
 
-  start_workload = run_workload(info=cluster_info)
+  start_workload = run_workload(
+      info=cluster_info, workload_file="workload.yaml"
+  )
 
   wait_three_minutes = wait(seconds=180)
 
