@@ -174,3 +174,11 @@ def wait_for_cpc_deletion(cpc: CheckpointConfiguration) -> bool:
   A sensor that waits for the CheckpointConfiguration to be completely deleted.
   """
   return _delete_cpc(cpc)
+
+
+@task
+def generate_run_name(short_id: str, checkpointing_name: str, slice_num: int, accelerator: str):
+  """Generate a consistent run name for training phases."""
+  import datetime
+  run_time = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M")
+  return f"{short_id}-{checkpointing_name}-{slice_num}x-{accelerator}-{run_time}"
