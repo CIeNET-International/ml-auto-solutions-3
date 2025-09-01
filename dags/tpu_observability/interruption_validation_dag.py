@@ -8,6 +8,7 @@ from typing import List
 
 from airflow import models
 from airflow.decorators import task
+from airflow.exceptions import AirflowSkipException
 from dags.common.vm_resource import Project
 from dags.map_reproducibility.utils.constants import Schedule
 from dags.multipod.configs.common import Platform
@@ -222,7 +223,11 @@ def fetch_gcp_metrics(
       )
 
   if not event_records:
-    raise RuntimeError('No metric events found in the specified time range.')
+    # If there are no metric events in this time range, skip this task and all subsequent ones.
+    # The state of all the task will be marked as `skipped`.
+    raise AirflowSkipException(
+        'No metric events found in the specified time range.'
+    )
 
   return list(event_records.values())
 
