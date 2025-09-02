@@ -9,7 +9,7 @@ import logging
 import os
 import re
 import subprocess
-from typing import Any, List, Tuple
+from typing import List, Tuple
 import random
 
 from airflow import models
@@ -20,7 +20,6 @@ from dags.common.vm_resource import Project
 from dags.common.vm_resource import Region
 from dags.common.vm_resource import Zone
 from dags.map_reproducibility.utils import constants
-from google.cloud import logging_v2 as gcp_logging
 from google.cloud import monitoring_v3
 from google.cloud.monitoring_v3 import types
 
@@ -330,10 +329,12 @@ def get_tpu_info_from_pod(kubeconfig: str, pod_name: str) -> str:
 
 
 @task
-def get_monitoring_data(
-    info: Info, pod_name: str, job_apply_time: str
-) -> List[dict[str, Any]]:
-  """Gets Cloud Monitoring data for a specific pod."""
+def fetch_parse_and_compare_utilization(
+    info: Info,
+    job_apply_time: str,
+    comparison_data: Tuple[str, str],) -> bool:
+  """Parses outputs from Monitoring and tpu-info, then compares them."""
+  pod_name, tpu_info_text = comparison_data
   logging.info("Getting monitoring data for pod: %s...", pod_name)
   mon_client = monitoring_v3.MetricServiceClient()
   datetime_job_apply_time = datetime.datetime.fromisoformat(job_apply_time)
@@ -360,16 +361,6 @@ def get_monitoring_data(
         f"Could not retrieve valid monitoring data for pod {pod_name}."
     )
 
-  return [monitoring_v3.TimeSeries.to_dict(ts) for ts in ts_list]
-
-
-@task
-def parse_and_compare_utilization(comparison_data: tuple) -> bool:
-  """Parses outputs from Monitoring and tpu-info, then compares them."""
-  monitoring_data_dicts, tpu_info_text, pod_name = comparison_data
-  time_series_data = [
-      monitoring_v3.TimeSeries(**ts_dict) for ts_dict in monitoring_data_dicts
-  ]
   metric_values = {}
   for ts in time_series_data:
     accelerator_id = ts.metric.labels["accelerator_id"]
@@ -455,7 +446,7 @@ with models.DAG(
     default_args={"retries": 0},
     schedule=constants.Schedule.WEEKDAY_PST_6_30PM_EXCEPT_THURSDAY,
     catchup=False,
-    tags=["gke", "tpu-info", "tensorcore-utilization"],
+    tags=["gke", "tpu-observability", "tpu-info", "tensorcore-utilization"],
     description=(
         "This DAG verifies TensorCore utilization metrics by comparing data"
         " from Cloud Logging and Cloud Monitoring."
@@ -512,21 +503,17 @@ with models.DAG(
       task_id="wait_for_job_start"
   )(cluster_info, pod_name_list=active_pods, job_apply_time=apply_time)
 
-  monitoring_data = get_monitoring_data.partial(
-      info=cluster_info, job_apply_time=apply_time
-  ).expand(pod_name=active_pods)
-
   tpu_info_outputs = (
       get_tpu_info_from_pod.override(task_id="get_tpu_info")
       .partial(kubeconfig=kubeconfig_path)
       .expand(pod_name=active_pods)
   )
 
-  verify_utilization_per_pod = parse_and_compare_utilization.expand(
-      comparison_data=monitoring_data.zip(
-          tpu_info_outputs,
-          active_pods,
-      )
+  verify_utilization_per_pod = fetch_parse_and_compare_utilization.partial(
+      info=cluster_info,
+      job_apply_time=apply_time
+  ).expand(
+      comparison_data=active_pods.zip(tpu_info_outputs)
   )
 
   summary = summarize_results.override(
@@ -544,7 +531,6 @@ with models.DAG(
       >> apply_time
       >> active_pods
       >> wait_for_job_start
-      >> monitoring_data
       >> tpu_info_outputs
       >> verify_utilization_per_pod
   )
