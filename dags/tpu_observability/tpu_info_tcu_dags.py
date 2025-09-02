@@ -20,6 +20,8 @@ from dags.common.vm_resource import Project
 from dags.common.vm_resource import Region
 from dags.common.vm_resource import Zone
 from dags.map_reproducibility.utils import constants
+from dags.tpu_observability.utils.monitoring import query_time_series
+
 from google.cloud import monitoring_v3
 from google.cloud.monitoring_v3 import types
 
@@ -47,7 +49,7 @@ class Info:
   bucket_path: str
 
 
-def compare_tensorcore_utilization_values(
+def compare_metric_values(
     cmd_values: List[float],
     monitoring_values: List[float],
     pod_name: str,
@@ -259,23 +261,24 @@ def query_to_wait_for_jobset_start(
 
   datetime_job_apply_time = datetime.datetime.fromisoformat(job_apply_time)
   end_time_utc = datetime_job_apply_time + datetime.timedelta(minutes=10)
+
+  if not pod_name_list:
+    raise AirflowException("pod_name_list is empty, sensor cannot proceed.")
+
   pod_name = random.choice(pod_name_list)
-  mon_client = monitoring_v3.MetricServiceClient()
-  request = monitoring_v3.ListTimeSeriesRequest(
-      name=f"projects/{info.project_id}",
-      filter=(
-          "metric.type = "
-          '"kubernetes.io/container/accelerator/tensorcore_utilization" AND '
-          f'resource.labels.cluster_name = "{info.cluster_name}" AND '
-          f'resource.labels.pod_name = "{pod_name}"'
-      ),
-      interval=types.TimeInterval({
-          "end_time": {"seconds": int(end_time_utc.timestamp())},
-          "start_time": {"seconds": int(datetime_job_apply_time.timestamp())},
-      }),
+  filter_string = (
+      "metric.type ="
+      ' "kubernetes.io/container/accelerator/tensorcore_utilization" AND'
+      f' resource.labels.cluster_name = "{info.cluster_name}" AND'
+      f' resource.labels.pod_name = "{pod_name}"'
+  )
+  time_series_data = query_time_series(
+      project_id=info.project_id,
+      filter_str=filter_string,
+      start_time=datetime_job_apply_time,
+      end_time=end_time_utc,
       view="FULL",
   )
-  time_series_data = mon_client.list_time_series(request)
   time_series_data_list = list(time_series_data)
 
   # Retrieve the last three records to ensure stable workload startup.
@@ -336,25 +339,24 @@ def fetch_parse_and_compare_utilization(
   """Parses outputs from Monitoring and tpu-info, then compares them."""
   pod_name, tpu_info_text = comparison_data
   logging.info("Getting monitoring data for pod: %s...", pod_name)
-  mon_client = monitoring_v3.MetricServiceClient()
+
   datetime_job_apply_time = datetime.datetime.fromisoformat(job_apply_time)
   end_time_utc = datetime_job_apply_time + datetime.timedelta(minutes=10)
 
-  request = monitoring_v3.ListTimeSeriesRequest(
-      name=f"projects/{info.project_id}",
-      filter=(
-          "metric.type = "
-          '"kubernetes.io/container/accelerator/tensorcore_utilization" AND '
-          f'resource.labels.cluster_name = "{info.cluster_name}" AND '
-          f'resource.labels.pod_name = "{pod_name}"'
-      ),
-      interval=types.TimeInterval(
-          end_time={"seconds": int(end_time_utc.timestamp())},
-          start_time={"seconds": int(datetime_job_apply_time.timestamp())},
-      ),
-      view="FULL",
+  filter_string = (
+      "metric.type ="
+      ' "kubernetes.io/container/accelerator/tensorcore_utilization" AND'
+      f' resource.labels.cluster_name = "{info.cluster_name}" AND'
+      f' resource.labels.pod_name = "{pod_name}"'
   )
-  time_series_data = mon_client.list_time_series(request)
+
+  time_series_data = query_time_series(
+      project_id=info.project_id,
+      filter_str=filter_string,
+      start_time=datetime_job_apply_time,
+      end_time=end_time_utc,
+  )
+
   ts_list = list(time_series_data)
   if not ts_list or not all(ts.points for ts in ts_list):
     raise AirflowException(
@@ -398,7 +400,7 @@ def fetch_parse_and_compare_utilization(
         f" {pod_name}."
     )
 
-  compare_tensorcore_utilization_values(
+  compare_metric_values(
       util_values, monitoring_values, pod_name
   )
   return True
@@ -441,7 +443,7 @@ def summarize_results(verification_results: List[bool], active_pods: List[str]):
 
 
 with models.DAG(
-    dag_id="tpu_info_tensorcore_utilization_dag",
+    dag_id="tpu_info_tensorcore_utilization_dag_test",
     start_date=datetime.datetime(2025, 8, 15),
     default_args={"retries": 0},
     schedule=constants.Schedule.WEEKDAY_PST_6_30PM_EXCEPT_THURSDAY,
