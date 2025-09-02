@@ -515,7 +515,7 @@ def create_interruption_dag(
       start_date=datetime.datetime(2025, 7, 20),
       schedule=Schedule.WEEKDAY_PST_6PM_EXCEPT_THURSDAY,
       catchup=False,
-      tags=['gke', 'gce', 'tpu-observability', 'interruption_validation'],
+      tags=[platform.value, 'tpu-observability', 'interruption-count'],
       description=(
           'This DAG validates the accuracy of the interruption count metric by '
           'comparing it against logs.'
