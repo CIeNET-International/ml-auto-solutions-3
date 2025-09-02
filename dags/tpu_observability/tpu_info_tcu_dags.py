@@ -335,7 +335,8 @@ def get_tpu_info_from_pod(kubeconfig: str, pod_name: str) -> str:
 def fetch_parse_and_compare_utilization(
     info: Info,
     job_apply_time: str,
-    comparison_data: Tuple[str, str],) -> bool:
+    comparison_data: Tuple[str, str],
+) -> bool:
   """Parses outputs from Monitoring and tpu-info, then compares them."""
   pod_name, tpu_info_text = comparison_data
   logging.info("Getting monitoring data for pod: %s...", pod_name)
@@ -400,9 +401,7 @@ def fetch_parse_and_compare_utilization(
         f" {pod_name}."
     )
 
-  compare_metric_values(
-      util_values, monitoring_values, pod_name
-  )
+  compare_metric_values(util_values, monitoring_values, pod_name)
   return True
 
 
@@ -512,11 +511,8 @@ with models.DAG(
   )
 
   verify_utilization_per_pod = fetch_parse_and_compare_utilization.partial(
-      info=cluster_info,
-      job_apply_time=apply_time
-  ).expand(
-      comparison_data=active_pods.zip(tpu_info_outputs)
-  )
+      info=cluster_info, job_apply_time=apply_time
+  ).expand(comparison_data=active_pods.zip(tpu_info_outputs))
 
   summary = summarize_results.override(
       task_id="summarize_results", trigger_rule=TriggerRule.ALL_DONE
