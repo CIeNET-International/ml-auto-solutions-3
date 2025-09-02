@@ -429,7 +429,7 @@ def list_log_entries(
       f'resource.labels.location="{location}"',
       f'resource.labels.cluster_name="{cluster_name}"',
       f'resource.labels.namespace_name="{namespace}"',
-      f'resource.labels.pod_name:"{pod_pattern}"',
+      f'resource.labels.pod_name=~"{pod_pattern}"',
       "severity>=DEFAULT",
       f'timestamp>="{start_time_str}"',
       f'timestamp<="{end_time_str}"',
