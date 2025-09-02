@@ -373,6 +373,168 @@ def validate_log_with_gcs_save(
     )
 
 
+@task
+def validate_emergency_restore_log(
+    project_id: str,
+    location: str,
+    cluster_name: str,
+    namespace: str = "default",
+    pod_pattern: str = "*",
+    start_time: Optional[datetime] = None,
+    end_time: Optional[datetime] = None,
+) -> None:
+  """
+  Validates that a workload successfully performed an emergency restore from local checkpoints.
+
+  This function queries logs from a specified GKE cluster and namespace
+  to look for log entries with 'event_type': 'emergency_restore' and validates that
+  the emergency restore operation occurred successfully.
+
+  Args:
+    project_id: The Google Cloud project ID
+    location: GKE cluster location
+    cluster_name: GKE cluster name
+    namespace: Kubernetes namespace (defaults to "default")
+    pod_pattern: Pattern to match pod names (defaults to "*")
+    start_time: Optional start time for log retrieval
+      (defaults to 12 hours ago)
+    end_time: Optional end time for log retrieval (defaults to now)
+  Returns:
+    None: Raises AirflowFailException if emergency restoration validation fails
+  """
+  entries = list_log_entries(
+      project_id=project_id,
+      location=location,
+      cluster_name=cluster_name,
+      namespace=namespace,
+      pod_pattern=pod_pattern,
+      text_filter="event_type",
+      start_time=start_time,
+      end_time=end_time,
+  )
+  
+  emergency_restore_steps = set()
+  
+  for entry in entries:
+    if not entry.payload:
+      continue
+    payload_str = str(entry.payload)
+    
+    for line in payload_str.split("\n"):
+      if "'event_type': 'emergency_restore'" in line or '"event_type": "emergency_restore"' in line:
+        # Extract step from emergency restore event
+        step_match = re.search(r"'step': (\d+)|\"step\": (\d+)", line)
+        if step_match:
+          step = int(step_match.group(1) or step_match.group(2))
+          emergency_restore_steps.add(step)
+          logging.info(f"├─ Found emergency restore event at step {step}")
+          logging.info(f"├─ Timestamp: {entry.timestamp}")
+          logging.info("└─ Full log:")
+          logging.info(f"   {line}")
+  
+  if not emergency_restore_steps:
+    raise AirflowFailException(
+        "No emergency restore events found. Emergency checkpoint restoration from local storage may have failed."
+    )
+  
+  logging.info(f"Emergency restore validation successful!")
+  logging.info(f"Emergency restored steps: {sorted(emergency_restore_steps)}")
+  logging.info(f"Total {len(emergency_restore_steps)} emergency restore events found.")
+
+
+@task
+def validate_replicator_gcs_restore_log(
+    project_id: str,
+    location: str,
+    cluster_name: str,
+    namespace: str = "default",
+    pod_pattern: str = "*",
+    start_time: Optional[datetime] = None,
+    end_time: Optional[datetime] = None,
+    vali_step_list: Optional[list] = None,
+) -> None:
+  """
+  Validates that the replicator successfully restored checkpoints from GCS backup.
+
+  This function queries logs from a specified GKE cluster and namespace
+  to look for log entries showing replicator restoring from GCS backup.
+
+  Expected log format:
+  "Restoring from backup '2025-08-22_03-01', checkpoint 120"
+
+  Args:
+    project_id: The Google Cloud project ID
+    location: GKE cluster location
+    cluster_name: GKE cluster name
+    namespace: Kubernetes namespace (defaults to "default")
+    pod_pattern: Pattern to match pod names (defaults to "*")
+    start_time: Optional start time for log retrieval
+      (defaults to 12 hours ago)
+    end_time: Optional end time for log retrieval (defaults to now)
+    vali_step_list: Optional list of steps to validate replication for
+  Returns:
+    None: Raises AirflowFailException if replicator GCS restore validation fails
+  """
+  entries = list_log_entries(
+      project_id=project_id,
+      location=location,
+      cluster_name=cluster_name,
+      namespace=namespace,
+      pod_pattern=pod_pattern,
+      text_filter="Restoring from backup",
+      start_time=start_time,
+      end_time=end_time,
+  )
+  
+  restored_steps = set()
+  
+  for entry in entries:
+    if not entry.payload:
+      continue
+    payload_str = str(entry.payload)
+    
+    for line in payload_str.split("\n"):
+      # Look for restore initiation logs
+      if "Restoring from backup" in line and "checkpoint" in line:
+        # Extract step from restore log
+        # Example: "Restoring from backup '2025-08-22_03-01', checkpoint 120"
+        checkpoint_match = re.search(r"checkpoint (\d+)", line)
+        backup_match = re.search(r"backup '([^']+)'", line)
+        
+        if checkpoint_match:
+          step = int(checkpoint_match.group(1))
+          backup_id = backup_match.group(1) if backup_match else "unknown"
+          restored_steps.add(step)
+          
+          logging.info(f"├─ Found restore initiation at step {step}")
+          logging.info(f"├─ Timestamp: {entry.timestamp}")
+          logging.info(f"├─ Backup ID: {backup_id}")
+          logging.info("└─ Full log:")
+          logging.info(f"   {line}")
+  
+  if not restored_steps:
+    raise AirflowFailException(
+        "No replicator restore operations found. Replicator may not be working correctly."
+    )
+  
+  # If vali_step_list is provided, validate that expected steps were restored
+  if vali_step_list:
+    expected_steps = set(vali_step_list)
+    missing_steps = expected_steps - restored_steps
+    
+    if missing_steps:
+      raise AirflowFailException(
+          f"Replicator validation failed: Expected steps {sorted(missing_steps)} were not restored. "
+          f"Expected: {sorted(expected_steps)}, Found: {sorted(restored_steps)}"
+      )
+    else:
+      logging.info(f"All expected steps found in restore logs: {sorted(expected_steps)}")
+  
+  logging.info(f"Replicator validation successful!")
+  logging.info(f"Total {len(restored_steps)} restore operations found.")
+  logging.info(f"Restored checkpoint steps: {sorted(restored_steps)}")
+
+
 def list_log_entries(
     project_id: str,
     location: str,
@@ -429,7 +591,7 @@ def list_log_entries(
       f'resource.labels.location="{location}"',
       f'resource.labels.cluster_name="{cluster_name}"',
       f'resource.labels.namespace_name="{namespace}"',
-      f'resource.labels.pod_name:"{pod_pattern}"',
+      f'resource.labels.pod_name=~"{pod_pattern}"',
       "severity>=DEFAULT",
       f'timestamp>="{start_time_str}"',
       f'timestamp<="{end_time_str}"',
