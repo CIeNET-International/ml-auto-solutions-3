@@ -9,7 +9,6 @@ multi-pod cluster.
 
 import datetime
 from dataclasses import dataclass
-import posixpath
 from typing import Optional
 
 from airflow import models
