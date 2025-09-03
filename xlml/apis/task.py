@@ -19,10 +19,11 @@ import dataclasses
 import datetime
 import shlex
 from dags.common.quarantined_tests import QuarantineTests
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple, Union, List
 import airflow
 from airflow.models.taskmixin import DAGNode
 from airflow.utils.task_group import TaskGroup
+from airflow.decorators import task
 from xlml.apis import gcp_config, metric_config, test_config
 from xlml.utils import gpu, metric, name_format, ssh, tpu, xpk, gke
 
@@ -175,6 +176,7 @@ class XpkTask(BaseTask):
       ramdisk_directory: str = "",
       mtc_enabled: bool = False,
       xpk_branch: str = xpk.MAIN_BRANCH,
+      max_restart: int = 0,
   ) -> DAGNode:
     """Run a test job within a docker image.
 
@@ -195,6 +197,7 @@ class XpkTask(BaseTask):
           ramdisk_directory,
           mtc_enabled,
           xpk_branch,
+          max_restart,
       )
       if not skip_post_process:
         run_model >> self.post_process(gcs_path)
@@ -213,6 +216,7 @@ class XpkTask(BaseTask):
       mtc_enabled: bool = False,
       xpk_branch: str = xpk.MAIN_BRANCH,
       last_node: bool = False,
+      max_restart: int = 0,
   ) -> DAGNode:
     """Run a test job within a docker image.
 
@@ -232,6 +236,8 @@ class XpkTask(BaseTask):
       xpk_branch: The specific git branch of the xpk tool to use.
       last_node: If True, the interruption will target the last node in the
         workload; otherwise, it targets the first node.
+      max_restart: By default, this is 0.
+        This will restart the job with flag "--max-restarts"
     Returns:
       A task group with the following tasks chained: run_model and
       post_process.
@@ -246,6 +252,7 @@ class XpkTask(BaseTask):
           mtc_enabled=mtc_enabled,
           xpk_branch=xpk_branch,
           last_node=last_node,
+          max_restart=max_restart,
       )
       if not skip_post_process:
         run_model >> self.post_process(gcs_path)
@@ -262,6 +269,7 @@ class XpkTask(BaseTask):
       mtc_enabled: bool = False,
       xpk_branch: str = xpk.MAIN_BRANCH,
       last_node: bool = False,
+      max_restart: int = 0,
   ) -> DAGNode:
     """Run the TPU/GPU test in `task_test_config` using xpk.
 
@@ -279,6 +287,8 @@ class XpkTask(BaseTask):
       xpk_branch: The specific git branch of the xpk tool to use.
       last_node: If True, the interruption will target the last node in the
         workload; otherwise, it targets the first node.
+      max_restart: By default, this is 0.
+        This will restart the job with flag "--max-restarts"
 
     Returns:
       A DAG node that executes the model test.
@@ -303,11 +313,12 @@ class XpkTask(BaseTask):
               ramdisk_directory,
               mtc_enabled,
               xpk_branch,
+              max_restart,
           )
       )
 
       run_node_interruption = xpk.delete_node.override(
-          owner=self.task_test_config.task_owner
+          owner=self.task_test_config.task_owner, trigger_rule="none_failed"
       )(
           project=self.task_gcp_config.project_name,
           zone=self.task_gcp_config.zone,
@@ -353,8 +364,32 @@ class XpkTask(BaseTask):
       ramdisk_directory: str = "",
       mtc_enabled: bool = False,
       xpk_branch: str = xpk.MAIN_BRANCH,
+      max_restart: int = 0,
   ) -> DAGNode:
-    """Create the workload and wait for it to provision."""
+    @task.branch
+    def task_path_decider(
+        workload_id: str, group_id: str
+    ) -> Union[str, List[str]]:
+      """
+      Decide whether the wait_for_file_to_exist should be
+      executed based on the workload_id
+
+      Attributes:
+      workload_id: Unique ID for identiying the workload
+      group_id: Unique ID for identiying the Taskgroup
+
+      Returns:
+        task id(s) that should be executed
+      """
+      short_id = ["max-reg-res-gcs-node"]
+      task_wait_reach_id = f"{group_id}.wait_for_workload_reach_step"
+      task_wait_file_id = f"{group_id}.wait_for_file_to_exist"
+      for item in short_id:
+        if item in workload_id:
+          return [task_wait_reach_id, task_wait_file_id]
+      return task_wait_reach_id
+
+    # Create the workload and wait for it to provision.
     with TaskGroup(group_id="launch_workload_with_node_reach_to_step") as group:
       run_workload = xpk.run_workload.override(
           owner=self.task_test_config.task_owner
@@ -375,6 +410,7 @@ class XpkTask(BaseTask):
           ramdisk_directory=ramdisk_directory,
           mtc_enabled=mtc_enabled,
           xpk_branch=xpk_branch,
+          max_restart=max_restart,
       )
       wait_for_workload_start = xpk.wait_for_workload_start.override(
           timeout=self.workload_provision_timeout.total_seconds()
@@ -384,15 +420,33 @@ class XpkTask(BaseTask):
           region=gke.zone_to_region(self.task_gcp_config.zone),
           cluster_name=self.task_test_config.cluster_name,
       )
-      wait_for_workload_to_reach_step = xpk.wait_for_workload_reach_step(
-          workload_id=workload_id,
-          project_id=self.task_gcp_config.project_name,
-          region=gke.zone_to_region(self.task_gcp_config.zone),
-          cluster_name=self.task_test_config.cluster_name,
-          expect_reach_to_step=str(expect_reach_to_step),
+      wait_for_workload_to_reach_step = (
+          xpk.wait_for_workload_reach_step.override(
+              task_id="wait_for_workload_reach_step"
+          )(
+              workload_id=workload_id,
+              project_id=self.task_gcp_config.project_name,
+              region=gke.zone_to_region(self.task_gcp_config.zone),
+              cluster_name=self.task_test_config.cluster_name,
+              expect_reach_to_step=str(expect_reach_to_step),
+          )
       )
 
-      run_workload >> wait_for_workload_start >> wait_for_workload_to_reach_step
+      wait_for_file_to_exist = xpk.wait_for_file_to_exist.override(
+          task_id="wait_for_file_to_exist"
+      )(
+          file_path=gcs_path,
+          step_to_interrupt=str(expect_reach_to_step),
+      )
+
+      # Conditional Execution: Not all test scenarios require checking for
+      # the existence of commit_message.txt (in task: wait_for_file_to_exist).
+      # using the @task.branch decorator to dynamically route the workflow.
+      decider = task_path_decider(workload_id, group.group_id)
+
+      (run_workload >> wait_for_workload_start >> decider)
+      decider >> [wait_for_workload_to_reach_step, wait_for_file_to_exist]
+
       return group
 
   def run_with_name_gen_and_quarantine(
@@ -494,6 +548,7 @@ class XpkTask(BaseTask):
       ramdisk_directory: str = "",
       mtc_enabled: bool = False,
       xpk_branch: str = xpk.MAIN_BRANCH,
+      max_restart: int = 0,
   ) -> DAGNode:
     """Run the TPU/GPU test in `task_test_config` using xpk.
 
@@ -522,6 +577,7 @@ class XpkTask(BaseTask):
           ramdisk_directory,
           mtc_enabled,
           xpk_branch,
+          max_restart,
       )
       wait_for_workload_completion = xpk.wait_for_workload_completion.override(
           timeout=int(self.task_test_config.timeout.total_seconds()),
@@ -556,6 +612,7 @@ class XpkTask(BaseTask):
       ramdisk_directory: str = "",
       mtc_enabled: bool = False,
       xpk_branch: str = xpk.MAIN_BRANCH,
+      max_restart: int = 0,
   ) -> DAGNode:
     """Create the workload and wait for it to provision."""
     with TaskGroup(group_id="launch_workload") as group:
@@ -578,6 +635,7 @@ class XpkTask(BaseTask):
           ramdisk_directory=ramdisk_directory,
           mtc_enabled=mtc_enabled,
           xpk_branch=xpk_branch,
+          max_restart=max_restart,
       )
       wait_for_workload_start = xpk.wait_for_workload_start.override(
           timeout=self.workload_provision_timeout.total_seconds()
@@ -696,7 +754,8 @@ class GpuCreateResourceTask(BaseTask):
     """Run a test job via existing instance.
 
     Returns:
-      A task group with the following tasks chained:  provision, run_model and post_process, clean_up.
+      A task group with the following tasks chained:
+      provision, run_model and post_process, clean_up.
     """
     with TaskGroup(
         group_id=self.task_test_config.benchmark_id, prefix_group_id=True
@@ -861,7 +920,8 @@ class GpuCreateResourceTask(BaseTask):
     )
 
   def clean_up_existing_instance(self, ssh_keys: airflow.XComArg) -> DAGNode:
-    """Clean up existing GPU resources - remove the one-time use generated ssh_keys.
+    """Clean up existing GPU resources
+      - remove the one-time use generated ssh_keys.
 
     Args:
       ssh_keys: generated GPU's one-time use SSH keys to be removed.
