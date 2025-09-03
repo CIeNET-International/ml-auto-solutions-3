@@ -313,3 +313,33 @@ def list_log_entries(
 
   logging.info(f"Log filter constructed: {log_filter}")
   return list(logging_client.list_entries(filter_=log_filter))
+
+
+@task
+def validate_log_exist(
+    project_id: str,
+    location: str,
+    cluster_name: str,
+    namespace: str = "default",
+    pod_pattern: str = "*",
+    container_name: Optional[str] = None,
+    text_filter: Optional[str] = None,
+    start_time: Optional[datetime] = None,
+    end_time: Optional[datetime] = None,
+) -> None:
+  """Validate the workload log text filter it is found during training."""
+
+  entries = list_log_entries(
+      project_id=project_id,
+      location=location,
+      cluster_name=cluster_name,
+      namespace=namespace,
+      pod_pattern=pod_pattern,
+      container_name=container_name,
+      text_filter=text_filter,
+      start_time=start_time,
+      end_time=end_time,
+  )
+
+  if not entries:
+    raise AirflowFailException("The log history is empty!")
