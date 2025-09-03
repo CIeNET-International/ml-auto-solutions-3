@@ -2,7 +2,7 @@
 
 This is done by comparing data from Cloud Logging and Cloud Monitoring.
 """
-
+from abc import ABC, abstractmethod
 import dataclasses
 import datetime
 import logging
@@ -10,11 +10,12 @@ import os
 import random
 import re
 import subprocess
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 from airflow import models
 from airflow.decorators import task
 from airflow.exceptions import AirflowException
+from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
 from dags.common.vm_resource import Project
@@ -24,7 +25,7 @@ from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.utils.jobset_yaml_generator import create_jobset_yaml
 from dags.tpu_observability.utils.jobset_yaml_generator import YamlConfig
 from dags.tpu_observability.utils.monitoring import query_time_series
-
+from google.cloud.monitoring_v3 import types
 
 @dataclasses.dataclass
 class Info:
@@ -43,6 +44,109 @@ class Info:
   zone: str
   cluster_name: str
   container_name: str
+
+
+class BaseMetricStrategy(ABC):
+  """Abstract Base Class (Interface) for a metric verification strategy.
+
+  It defines the contract that all concrete metric strategies must follow.
+  """
+
+  @property
+  @abstractmethod
+  def metric_name(self) -> str:
+    """The name of the metric as it appears in the Monitoring filter."""
+    pass
+
+  @abstractmethod
+  def parse_from_monitoring(
+      self, time_series_data: List[types.TimeSeries], **kwargs
+  ) -> List[float]:
+    """Parses the desired value from a list of TimeSeries objects."""
+    pass
+
+  @abstractmethod
+  def parse_from_tpu_info(self, tpu_info_text: str) -> List[float]:
+    """Parses the desired value from the raw tpu-info command output."""
+    pass
+
+
+class TensorcoreUtilizationStrategy(BaseMetricStrategy):
+  """Strategy for verifying TensorCore Utilization."""
+
+  @property
+  def metric_name(self) -> str:
+    return "tensorcore_utilization"
+
+  def parse_from_monitoring(
+      self, time_series_data: List[types.TimeSeries], **kwargs
+  ) -> List[float]:
+    metric_values = {}
+    for ts in time_series_data:
+      if ts.points:
+        accelerator_id = ts.metric.labels["accelerator_id"]
+        point = ts.points[0]
+        metric_values[accelerator_id] = round(point.value.double_value, 2)
+    return [
+        metric_values[key]
+        for key in sorted(
+            metric_values.keys(), key=lambda x: int(x.split("-")[-1])
+        )
+    ]
+
+  def parse_from_tpu_info(self, tpu_info_text: str) -> List[float]:
+    util_values = []
+    in_section = False
+    for line in tpu_info_text.strip().split("\n"):
+      if "TensorCore Utilization" in line:
+        in_section = True
+        continue
+      if in_section:
+        match = re.search(r"│\s*\d+\s*│\s*([\d.]+)%", line)
+        if match:
+          util_values.append(float(match.group(1)))
+    return util_values
+
+
+class MemoryUsedStrategy(BaseMetricStrategy):
+  """Strategy for verifying Used HBM Memory."""
+
+  @property
+  def metric_name(self) -> str:
+    return "memory_used"
+
+  def parse_from_monitoring(
+      self, time_series_data: List[types.TimeSeries], **kwargs
+  ) -> List[float]:
+    metric_values = {}
+    for ts in time_series_data:
+      if ts.points:
+        accelerator_id = ts.metric.labels["accelerator_id"]
+        point = ts.points[0]
+        bytes_value = point.value.int64_value
+        gib_value = bytes_value / (1024**3)
+        metric_values[accelerator_id] = round(gib_value, 2)
+    return [
+        metric_values[key]
+        for key in sorted(
+            metric_values.keys(), key=lambda x: int(x.split("-")[-1])
+        )
+    ]
+
+  def parse_from_tpu_info(self, tpu_info_text: str) -> List[float]:
+    util_values = []
+    in_section = False
+    for line in tpu_info_text.strip().split("\n"):
+      if "TPU Runtime Utilization" in line:
+        in_section = True
+        continue
+      if in_section:
+        match = re.search(r"(\d+\.\d+)\s*GiB\s*\/\s*(\d+\.\d+)\s*GiB", line)
+        if match:
+          util_values.append(float(match.group(1)))
+      if len(util_values) == 4:
+        break
+    return util_values
 
 
 def compare_metric_values(
@@ -200,6 +304,8 @@ def end_workload(info: Info, kubeconfig: str, yaml_config: YamlConfig):
       shell=True,
       check=True,
       env=env,
+      capture_output=True,
+      text=True,
   )
 
   kubectl_cmd = (
@@ -350,25 +456,24 @@ def get_tpu_info_from_pod(kubeconfig: str, pod_name: str) -> str:
 
 
 @task
-def fetch_parse_and_compare_utilization(
+def run_metric_verification(
     info: Info,
     job_apply_time: str,
+    metric_strategy: BaseMetricStrategy,
     comparison_data: Tuple[str, str],
 ) -> bool:
-  """Parses outputs from Monitoring and tpu-info, then compares them."""
+  """A generic task that uses a strategy object to verify a metric."""
   pod_name, tpu_info_text = comparison_data
-  logging.info("Getting monitoring data for pod: %s...", pod_name)
-
+  metric_name = metric_strategy.metric_name
+  logging.info("Verifying metric '%s' for pod: %s...", metric_name, pod_name)
   datetime_job_apply_time = datetime.datetime.fromisoformat(job_apply_time)
   end_time_utc = datetime_job_apply_time + datetime.timedelta(minutes=10)
 
   filter_string = (
-      "metric.type ="
-      ' "kubernetes.io/container/accelerator/tensorcore_utilization" AND'
-      f' resource.labels.cluster_name = "{info.cluster_name}" AND'
-      f' resource.labels.pod_name = "{pod_name}"'
+      f'metric.type = "kubernetes.io/container/accelerator/{metric_name}" '
+      f'AND resource.labels.cluster_name = "{info.cluster_name}" '
+      f'AND resource.labels.pod_name = "{pod_name}"'
   )
-
   time_series_data = query_time_series(
       project_id=info.project_id,
       filter_str=filter_string,
@@ -376,91 +481,68 @@ def fetch_parse_and_compare_utilization(
       end_time=end_time_utc,
   )
 
-  ts_list = list(time_series_data)
-  if not ts_list or not all(ts.points for ts in ts_list):
-    raise AirflowException(
-        f"Could not retrieve valid monitoring data for pod {pod_name}."
-    )
-
-  metric_values = {}
-  for ts in time_series_data:
-    accelerator_id = ts.metric.labels["accelerator_id"]
-    if ts.points:
-      point = ts.points[0]
-      metric_values[accelerator_id] = round(point.value.double_value, 2)
-
-  if not metric_values:
-    raise AirflowException(
-        "Failed to extract metric values from monitoring data for pod"
-        f" {pod_name}."
-    )
-
-  monitoring_values = [
-      metric_values[key]
-      for key in sorted(
-          metric_values.keys(), key=lambda x: int(x.split("-")[-1])
-      )
-  ]
-
-  util_values = []
-  in_tensorcore_section = False
-  for line in tpu_info_text.strip().split("\n"):
-    if "TensorCore Utilization" in line:
-      in_tensorcore_section = True
-      continue
-    if in_tensorcore_section:
-      match = re.search(r"│\s*\d+\s*│\s*([\d.]+)%", line)
-      if match:
-        util_values.append(float(match.group(1)))
-
-  if not util_values:
-    raise AirflowException(
-        "Failed to parse TensorCore utilization from tpu-info output for pod"
-        f" {pod_name}."
-    )
+  monitoring_values = metric_strategy.parse_from_monitoring(time_series_data)
+  util_values = metric_strategy.parse_from_tpu_info(tpu_info_text)
 
   compare_metric_values(util_values, monitoring_values, pod_name)
   return True
 
 
 @task
-def summarize_results(verification_results: List[bool], active_pods: List[str]):
-  """Summarizes the results of the TensorCore utilization verification.
-
-  This function logs the number of nodes verified, how many passed, and returns
-  a boolean indicating the overall success of the verification process.
-
-  Args:
-    verification_results: A list of booleans, where each boolean indicates
-      whether the verification passed (True) or failed (False) for a node.
-    active_pods: A list of pod names that were included in the verification.
-
-  Returns:
-    True if all nodes passed verification, False otherwise. If no nodes were
-    active, the task is skipped and does not affect the DAG's final state.
+def summarize_results(
+    verification_results_dict: Dict[str, List[bool]],
+    active_pods: List[str]
+):
+  """
+  Summarizes the results for multiple metric verifications, checking each
+  metric group individually.
   """
   if not active_pods:
     logging.info("No active nodes were found. Grand Result: SKIPPED")
     return
-  total_successful_pods = len(verification_results)
-  total_expected_pods = len(active_pods)
+
+  num_expected_pods = len(active_pods)
+  overall_success = True
+  failure_summary = []
 
   logging.info("--- Overall Verification Summary ---")
-  logging.info("Total pods scheduled for verification: %d", total_expected_pods)
+  logging.info("Total pods scheduled for verification: %s", num_expected_pods)
+  logging.info("-" * 70)
+  logging.info("%-35s | %-10s | %-20s", "Metric Name", "Result", "Details")
+  logging.info("-" * 70)
+
+  for metric_name, results in verification_results_dict.items():
+    num_passes = len(results)  # Only successed task return result
+
+    if num_passes < num_expected_pods:
+      status = "FAIL"
+      details = f"Passed {num_passes} of {num_expected_pods} pods."
+      overall_success = False
+      failure_summary.append(f"- {metric_name}: {details}")
+    else:
+      status = "PASS"
+      details = f"All {num_expected_pods} pods passed."
+
+    logging.info("%-35s | %-10s | %-20s", metric_name, status, details)
+
+  logging.info("-" * 70)
+
+  if not overall_success:
+    error_message = (
+        "Grand Result: FAILURE - One or more metric verifications failed.\n"
+        "Failure Details:\n"
+        + "\n".join(failure_summary)
+    )
+    raise AirflowException(error_message)
+
   logging.info(
-      "Pods that passed verification (succeeded): %d", total_successful_pods
+      "Grand Result: SUCCESS - All metric verifications passed for all pods."
   )
 
-  if total_successful_pods != total_expected_pods:
-    raise AirflowException(
-        "Grand Result: FAILURE - The number of passed comparisons "
-        f"({total_successful_pods}) did not meet the threshold of "
-        f"{total_expected_pods}. Active pods: {active_pods}"
-    )
 
 
 with models.DAG(
-    dag_id="tpu_info_tensorcore_utilization_dag",
+    dag_id="tpu_info_dag",
     start_date=datetime.datetime(2025, 8, 15),
     default_args={"retries": 0},
     schedule=constants.Schedule.WEEKDAY_PST_6_30PM_EXCEPT_THURSDAY,
@@ -477,16 +559,16 @@ with models.DAG(
 ) as dag:
   cluster_info = Info(
       project_id=models.Variable.get(
-          "TCU_PROJECT_ID", default_var=Project.TPU_PROD_ENV_ONE_VM.value
+          "TPU_INFO_PROJECT_ID", default_var=Project.TPU_PROD_ENV_ONE_VM.value
       ),
       cluster_name=models.Variable.get(
-          "TCU_CLUSTER_NAME", default_var="yuna-xpk-v6e"
+          "TPU_INFO_CLUSTER_NAME", default_var="yuna-xpk-v6e"
       ),
       region=models.Variable.get(
-          "TCU_REGION", default_var=Region.ASIA_NORTHEAST1.value
+          "TPU_INFO_REGION", default_var=Region.ASIA_NORTHEAST1.value
       ),
       zone=models.Variable.get(
-          "TCU_ZONE", default_var=Zone.ASIA_NORTHEAST1_B.value
+          "TPU_INFO_ZONE", default_var=Zone.ASIA_NORTHEAST1_B.value
       ),
       container_name=models.Variable.get(
           "CONTAINER_NAME", default_var="jax-tpu-job"
@@ -561,19 +643,40 @@ with models.DAG(
       task_id="wait_for_job_start"
   )(cluster_info, pod_name_list=active_pods, job_apply_time=apply_time)
 
-  tpu_info_outputs = (
-      get_tpu_info_from_pod.override(task_id="get_tpu_info")
-      .partial(kubeconfig=kubeconfig_path)
-      .expand(pod_name=active_pods)
-  )
+  with TaskGroup(group_id="verification_group") as verification_group:
+    tpu_info_outputs = (
+        get_tpu_info_from_pod.override(task_id="get_tpu_info")
+        .partial(kubeconfig=kubeconfig_path)
+        .expand(pod_name=active_pods)
+    )
 
-  verify_utilization_per_pod = fetch_parse_and_compare_utilization.partial(
-      info=cluster_info, job_apply_time=apply_time
-  ).expand(comparison_data=active_pods.zip(tpu_info_outputs))
+    verify_tensorcore = run_metric_verification.override(
+        task_id="verify_tensorcore_utilization"
+    ).partial(
+        info=cluster_info,
+        job_apply_time=apply_time,
+        metric_strategy=TensorcoreUtilizationStrategy(),
+    ).expand(comparison_data=active_pods.zip(tpu_info_outputs))
+
+    verify_memory_used = run_metric_verification.override(
+        task_id="verify_memory_used"
+    ).partial(
+        info=cluster_info,
+        job_apply_time=apply_time,
+        metric_strategy=MemoryUsedStrategy(),
+    ).expand(comparison_data=active_pods.zip(tpu_info_outputs))
+
+    tpu_info_outputs >> [verify_tensorcore, verify_memory_used]
 
   summary = summarize_results.override(
       task_id="summarize_results", trigger_rule=TriggerRule.ALL_DONE
-  )(verify_utilization_per_pod, active_pods)
+  )(
+      verification_results_dict={
+          "TensorCore Utilization": verify_tensorcore,
+          "HBM Memory Used": verify_memory_used,
+      },
+      active_pods=active_pods
+  )
 
   clean_up = end_workload.override(
       task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
@@ -591,8 +694,7 @@ with models.DAG(
       >> apply_time
       >> active_pods
       >> wait_for_job_start
-      >> tpu_info_outputs
-      >> verify_utilization_per_pod
+      >> verification_group
+      >> summary
+      >> clean_up
   )
-
-  summary >> clean_up
