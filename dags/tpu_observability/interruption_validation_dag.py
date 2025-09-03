@@ -273,9 +273,6 @@ def fetch_interruption_log_records(
       max_results=max_results,
   )
 
-  if not log_entries:
-    return []
-
   # key: resource_name, value: EventRecord
   event_records: dict[str, EventRecord] = {}
   entry_count = 0
@@ -301,9 +298,7 @@ def fetch_interruption_log_records(
       )
 
   if entry_count == max_results:
-    raise AirflowSkipException(
-        f'Log entries limit reached ({max_results} entries).'
-    )
+    raise RuntimeError(f'Log entries limit reached ({max_results} entries).')
 
   return list(event_records.values())
 
@@ -472,21 +467,13 @@ def validate_interruption_count(
 
   for metric in metric_records:
     resource_name = metric.resource_name
-    log_timestamps = log_map.get(resource_name)
-
-    if log_timestamps is None:
-      raise RuntimeError(
-          f'No matching log record found for metric record with resource name:'
-          f' {resource_name}. \n'
-          f'The metric records: {metric_records} \n'
-          f'The log records: {log_records}'
-      )
+    log_timestamps = log_map.get(resource_name, [])
 
     if len(log_timestamps) != len(metric.record_timestamps):
       raise RuntimeError(
           'Event count mismatch. \n'
-          f'The metric records: {metric_records} \n'
-          f'The log records: {log_records}'
+          f'Metric records count for {resource_name}: {len(metric.record_timestamps)} \n'
+          f'Log records count for {resource_name}: {len(log_timestamps)}'
       )
 
 
