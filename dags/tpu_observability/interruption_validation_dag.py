@@ -245,7 +245,7 @@ def fetch_interruption_log_records(
 
   Raises:
     RuntimeError: If the number of log entries reaches the `max_log_results`
-    limit.
+      limit.
   """
   start_time = datetime.datetime.fromtimestamp(
       time_range.start, tz=datetime.timezone.utc
@@ -328,7 +328,7 @@ def determine_time_range(
 
   Raises:
     AirflowSkipException: Raised to notify Airflow to skip the task and DAG when
-    no suitable time window is found.
+      no suitable time window is found.
   """
   # We assume the max shift of the log is 30 minutes. (call it max_shift)
   # The allowed_gap should be 2 * 30 minutes. Here's why we need this buffer:
