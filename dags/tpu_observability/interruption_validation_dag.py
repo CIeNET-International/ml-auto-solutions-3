@@ -244,9 +244,8 @@ def fetch_interruption_log_records(
     events for each resource.
 
   Raises:
-    AirflowSkipException: If the number of log entries reaches the
-    `max_log_results` limit. We skip this task and all subsequent ones. The
-    state of all the task will be marked as `skipped`.
+    RuntimeError: If the number of log entries reaches the `max_log_results`
+    limit.
   """
   start_time = datetime.datetime.fromtimestamp(
       time_range.start, tz=datetime.timezone.utc
@@ -328,9 +327,8 @@ def determine_time_range(
     window.
 
   Raises:
-    AirflowSkipException: If a suitable time window cannot be found within a
-      reasonable time range, we skip this task and all subsequent ones. The
-      state of all the task will be marked as `skipped`.
+    AirflowSkipException: Raised to notify Airflow to skip the task and DAG when
+    no suitable time window is found.
   """
   # We assume the max shift of the log is 30 minutes. (call it max_shift)
   # The allowed_gap should be 2 * 30 minutes. Here's why we need this buffer:
@@ -359,8 +357,10 @@ def determine_time_range(
 
   found_right = False
   while not found_right:
-    # Fail the test to indicate that manual inspection is required,
-    # as the data has been too dense for a significant duration.
+    # If the search for the right boundary has to go back more than three days
+    # from the task start time, it indicates that the data in the past few days
+    # is too dense. In such a case, validating the interruption count (three
+    # days ago) does not make sense, and manual inspection is required.
     if abs(task_start_time - right_bound) > int(
         datetime.timedelta(days=3).total_seconds()
     ):
