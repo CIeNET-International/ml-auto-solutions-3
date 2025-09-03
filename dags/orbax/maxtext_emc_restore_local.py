@@ -179,7 +179,8 @@ with models.DAG(
       2.  **Run MaxText with Interruption:** A MaxText training job is initiated.
           During its execution, a node interruption is simulated to trigger the
           emergency restore mechanism.
-      3.  **Validate Restore:** The DAG inspects the application logs to confirm that an `'emergency_restore'` event occurred.
+      3.  **Validate Restore:** The DAG inspects the application logs to confirm 
+          that an `'emergency_restore'` event occurred.
       4.  **Validate Checkpoint Integrity:** It then verifies that the training job resumed and continued to save checkpoints correctly after the restore, ensuring no data was lost.
       """,
     concurrency=2,
