@@ -11,6 +11,7 @@ class YamlConfig:
   This class centralizes all configurable parts of the YAML, making DAGs
   cleaner and more maintainable.
   """
+
   # Metadata
   jobset_name: str
   namespace: str
@@ -93,10 +94,12 @@ def create_jobset_yaml(
     }
 
   if command_args is None:
-    command_args = ["""
+    command_args = [
+        """
             echo "sleep..."
             sleep 10000
-            """]
+            """
+    ]
 
   jobset_dict = {
       "apiVersion": "jobset.x-k8s.io/v1alpha2",
@@ -165,9 +168,10 @@ def create_jobset_yaml(
     pod_spec = jobset_dict["spec"]["replicatedJobs"][0]["template"]["spec"][
         "template"
     ]["spec"]
-    pod_spec["containers"][0]["volumeMounts"] = [
-        {"name": volume_name, "mountPath": "/app"}
-    ]
+    pod_spec["containers"][0]["volumeMounts"] = [{
+        "name": volume_name,
+        "mountPath": "/app",
+    }]
     pod_spec["volumes"] = [{
         "name": volume_name,
         "configMap": {"name": config_map_name},
