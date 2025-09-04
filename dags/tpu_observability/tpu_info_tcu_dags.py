@@ -7,10 +7,10 @@ import dataclasses
 import datetime
 import logging
 import os
+import random
 import re
 import subprocess
 from typing import List, Tuple
-import random
 
 from airflow import models
 from airflow.decorators import task
@@ -20,10 +20,9 @@ from dags.common.vm_resource import Project
 from dags.common.vm_resource import Region
 from dags.common.vm_resource import Zone
 from dags.map_reproducibility.utils import constants
+from dags.tpu_observability.utils.jobset_yaml_generator import create_jobset_yaml
+from dags.tpu_observability.utils.jobset_yaml_generator import YamlConfig
 from dags.tpu_observability.utils.monitoring import query_time_series
-
-from google.cloud import monitoring_v3
-from google.cloud.monitoring_v3 import types
 
 
 @dataclasses.dataclass
@@ -98,7 +97,35 @@ def compare_metric_values(
 
 
 @task
-def run_workload(info: Info, kubeconfig: str, yaml_path: str):
+def generate_yaml_file(yaml_config: YamlConfig) -> str:
+  """Generates YAML content based on the provided YamlConfig object.
+
+  This function writes the generated YAML to a local temporary file.
+
+  Args:
+    yaml_config: The YamlConfig object containing the configuration for the
+      YAML.
+  """
+  params = dataclasses.asdict(yaml_config)
+  base_job_name = yaml_config.jobset_name
+
+  logging.info("Generating YAML content for JobSet: %s", base_job_name)
+
+  yaml_content = create_jobset_yaml(**params)
+
+  output_path = f"/tmp/{base_job_name}.yaml"
+  with open(output_path, "w") as f:
+    f.write(yaml_content)
+  logging.info("Successfully generated YAML file at: %s", output_path)
+  with open(output_path, "r") as f:
+    logging.info("--- File Content ---\n%s", f.read())
+  return output_path
+
+
+@task
+def run_workload(
+    info: Info, kubeconfig: str, yaml_config: YamlConfig, yaml_path: str
+):
   """Applies the workload YAML to the GKE cluster using subprocess.
 
   This task executes a series of shell commands using Python's subprocess
@@ -114,6 +141,7 @@ def run_workload(info: Info, kubeconfig: str, yaml_path: str):
   Args:
       info: Configuration object with cluster and workload details.
       kubeconfig: The path to the kubeconfig file.
+      yaml_config: The YamlConfig object containing namespace information.
       yaml_path: The local path where the YAML file will be copied.
 
   Returns:
@@ -144,7 +172,8 @@ def run_workload(info: Info, kubeconfig: str, yaml_path: str):
       text=True,
   )
   kubectl_cmd = (
-      f"kubectl --kubeconfig={kubeconfig} apply -f {yaml_path} " "-n default"
+      f"kubectl --kubeconfig={kubeconfig} apply -f {yaml_path} -n"
+      f" {yaml_config.namespace}"
   )
   subprocess.run(
       kubectl_cmd, shell=True, check=True, capture_output=True, text=True
@@ -156,7 +185,7 @@ def run_workload(info: Info, kubeconfig: str, yaml_path: str):
 
 
 @task
-def end_workload(info: Info, kubeconfig: str):
+def end_workload(info: Info, kubeconfig: str, yaml_config: YamlConfig):
   """Deletes all JobSets from the GKE cluster to clean up resources.
 
   This task executes a bash script to:
@@ -166,6 +195,7 @@ def end_workload(info: Info, kubeconfig: str):
   Args:
     info: Configuration object with cluster details.
     kubeconfig: The path to the kubeconfig file.
+    yaml_config: The YamlConfig object containing namespace information.
   """
   env = os.environ.copy()
   env["KUBECONFIG"] = kubeconfig
@@ -181,13 +211,11 @@ def end_workload(info: Info, kubeconfig: str):
       shell=True,
       check=True,
       env=env,
-      capture_output=True,
-      text=True,
   )
 
   kubectl_cmd = (
-      f"kubectl --kubeconfig={kubeconfig} delete jobsets --all -n default"
-      " --timeout=60s --ignore-not-found=true"
+      f"kubectl --kubeconfig={kubeconfig} delete jobsets --all -n"
+      f" {yaml_config.namespace} --timeout=60s --ignore-not-found=true"
   )
   subprocess.run(
       kubectl_cmd, shell=True, check=True, capture_output=True, text=True
@@ -195,7 +223,7 @@ def end_workload(info: Info, kubeconfig: str):
 
 
 @task
-def get_active_pods(info: Info, kubeconfig: str):
+def get_active_pods(info: Info, kubeconfig: str, yaml_config: YamlConfig):
   """Deletes all JobSets from the GKE cluster to clean up resources.
 
   This task executes a bash script to:
@@ -205,6 +233,7 @@ def get_active_pods(info: Info, kubeconfig: str):
   Args:
     info: Configuration object with cluster details.
     kubeconfig: The path to the kubeconfig file.
+    yaml_config: The YamlConfig object containing namespace information.
   """
   env = os.environ.copy()
   env["KUBECONFIG"] = kubeconfig
@@ -225,8 +254,8 @@ def get_active_pods(info: Info, kubeconfig: str):
   )
 
   kubectl_cmd = (
-      f"kubectl --kubeconfig={kubeconfig} get pods -n default -o"
-      " jsonpath={.items[*].metadata.name}"
+      f"kubectl --kubeconfig={kubeconfig} get pods -n"
+      f" {yaml_config.namespace} -o jsonpath={{.items[*].metadata.name}}"
   )
   process = subprocess.run(
       kubectl_cmd, shell=True, check=True, capture_output=True, text=True
@@ -442,12 +471,12 @@ def summarize_results(verification_results: List[bool], active_pods: List[str]):
 
 
 with models.DAG(
-    dag_id="tpu_info_tensorcore_utilization_dag_test",
+    dag_id="tpu_info_tensorcore_utilization_dag",
     start_date=datetime.datetime(2025, 8, 15),
     default_args={"retries": 0},
     schedule=constants.Schedule.WEEKDAY_PST_6_30PM_EXCEPT_THURSDAY,
     catchup=False,
-    tags=["gke", "tpu-observability", "tpu-info", "tensorcore-utilization"],
+    tags=["gke", "tpu-observability", "tpu-info"],
     description=(
         "This DAG verifies TensorCore utilization metrics by comparing data"
         " from Cloud Logging and Cloud Monitoring."
@@ -483,21 +512,63 @@ with models.DAG(
   )
 
   kubeconfig_path = "/tmp/kubeconfig"
-  local_yaml_path = f"/tmp/{cluster_info.yaml_file_name}"
+  yaml_config_instance = YamlConfig(
+      jobset_name="tpu-info-v6e-workload",
+      namespace="default",
+      max_restarts=5,
+      replicated_job_name="tpu-job-slice",
+      replicas=2,
+      backoff_limit=0,
+      completions=4,
+      parallelism=4,
+      image="us-docker.pkg.dev/tpu-prod-env-one-vm/yuna-docker-repo/tpu-info:v0.4.0",
+      container_name="jax-tpu-job",
+      tpu_cores_per_pod=4,
+      node_selector={
+          "cloud.google.com/gke-tpu-accelerator": "tpu-v6e-slice",
+          "cloud.google.com/gke-tpu-topology": "4x4",
+      },
+      command=["/bin/bash", "-c"],
+      command_args=["""
+          python -c 'import jax; print("TPU cores:", jax.device_count())'
+          python /app/jax_tpu_benchmark.py
+          echo "sleep..."
+          sleep 10000
+          """],
+      volume_name="code",
+      config_map_name="jax-tpu-benchmark-code-one-tpuinfo-output",
+  )
+
+  workload_command_args = ["""
+      python -c 'import jax; print("TPU cores:", jax.device_count())'
+      python /app/jax_tpu_benchmark.py
+      echo "sleep..."
+      sleep 10000
+      """]
+
   # Clean up any pre-existing workloads to ensure a clean environment for the
   # test.
   start_cleanup = end_workload.override(
       task_id="start_cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
-  )(info=cluster_info, kubeconfig=kubeconfig_path)
+  )(
+      info=cluster_info,
+      kubeconfig=kubeconfig_path,
+      yaml_config=yaml_config_instance,
+  )
+
+  generated_yaml_path = generate_yaml_file(yaml_config=yaml_config_instance)
 
   apply_time = run_workload.override(task_id="run_workload")(
       info=cluster_info,
       kubeconfig=kubeconfig_path,
-      yaml_path=local_yaml_path,
+      yaml_config=yaml_config_instance,
+      yaml_path=generated_yaml_path,
   )
 
   active_pods = get_active_pods.override(task_id="get_active_pod")(
-      info=cluster_info, kubeconfig=kubeconfig_path
+      info=cluster_info,
+      kubeconfig=kubeconfig_path,
+      yaml_config=yaml_config_instance,
   )
 
   wait_for_job_start = query_to_wait_for_jobset_start.override(
@@ -520,12 +591,17 @@ with models.DAG(
 
   clean_up = end_workload.override(
       task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
-  )(info=cluster_info, kubeconfig=kubeconfig_path).as_teardown(
+  )(
+      info=cluster_info,
+      kubeconfig=kubeconfig_path,
+      yaml_config=yaml_config_instance,
+  ).as_teardown(
       setups=apply_time
   )
 
   (
       start_cleanup
+      >> generated_yaml_path
       >> apply_time
       >> active_pods
       >> wait_for_job_start
