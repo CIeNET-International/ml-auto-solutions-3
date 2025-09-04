@@ -134,7 +134,7 @@ with models.DAG(
 
         end_time = validation_util.generate_timestamp()
 
-        validate_steps = validation_util.validate_checkpoint_at_steps_are_saved(
+        validate_steps = validation_util.validate_checkpoint_saves(
             project_id=test_config.cluster.project,
             location=zone_to_region(test_config.cluster.zone),
             cluster_name=test_config.cluster.name,

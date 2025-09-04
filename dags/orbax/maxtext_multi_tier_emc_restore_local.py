@@ -250,14 +250,17 @@ with models.DAG(
         # Here we are looking for the string '(blocking + background)'.
         # We will compare expected steps with the ones we found when query this
         # regex. Should be the same
-        validate_steps = validation_util.validate_checkpoint_at_steps_are_saved(
+        validate_steps = validation_util.validate_checkpoint_saves(
             project_id=test_config.cluster.project,
             location=zone_to_region(test_config.cluster.zone),
             cluster_name=test_config.cluster.name,
-            ram_disk=RAM_DISK,
+            pod_pattern="max.*-job-1-0",
+            text_filter="(blocking + background).",
             start_time=start_time,
             end_time=end_time,
             vali_step_list=vali_step_list,
+            checkpoint_type="local",
+            local_directory=RAM_DISK,
         )
 
         (
