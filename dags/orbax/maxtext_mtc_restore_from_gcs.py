@@ -67,7 +67,6 @@ class TestConfig:
   step: int
   local_checkpoint_step: int
   checkpoint_step: int
-  checkpoint_period: int
   ram_disk_size: str
   cpc_config: checkpoint_util.CheckpointConfiguration
 
@@ -82,7 +81,6 @@ class TestConfig:
       replicator_backup_time: int,
       step: int,
       local_checkpoint_step: int,
-      checkpoint_period: int,
       ram_disk_size_in_mi: str,
       checkpoint_step: Optional[int] = None,
   ):
@@ -100,7 +98,6 @@ class TestConfig:
         and store checkpoint to bucket
       step: The current step of the training process.
       local_checkpoint_step: The step interval for local checkpoints.
-      checkpoint_period: The step interval for regular checkpoints to GCS.
       checkpoint_step: The step interval for the checkpoints store in the
         bucket.
       ram_disk_size_in_mi: The size in mebibytes (Mi) about the RAM disk in the
@@ -117,7 +114,6 @@ class TestConfig:
     self.replicator_backup_time = replicator_backup_time
     self.step = step
     self.local_checkpoint_step = local_checkpoint_step
-    self.checkpoint_period = checkpoint_period
     self.checkpoint_step = checkpoint_step
     self.ram_disk_size = ram_disk_size_in_mi
     self.cpc_config = checkpoint_util.CheckpointConfiguration(
@@ -154,7 +150,6 @@ class TestConfig:
         "enable_emergency_checkpoint=true "
         f"local_checkpoint_directory={checkpoint_dir} "
         f"local_checkpoint_period={self.local_checkpoint_step} "
-        f"checkpoint_period={self.checkpoint_period} "
         f"use_replicator_service={cp.use_replicator} "
         f"replicator_backup_interval_minutes={self.replicator_backup_time} "
         f"run_name={run_name}",
@@ -210,7 +205,6 @@ with models.DAG(
          - **File Validation:** Verify all expected checkpoint files exist in GCS
 
       ### Key Parameters
-      - **checkpoint_period=25:** Regular checkpoint interval for GCS saves
       - **local_checkpoint_step=20:** Local checkpoint interval for RAM disk
       - **Initial training:** 100 steps, **Resume training:** 200 steps total
       - **Emergency checkpointing:** Enabled throughout the test
@@ -238,7 +232,6 @@ with models.DAG(
           replicator_backup_time=3,
           step=100,
           local_checkpoint_step=20,
-          checkpoint_period=25,
           ram_disk_size_in_mi="800000Mi",
       ),
   ]
@@ -273,7 +266,6 @@ with models.DAG(
           initial_workload_command = test_config.generate_workload_command(
               cp=checkpointing,
               checkpoint_dir=RAM_DISK,
-              slice_number=slice_num,
               run_name=run_name,
           )
 
@@ -313,7 +305,6 @@ with models.DAG(
           resume_workload_command = test_config.generate_workload_command(
               cp=checkpointing,
               checkpoint_dir=RAM_DISK,
-              slice_number=slice_num,
               run_name=run_name,
               custom_step=200,
           )
@@ -356,13 +347,13 @@ with models.DAG(
           final_step = 200 - 1  # 199
           vali_step_list = [0]  # Start with step 0
           vali_step_list.extend([
-              i for i in range(test_config.checkpoint_period, final_step, test_config.checkpoint_period)  # Every checkpoint_period steps
+              i for i in range(test_config.local_checkpoint_step, final_step, test_config.local_checkpoint_step)  # Every local_checkpoint_step steps
           ])
           vali_step_list.append(first_end_step)  # First training end (99)
           vali_step_list.append(final_step)  # Final step (199)
           vali_step_list = sorted(list(set(vali_step_list)))  # Remove duplicates and sort
 
-          validate_log = validation_util.validate_log_with_step(
+          validate_local_save = validation_util.validate_log_with_step(
               project_id=test_config.cluster.project,
               location=zone_to_region(test_config.cluster.zone),
               cluster_name=test_config.cluster.name,
@@ -371,6 +362,16 @@ with models.DAG(
               start_time=start_time,
               end_time=end_time,
               vali_step_list=vali_step_list,
+          )
+
+          # Validate that replicator backed up checkpoints to GCS
+          validate_replicator_backup = validation_util.validate_replicator_gcs_backup_log(
+              project_id=test_config.cluster.project,
+              location=zone_to_region(test_config.cluster.zone),
+              cluster_name=test_config.cluster.name,
+              pod_pattern="multitier-driver-.*",
+              start_time=start_time,
+              end_time=end_time,
           )
 
           # Validate that emergency restore happened during the second training run
@@ -383,21 +384,21 @@ with models.DAG(
               end_time=end_time,
           )
 
-          # (todo) Validate the replicator replicated the checkpoint files from gcs
-          validate_replicator = validation_util.validate_replicator_gcs_restore_log(
+          # Validate that replicator restored checkpoints from GCS backup
+          validate_replicator_restore = validation_util.validate_replicator_gcs_restore_log(
               project_id=test_config.cluster.project,
               location=zone_to_region(test_config.cluster.zone),
               cluster_name=test_config.cluster.name,
-              pod_pattern="max.*-job-0-0",
+              pod_pattern="multitier-driver-.*",
               start_time=start_time,
               end_time=end_time,
-              vali_step_list=vali_step_list,
+              backup_info=validate_replicator_backup,
           )
 
-          # Validate that checkpoint files exist in GCS bucket
-          validate_gcs_files = validation_util.validate_gcs_checkpoint_files(
+          # Validate that MTC checkpoint files exist in GCS bucket with correct backup folder structure
+          validate_mtc_gcs_files = validation_util.validate_mtc_gcs_checkpoint_files(
               bucket_path=f"{BASE_OUTPUT_DIR}/{run_name}/checkpoints",
-              vali_step_list=vali_step_list,
+              backup_info=validate_replicator_backup,
           )
 
           (
@@ -410,5 +411,5 @@ with models.DAG(
               >> resume_training_run
               >> ram_disk_cleanup
               >> end_time
-              >> [validate_log, validate_emergency_restore, validate_replicator, validate_gcs_files]
+              >> [validate_local_save, validate_emergency_restore, validate_replicator_backup, validate_replicator_restore, validate_mtc_gcs_files]
           )
