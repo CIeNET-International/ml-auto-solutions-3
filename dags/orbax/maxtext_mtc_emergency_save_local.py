@@ -272,15 +272,18 @@ with models.DAG(
             steps_to_validate = [*range(0, total_steps, k), last_step]
 
             validate_local_check_steps = (
-                validation_util.validate_checkpoint_at_steps_are_saved(
-                    project_id=test_config.cluster.project,
-                    location=zone_to_region(test_config.cluster.zone),
-                    cluster_name=test_config.cluster.name,
-                    ram_disk=RAM_DISK,
-                    start_time=start_time,
-                    end_time=end_time,
-                    steps_to_validate=steps_to_validate,
-                )
+                validation_util.validate_checkpoint_saves(
+                project_id=test_config.cluster.project,
+                location=zone_to_region(test_config.cluster.zone),
+                cluster_name=test_config.cluster.name,
+                pod_pattern="max.*-job-1-0",
+                text_filter="(blocking + background).",
+                start_time=start_time,
+                end_time=end_time,
+                vali_step_list=steps_to_validate,
+                checkpoint_type="local",
+                local_directory=RAM_DISK,
+                )       
             )
 
             (

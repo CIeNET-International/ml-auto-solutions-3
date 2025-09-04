@@ -239,14 +239,17 @@ with models.DAG(
 
         end_time = validation_util.generate_timestamp()
 
-        validate_steps = validation_util.validate_checkpoint_at_steps_are_saved(
+        validate_steps = validation_util.validate_checkpoint_saves(
             project_id=test_config.cluster.project,
             location=zone_to_region(test_config.cluster.zone),
             cluster_name=test_config.cluster.name,
-            ram_disk=RAM_DISK,
+            pod_pattern="max.*-job-1-0",
+            text_filter="(blocking + background).",
             start_time=start_time,
             end_time=end_time,
-            steps_to_validate=steps_to_validate,
+            vali_step_list=steps_to_validate,
+            checkpoint_type="local",
+            local_directory=RAM_DISK,
         )
 
         validate_gcs_bucket = validation_util.validate_log_with_gcs(
