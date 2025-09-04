@@ -16,6 +16,7 @@ from airflow import models
 from airflow.decorators import task
 from airflow.exceptions import AirflowException
 from airflow.utils.trigger_rule import TriggerRule
+
 from dags.common.vm_resource import Project
 from dags.common.vm_resource import Region
 from dags.common.vm_resource import Zone
@@ -35,8 +36,6 @@ class Info:
     zone: The zone of the GKE cluster.
     cluster_name: The name of the GKE cluster.
     container_name: The name of the container running the workload.
-    yaml_file_name: The name of the YAML file defining the Kubernetes job.
-    bucket_path: The GCS bucket path where the YAML file is stored.
   """
 
   project_id: str
@@ -44,8 +43,6 @@ class Info:
   zone: str
   cluster_name: str
   container_name: str
-  yaml_file_name: str
-  bucket_path: str
 
 
 def compare_metric_values(
@@ -150,13 +147,6 @@ def run_workload(
   env = os.environ.copy()
   env["KUBECONFIG"] = kubeconfig
 
-  gsutil_cmd = f"gsutil cp {info.bucket_path}{info.yaml_file_name} {yaml_path}"
-  process = subprocess.run(
-      gsutil_cmd, shell=True, check=True, capture_output=True, text=True
-  )
-  logging.info("STDOUT message: %s", process.stdout)
-  logging.info("STDERR message: %s", process.stderr)
-
   gcloud_cmd = (
       f"gcloud container clusters get-credentials {info.cluster_name} "
       f"--region={info.region} "
@@ -178,7 +168,6 @@ def run_workload(
   subprocess.run(
       kubectl_cmd, shell=True, check=True, capture_output=True, text=True
   )
-  logging.info("STDOUT message: %s", process.stdout)
   current_time_utc = datetime.datetime.now(datetime.timezone.utc)
   current_time_utc_format = current_time_utc.isoformat(timespec="milliseconds")
   return current_time_utc_format
@@ -499,13 +488,6 @@ with models.DAG(
       zone=models.Variable.get(
           "TCU_ZONE", default_var=Zone.ASIA_NORTHEAST1_B.value
       ),
-      yaml_file_name=models.Variable.get(
-          "YAML_FILE_NAME", default_var="v6e-tpu-info-workload.yaml"
-      ),
-      bucket_path=models.Variable.get(
-          "BUCKET_PATH",
-          default_var="gs://us-east1-dennis-airflow-tes-a24588e9-bucket/data/",
-      ),
       container_name=models.Variable.get(
           "CONTAINER_NAME", default_var="jax-tpu-job"
       ),
@@ -529,22 +511,26 @@ with models.DAG(
           "cloud.google.com/gke-tpu-topology": "4x4",
       },
       command=["/bin/bash", "-c"],
-      command_args=["""
+      command_args=[
+          """
           python -c 'import jax; print("TPU cores:", jax.device_count())'
           python /app/jax_tpu_benchmark.py
           echo "sleep..."
           sleep 10000
-          """],
+          """
+      ],
       volume_name="code",
       config_map_name="jax-tpu-benchmark-code-one-tpuinfo-output",
   )
 
-  workload_command_args = ["""
+  workload_command_args = [
+      """
       python -c 'import jax; print("TPU cores:", jax.device_count())'
       python /app/jax_tpu_benchmark.py
       echo "sleep..."
       sleep 10000
-      """]
+      """
+  ]
 
   # Clean up any pre-existing workloads to ensure a clean environment for the
   # test.
