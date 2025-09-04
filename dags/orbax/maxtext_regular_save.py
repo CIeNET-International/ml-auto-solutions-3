@@ -183,7 +183,7 @@ with models.DAG(
     for mode, image in DOCKER_IMAGES:
         for test_config in test_configs:
             for slice_num in test_config.slices:
-                
+
                 run_name = validation_util.generate_run_name(
                     short_id=test_config.short_id,
                     checkpointing_type=checkpointing_type,

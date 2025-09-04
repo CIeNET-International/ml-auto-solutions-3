@@ -168,7 +168,7 @@ with models.DAG(
                 start_time=start_time,
                 end_time=end_time,
                 steps_to_validate=steps_to_validate,
-                )       
+                )
             )
 
             (
