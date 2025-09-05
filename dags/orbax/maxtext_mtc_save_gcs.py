@@ -17,7 +17,7 @@ from dags.orbax.util import checkpoint_util
 from dags.orbax.util import validation_util
 from xlml.utils.xpk import BRANCH_ABHINAV_MTC
 from xlml.utils.gke import zone_to_region
-from dags.orbax.util.orbax import TestConfig, CheckpointingMode, DEFAULT_BUCKET, DEFAULT_RAM_DISK
+from dags.orbax.util import orbax
 
 
 SCHEDULE = "0 15 * * *" if composer_env.is_prod_env() else None
@@ -69,6 +69,9 @@ with models.DAG(
     """,
     concurrency=2,
 ) as dag:
+  checkpointing = orbax.Checkpointing(
+      name="mtc", enable_multi_tier_checkpointing=True
+  )
   test_configs = [
       orbax.TestConfig(
           cluster=XpkClusters.TPU_V5P_128_CLUSTER,
@@ -79,11 +82,10 @@ with models.DAG(
           short_id="max-sv-gcs",
           replicator_backup_time=1,
           step=200,
-          gcs_checkpoint_period=300,
-          local_checkpoint_period=20,
+          checkpoint_step=300,
+          local_checkpoint_step=20,
           ram_disk_size_in_mi="800000Mi",
-          base_dir=DEFAULT_BUCKET,
-          mode=CheckpointingMode.MTC,
+          base_dir=orbax.DEFAULT_BUCKET,
       ),
   ]
   for mode, image in DOCKER_IMAGES:
@@ -99,15 +101,16 @@ with models.DAG(
         # Generate consistent run name.
         run_name = validation_util.generate_run_name(
             short_id=test_config.short_id,
-            checkpointing_type=test_config.mode.short_name,
+            checkpointing_type=checkpointing.name,
             slice_number=slice_num,
             accelerator=test_config.accelerator,
         )
 
         workload_command = test_config.generate_workload_command(
+            checkpoint_dir=orbax.DEFAULT_RAM_DISK,
             run_name=run_name,
-            out_folder=f"maxtext_{test_config.mode.short_name}_orbax_save_gcs",
-            checkpoint_dir=DEFAULT_RAM_DISK,
+            out_folder=f"maxtext_mtc_orbax_save_gcs",
+            enable_multi_tier_checkp=checkpointing.enable_multi_tier_checkpointing,
         )
 
         start_time = validation_util.generate_timestamp()
@@ -116,29 +119,29 @@ with models.DAG(
             num_slices=slice_num,
             cluster=test_config.cluster,
             time_out_in_min=60,
-            test_name=f"{test_config.short_id}-{test_config.mode.short_name}",
+            test_name=f"{test_config.short_id}-mtc",
             run_model_cmds=workload_command,
             docker_image=image.value,
             test_owner=test_owner.CAMILO_Q,
         ).run(
-            ramdisk_directory=DEFAULT_RAM_DISK,
+            ramdisk_directory=orbax.DEFAULT_RAM_DISK,
             mtc_enabled=True,
             xpk_branch=BRANCH_ABHINAV_MTC,
             skip_post_process=True,
         )
 
-        steps_to_validate = test_config.generate_steps_to_validate(test_config.local_checkpoint_period)
+        steps_to_validate = test_config.generate_step_to_validate(is_local=True)
 
         end_time = validation_util.generate_timestamp()
 
-        validate_steps = validation_util.validate_checkpoint_saves(
+        validate_steps = validation_util.validate_checkpoint_at_steps_are_saved(
             project_id=test_config.cluster.project,
             location=zone_to_region(test_config.cluster.zone),
             cluster_name=test_config.cluster.name,
-            steps_to_validate=steps_to_validate,
-            pod_pattern="max.*-job-1-0",
+            ram_disk=orbax.DEFAULT_RAM_DISK,
             start_time=start_time,
             end_time=end_time,
+            steps_to_validate=steps_to_validate,
         )
 
         validate_gcs_bucket = validation_util.validate_log_with_gcs(
@@ -151,7 +154,7 @@ with models.DAG(
             pod_pattern="multitier-driver",
             start_time=start_time,
             end_time=end_time,
-            checkpoint_dir=f"{DEFAULT_BUCKET}/{run_name}",
+            checkpoint_dir=f"{orbax.DEFAULT_BUCKET}/{run_name}",
         )
 
         # Final CPC cleanup to ensure symmetric start/end

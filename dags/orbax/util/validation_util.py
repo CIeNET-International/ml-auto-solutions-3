@@ -12,10 +12,14 @@ from google.cloud import logging as logging_api
 from dags.orbax.util import gcs
 from xlml.utils import xpk
 
+
 @task
 def generate_timestamp():
   return datetime.now(timezone.utc)
 
+@task
+def convert_gcs_location(gcs_location: str) -> str:
+  return gcs_location
 
 @task
 def validate_checkpoint_saves(
@@ -23,21 +27,17 @@ def validate_checkpoint_saves(
     location: str,
     cluster_name: str,
     steps_to_validate: list,
+    ram_disk: str = "/local",
     pod_pattern: str = ".*",
     container_name: Optional[str] = None,
     start_time: Optional[datetime] = None,
     end_time: Optional[datetime] = None,
-    vali_step_list: Optional[list] = None,
-    checkpoint_type: str = "gcs",  # "gcs" or "local"
-    local_directory: str = "/local",
 ) -> None:
   """
   Validates that a workload is saving checkpoints correctly by checking for specific log steps.
-
   This function queries logs from a specified GKE cluster and namespace.
   It searches for log entries containing step numbers and compares
   the steps found against an expected list.
-
   Args:
     project_id: The Google Cloud project ID
     location: GKE cluster location
@@ -51,46 +51,58 @@ def validate_checkpoint_saves(
   Returns:
     None: Raises AirflowFailException if validation fails
   """
+
+  directory_pattern = (
+      rf"{re.escape(ram_disk)}/(\d+)"
+      if ram_disk != "gcs"
+      else r"gs://[^/]+/[^/]+/[^/]+/checkpoints/(\d+)"
+  )
+  #log_pattern = rf"Finished async_save \(blocking \+ background\)\. Time taken: \d+\.\d+s\. directory={directory_pattern}"
+  log_pattern = rf"\'event_type\': \'save\'"
+
+  complied_pattern = re.compile(log_pattern)
   entries = list_log_entries(
       project_id=project_id,
       location=location,
       cluster_name=cluster_name,
       pod_pattern=pod_pattern,
       container_name=container_name,
-      text_filter='jsonPayload.message=~"\'event_type\': \'save\'"',
+      text_filter=f'jsonPayload.message=~"{log_pattern}"',
       start_time=start_time,
       end_time=end_time,
   )
 
-  found_steps = []
-
+  steps_are_saved = []  # Use a set for faster lookup.
   for entry in entries:
-    if isinstance(entry, logging_api.StructEntry):
-      message = entry.payload.get("message")
-      if message:
-        # Try to extract step number from the message
-        try:
-          # Use regex to find step number in the message
-          step_match = re.search(r"'step':\s*(\d+)", message)
-          if step_match:
-            step = int(step_match.group(1))
+    if not isinstance(entry, logging_api.StructEntry):
+      raise AirflowFailException(
+          "Log entry must be contain a jsonPayload attribute."
+      )
+    message = entry.payload.get("message")
+    if not message:
+      raise AirflowFailException(f"Failed to parse entry {entry}")
 
-            # Add all found steps to the list
-            if step not in found_steps:
-              logging.info(f"├─ Found checkpoint save at step {step}")
-              logging.info(f"├─ Timestamp: {entry.timestamp}")
-              logging.info("└─ Message:")
-              logging.info(f"   {message}")
-              found_steps.append(step)
+    try:
+      # Use regex to find step number in the message
+      step_match = re.search(r"'step':\s*(\d+)", message)
+      if step_match:
+        step = int(step_match.group(1))
+        logging.info(f"****steps are saved: {step}")
+        if step not in steps_are_saved:
+          logging.info(f"├─ Found checkpoint save at step {step}")
+          logging.info(f"├─ Timestamp: {entry.timestamp}")
+          logging.info("└─ Message:")
+          logging.info(f"   {message}")
+          steps_are_saved.append(step)
+    except (ValueError, AttributeError) as e:
+        # Skip entries that can't be parsed
+        logging.debug(f"Could not parse log entry: {e}")
+        continue
 
-        except (ValueError, AttributeError) as e:
-          # Skip entries that can't be parsed
-          logging.debug(f"Could not parse log entry: {e}")
-          continue
 
   # Compare the found steps with expected steps directly
   expected_steps = sorted(steps_to_validate)
-  found_steps_sorted = sorted(found_steps)
+  found_steps_sorted = sorted(steps_are_saved)
 
   if expected_steps == found_steps_sorted:
     logging.info(f"Checkpoint validation successful!")
@@ -98,15 +110,13 @@ def validate_checkpoint_saves(
     logging.info(f"Found steps: {found_steps_sorted}")
     return
   else:
-    missing_steps = set(steps_to_validate) - set(found_steps)
-    extra_steps = set(found_steps) - set(steps_to_validate)
-
+    missing_steps = set(steps_to_validate) - set(steps_are_saved)
+    extra_steps = set(steps_are_saved) - set(steps_to_validate)
     error_msg = f"Checkpoint validation failed: Expected {expected_steps}, Found {found_steps_sorted}"
     if missing_steps:
       error_msg += f". Missing steps: {sorted(missing_steps)}"
     if extra_steps:
       error_msg += f". Extra steps: {sorted(extra_steps)}"
-
     raise AirflowFailException(error_msg)
 
 
@@ -282,7 +292,9 @@ def validate_gcs_checkpoint_files(
     None: Raises AirflowFailException if checkpoint validation fails
   """
   if steps_to_validate is None:
-    logging.info("No validation steps provided, skipping GCS checkpoint validation")
+    logging.info(
+        "No validation steps provided, skipping GCS checkpoint validation"
+    )
     return
 
   try:
@@ -293,7 +305,7 @@ def validate_gcs_checkpoint_files(
     found_steps = set()
     for file_path in checkpoint_files:
       # Extract directory names that are numeric (step numbers)
-      path_parts = file_path.split('/')
+      path_parts = file_path.split("/")
       for part in path_parts:
         if part.isdigit():
           found_steps.add(int(part))
@@ -314,57 +326,6 @@ def validate_gcs_checkpoint_files(
     logging.info(
         f"All {len(steps_to_validate)} expected checkpoint files found in GCS"
     )
-    logging.info(f"Validated steps: {sorted(found_steps)}")
-
-  except Exception as e:
-    raise AirflowFailException(f"Error validating GCS checkpoints: {str(e)}")
-
-@task
-def validate_gcs_checkpoint_files(
-    bucket_path: str,
-    vali_step_list: Optional[list] = None,
-) -> None:
-  """
-  Validates that checkpoint files exist in GCS bucket for expected steps.
-  This function uses the GCS utility to check that checkpoint files
-  are properly saved in the bucket for each expected step.
-  Args:
-    bucket_path: The full gs:// path to the GCS bucket
-    vali_step_list: Optional list of steps to validate
-  Returns:
-    None: Raises AirflowFailException if checkpoint validation fails
-  """
-  if vali_step_list is None:
-    logging.info("No validation steps provided, skipping GCS checkpoint validation")
-    return
-
-  try:
-    checkpoint_files = gcs.get_gcs_checkpoint(bucket_path)
-    logging.info(f"Found checkpoint files in GCS: {checkpoint_files}")
-
-    # Extract step directories from checkpoint files
-    found_steps = set()
-    for file_path in checkpoint_files:
-      # Extract directory names that are numeric (step numbers)
-      path_parts = file_path.split('/')
-      for part in path_parts:
-        if part.isdigit():
-          found_steps.add(int(part))
-
-    expected_steps = set(vali_step_list)
-    missing_steps = expected_steps - found_steps
-
-    logging.info(f"Expected steps: {sorted(expected_steps)}")
-    logging.info(f"Found steps: {sorted(found_steps)}")
-
-    if missing_steps:
-      raise AirflowFailException(
-          f"GCS checkpoint validation failed: Missing checkpoint files for steps {sorted(missing_steps)}. "
-          f"Expected steps: {sorted(vali_step_list)}, Found steps: {sorted(found_steps)}"
-      )
-
-    logging.info(f"GCS checkpoint validation successful!")
-    logging.info(f"All {len(vali_step_list)} expected checkpoint files found in GCS")
     logging.info(f"Validated steps: {sorted(found_steps)}")
 
   except Exception as e:

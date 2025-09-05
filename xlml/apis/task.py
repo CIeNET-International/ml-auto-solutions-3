@@ -359,6 +359,7 @@ class XpkTask(BaseTask):
           region=self.task_gcp_config.zone[:-2],
           cluster_name=self.task_test_config.cluster_name,
           step_to_interrupt="40",
+          gcs_location=gcs_path,
       )
       run_node_interruption = xpk.delete_node.override(
           owner=self.task_test_config.task_owner

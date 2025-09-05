@@ -19,8 +19,9 @@ import tempfile
 import uuid
 import sys
 import re
-from typing import Tuple
+from typing import Tuple, Optional
 from absl import logging
+import airflow
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from airflow.hooks.subprocess import SubprocessHook
@@ -29,6 +30,8 @@ from google.cloud import compute_v1
 from xlml.apis import metric_config
 from xlml.utils import gke
 from dags.common.vm_resource import GpuVersion
+from dags.orbax.util import gcs
+import time
 
 # b/411426745 - Setting branch to 0.4.1 till the depdency issue is resolved.
 MAIN_BRANCH = "v0.4.1"
@@ -140,7 +143,7 @@ def run_workload(
     # For Orbax DAG add flag '--max-restars=50' it is need it to test
     # resiliency during Maxtext training with Emergency Checkpointer and
     # Multi-tier Checkpointing.
-    if ramdisk_directory and mtc_enabled:
+    if (ramdisk_directory and mtc_enabled) or gcs_path:
       workload_create_cmd += " --max-restarts=50"
 
     # If using a valid GPU and the XPK branch is set to "main", then branch is switch to "v0.4.1".
@@ -333,6 +336,7 @@ def clean_up_workload(
         result.exit_code == 0
     ), f"XPK clean-up failed with code {result.exit_code}"
 
+
 @task.sensor(poke_interval=120, timeout=3600, mode="reschedule")
 def wait_for_reach_step_to_interrupt(
     task_id: str,
@@ -341,6 +345,7 @@ def wait_for_reach_step_to_interrupt(
     cluster_name: str,
     workload_id: str,
     step_to_interrupt: str,
+    gcs_location: Optional[airflow.XComArg] = None,
 ) -> bool:
   """
   Watch any given training pod, check the given step is already reach before
@@ -370,7 +375,36 @@ def wait_for_reach_step_to_interrupt(
       # If the pod has reach the step (save) we can assume
       # that we can savly interrupt, so make this task return true
       if f"completed step: {step_to_interrupt}" in logs:
-        logging.info("The step to be interrupt is {step_to_interrupt}")
+        logging.info(f"The step to be interrupt is {step_to_interrupt}")
+        # check if commit_success.txt is generated for gcs and size is not 0
+        if gcs_location:
+          try:
+            target_file = "commit_success.txt"
+            timeout_seconds = 300
+            start_time = time.time()
+            while True:
+              checkpoint_files = gcs.get_gcs_checkpoint(
+                  f"{gcs_location}/{step_to_interrupt}/"
+              )
+              logging.info(f"Found step folder in GCS: {checkpoint_files}")
+              if len(checkpoint_files) > 0:
+                elapsed_time = time.time() - start_time
+                if elapsed_time > timeout_seconds:
+                  logging.info(
+                      "timeout: could not found the target file in 5 mins"
+                  )
+                  return False
+                for file in checkpoint_files:
+                  if target_file in file:
+                    logging.info(
+                        f"Found target file in the step folder in GCS: {file}"
+                    )
+                    return True
+                time.sleep(5)
+          except Exception as e:
+            raise AirflowFailException(
+                f"Error validating GCS checkpoints: {str(e)}"
+            )
         return True
   return False
 
@@ -381,6 +415,7 @@ def extract_numbers(pod_name: str) -> Tuple[int, int]:
   if match:
     return int(match.group(1)), int(match.group(2))
   return (0, 0)
+
 
 def _find_target_pod_node(
     project_id: str,
