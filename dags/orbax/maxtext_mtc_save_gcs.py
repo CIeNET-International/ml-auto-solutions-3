@@ -139,6 +139,7 @@ with models.DAG(
             location=zone_to_region(test_config.cluster.zone),
             cluster_name=test_config.cluster.name,
             ram_disk=orbax.DEFAULT_RAM_DISK,
+            pod_pattern="max.*-job-1-0",
             start_time=start_time,
             end_time=end_time,
             steps_to_validate=steps_to_validate,
