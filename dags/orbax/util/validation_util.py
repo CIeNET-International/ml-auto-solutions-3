@@ -10,6 +10,7 @@ from airflow.exceptions import AirflowFailException
 from google.cloud import logging as logging_api
 
 from dags.orbax.util import gcs
+from xlml.utils import xpk
 
 
 @task
@@ -24,6 +25,7 @@ def validate_checkpoint_at_steps_are_saved(
     cluster_name: str,
     steps_to_validate: list,
     ram_disk: str = "/local",
+    pod_pattern: Optional[str] = ".*",
     start_time: Optional[datetime] = None,
     end_time: Optional[datetime] = None,
 ) -> None:
@@ -50,15 +52,19 @@ def validate_checkpoint_at_steps_are_saved(
     None: This function does not return a value.
   """
 
-  log_pattern = (
-      r"Finished async_save \(blocking \+ background\)\. "
-      rf"Time taken: \d+\.\d+s\. directory={ram_disk}/(\d+)"
+  directory_pattern = (
+      rf"{re.escape(ram_disk)}/(\d+)"
+      if ram_disk != "gcs"
+      else r"gs://[^/]+/[^/]+/[^/]+/checkpoints/(\d+)"
   )
+  log_pattern = rf"Finished async_save \(blocking \+ background\)\. Time taken: \d+\.\d+s\. directory={directory_pattern}"
+
   complied_pattern = re.compile(log_pattern)
   entries = list_log_entries(
       project_id=project_id,
       location=location,
       cluster_name=cluster_name,
+      pod_pattern=pod_pattern,
       text_filter=f'jsonPayload.message=~"{log_pattern}"',
       start_time=start_time,
       end_time=end_time,
@@ -124,7 +130,7 @@ def validate_log_with_gcs(
     cluster_name: str,
     checkpoint_dir: str,
     namespace: str = "default",
-    pod_pattern: str = "*",
+    pod_pattern: str = ".*",
     container_name: Optional[str] = None,
     text_filter: Optional[str] = None,
     start_time: Optional[datetime] = None,
@@ -243,12 +249,68 @@ def validate_log_with_gcs(
   return max(gcs_save_step_list), max(gcs_save_step_list_bucket)
 
 
+@task
+def validate_gcs_checkpoint_files(
+    bucket_path: str,
+    steps_to_validate: Optional[list] = None,
+) -> None:
+  """
+  Validates that checkpoint files exist in GCS bucket for expected steps.
+  This function uses the GCS utility to check that checkpoint files
+  are properly saved in the bucket for each expected step.
+  Args:
+    bucket_path: The full gs:// path to the GCS bucket
+    vali_step_list: Optional list of steps to validate
+  Returns:
+    None: Raises AirflowFailException if checkpoint validation fails
+  """
+  if steps_to_validate is None:
+    logging.info(
+        "No validation steps provided, skipping GCS checkpoint validation"
+    )
+    return
+
+  try:
+    checkpoint_files = gcs.get_gcs_checkpoint(bucket_path)
+    logging.info(f"Found checkpoint files in GCS: {checkpoint_files}")
+
+    # Extract step directories from checkpoint files
+    found_steps = set()
+    for file_path in checkpoint_files:
+      # Extract directory names that are numeric (step numbers)
+      path_parts = file_path.split("/")
+      for part in path_parts:
+        if part.isdigit():
+          found_steps.add(int(part))
+
+    expected_steps = set(steps_to_validate)
+    missing_steps = expected_steps - found_steps
+
+    logging.info(f"Expected steps: {sorted(expected_steps)}")
+    logging.info(f"Found steps: {sorted(found_steps)}")
+
+    if missing_steps:
+      raise AirflowFailException(
+          f"GCS checkpoint validation failed: Missing checkpoint files for steps {sorted(missing_steps)}. "
+          f"Expected steps: {sorted(steps_to_validate)}, Found steps: {sorted(found_steps)}"
+      )
+
+    logging.info(f"GCS checkpoint validation successful!")
+    logging.info(
+        f"All {len(steps_to_validate)} expected checkpoint files found in GCS"
+    )
+    logging.info(f"Validated steps: {sorted(found_steps)}")
+
+  except Exception as e:
+    raise AirflowFailException(f"Error validating GCS checkpoints: {str(e)}")
+
+
 def list_log_entries(
     project_id: str,
     location: str,
     cluster_name: str,
     namespace: str = "default",
-    pod_pattern: str = "*",
+    pod_pattern: str = ".*",
     container_name: Optional[str] = None,
     text_filter: Optional[str] = None,
     start_time: Optional[datetime] = None,
@@ -298,7 +360,7 @@ def list_log_entries(
       f'resource.labels.location="{location}"',
       f'resource.labels.cluster_name="{cluster_name}"',
       f'resource.labels.namespace_name="{namespace}"',
-      f'resource.labels.pod_name:"{pod_pattern}"',
+      f'resource.labels.pod_name=~"{pod_pattern}"',
       "severity>=DEFAULT",
       f'timestamp>="{start_time_str}"',
       f'timestamp<="{end_time_str}"',
@@ -321,7 +383,7 @@ def validate_log_exist(
     location: str,
     cluster_name: str,
     namespace: str = "default",
-    pod_pattern: str = "*",
+    pod_pattern: str = ".*",
     container_name: Optional[str] = None,
     text_filter: Optional[str] = None,
     start_time: Optional[datetime] = None,
