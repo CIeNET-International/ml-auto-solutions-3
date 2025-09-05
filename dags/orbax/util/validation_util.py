@@ -31,11 +31,11 @@ def validate_checkpoint_saves(
 ) -> None:
   """
   Validates that a workload is saving checkpoints correctly by checking for specific log steps.
-  
+
   This function queries logs from a specified GKE cluster and namespace.
-  It searches for log entries containing step numbers and compares 
+  It searches for log entries containing step numbers and compares
   the steps found against an expected list.
-  
+
   Args:
     project_id: The Google Cloud project ID
     location: GKE cluster location
@@ -98,13 +98,13 @@ def validate_checkpoint_saves(
   else:
     missing_steps = set(steps_to_validate) - set(found_steps)
     extra_steps = set(found_steps) - set(steps_to_validate)
-    
+
     error_msg = f"Checkpoint validation failed: Expected {expected_steps}, Found {found_steps_sorted}"
     if missing_steps:
       error_msg += f". Missing steps: {sorted(missing_steps)}"
     if extra_steps:
       error_msg += f". Extra steps: {sorted(extra_steps)}"
-    
+
     raise AirflowFailException(error_msg)
 
 

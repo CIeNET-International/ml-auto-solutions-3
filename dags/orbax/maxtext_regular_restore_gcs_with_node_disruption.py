@@ -1,7 +1,7 @@
 """
 A DAG to run MaxText regular checkpointing tests.
 
-This DAG performs a series of tests to save and validate checkpoints
+This DAG performs a series of tests to save and restore and validate checkpoints
 for the MaxText model using the regular checkpointer.
 The tests are executed on a TPU multi-pod cluster.
 """
@@ -24,7 +24,7 @@ from xlml.utils.xpk import MAIN_BRANCH
 from xlml.utils.gke import zone_to_region
 
 SCHEDULE = "0 10 * * *" if composer_env.is_prod_env() else None
-DAG_TEST_NAME = "maxtext_regular_save"
+DAG_TEST_NAME = "maxtext_regular_restore_with_node_disruption"
 BASE_OUTPUT_DIR = gcs_bucket.MTC_AUTOMATION_BUCKET
 
 # Only one version of the Docker image is supported at the moment.
@@ -126,8 +126,8 @@ with models.DAG(
 
       ### Description
       This DAG (Directed Acyclic Graph) automates the process of validating
-      regular checkpoint saving for the MaxText model. The DAG runs a single
-      MaxText training job and validates that checkpoints are saved correctly
+      regular checkpoint saving and restoring with node disruption for the MaxText model. The DAG runs a single
+      MaxText training job and validates that checkpoints are saved and restored correctly
       at specified intervals.
 
       ### Test Scenario
@@ -135,6 +135,10 @@ with models.DAG(
       1. Training runs normally with regular checkpoints saved to GCS at defined intervals
       2. Checkpoint logs are validated to ensure proper save events
       3. GCS bucket is validated to ensure checkpoint files exist
+      4. Find the node hosts pod 0-0 and delete it
+      5. Validate the workload restart successfully
+      6. Validate the restore is successful and continuous save work as expected
+      7. Revalidate the results checking on the GCS Bucket at defined intervals
 
       ### Prerequisites
       - An existing TPU cluster configured for MaxText training
@@ -142,22 +146,29 @@ with models.DAG(
 
       ### Test Flow
       1. **Start Training:** Run MaxText training job for 100 steps
-         - Saves regular checkpoints to GCS every 25 steps (0, 25, 50, 75, 99)
+         - Saves regular checkpoints to GCS every 20 steps (0, 20, 40, 80, 99)
          - No local checkpoints or emergency features are used
       2. **Log Validation:** Verify checkpoint save events in logs
          - Looks for 'Finished async_save (blocking + background)' messages
          - Validates that saves occurred at expected steps
       3. **File Validation:** Verify checkpoint files exist in GCS bucket
          - Checks that actual checkpoint files are present for each expected step
+      4. **Node Interruption:** A MaxText training job is initiated.
+          During its execution, a node interruption is simulated
+      5.  **Validate Restore:** The DAG inspects the application logs to confirm
+          that an `'restore'` event occurred.
+      6.  **Validate Checkpoint Integrity:** It then verifies that the training job
+          resumed and continued to save checkpoints correctly after the restore,
+          ensuring no data was lost.
 
       ### Key Parameters
-      - **checkpoint_step=25:** Regular checkpoint interval for GCS saves
+      - **checkpoint_step=20:** Regular checkpoint interval for GCS saves
       - **step=100:** Total training steps
       - **Model:** llama2-7b on v5p-128 TPU slices
 
       ### Success Criteria
       The test passes when:
-      1. All expected checkpoint save logs are found at steps 0, 25, 50, 75, 99
+      1. All expected checkpoint save logs are found at steps 0, 20, 50, 80, 99
       2. All corresponding checkpoint files exist in the GCS bucket
       3. No emergency checkpointing or multi-tier features are involved
     """,
@@ -172,9 +183,9 @@ with models.DAG(
             accelerator="v5p-128",
             slices=[2],
             model_name="llama2-7b",
-            short_id="max-reg-save",
+            short_id="max-reg-res-gcs-node",
             step=100,
-            checkpoint_step=25,
+            checkpoint_step=20,
         ),
     ]
 
@@ -205,13 +216,23 @@ with models.DAG(
                     test_name=f"{test_config.short_id}-{checkpointing_type}",
                     run_model_cmds=workload_command,
                     docker_image=image.value,
-                    test_owner=test_owner.JACKY_F,
-                ).run(
+                    test_owner=test_owner.SHARON_Y,
+                ).run_with_node_interruption(
                     xpk_branch=MAIN_BRANCH,
                     skip_post_process=True,
+                    gcs_location=f"{BASE_OUTPUT_DIR}/{DAG_TEST_NAME}/{run_name}",
                 )
 
                 end_time = validation_util.generate_timestamp()
+
+                validate_is_restoring = validation_util.validate_log_exist(
+                    project_id=test_config.cluster.project,
+                    location=zone_to_region(test_config.cluster.zone),
+                    cluster_name=test_config.cluster.name,
+                    text_filter="\"'event_type': 'restore'\"",
+                    start_time=start_time,
+                    end_time=end_time,
+                )
 
                 total_steps = test_config.step
                 checkpoint_period = test_config.checkpoint_step
@@ -240,6 +261,7 @@ with models.DAG(
                     start_time
                     >> maxtext_chkpt_run_test
                     >> end_time
+                    >> validate_is_restoring
                     >> validate_log
                     >> validate_bucket
                 )
