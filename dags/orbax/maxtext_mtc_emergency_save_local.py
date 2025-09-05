@@ -160,15 +160,15 @@ with models.DAG(
             )
 
             validate_local_check_steps = (
-                validation_util.validate_checkpoint_at_steps_are_saved(
-                    project_id=test_config.cluster.project,
-                    location=zone_to_region(test_config.cluster.zone),
-                    cluster_name=test_config.cluster.name,
-                    ram_disk=orbax.DEFAULT_RAM_DISK,
-                    start_time=start_time,
-                    end_time=end_time,
-                    steps_to_validate=steps_to_validate,
-                )
+                validation_util.validate_checkpoint_saves(
+                project_id=test_config.cluster.project,
+                location=zone_to_region(test_config.cluster.zone),
+                cluster_name=test_config.cluster.name,
+                pod_pattern="max.*-job-1-0",
+                start_time=start_time,
+                end_time=end_time,
+                steps_to_validate=steps_to_validate,
+                )       
             )
 
             (
