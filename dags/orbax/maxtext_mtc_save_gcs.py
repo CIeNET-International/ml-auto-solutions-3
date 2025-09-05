@@ -142,9 +142,7 @@ with models.DAG(
             pod_pattern="max.*-job-1-0",
             start_time=start_time,
             end_time=end_time,
-            vali_step_list=steps_to_validate,
-            checkpoint_type="local",
-            local_directory=RAM_DISK,
+            steps_to_validate=steps_to_validate,
         )
 
         validate_gcs_bucket = validation_util.validate_log_with_gcs(
