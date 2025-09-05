@@ -167,7 +167,7 @@ with models.DAG(
 
         steps_to_validate = test_config.generate_step_to_validate(is_local=True)
 
-        validate_log = validation_util.validate_checkpoint_at_steps_are_saved(
+        validate_log = validation_util.validate_checkpoint_saves(
             project_id=test_config.cluster.project,
             location=zone_to_region(test_config.cluster.zone),
             cluster_name=test_config.cluster.name,

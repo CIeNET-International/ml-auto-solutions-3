@@ -100,6 +100,7 @@ class TestConfig:
             f"steps={self.step} "
             "per_device_batch_size=1 "
             "max_target_length=256 "
+            f"checkpoint_period={self.checkpoint_step} "
             f"model_name={self.model_name} "
             "per_device_batch_size=2 "
             "reuse_example_batch=1 "
@@ -182,7 +183,7 @@ with models.DAG(
     for mode, image in DOCKER_IMAGES:
         for test_config in test_configs:
             for slice_num in test_config.slices:
-                # Generate run name for the training job
+                
                 run_name = validation_util.generate_run_name(
                     short_id=test_config.short_id,
                     checkpointing_type=checkpointing_type,
@@ -224,17 +225,15 @@ with models.DAG(
                     project_id=test_config.cluster.project,
                     location=zone_to_region(test_config.cluster.zone),
                     cluster_name=test_config.cluster.name,
+                    steps_to_validate=gcs_steps_to_validate,
                     pod_pattern="max.*-job-0-0",
-                    text_filter="(blocking + background).",
                     start_time=start_time,
                     end_time=end_time,
-                    vali_step_list=gcs_steps_to_validate,
-                    checkpoint_type="gcs",
                 )
 
                 validate_bucket = validation_util.validate_gcs_checkpoint_files(
                     bucket_path=f"{BASE_OUTPUT_DIR}/{DAG_TEST_NAME}/{run_name}/checkpoints",
-                    vali_step_list=gcs_steps_to_validate,
+                    steps_to_validate=gcs_steps_to_validate,
                 )
 
                 (
