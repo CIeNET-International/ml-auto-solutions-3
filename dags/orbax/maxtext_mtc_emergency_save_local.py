@@ -21,7 +21,7 @@ from dags.orbax.util import validation_util
 from dags.orbax.util import checkpoint_util
 from xlml.utils.xpk import BRANCH_ABHINAV_MTC
 from xlml.utils.gke import zone_to_region
-from dags.orbax.util import orbax
+from dags.orbax.util.orbax import TestConfig, CheckpointingMode, DEFAULT_BUCKET, DEFAULT_RAM_DISK
 
 SCHEDULE = "0 13 * * *" if composer_env.is_prod_env() else None
 DAG_TEST_NAME = "maxtext_emc_and_mtc_orbax_save_local"
@@ -90,30 +90,30 @@ with models.DAG(
           short_id="max-sv-loc",
           replicator_backup_time=30,
           step=100,
-          checkpoint_step=200,
-          local_checkpoint_step=20,
+          gcs_checkpoint_period=200,
+          local_checkpoint_period=20,
           ram_disk_size_in_mi="800000Mi",
-          base_dir=orbax.DEFAULT_BUCKET,
+          base_dir=DEFAULT_BUCKET,
       ),
+  ]
+
+  # Test both modes: MTC and ECM
+  checkpointing_configs = [
+      CheckpointingMode.MTC,   # Multi-tier Checkpointing
+      CheckpointingMode.ECM,   # Emergency Checkpointing
   ]
 
   task_groups = []
 
-  for checkpointing in [
-      orbax.Checkpointing(
-          name="mtc",  # Multi-tier Checkpointing
-          enable_multi_tier_checkpointing=True,
-      ),
-      orbax.Checkpointing(
-          name="emc",  # Emergency Checkpointing
-          enable_multi_tier_checkpointing=False,
-      ),
-  ]:
+  for checkpointing_mode in checkpointing_configs:
     with TaskGroup(
-        group_id=f"maxtext_{checkpointing.name}_orbax_save_local",
+        group_id=f"maxtext_{checkpointing_mode.short_name}_orbax_save_local",
     ) as group:
       for mode, image in DOCKER_IMAGES:
         for test_config in test_configs:
+          # Update test config with the current mode
+          test_config.mode = checkpointing_mode
+
           for slice_num in test_config.slices:
             # We conditionally set the trigger_rule on the first task.
             # If first task group failed the next one can execute.
@@ -125,16 +125,15 @@ with models.DAG(
             # Generate consistent run name.
             run_name = validation_util.generate_run_name(
                 short_id=test_config.short_id,
-                checkpointing_type=checkpointing.name,
+                checkpointing_type=checkpointing_mode.short_name,
                 slice_number=slice_num,
                 accelerator=test_config.accelerator,
             )
 
             workload_command = test_config.generate_workload_command(
-                checkpoint_dir=orbax.DEFAULT_RAM_DISK,
                 run_name=run_name,
-                out_folder=f"maxtext_{checkpointing.name}_orbax_save_local",
-                enable_multi_tier_checkp=checkpointing.enable_multi_tier_checkpointing,
+                out_folder=f"maxtext_{checkpointing_mode.short_name}_orbax_save_local",
+                checkpoint_dir=DEFAULT_RAM_DISK,
             )
 
             start_time = validation_util.generate_timestamp()
@@ -142,12 +141,12 @@ with models.DAG(
                 num_slices=slice_num,
                 cluster=test_config.cluster,
                 time_out_in_min=60,
-                test_name=f"{test_config.short_id}-{checkpointing.name}",
+                test_name=f"{test_config.short_id}-{checkpointing_mode.short_name}",
                 run_model_cmds=workload_command,
                 docker_image=image.value,
                 test_owner=test_owner.CAMILO_Q,
             ).run(
-                ramdisk_directory=orbax.DEFAULT_RAM_DISK,
+                ramdisk_directory=DEFAULT_RAM_DISK,
                 mtc_enabled=True,
                 xpk_branch=BRANCH_ABHINAV_MTC,
                 skip_post_process=True,
@@ -155,8 +154,8 @@ with models.DAG(
 
             end_time = validation_util.generate_timestamp()
 
-            steps_to_validate = test_config.generate_step_to_validate(
-                is_local=True
+            steps_to_validate = test_config.generate_steps_to_validate(
+                test_config.local_checkpoint_period
             )
 
             validate_local_check_steps = (
@@ -168,7 +167,7 @@ with models.DAG(
                 start_time=start_time,
                 end_time=end_time,
                 steps_to_validate=steps_to_validate,
-                )       
+                )
             )
             # Final CPC cleanup to ensure symmetric start/end
             wait_delete_cpc_final = (
