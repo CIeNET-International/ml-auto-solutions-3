@@ -51,7 +51,17 @@ class LiteralScalarString(str):
 
 
 def literal_presenter(dumper, data):
+  """This presenter tells PyYAML to render instances of LiteralScalarString.
+
+  Args:
+    dumper: The PyYAML dumper object.
+    data: The FlowList instance to represent.
+
+  Returns:
+    The represented YAML sequence in flow style.
+  """
   return dumper.represent_scalar("tag:yaml.org,2002:str", data, style="|")
+
 
 yaml.add_representer(LiteralScalarString, literal_presenter)
 
