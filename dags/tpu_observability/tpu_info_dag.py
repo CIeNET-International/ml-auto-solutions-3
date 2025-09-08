@@ -27,6 +27,7 @@ from dags.tpu_observability.utils.jobset_yaml_generator import YamlConfig
 from dags.tpu_observability.utils.monitoring import query_time_series
 from google.cloud.monitoring_v3 import types
 
+
 @dataclasses.dataclass
 class Info:
   """Configuration for the GKE Node Pool and Monitoring.
@@ -36,14 +37,12 @@ class Info:
     region: The region of the GKE cluster.
     zone: The zone of the GKE cluster.
     cluster_name: The name of the GKE cluster.
-    container_name: The name of the container running the workload.
   """
 
   project_id: str
   region: str
   zone: str
   cluster_name: str
-  container_name: str
 
 
 class BaseMetricStrategy(ABC):
@@ -404,7 +403,6 @@ def query_to_wait_for_jobset_start(
       view="FULL",
   )
   time_series_data_list = list(time_series_data)
-
   # Retrieve the last three records to ensure stable workload startup.
   if not time_series_data_list or len(time_series_data_list[0].points) < 3:
     return False
@@ -490,8 +488,7 @@ def run_metric_verification(
 
 @task
 def summarize_results(
-    verification_results_dict: Dict[str, List[bool]],
-    active_pods: List[str]
+    verification_results_dict: Dict[str, List[bool]], active_pods: List[str]
 ):
   """
   Summarizes the results for multiple metric verifications, checking each
@@ -530,15 +527,13 @@ def summarize_results(
   if not overall_success:
     error_message = (
         "Grand Result: FAILURE - One or more metric verifications failed.\n"
-        "Failure Details:\n"
-        + "\n".join(failure_summary)
+        "Failure Details:\n" + "\n".join(failure_summary)
     )
     raise AirflowException(error_message)
 
   logging.info(
       "Grand Result: SUCCESS - All metric verifications passed for all pods."
   )
-
 
 
 with models.DAG(
@@ -569,9 +564,6 @@ with models.DAG(
       ),
       zone=models.Variable.get(
           "TPU_INFO_ZONE", default_var=Zone.ASIA_NORTHEAST1_B.value
-      ),
-      container_name=models.Variable.get(
-          "CONTAINER_NAME", default_var="jax-tpu-job"
       ),
   )
 
@@ -604,15 +596,6 @@ with models.DAG(
       volume_name="code",
       config_map_name="jax-tpu-benchmark-code-one-tpuinfo-output",
   )
-
-  workload_command_args = [
-      """
-      python -c 'import jax; print("TPU cores:", jax.device_count())'
-      python /app/jax_tpu_benchmark.py
-      echo "sleep..."
-      sleep 10000
-      """
-  ]
 
   # Clean up any pre-existing workloads to ensure a clean environment for the
   # test.
@@ -650,21 +633,27 @@ with models.DAG(
         .expand(pod_name=active_pods)
     )
 
-    verify_tensorcore = run_metric_verification.override(
-        task_id="verify_tensorcore_utilization"
-    ).partial(
-        info=cluster_info,
-        job_apply_time=apply_time,
-        metric_strategy=TensorcoreUtilizationStrategy(),
-    ).expand(comparison_data=active_pods.zip(tpu_info_outputs))
+    verify_tensorcore = (
+        run_metric_verification.override(
+            task_id="verify_tensorcore_utilization"
+        )
+        .partial(
+            info=cluster_info,
+            job_apply_time=apply_time,
+            metric_strategy=TensorcoreUtilizationStrategy(),
+        )
+        .expand(comparison_data=active_pods.zip(tpu_info_outputs))
+    )
 
-    verify_memory_used = run_metric_verification.override(
-        task_id="verify_memory_used"
-    ).partial(
-        info=cluster_info,
-        job_apply_time=apply_time,
-        metric_strategy=MemoryUsedStrategy(),
-    ).expand(comparison_data=active_pods.zip(tpu_info_outputs))
+    verify_memory_used = (
+        run_metric_verification.override(task_id="verify_memory_used")
+        .partial(
+            info=cluster_info,
+            job_apply_time=apply_time,
+            metric_strategy=MemoryUsedStrategy(),
+        )
+        .expand(comparison_data=active_pods.zip(tpu_info_outputs))
+    )
 
     tpu_info_outputs >> [verify_tensorcore, verify_memory_used]
 
@@ -675,7 +664,7 @@ with models.DAG(
           "TensorCore Utilization": verify_tensorcore,
           "HBM Memory Used": verify_memory_used,
       },
-      active_pods=active_pods
+      active_pods=active_pods,
   )
 
   clean_up = end_workload.override(
