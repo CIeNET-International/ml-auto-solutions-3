@@ -31,18 +31,18 @@ class YamlConfig:
   parallelism: int
 
   # Pod Template Spec
-  node_selector: Optional[Dict[str, str]]
+  node_selector: Optional[Dict[str, str]] = None
 
   # Container Spec
   container_name: str
   image: str
   tpu_cores_per_pod: int
-  command: Optional[List[str]]
-  command_args: Optional[List[str]]
+  command: Optional[List[str]] = None
+  command_args: Optional[List[str]] = None
 
   # Volume Spec
-  volume_name: Optional[str]
-  config_map_name: Optional[str]
+  volume_name: Optional[str] = None
+  config_map_name: Optional[str] = None
 
 
 # --- Custom String Class for Multi-line Args ---

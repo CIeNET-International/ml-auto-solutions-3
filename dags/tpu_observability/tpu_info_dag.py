@@ -17,6 +17,7 @@ from airflow.decorators import task
 from airflow.exceptions import AirflowException
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
+from google.cloud.monitoring_v3 import types
 
 from dags.common.vm_resource import Project
 from dags.common.vm_resource import Region
@@ -25,24 +26,7 @@ from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.utils.jobset_yaml_generator import create_jobset_yaml
 from dags.tpu_observability.utils.jobset_yaml_generator import YamlConfig
 from dags.tpu_observability.utils.monitoring import query_time_series
-from google.cloud.monitoring_v3 import types
-
-
-@dataclasses.dataclass
-class Info:
-  """Configuration for the GKE Node Pool and Monitoring.
-
-  Attributes:
-    project_id: The Google Cloud project ID.
-    region: The region of the GKE cluster.
-    zone: The zone of the GKE cluster.
-    cluster_name: The name of the GKE cluster.
-  """
-
-  project_id: str
-  region: str
-  zone: str
-  cluster_name: str
+from dags.tpu_observability.utils.node_pool_util import Info
 
 
 class BaseMetricStrategy(ABC):
@@ -565,6 +549,12 @@ with models.DAG(
       zone=models.Variable.get(
           "TPU_INFO_ZONE", default_var=Zone.ASIA_NORTHEAST1_B.value
       ),
+      machine_type=models.Variable.get(
+          "TPU_INFO_MACHINE_TYPE", default_var="tpu-v6e-slice"
+      ),
+      tpu_topology=models.Variable.get(
+          "TPU_INFO_TPU_TOPOLOGY", default_var="4x4"
+      ),
   )
 
   kubeconfig_path = "/tmp/kubeconfig"
@@ -581,8 +571,8 @@ with models.DAG(
       container_name="jax-tpu-job",
       tpu_cores_per_pod=4,
       node_selector={
-          "cloud.google.com/gke-tpu-accelerator": "tpu-v6e-slice",
-          "cloud.google.com/gke-tpu-topology": "4x4",
+          "cloud.google.com/gke-tpu-accelerator": cluster_info.machine_type,
+          "cloud.google.com/gke-tpu-topology": cluster_info.tpu_topology,
       },
       command=["/bin/bash", "-c"],
       command_args=[
