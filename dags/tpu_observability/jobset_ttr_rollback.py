@@ -1,10 +1,13 @@
 """A DAG to test the jobset time-to-recover metric from a node pool rollback."""
 
+import dataclasses
 import datetime
 import logging
+import os
 import subprocess
 import time
 
+from typing import Dict, List, Optional
 from airflow import models
 from airflow.decorators import task
 from airflow.models import Variable
@@ -12,35 +15,100 @@ from airflow.utils.trigger_rule import TriggerRule
 from dags.common.vm_resource import Project, Region, Zone
 from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.utils import node_pool_util as node_pool
+from dags.tpu_observability.utils.jobset_yaml_generator import create_jobset_yaml
 from google.cloud import monitoring_v3
 
 
-@task
-def run_workload(info: node_pool.Info, workload_file: str):
-  """Runs a kubectl workload in the designated cluster.
+# Will be moved to node_pool_utils
+@dataclasses.dataclass
+class YamlConfig:
+  """A data structure to store dynamic parameters for the JobSet YAML.
 
-  Downloads the file at the fiven path to a temporary folder.
-  Gets the credentials for the cluster specified in the info
-  input. Runs the workload on the cluster and waits 150s to
-  let the workload initilize.
+  This class centralizes all configurable parts of the YAML, making DAGs
+  cleaner and more maintainable.
+  """
+
+  # Metadata
+  jobset_name: str
+  namespace: str
+
+  # Failure Policy
+  max_restarts: int
+
+  # ReplicatedJob Spec
+  replicated_job_name: str
+  replicas: int
+
+  # Job Template Spec
+  backoff_limit: int
+  completions: int
+  parallelism: int
+
+  # Pod Template Spec
+  node_selector: Optional[Dict[str, str]]
+
+  # Container Spec
+  container_name: str
+  image: str
+  tpu_cores_per_pod: int
+  command: Optional[List[str]]
+  command_args: Optional[List[str]]
+
+  # Volume Spec
+  volume_name: Optional[str]
+  config_map_name: Optional[str]
+
+
+# Will be moved to a util file
+@task
+def run_jobset_workload(info: node_pool.Info, yaml_config: YamlConfig):
+  """Generates and runs a JobSet manifest.
 
   Args:
-    info(Info): Configuration object with cluster details.
-    workload_file(str): Name of the workload file to be run.
+    info(Info): An instance of the Info class that encapsulates
+    the configuration and metadata of a GKE node pool and workload.
+    yaml_config(YamlConfig): All parameters needing to generate the
+    JobSet file which will be run by this function.
   """
-  command = (
-      "export KUBECONFIG=/tmp/kubeconfig && "
+  params = dataclasses.asdict(yaml_config)
+
+  base_job_name = yaml_config.jobset_name
+
+  logging.info("Generating YAML content for JobSet: %s", base_job_name)
+  yaml_content = create_jobset_yaml(**params)
+
+  output_path = f"/tmp/{base_job_name}.yaml"
+  with open(output_path, "w") as f:
+    f.write(yaml_content)
+
+  env = os.environ.copy()
+  env["KUBECONFIG"] = "/tmp/kubeconfig"
+
+  gcloud_cmd = (
       f"gcloud container clusters get-credentials {info.cluster_name} "
-      f"--region {info.location} --project {info.project_id} && "
-      f"kubectl --kubeconfig $KUBECONFIG apply -f "
-      f"utils/{workload_file} -n default"
+      f"--region={info.location} "
+      f"--project={info.project_id} "
   )
-  process = subprocess.run(
-      command, shell=True, check=True, capture_output=True, text=True
+  subprocess.run(
+      gcloud_cmd,
+      shell=True,
+      check=True,
+      env=env,
+      capture_output=True,
+      text=True,
+  )
+  logging.info(
+      "Successfully got credentials for cluster %s.", info.cluster_name
   )
 
-  logging.info("STDOUT message: %s", process.stdout)
-  logging.info("STDERR message: %s", process.stderr)
+  kubectl_cmd = (
+      f"kubectl --kubeconfig=/tmp/kubeconfig apply -f {output_path} "
+      "-n default"
+  )
+  subprocess.run(
+      kubectl_cmd, shell=True, check=True, capture_output=True, text=True
+  )
+  logging.info("Successfully applied YAML to the cluster.")
 
 
 @task
@@ -133,7 +201,7 @@ with models.DAG(
         "cloud-ml-auto-solutions",
         "jobset",
         "time-to-recover",
-        "tpu_obervability",
+        "tpu-obervability",
         "rollback",
     ],
     description=(
@@ -180,10 +248,81 @@ with models.DAG(
       tpu_topology=Variable.get("TPU_TOPOLOGY", default_var="4x4"),
   )
 
+  yaml_config_instance = YamlConfig(
+      jobset_name="tpu-info-v6e-workload",
+      namespace="default",
+      max_restarts=5,
+      replicated_job_name="tpu-job-slice",
+      replicas=1,
+      backoff_limit=0,
+      completions=4,
+      parallelism=4,
+      image="python:3.10",
+      container_name="jax-tpu-job",
+      tpu_cores_per_pod=4,
+      node_selector={
+          "cloud.google.com/gke-tpu-accelerator": "tpu-v6e-slice",
+          "cloud.google.com/gke-tpu-topology": "4x4",
+      },
+      command=["bash", "-c"],
+      command_args=[
+          """
+        pip install "jax[tpu]" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
+        python -c '
+        import jax
+        import jax.numpy as jnp
+        import time
+        import os
+        from jax.sharding import Mesh, NamedSharding
+        from jax.experimental.pjit import pjit
+
+        os.environ.setdefault("JAX_USE_PJIT", "true")
+        jax.distributed.initialize()
+
+        global_devices = jax.devices()
+        print(f"[Host {jax.process_index()}] Got {len(global_devices)} global devices")
+        mesh = Mesh(global_devices, ("x",))
+
+        size = 32768
+        x_global = jnp.ones((size, size), dtype=jnp.float32)
+        y_global = jnp.ones((size, size), dtype=jnp.float32)
+
+        sharding = NamedSharding(mesh, jax.sharding.PartitionSpec("x", None))
+        x = jax.device_put(x_global, sharding)
+        y = jax.device_put(y_global, sharding)
+
+        @pjit
+        def matmul_ultra_heavy(x, y):
+            tmp1 = jnp.dot(x, y)
+            tmp2 = jnp.dot(tmp1, y.T)
+            tmp3 = jnp.dot(tmp2, x.T)
+            tmp4 = jnp.dot(tmp3, x)
+            tmp5 = jnp.dot(tmp4, y)
+            return tmp5
+
+        matmul_ultra_heavy(x, y).block_until_ready()
+
+        print(f"[Host {jax.process_index()}] Starting benchmark...")
+
+        start = time.time()
+        for i in range(1_000_000):
+            result = matmul_ultra_heavy(x, y)
+        result.block_until_ready()
+        end = time.time()
+
+        if jax.process_index() == 0:
+            print(f"Total time: {end - start:.2f} seconds (on full v6e-16)")
+        '
+        """
+      ],
+      volume_name=None,
+      config_map_name=None,
+  )
+
   create_node_pool = node_pool.create(node_pool=cluster_info)
 
-  start_workload = run_workload(
-      info=cluster_info, workload_file="workload.yaml"
+  start_workload = run_jobset_workload(
+      info=cluster_info, yaml_config=yaml_config_instance
   )
 
   wait_three_minutes = wait(seconds=180)
@@ -194,11 +333,13 @@ with models.DAG(
 
   cleanup_workload = end_workload.override(trigger_rule=TriggerRule.ALL_DONE)(
       info=cluster_info
+  ).as_teardown(
+      setups=start_workload,
   )
 
-  cleanup_node_pool = node_pool.delete.override(trigger_rule="all_done")(
-      node_pool=cluster_info
-  ).as_teardown(
+  cleanup_node_pool = node_pool.delete.override(
+      trigger_rule=TriggerRule.ALL_DONE
+  )(node_pool=cluster_info).as_teardown(
       setups=create_node_pool,
   )
 
