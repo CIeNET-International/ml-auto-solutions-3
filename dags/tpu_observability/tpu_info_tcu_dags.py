@@ -94,35 +94,7 @@ def compare_metric_values(
 
 
 @task
-def generate_yaml_file(yaml_config: YamlConfig) -> str:
-  """Generates YAML content based on the provided YamlConfig object.
-
-  This function writes the generated YAML to a local temporary file.
-
-  Args:
-    yaml_config: The YamlConfig object containing the configuration for the
-      YAML.
-  """
-  params = dataclasses.asdict(yaml_config)
-  base_job_name = yaml_config.jobset_name
-
-  logging.info("Generating YAML content for JobSet: %s", base_job_name)
-
-  yaml_content = create_jobset_yaml(**params)
-
-  output_path = f"/tmp/{base_job_name}.yaml"
-  with open(output_path, "w") as f:
-    f.write(yaml_content)
-  logging.info("Successfully generated YAML file at: %s", output_path)
-  with open(output_path, "r") as f:
-    logging.info("--- File Content ---\n%s", f.read())
-  return output_path
-
-
-@task
-def run_workload(
-    info: Info, kubeconfig: str, yaml_config: YamlConfig, yaml_path: str
-):
+def run_workload(info: Info, kubeconfig: str, yaml_config: YamlConfig):
   """Applies the workload YAML to the GKE cluster using subprocess.
 
   This task executes a series of shell commands using Python's subprocess
@@ -139,11 +111,24 @@ def run_workload(
       info: Configuration object with cluster and workload details.
       kubeconfig: The path to the kubeconfig file.
       yaml_config: The YamlConfig object containing namespace information.
-      yaml_path: The local path where the YAML file will be copied.
 
   Returns:
       The UTC timestamp (ISO 8601 format) of when the job was applied.
   """
+  params = dataclasses.asdict(yaml_config)
+  base_job_name = yaml_config.jobset_name
+
+  logging.info("Generating YAML content for JobSet: %s", base_job_name)
+
+  yaml_content = create_jobset_yaml(**params)
+
+  yaml_path = f"/tmp/{base_job_name}.yaml"
+  with open(yaml_path, "w") as f:
+    f.write(yaml_content)
+  logging.info("Successfully generated YAML file at: %s", yaml_path)
+  with open(yaml_path, "r") as f:
+    logging.info("--- File Content ---\n%s", f.read())
+
   env = os.environ.copy()
   env["KUBECONFIG"] = kubeconfig
 
@@ -542,13 +527,10 @@ with models.DAG(
       yaml_config=yaml_config_instance,
   )
 
-  generated_yaml_path = generate_yaml_file(yaml_config=yaml_config_instance)
-
   apply_time = run_workload.override(task_id="run_workload")(
       info=cluster_info,
       kubeconfig=kubeconfig_path,
       yaml_config=yaml_config_instance,
-      yaml_path=generated_yaml_path,
   )
 
   active_pods = get_active_pods.override(task_id="get_active_pod")(
@@ -587,7 +569,6 @@ with models.DAG(
 
   (
       start_cleanup
-      >> generated_yaml_path
       >> apply_time
       >> active_pods
       >> wait_for_job_start
