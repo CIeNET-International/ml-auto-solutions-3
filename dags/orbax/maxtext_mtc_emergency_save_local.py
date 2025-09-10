@@ -22,7 +22,6 @@ from xlml.utils.xpk import BRANCH_ABHINAV_MTC
 from xlml.utils.gke import zone_to_region
 from dags.orbax.util import test_config_util
 
-
 SCHEDULE = "0 13 * * *" if composer_env.is_prod_env() else None
 DAG_TEST_NAME = "maxtext_emc_and_mtc_orbax_save_local"
 
