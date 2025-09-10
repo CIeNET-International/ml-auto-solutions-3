@@ -24,3 +24,4 @@ maxtext_emc_and_mtc_orbax_save_local
 maxtext_mtc_orbax_save_gcs
 maxtext_emc_orbax_res_local
 maxtext_mtc_orbax_res_local
+maxtext_emc_orbax_res_gcs

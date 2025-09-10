@@ -405,3 +405,68 @@ def validate_log_exist(
 
   if not entries:
     raise AirflowFailException("The log history is empty!")
+
+
+@task
+def validate_restored_correct_checkpoint(
+    project_id: str,
+    location: str,
+    cluster_name: str,
+    interrupt_at_step: int,
+    pod_pattern: str = ".*",
+    start_time: Optional[datetime] = None,
+    end_time: Optional[datetime] = None,
+) -> None:
+  """Validate the restored step is in the expected range."""
+
+  entries = list_log_entries(
+      project_id=project_id,
+      location=location,
+      cluster_name=cluster_name,
+      namespace="default",
+      pod_pattern=pod_pattern,
+      text_filter="jsonPayload.message:\"'event_type'\"",
+      start_time=start_time,
+      end_time=end_time,
+  )
+
+  if not entries:
+    raise AirflowFailException("No event_type found in the log.")
+
+  save_step_before_restore = None
+  for entry in entries:
+    if not isinstance(entry, logging_api.StructEntry):
+      raise AirflowFailException(
+          "Log entry must be contain a jsonPayload attribute."
+      )
+    message = entry.payload.get("message")
+    if not message:
+      continue
+
+    if re.search(r"'event_type': 'save'", message):
+      match = re.search(r"'step': (\d+)", message)
+      if match:
+        save_step_before_restore = int(match.group(1))
+      else:
+        raise AirflowFailException(
+            f"Found save event with no step number, message: {message}"
+        )
+    elif re.search(r"'event_type': '(emergency_)?restore'", message):
+      logging.info("Found restore event: %s", message)
+      if save_step_before_restore is None:
+        raise AirflowFailException(
+            "Found a restore event before any save event."
+        )
+      match = re.search(r"'step':\s*(?:np\.int32\()?(\d+)", message)
+      if match and int(match.group(1)) >= interrupt_at_step:
+        return
+
+      raise AirflowFailException(
+          f"Restore event did not contain the expected step. Expect step "
+          f"{match.group(1)} to be greater than or equal to step "
+          f"{interrupt_at_step}, but the log was: {message}."
+      )
+
+  raise AirflowFailException(
+      "Failed to validate that restored happened at correct step."
+  )
