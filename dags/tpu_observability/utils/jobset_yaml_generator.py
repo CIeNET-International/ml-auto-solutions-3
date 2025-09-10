@@ -30,15 +30,15 @@ class YamlConfig:
   completions: int
   parallelism: int
 
-  # Pod Template Spec
-  node_selector: Optional[Dict[str, str]] = None
-
   # Container Spec
   container_name: str
   image: str
   tpu_cores_per_pod: int
   command: Optional[List[str]] = None
   command_args: Optional[List[str]] = None
+
+  # Pod Template Spec
+  node_selector: Optional[Dict[str, str]] = None
 
   # Volume Spec
   volume_name: Optional[str] = None
