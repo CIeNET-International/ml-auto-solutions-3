@@ -1,5 +1,7 @@
 """Utility to generate YAML for a Kubernetes JobSet for TPU workloads."""
+
 import dataclasses
+import textwrap
 from typing import Dict, List, Optional
 import yaml
 
@@ -28,19 +30,65 @@ class YamlConfig:
   completions: int
   parallelism: int
 
-  # Pod Template Spec
-  node_selector: Optional[Dict[str, str]]
-
   # Container Spec
   container_name: str
   image: str
   tpu_cores_per_pod: int
-  command: Optional[List[str]]
-  command_args: Optional[List[str]]
+  command: Optional[List[str]] = None
+  command_args: Optional[List[str]] = None
+
+  # Pod Template Spec
+  node_selector: Optional[Dict[str, str]] = None
 
   # Volume Spec
-  volume_name: Optional[str]
-  config_map_name: Optional[str]
+  volume_name: Optional[str] = None
+  config_map_name: Optional[str] = None
+
+
+# --- Custom String Class for Multi-line Args ---
+class LiteralScalarString(str):
+  pass
+
+
+def literal_presenter(dumper, data):
+  """This presenter tells PyYAML to render instances of LiteralScalarString.
+
+  Args:
+    dumper: The PyYAML dumper object.
+    data: The FlowList instance to represent.
+
+  Returns:
+    The represented YAML sequence in flow style.
+  """
+  return dumper.represent_scalar("tag:yaml.org,2002:str", data, style="|")
+
+
+yaml.add_representer(LiteralScalarString, literal_presenter)
+
+
+# --- Custom List Class for Flow Style Command ---
+class FlowList(list):
+  pass
+
+
+def flow_list_presenter(dumper, data):
+  """This presenter tells PyYAML to render instances of FlowList.
+
+  This uses the flow style (e.g., ["item1", "item2"]).
+
+  Args:
+    dumper: The PyYAML dumper object.
+    data: The FlowList instance to represent.
+
+  Returns:
+    The represented YAML sequence in flow style.
+  """
+  return dumper.represent_sequence(
+      "tag:yaml.org,2002:seq", data, flow_style=True
+  )
+
+
+yaml.add_representer(FlowList, flow_list_presenter)
 
 
 def create_jobset_yaml(
@@ -100,6 +148,12 @@ def create_jobset_yaml(
             sleep 10000
             """
     ]
+  processed_args = []
+  for arg in command_args:
+    dedented_arg = textwrap.dedent(arg).strip()
+    processed_args.append(LiteralScalarString(dedented_arg))
+
+  processed_command = FlowList(command) if command is not None else None
 
   jobset_dict = {
       "apiVersion": "jobset.x-k8s.io/v1alpha2",
@@ -143,8 +197,8 @@ def create_jobset_yaml(
                                       {"containerPort": 8431},
                                   ],
                                   "securityContext": {"privileged": True},
-                                  "command": command,
-                                  "args": command_args,
+                                  "command": processed_command,
+                                  "args": processed_args,
                                   "stdin": True,
                                   "tty": True,
                                   "resources": {

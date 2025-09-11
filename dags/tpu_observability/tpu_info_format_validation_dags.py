@@ -14,6 +14,7 @@ from typing import List, Tuple
 
 from airflow import models
 from airflow.decorators import task
+from airflow.utils.task_group import TaskGroup
 from airflow.exceptions import AirflowException
 from airflow.utils.trigger_rule import TriggerRule
 
@@ -35,62 +36,12 @@ class Info:
     region: The region of the GKE cluster.
     zone: The zone of the GKE cluster.
     cluster_name: The name of the GKE cluster.
-    container_name: The name of the container running the workload.
   """
 
   project_id: str
   region: str
   zone: str
   cluster_name: str
-  container_name: str
-
-
-def compare_metric_values(
-    cmd_values: List[float],
-    monitoring_values: List[float],
-    pod_name: str,
-    tolerance: float = 1.0,
-):
-  """Compares two lists of utilization values within a given tolerance."""
-  if len(cmd_values) != len(monitoring_values):
-    raise AirflowException(
-        f"For pod {pod_name}, data count mismatch. TPU-Info has"
-        f" {len(cmd_values)} values, Monitoring has {len(monitoring_values)}."
-    )
-
-  logging.info("--- Comparison Results for pod: %s ---", pod_name)
-  logging.info(
-      "%-12s%-15s%-17s%-12s%-10s",
-      "Device",
-      "TPU-Info Val",
-      "Monitoring Val",
-      "Difference",
-      "Result",
-  )
-  logging.info("-" * 70)
-
-  all_passed = True
-  for i, (log_val, mon_val) in enumerate(zip(cmd_values, monitoring_values)):
-    diff = abs(log_val - mon_val)
-    passed = diff <= tolerance
-    if not passed:
-      all_passed = False
-    logging.info(
-        "%-12s%-15.2f%-17.2f%-12.2f%-10s",
-        f"Device {i}",
-        log_val,
-        mon_val,
-        diff,
-        "PASS" if passed else "FAIL",
-    )
-  logging.info("-" * 70)
-
-  if not all_passed:
-    raise AirflowException(
-        f"Overall Result for Pod {pod_name}: FAIL - Utilization values do not"
-        " match within tolerance."
-    )
-  logging.info("Overall Result for Pod %s: PASS", pod_name)
 
 
 @task
@@ -335,122 +286,256 @@ def get_tpu_info_from_pod(kubeconfig: str, pod_name: str) -> str:
 
 
 @task
-def fetch_parse_and_compare_utilization(
-    info: Info,
-    job_apply_time: str,
-    comparison_data: Tuple[str, str],
-) -> bool:
-  """Parses outputs from Monitoring and tpu-info, then compares them."""
-  pod_name, tpu_info_text = comparison_data
-  logging.info("Getting monitoring data for pod: %s...", pod_name)
-
-  datetime_job_apply_time = datetime.datetime.fromisoformat(job_apply_time)
-  end_time_utc = datetime_job_apply_time + datetime.timedelta(minutes=10)
-
-  filter_string = (
-      "metric.type ="
-      ' "kubernetes.io/container/accelerator/tensorcore_utilization" AND'
-      f' resource.labels.cluster_name = "{info.cluster_name}" AND'
-      f' resource.labels.pod_name = "{pod_name}"'
-  )
-
-  time_series_data = query_time_series(
-      project_id=info.project_id,
-      filter_str=filter_string,
-      start_time=datetime_job_apply_time,
-      end_time=end_time_utc,
-  )
-
-  ts_list = list(time_series_data)
-  if not ts_list or not all(ts.points for ts in ts_list):
-    raise AirflowException(
-        f"Could not retrieve valid monitoring data for pod {pod_name}."
-    )
-
-  metric_values = {}
-  for ts in time_series_data:
-    accelerator_id = ts.metric.labels["accelerator_id"]
-    if ts.points:
-      point = ts.points[0]
-      metric_values[accelerator_id] = round(point.value.double_value, 2)
-
-  if not metric_values:
-    raise AirflowException(
-        "Failed to extract metric values from monitoring data for pod"
-        f" {pod_name}."
-    )
-
-  monitoring_values = [
-      metric_values[key]
-      for key in sorted(
-          metric_values.keys(), key=lambda x: int(x.split("-")[-1])
-      )
+def validate_table_structure(tpu_info_output: str):
+  table_title = [
+      "TPU Chips",
+      "TPU Runtime Utilization",
+      "TensorCore Utilization",
+      "TPU Buffer Transfer Latency",
   ]
-
-  util_values = []
-  in_tensorcore_section = False
-  for line in tpu_info_text.strip().split("\n"):
-    if "TensorCore Utilization" in line:
-      in_tensorcore_section = True
-      continue
-    if in_tensorcore_section:
-      match = re.search(r"│\s*\d+\s*│\s*([\d.]+)%", line)
-      if match:
-        util_values.append(float(match.group(1)))
-
-  if not util_values:
-    raise AirflowException(
-        "Failed to parse TensorCore utilization from tpu-info output for pod"
-        f" {pod_name}."
+  flag = True
+  invaild_metric = ""
+  for title in table_title:
+    escaped_title = re.escape(title)
+    pattern = re.compile(
+        rf"{escaped_title}\s*"
+        rf"┏[━┳]+┓\s*"
+        rf"┃.*?┃\s*"
+        rf"┡[━╇]+┩"
+        rf"[\s\S]*?"
+        rf"└[─┴]+┘",
+        re.S,
     )
+    output_validated = pattern.search(tpu_info_output)
+    if not output_validated:
+      logging.error("Table %s is not exist", title)
+      invaild_metric += title + " "
+      flag = False
+      continue
+    output_ = pattern.search(tpu_info_output).group(0)
+    print(output_)
 
-  compare_metric_values(util_values, monitoring_values, pod_name)
-  return True
+    if flag is False:
+      raise AirflowException(
+          f"Structure Error: Table '{invaild_metric}' not found or its"
+          " structure is incomplete."
+      )
 
 
 @task
-def summarize_results(verification_results: List[bool], active_pods: List[str]):
-  """Summarizes the results of the TensorCore utilization verification.
+def validate_row_counts(tpu_info_output: str):
+  """Validates the number of rows in specific tables within the tpu-info output.
 
-  This function logs the number of nodes verified, how many passed, and returns
-  a boolean indicating the overall success of the verification process.
+  This task checks if the "TPU Chips", "TPU Runtime Utilization", and
+  "TensorCore Utilization" tables in the provided `tpu_info_output` contain
+  the expected number of data rows (excluding headers and footers).
 
   Args:
-    verification_results: A list of booleans, where each boolean indicates
-      whether the verification passed (True) or failed (False) for a node.
-    active_pods: A list of pod names that were included in the verification.
+    tpu_info_output: The string output from the 'tpu-info' command.
 
   Returns:
-    True if all nodes passed verification, False otherwise. If no nodes were
-    active, the task is skipped and does not affect the DAG's final state.
+    A tuple containing:
+      - bool: True if all checked tables have the expected row counts, False
+      otherwise.
+      - list[str]: A list of error messages for tables with incorrect row
+      counts.
   """
-  if not active_pods:
-    logging.info("No active nodes were found. Grand Result: SKIPPED")
-    return
-  total_successful_pods = len(verification_results)
-  total_expected_pods = len(active_pods)
+  errors = []
+  tables_to_check = {
+      "TPU Chips": 4,
+      "TPU Runtime Utilization": 4,
+      "TensorCore Utilization": 4,
+  }
 
-  logging.info("--- Overall Verification Summary ---")
-  logging.info("Total pods scheduled for verification: %d", total_expected_pods)
-  logging.info(
-      "Pods that passed verification (succeeded): %d", total_successful_pods
-  )
+  for title, expected_rows in tables_to_check.items():
+    escaped_title = re.escape(title)
+    pattern = re.compile(
+        rf"{escaped_title}\s*"
+        rf"┏[━┳]+┓\s*"
+        rf"┃.*?┃\s*"
+        rf"┡[━╇]+┩"
+        rf"([\s\S]*?)"
+        rf"└[─┴]+┘",
+        re.S,
+    )
+    match = pattern.search(tpu_info_output)
+    if not match:
+      errors.append(
+          f"Row count check error: Could not find table '{title}' to count its"
+          " rows."
+      )
+      continue
 
-  if total_successful_pods != total_expected_pods:
+    body_content = match.group(1).strip()
+    actual_rows = len(body_content.split("\n")) if body_content else 0
+    if actual_rows != expected_rows:
+      error_msg = (
+          f"Row count for '{title}' is incorrect"
+          f"(Actual: {actual_rows}, Expected: {expected_rows})."
+      )
+      print(error_msg)
+      errors.append(error_msg)
+  if errors:
     raise AirflowException(
-        "Grand Result: FAILURE - The number of passed comparisons "
-        f"({total_successful_pods}) did not meet the threshold of "
-        f"{total_expected_pods}. Active pods: {active_pods}"
+        f"Row count check error: {errors}"
     )
 
 
+@task
+def validate_table_contents(tpu_info_output: str):
+  """Validates the content format of tables within the tpu-info output.
+
+  This task parses the output of the 'tpu-info' command and checks if the
+  data within each expected table ("TPU Chips", "TPU Runtime Utilization",
+  "TensorCore Utilization", and "TPU Buffer Transfer Latency") conforms to
+  the expected format and constraints (e.g., numeric ranges, specific units).
+
+  Args:
+    tpu_info_output: The string output from the 'tpu-info' command.
+
+  Returns:
+    A boolean indicating whether all table contents are valid.
+    (Note: Currently, this function only populates an `errors` list but doesn't
+    explicitly return it or raise an exception based on it).
+  """
+  table_title = [
+      "TPU Chips",
+      "TPU Runtime Utilization",
+      "TensorCore Utilization",
+      "TPU Buffer Transfer Latency",
+  ]
+  errors = []
+  for title in table_title:
+    escaped_title = re.escape(title)
+    pattern = re.compile(
+        rf"{escaped_title}\s*"
+        rf"┏[━┳]+┓\s*"
+        rf"┃.*?┃\s*"
+        rf"┡[━╇]+┩"
+        rf"([\s\S]*?)"
+        rf"└[─┴]+┘",
+        re.S,
+    )
+    output_validated = pattern.search(tpu_info_output)
+    rows = output_validated.group(1).strip().split("\n")
+
+    match title:
+      case "TPU Chips":
+        for i, row_str in enumerate(rows, 1):
+          cols = [col.strip() for col in row_str.split("│") if col.strip()]
+
+          chip, type_str, devices_str, pid_str = cols
+          if not re.match(r"/dev/vfio/\d+", chip):
+            errors.append(f"TPU Chips, Row {i}: Invalid 'Chip' format: {chip}")
+          if "TPU" not in type_str:
+            errors.append(
+                f"TPU Chips, Row {i}: 'Type' does not seem valid: {type_str}"
+            )
+          if not (devices_str.isdigit() and int(devices_str) > 0):
+            errors.append(
+                f"TPU Chips, Row {i}: 'Devices' must be > 0, but got:"
+                f" {devices_str}"
+            )
+
+          if not (pid_str.isdigit() and int(pid_str) > 0):
+            errors.append(
+                f"TPU Chips, Row {i}: 'PID' must be > 0, but got: {pid_str}"
+            )
+
+      case "TPU Runtime Utilization":
+
+        for i, row_str in enumerate(rows, 1):
+          cols = [col.strip() for col in row_str.split("│") if col.strip()]
+
+          _, hbm_usage, duty_cycle = cols
+          hbm_match = re.match(
+              r"(\d+\.\d+)\s*GiB\s*/\s*(\d+\.\d+)\s*GiB", hbm_usage
+          )
+          if hbm_match:
+            used, total = float(hbm_match.group(1)), float(hbm_match.group(2))
+            if total == 0:
+              errors.append(f"Runtime Util, Row {i}: Total HBM cannot be 0.")
+            if used > total:
+              errors.append(
+                  f"Runtime Util, Row {i}: Used HBM ({used}) cannot be"
+                  f" greater than Total HBM ({total})."
+              )
+          else:
+            errors.append(
+                f"Runtime Util, Row {i}: Invalid 'HBM Usage' format:"
+                f" {hbm_usage}"
+            )
+
+          duty_match = re.match(r"(\d+\.\d+)%", duty_cycle)
+          if duty_match:
+            percent = float(duty_match.group(1))
+            if not (0.0 <= percent <= 100.0):
+              errors.append(
+                  f"Runtime Util, Row {i}: 'Duty cycle' is not between"
+                  f" 0-100%: {duty_cycle}"
+              )
+          else:
+            errors.append(
+                f"Runtime Util, Row {i}: Invalid 'Duty cycle' format:"
+                f" {duty_cycle}"
+            )
+
+      case "TensorCore Utilization":
+        for i, row_str in enumerate(rows, 1):
+          cols = [col.strip() for col in row_str.split("│") if col.strip()]
+
+          _, util_str = cols
+          util_match = re.match(r"(\d+\.\d+)%", util_str)
+          if util_match:
+            percent = float(util_match.group(1))
+            if not (0.0 <= percent <= 100.0):
+              errors.append(
+                  f"TensorCore Util, Row {i}: 'Utilization' is not between"
+                  f" 0-100%: {util_str}"
+              )
+          else:
+            errors.append(
+                f"TensorCore Util, Row {i}: Invalid 'Utilization' format:"
+                f" {util_str}"
+            )
+
+      case "TPU Buffer Transfer Latency":
+        for i, row_str in enumerate(rows, 1):
+          cols = [col.strip() for col in row_str.split("│") if col.strip()]
+
+          if not cols[0]:
+            errors.append(f"Latency, Row {i}: 'Buffer Size' cannot be empty.")
+          for j, val_str in enumerate(cols[1:], 1):  # Check P50, P90, etc.
+            if val_str.endswith(" us"):
+              try:
+                if float(val_str.replace(" us", "")) <= 0:
+                  errors.append(
+                      f"Latency, Row {i}, Col {j+1}: Value must be > 0,"
+                      f" but got {val_str}"
+                  )
+              except ValueError:
+                errors.append(
+                    f"Latency, Row {i}, Col {j+1}: Could not parse numeric"
+                    f" part of {val_str}"
+                )
+            else:
+              errors.append(
+                  f"Latency, Row {i}, Col {j+1}: Value must end with ' us',"
+                  f" but got {val_str}"
+              )
+
+  if errors:
+    raise AirflowException(f"Table content check error: {errors}")
+
+
 with models.DAG(
-    dag_id="tpu_info_tensorcore_utilization_dag",
+    dag_id="tpu_info_format_validation_dag",
     start_date=datetime.datetime(2025, 8, 15),
     default_args={"retries": 0},
-    schedule=constants.Schedule.WEEKDAY_PST_6_30PM_EXCEPT_THURSDAY,
+    schedule=constants.Schedule.WEEKDAY_PDT_6AM_7AM_EXCEPT_THURSDAY,
     catchup=False,
     tags=["gke", "tpu-observability", "tpu-info"],
+    # TODO modify the description and after dag finish.
     description=(
         "This DAG verifies TensorCore utilization metrics by comparing data"
         " from Cloud Logging and Cloud Monitoring."
@@ -462,20 +547,13 @@ with models.DAG(
 ) as dag:
   cluster_info = Info(
       project_id=models.Variable.get(
-          "TCU_PROJECT_ID", default_var=Project.TPU_PROD_ENV_ONE_VM.value
+          "TCU_PROJECT_ID", default_var="cienet-cmcs"
       ),
       cluster_name=models.Variable.get(
-          "TCU_CLUSTER_NAME", default_var="yuna-xpk-v6e"
+          "TCU_CLUSTER_NAME", default_var="qmcgarry-auto"
       ),
-      region=models.Variable.get(
-          "TCU_REGION", default_var=Region.ASIA_NORTHEAST1.value
-      ),
-      zone=models.Variable.get(
-          "TCU_ZONE", default_var=Zone.ASIA_NORTHEAST1_B.value
-      ),
-      container_name=models.Variable.get(
-          "CONTAINER_NAME", default_var="jax-tpu-job"
-      ),
+      region=models.Variable.get("TCU_REGION", default_var="europe-west4"),
+      zone=models.Variable.get("TCU_ZONE", default_var="europe-west4-a"),
   )
 
   kubeconfig_path = "/tmp/kubeconfig"
@@ -488,7 +566,7 @@ with models.DAG(
       backoff_limit=0,
       completions=4,
       parallelism=4,
-      image="us-docker.pkg.dev/tpu-prod-env-one-vm/yuna-docker-repo/tpu-info:v0.4.0",
+      image="asia-northeast1-docker.pkg.dev/cienet-cmcs/yuna-docker/tpu-info:v0.4.0",
       container_name="jax-tpu-job",
       tpu_cores_per_pod=4,
       node_selector={
@@ -499,23 +577,64 @@ with models.DAG(
       command_args=[
           """
           python -c 'import jax; print("TPU cores:", jax.device_count())'
-          python /app/jax_tpu_benchmark.py
+          python -c '
+          import jax
+          import jax.numpy as jnp
+          import time
+          import os
+          from jax.sharding import Mesh, NamedSharding
+          from jax.experimental.pjit import pjit
+
+          os.environ.setdefault("JAX_USE_PJIT", "true")
+          jax.distributed.initialize()
+
+          global_devices = jax.devices()
+          print(f"[Host {jax.process_index()}] Got {len(global_devices)} global devices")
+          mesh = Mesh(global_devices, ("x",))
+
+          print(f"[Host {jax.process_index()}] Allocating data...")
+          size = 32768
+          x_global = jnp.ones((size, size), dtype=jnp.float32)
+          y_global = jnp.ones((size, size), dtype=jnp.float32)
+
+          print(f"[Host {jax.process_index()}] Sharding data...")
+          sharding = NamedSharding(mesh, jax.sharding.PartitionSpec("x", None))
+          x = jax.device_put(x_global, sharding)
+          y = jax.device_put(y_global, sharding)
+          print(f"[Host {jax.process_index()}] Data on device")
+
+          # ========= Define heavy workload =========
+          @pjit
+          def matmul_ultra_heavy(x, y):
+              tmp1 = jnp.dot(x, y)
+              tmp2 = jnp.dot(tmp1, y.T)
+              tmp3 = jnp.dot(tmp2, x.T)
+              tmp4 = jnp.dot(tmp3, x)
+              tmp5 = jnp.dot(tmp4, y)
+              return tmp5
+
+          print(f"[Host {jax.process_index()}] Warming up...")
+          matmul_ultra_heavy(x, y).block_until_ready()
+
+          # ========= Benchmark =========
+          print(f"[Host {jax.process_index()}] Starting benchmark...")
+
+          start = time.time()
+          for i in range(1_000_000): # Remember to control loop time to control experiment time
+              result = matmul_ultra_heavy(x, y)
+          result.block_until_ready()
+          end = time.time()
+
+          if jax.process_index() == 0:
+              print(f"Total time: {end - start:.2f} seconds (on full v6e-16)")
+          '
           echo "sleep..."
           sleep 10000
           """
       ],
-      volume_name="code",
-      config_map_name="jax-tpu-benchmark-code-one-tpuinfo-output",
+      volume_name="",
+      config_map_name="",
   )
-
-  workload_command_args = [
-      """
-      python -c 'import jax; print("TPU cores:", jax.device_count())'
-      python /app/jax_tpu_benchmark.py
-      echo "sleep..."
-      sleep 10000
-      """
-  ]
 
   # Clean up any pre-existing workloads to ensure a clean environment for the
   # test.
@@ -549,14 +668,24 @@ with models.DAG(
       .expand(pod_name=active_pods)
   )
 
-  verify_utilization_per_pod = fetch_parse_and_compare_utilization.partial(
-      info=cluster_info, job_apply_time=apply_time
-  ).expand(comparison_data=active_pods.zip(tpu_info_outputs))
+  with TaskGroup(group_id="verification_group") as verification_group:
+    validate_table_structure_task = (
+        validate_table_structure.override(task_id="validate_table_structure_task")
+        .partial()
+        .expand(tpu_info_output=tpu_info_outputs)
+    )
 
-  summary = summarize_results.override(
-      task_id="summarize_results", trigger_rule=TriggerRule.ALL_DONE
-  )(verify_utilization_per_pod, active_pods)
+    validate_row_counts_task = (
+        validate_row_counts.override(task_id="validate_row_counts_task")
+        .partial()
+        .expand(tpu_info_output=tpu_info_outputs)
+    )
 
+    validate_table_contents_task = (
+        validate_table_contents.override(task_id="validate_table_contents_task")
+        .partial()
+        .expand(tpu_info_output=tpu_info_outputs)
+    )
   clean_up = end_workload.override(
       task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
   )(
@@ -568,12 +697,17 @@ with models.DAG(
   )
 
   (
+    validate_table_structure_task
+    >> validate_row_counts_task
+    >> validate_table_contents_task
+  )
+
+  (
       start_cleanup
       >> apply_time
       >> active_pods
       >> wait_for_job_start
       >> tpu_info_outputs
-      >> verify_utilization_per_pod
+      >> verification_group
+      >> clean_up
   )
-
-  summary >> clean_up
