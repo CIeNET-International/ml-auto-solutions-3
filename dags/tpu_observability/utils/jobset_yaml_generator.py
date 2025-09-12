@@ -1,72 +1,102 @@
-"""Utility to generate YAML for a Kubernetes JobSet for TPU workloads."""
+"""Generates a JobSet YAML file for running TPU workloads on GKE.
+
+This script defines a `JobSetParams` dataclass to configure the JobSet
+and uses a YAML template to generate the final JobSet YAML. It includes
+custom handling for command arguments to allow multi-line strings.
+"""
 
 import dataclasses
+from dataclasses import asdict
 import textwrap
-from typing import Dict, List, Optional
+from typing import List, Optional
+
 import yaml
 
 
-@dataclasses.dataclass
+dataclass = dataclasses.dataclass
+TEMPLATE = """
+apiVersion: jobset.x-k8s.io/v1alpha2
+kind: JobSet
+metadata:
+  name: {jobset_name}
+  annotations:
+    alpha.jobset.sigs.k8s.io/exclusive-topology: cloud.google.com/gke-nodepool
+  namespace: {namespace}
+spec:
+  failurePolicy:
+    maxRestarts: {max_restarts}
+  replicatedJobs:
+  - name: {replicated_job_name}
+    replicas: {replicas}
+    template:
+      spec:
+        backoffLimit: {backoff_limit}
+        completions: {completions}
+        parallelism: {parallelism}
+        template:
+          spec:
+            nodeSelector:
+              cloud.google.com/gke-tpu-accelerator: {tpu_accelerator_type}
+              cloud.google.com/gke-tpu-topology: {tpu_topology}
+            containers:
+            - name: {container_name}
+              image: {image}
+              __COMMAND_ARGS_PLACEHOLDER__
+              stdin: true
+              tty: true
+              resources:
+                requests:
+                  google.com/tpu: {tpu_cores_per_pod}
+                limits:
+                  google.com/tpu: {tpu_cores_per_pod}
+"""
+
+
+@dataclass
 class YamlConfig:
-  """A data structure to store dynamic parameters for the JobSet YAML.
+  """A class to hold all parameters for the JobSet YAML template."""
 
-  This class centralizes all configurable parts of the YAML, making DAGs
-  cleaner and more maintainable.
-  """
-
-  # Metadata
+  # --- Metadata ---
   jobset_name: str
-  namespace: str
 
-  # Failure Policy
-  max_restarts: int
+  namespace: str = "default"
 
-  # ReplicatedJob Spec
-  replicated_job_name: str
-  replicas: int
+  # --- JobSet Specification ---
+  max_restarts: int = 5
+  replicated_job_name: str = "tpu-slice"
+  replicas: int = 2
 
-  # Job Template Spec
-  backoff_limit: int
-  completions: int
-  parallelism: int
+  # --- Pod Specification ---
+  backoff_limit: int = 0
+  completions: int = 4
+  parallelism: int = 4
 
-  # Container Spec
-  container_name: str
-  image: str
-  tpu_cores_per_pod: int
-  command: Optional[List[str]] = None
+  # --- Node Selection (Crucial for TPUs) ---
+  tpu_accelerator_type: str = "tpu-v6e-slice"
+  tpu_topology: str = "4x4"
+
+  # --- Container Specification ---
+  container_name: str = "jax-tpu-worker"
+  image: str = (
+      "asia-northeast1-docker.pkg.dev/cienet-cmcs/yuna-docker/tpu-info:v0.4.0"
+  )
+  command: Optional[List[str]] = (["bash", "-c"],)
   command_args: Optional[List[str]] = None
 
-  # Pod Template Spec
-  node_selector: Optional[Dict[str, str]] = None
-
-  # Volume Spec
-  volume_name: Optional[str] = None
-  config_map_name: Optional[str] = None
+  # --- Resource Allocation ---
+  tpu_cores_per_pod: int = 4
 
 
-# --- Custom String Class for Multi-line Args ---
 class LiteralScalarString(str):
   pass
 
 
 def literal_presenter(dumper, data):
-  """This presenter tells PyYAML to render instances of LiteralScalarString.
-
-  Args:
-    dumper: The PyYAML dumper object.
-    data: The FlowList instance to represent.
-
-  Returns:
-    The represented YAML sequence in flow style.
-  """
   return dumper.represent_scalar("tag:yaml.org,2002:str", data, style="|")
-
 
 yaml.add_representer(LiteralScalarString, literal_presenter)
 
 
-# --- Custom List Class for Flow Style Command ---
 class FlowList(list):
   pass
 
@@ -91,144 +121,40 @@ def flow_list_presenter(dumper, data):
 yaml.add_representer(FlowList, flow_list_presenter)
 
 
-def create_jobset_yaml(
-    jobset_name: str = "tpu-info-v6e-workload",
-    namespace: str = "default",
-    max_restarts: int = 5,
-    replicated_job_name: str = "tpu-job-slice",
-    replicas: int = 2,
-    backoff_limit: int = 0,
-    completions: int = 4,
-    parallelism: int = 4,
-    image: str = "python:3.10",
-    container_name: str = "jax-tpu-job",
-    tpu_cores_per_pod: int = 4,
-    node_selector: Optional[Dict[str, str]] = None,
-    command: Optional[List[str]] = None,
-    command_args: Optional[List[str]] = None,
-    volume_name: Optional[str] = None,
-    config_map_name: Optional[str] = None,
-) -> str:
-  """Dynamically generates the YAML configuration for a Kubernetes JobSet.
+def create_jobset_yaml(jobset_config):
+  """Generates and saves a JobSet YAML file from the given JobSetParams.
+
+  This function takes a JobSetParams object, formats a base YAML template,
+  and then uses PyYAML to add custom elements like multi-line command arguments
+  with literal style. The resulting YAML is saved to a file named after
+  the jobset_name.
 
   Args:
-      jobset_name (str): The name of the JobSet.
-      namespace (str): The namespace where the JobSet will be created.
-      max_restarts (int): The maximum number of restarts for the JobSet's
-        failure policy.
-      replicated_job_name (str): The name of the ReplicatedJob.
-      replicas (int): The number of replicas for the ReplicatedJob.
-      backoff_limit (int): The backoff limit for the job template.
-      completions (int): The number of completions for each job.
-      parallelism (int): The parallelism for each job.
-      image (str): The container image to use.
-      container_name (str): The name of the container within the pod.
-      tpu_cores_per_pod (int): The number of TPU cores requested per pod.
-      node_selector (Optional[Dict[str, str]]): The node selector for pod
-        scheduling.
-      command (Optional[List[str]]): The main command to run in the container.
-      command_args (Optional[List[str]]): The arguments for the command.
-      volume_name (Optional[str]): The name of the volume to mount.
-      config_map_name (Optional[str]): The name of the ConfigMap to use. If
-        None, no volume is mounted.
-
-  Returns:
-      str: The formatted YAML string.
+    jobset_config: An instance of JobSetParams containing all configuration
+      parameters for the JobSet.
   """
-  if node_selector is None:
-    node_selector = {
-        "cloud.google.com/gke-tpu-accelerator": "tpu-v6e-slice",
-        "cloud.google.com/gke-tpu-topology": "4x4",
-    }
+  params_dict = asdict(jobset_config)
 
-  if command_args is None:
-    command_args = [
-        """
-            echo "sleep..."
-            sleep 10000
-            """
+  final_yaml = TEMPLATE.format(**params_dict)
+  intermediate_yaml_str = final_yaml.replace(
+      "__COMMAND_ARGS_PLACEHOLDER__", "command_args_placeholder: true"
+  )
+  data = yaml.safe_load(intermediate_yaml_str)
+  container_spec = data["spec"]["replicatedJobs"][0]["template"]["spec"][
+      "template"
+  ]["spec"]["containers"][0]
+  del container_spec["command_args_placeholder"]
+
+  container_spec["command"] = jobset_config.command
+
+  if jobset_config.command_args:
+    processed_args = [
+        LiteralScalarString(textwrap.dedent(arg).strip())
+        for arg in jobset_config.command_args
     ]
-  processed_args = []
-  for arg in command_args:
-    dedented_arg = textwrap.dedent(arg).strip()
-    processed_args.append(LiteralScalarString(dedented_arg))
+    container_spec["args"] = processed_args
+  output_file_path = f"/tmp/{jobset_config.jobset_name}.yaml"
 
-  processed_command = FlowList(command) if command is not None else None
-
-  jobset_dict = {
-      "apiVersion": "jobset.x-k8s.io/v1alpha2",
-      "kind": "JobSet",
-      "metadata": {
-          "name": jobset_name,
-          "annotations": {
-              "alpha.jobset.sigs.k8s.io/exclusive-topology": (
-                  "cloud.google.com/gke-nodepool"
-              )
-          },
-          "namespace": namespace,
-      },
-      "spec": {
-          "failurePolicy": {
-              "restartStrategy": "BlockingRecreate",
-              "maxRestarts": max_restarts,
-          },
-          "replicatedJobs": [{
-              "name": replicated_job_name,
-              "replicas": replicas,
-              "template": {
-                  "spec": {
-                      "backoffLimit": backoff_limit,
-                      "completions": completions,
-                      "parallelism": parallelism,
-                      "completionMode": "Indexed",
-                      "template": {
-                          "spec": {
-                              "hostNetwork": True,
-                              "dnsPolicy": "ClusterFirstWithHostNet",
-                              "subdomain": "headless-svc",
-                              "restartPolicy": "Never",
-                              "nodeSelector": node_selector,
-                              "containers": [{
-                                  "name": container_name,
-                                  "image": image,
-                                  "ports": [
-                                      {"containerPort": 8471},
-                                      {"containerPort": 8080},
-                                      {"containerPort": 8431},
-                                  ],
-                                  "securityContext": {"privileged": True},
-                                  "command": processed_command,
-                                  "args": processed_args,
-                                  "stdin": True,
-                                  "tty": True,
-                                  "resources": {
-                                      "requests": {
-                                          "google.com/tpu": tpu_cores_per_pod
-                                      },
-                                      "limits": {
-                                          "google.com/tpu": tpu_cores_per_pod
-                                      },
-                                  },
-                              }],
-                          }
-                      },
-                  }
-              },
-          }],
-      },
-  }
-
-  if config_map_name:
-    pod_spec = jobset_dict["spec"]["replicatedJobs"][0]["template"]["spec"][
-        "template"
-    ]["spec"]
-    pod_spec["containers"][0]["volumeMounts"] = [{
-        "name": volume_name,
-        "mountPath": "/app",
-    }]
-    pod_spec["volumes"] = [{
-        "name": volume_name,
-        "configMap": {"name": config_map_name},
-    }]
-
-  return yaml.dump(jobset_dict, sort_keys=False)
+  with open(output_file_path, "w", encoding="utf-8") as f:
+    yaml.dump(data, f, sort_keys=False, indent=2)
+  return output_file_path
