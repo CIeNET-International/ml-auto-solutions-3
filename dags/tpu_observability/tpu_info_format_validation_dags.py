@@ -44,69 +44,53 @@ class Info:
   cluster_name: str
 
 
+def _get_credentials_command(cluster_name: str, region: str, project_id: str):
+  return " ".join([
+      "gcloud container clusters",
+      f"get-credentials {cluster_name}",
+      f"--region={region}",
+      f"--project={project_id}",
+  ])
+
+
+def _k8s_apply_command(kubeconfig: str, yaml_path: str, namespace: str):
+  return " ".join([
+      f"kubectl --kubeconfig={kubeconfig} apply",
+      f"-f {yaml_path}",
+      f"-n {namespace}"
+  ])
+
+
+def _k8s_delete_command(kubeconfig: str, namespace: str):
+  return " ".join([
+      f"kubectl --kubeconfig={kubeconfig} delete jobsets --all",
+      f"-n {namespace} --timeout=60s --ignore-not-found=true"
+  ])
+
+
+
 @task
 def run_workload(info: Info, kubeconfig: str, yaml_config: YamlConfig):
-  """Applies the workload YAML to the GKE cluster using subprocess.
-
-  This task executes a series of shell commands using Python's subprocess
-  module to perform the following steps:
-  1. Defines temporary paths for kubeconfig and the YAML file.
-  2. Copies the workload YAML file from GCS to the local temp path.
-  3. Authenticates gcloud and gets credentials for the specified GKE cluster,
-      storing them in the temporary kubeconfig file.
-  4. Applies the YAML file to the `default` namespace using kubectl, pointing
-      to the temporary kubeconfig.
-  5. Returns the current UTC time as the job's start time, generated in Python.
-
-  Args:
-      info: Configuration object with cluster and workload details.
-      kubeconfig: The path to the kubeconfig file.
-      yaml_config: The YamlConfig object containing namespace information.
-
-  Returns:
-      The UTC timestamp (ISO 8601 format) of when the job was applied.
   """
-  params = dataclasses.asdict(yaml_config)
-  base_job_name = yaml_config.jobset_name
-
-  logging.info("Generating YAML content for JobSet: %s", base_job_name)
-
-  yaml_content = create_jobset_yaml(**params)
-
-  yaml_path = f"/tmp/{base_job_name}.yaml"
-  with open(yaml_path, "w") as f:
-    f.write(yaml_content)
-  logging.info("Successfully generated YAML file at: %s", yaml_path)
-  with open(yaml_path, "r") as f:
-    logging.info("--- File Content ---\n%s", f.read())
-
+  Applies the specified YAML file to the GKE cluster.
+  """
   env = os.environ.copy()
   env["KUBECONFIG"] = kubeconfig
 
-  gcloud_cmd = (
-      f"gcloud container clusters get-credentials {info.cluster_name} "
-      f"--region={info.region} "
-      f"--project={info.project_id} "
+  # Get GKE cluster credentials
+  yaml_path = create_jobset_yaml(yaml_config)
+  result = subprocess.run(
+        " && ".join([
+          _get_credentials_command(info.cluster_name, info.region, info.project_id),
+          _k8s_apply_command(kubeconfig, yaml_path, yaml_config.namespace),
+      ]),
+      shell=True, check=True, env=env, capture_output=True, text=True
   )
 
-  subprocess.run(
-      gcloud_cmd,
-      shell=True,
-      check=True,
-      env=env,
-      capture_output=True,
-      text=True,
-  )
-  kubectl_cmd = (
-      f"kubectl --kubeconfig={kubeconfig} apply -f {yaml_path} -n"
-      f" {yaml_config.namespace}"
-  )
-  subprocess.run(
-      kubectl_cmd, shell=True, check=True, capture_output=True, text=True
-  )
+  print("STDOUT:", result.stdout)
+
   current_time_utc = datetime.datetime.now(datetime.timezone.utc)
-  current_time_utc_format = current_time_utc.isoformat(timespec="milliseconds")
-  return current_time_utc_format
+  return current_time_utc.isoformat(timespec="milliseconds")
 
 
 @task
@@ -125,25 +109,12 @@ def end_workload(info: Info, kubeconfig: str, yaml_config: YamlConfig):
   env = os.environ.copy()
   env["KUBECONFIG"] = kubeconfig
 
-  gcloud_cmd = (
-      f"gcloud container clusters get-credentials {info.cluster_name} "
-      f"--region={info.region} "
-      f"--project={info.project_id} "
-  )
-
   subprocess.run(
-      gcloud_cmd,
-      shell=True,
-      check=True,
-      env=env,
-  )
-
-  kubectl_cmd = (
-      f"kubectl --kubeconfig={kubeconfig} delete jobsets --all -n"
-      f" {yaml_config.namespace} --timeout=60s --ignore-not-found=true"
-  )
-  subprocess.run(
-      kubectl_cmd, shell=True, check=True, capture_output=True, text=True
+      " && ".join([
+          _get_credentials_command(info.cluster_name, info.region, info.project_id),
+          _k8s_delete_command(kubeconfig, yaml_config.namespace),
+      ]),
+      shell=True, check=True, env=env, capture_output=True, text=True
   )
 
 
@@ -163,14 +134,8 @@ def get_active_pods(info: Info, kubeconfig: str, yaml_config: YamlConfig):
   env = os.environ.copy()
   env["KUBECONFIG"] = kubeconfig
 
-  gcloud_cmd = (
-      f"gcloud container clusters get-credentials {info.cluster_name} "
-      f"--region={info.region} "
-      f"--project={info.project_id} "
-  )
-
   subprocess.run(
-      gcloud_cmd,
+      _get_credentials_command(info.cluster_name, info.region, info.project_id),
       shell=True,
       check=True,
       env=env,
@@ -287,6 +252,20 @@ def get_tpu_info_from_pod(kubeconfig: str, pod_name: str) -> str:
 
 @task
 def validate_table_structure(tpu_info_output: str):
+  """Validates the structural integrity of tables within the tpu-info output.
+
+  This task checks if expected tables ("TPU Chips", "TPU Runtime Utilization",
+  "TensorCore Utilization", and "TPU Buffer Transfer Latency") are present
+  and have a valid structure (header, body, and footer) in the provided
+  `tpu_info_output`.
+
+  Args:
+    tpu_info_output: The string output from the 'tpu-info' command.
+
+  Raises:
+    AirflowException: If any of the expected tables are not found or have
+      an incomplete structure.
+  """
   table_title = [
       "TPU Chips",
       "TPU Runtime Utilization",
@@ -376,9 +355,7 @@ def validate_row_counts(tpu_info_output: str):
       print(error_msg)
       errors.append(error_msg)
   if errors:
-    raise AirflowException(
-        f"Row count check error: {errors}"
-    )
+    raise AirflowException(f"Row count check error: {errors}")
 
 
 @task
@@ -443,7 +420,6 @@ def validate_table_contents(tpu_info_output: str):
             )
 
       case "TPU Runtime Utilization":
-
         for i, row_str in enumerate(rows, 1):
           cols = [col.strip() for col in row_str.split("│") if col.strip()]
 
@@ -566,14 +542,11 @@ with models.DAG(
       backoff_limit=0,
       completions=4,
       parallelism=4,
+      tpu_accelerator_type="tpu-v6e-slice",
+      tpu_topology="4x4",
+      container_name="jax-tpu-worker",
       image="asia-northeast1-docker.pkg.dev/cienet-cmcs/yuna-docker/tpu-info:v0.4.0",
-      container_name="jax-tpu-job",
-      tpu_cores_per_pod=4,
-      node_selector={
-          "cloud.google.com/gke-tpu-accelerator": "tpu-v6e-slice",
-          "cloud.google.com/gke-tpu-topology": "4x4",
-      },
-      command=["/bin/bash", "-c"],
+      command=["bash", "-c"],
       command_args=[
           """
           python -c 'import jax; print("TPU cores:", jax.device_count())'
@@ -632,8 +605,7 @@ with models.DAG(
           sleep 10000
           """
       ],
-      volume_name="",
-      config_map_name="",
+      tpu_cores_per_pod=4,
   )
 
   # Clean up any pre-existing workloads to ensure a clean environment for the
@@ -646,7 +618,7 @@ with models.DAG(
       yaml_config=yaml_config_instance,
   )
 
-  apply_time = run_workload.override(task_id="run_workload")(
+  apply_time = run_workload(
       info=cluster_info,
       kubeconfig=kubeconfig_path,
       yaml_config=yaml_config_instance,
@@ -670,7 +642,9 @@ with models.DAG(
 
   with TaskGroup(group_id="verification_group") as verification_group:
     validate_table_structure_task = (
-        validate_table_structure.override(task_id="validate_table_structure_task")
+        validate_table_structure.override(
+            task_id="validate_table_structure_task"
+        )
         .partial()
         .expand(tpu_info_output=tpu_info_outputs)
     )
@@ -697,9 +671,9 @@ with models.DAG(
   )
 
   (
-    validate_table_structure_task
-    >> validate_row_counts_task
-    >> validate_table_contents_task
+      validate_table_structure_task
+      >> validate_row_counts_task
+      >> validate_table_contents_task
   )
 
   (
