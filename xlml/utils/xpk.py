@@ -17,14 +17,18 @@
 import os
 import tempfile
 import uuid
+
 from absl import logging
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from airflow.hooks.subprocess import SubprocessHook
 from kubernetes import client as k8s_client
+from kubernetes import config
+from kubernetes.client.exceptions import ApiException
 from xlml.apis import metric_config
 from xlml.utils import gke, composer
 from dags.common.vm_resource import GpuVersion
+from http import HTTPStatus
 
 # b/411426745 - Setting branch to 0.4.1 till the depdency issue is resolved.
 MAIN_BRANCH = "v0.4.1"
@@ -65,6 +69,79 @@ def is_valid_gpu_version(accelerator_type: str):
   if accelerator_type in [member.value for member in GpuVersion]:
     return True
   return False
+
+
+@task.sensor(poke_interval=60, mode="reschedule", timeout=3000)
+def wait_and_create_lease(
+    lease_name: str, holder_identity: str = "airflow", **context
+) -> bool:
+  """
+  Creates a Kubernetes Lease object using the Python client, and keeps
+  retrying every minute if the lease already exists.
+
+  Args:
+    lease_name (str): The name of the lease to create.
+    holder_identity (str): The identity of the holder of the lease. Defaults to "airflow".
+  """
+  config.load_kube_config()
+  api = k8s_client.CoordinationV1Api()
+  body = k8s_client.V1Lease(
+      api_version="coordination.k8s.io/v1",
+      kind="Lease",
+      metadata=k8s_client.V1ObjectMeta(
+          name=lease_name,
+          namespace="default",
+      ),
+      spec=k8s_client.V1LeaseSpec(
+          holder_identity=holder_identity,
+      ),
+  )
+
+  try:
+    logging.info(f"Creating lease: {lease_name}")
+    api.create_namespaced_lease("default", body)
+  except ApiException as e:
+    if e.status == HTTPStatus.CONFLICT:
+      logging.warning(
+          f"Lease '{lease_name}' already exists. Retrying after one minute..."
+      )
+      logging.info(f"Status: {e.status}, Reason: {e.reason}, Body: {e.body}")
+      return False
+    logging.info(
+        f"Failed to create lease. Status: {e.status}, Reason: {e.reason}, Body: {e.body}"
+    )
+    raise ApiException(
+        f"Creating status: {e.status}, Reason: {e.reason}, Body: {e.body}"
+    ) from e
+  logging.info(f"Successfully created lease: {lease_name}")
+  return True
+
+
+@task
+def delete_lease(lease_name: str):
+  """
+  Delete a Kubernetes Lease object using the Python client.
+
+  Args:
+    lease_name (str): The name of the lease to be deleted.
+
+  Returns:
+    bool: True if the lease was deleted, False if it failed to delete.
+  """
+  config.load_kube_config()
+  api = k8s_client.CoordinationV1Api()
+
+  try:
+    logging.info(f"Deleting lease: {lease_name}")
+    api.delete_namespaced_lease(lease_name, "default")
+  except ApiException as e:
+    logging.info(
+        f"Failed to delete lease. Status: {e.status}, Reason: {e.reason}, Body: {e.body}"
+    )
+    raise ApiException(
+        f"Deleting status: {e.status}, Reason: {e.reason}, Body: {e.body}"
+    ) from e
+  logging.info(f"Successfully delete lease: {lease_name}")
 
 
 @task
