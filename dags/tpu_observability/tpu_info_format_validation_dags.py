@@ -10,7 +10,7 @@ import os
 import random
 import re
 import subprocess
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 
 from airflow import models
 from airflow.decorators import task
@@ -45,28 +45,33 @@ class Info:
 
 
 def _get_credentials_command(cluster_name: str, region: str, project_id: str):
-  return " ".join([
-      "gcloud container clusters",
-      f"get-credentials {cluster_name}",
-      f"--region={region}",
-      f"--project={project_id}",
-  ])
+  return " ".join(
+      [
+          "gcloud container clusters",
+          f"get-credentials {cluster_name}",
+          f"--region={region}",
+          f"--project={project_id}",
+      ]
+  )
 
 
 def _k8s_apply_command(kubeconfig: str, yaml_path: str, namespace: str):
-  return " ".join([
-      f"kubectl --kubeconfig={kubeconfig} apply",
-      f"-f {yaml_path}",
-      f"-n {namespace}"
-  ])
+  return " ".join(
+      [
+          f"kubectl --kubeconfig={kubeconfig} apply",
+          f"-f {yaml_path}",
+          f"-n {namespace}",
+      ]
+  )
 
 
 def _k8s_delete_command(kubeconfig: str, namespace: str):
-  return " ".join([
-      f"kubectl --kubeconfig={kubeconfig} delete jobsets --all",
-      f"-n {namespace} --timeout=60s --ignore-not-found=true"
-  ])
-
+  return " ".join(
+      [
+          f"kubectl --kubeconfig={kubeconfig} delete jobsets --all",
+          f"-n {namespace} --timeout=60s --ignore-not-found=true",
+      ]
+  )
 
 
 @task
@@ -80,11 +85,19 @@ def run_workload(info: Info, kubeconfig: str, yaml_config: YamlConfig):
   # Get GKE cluster credentials
   yaml_path = create_jobset_yaml(yaml_config)
   result = subprocess.run(
-        " && ".join([
-          _get_credentials_command(info.cluster_name, info.region, info.project_id),
-          _k8s_apply_command(kubeconfig, yaml_path, yaml_config.namespace),
-      ]),
-      shell=True, check=True, env=env, capture_output=True, text=True
+      " && ".join(
+          [
+              _get_credentials_command(
+                  info.cluster_name, info.region, info.project_id
+              ),
+              _k8s_apply_command(kubeconfig, yaml_path, yaml_config.namespace),
+          ]
+      ),
+      shell=True,
+      check=True,
+      env=env,
+      capture_output=True,
+      text=True,
   )
 
   print("STDOUT:", result.stdout)
@@ -110,11 +123,19 @@ def end_workload(info: Info, kubeconfig: str, yaml_config: YamlConfig):
   env["KUBECONFIG"] = kubeconfig
 
   subprocess.run(
-      " && ".join([
-          _get_credentials_command(info.cluster_name, info.region, info.project_id),
-          _k8s_delete_command(kubeconfig, yaml_config.namespace),
-      ]),
-      shell=True, check=True, env=env, capture_output=True, text=True
+      " && ".join(
+          [
+              _get_credentials_command(
+                  info.cluster_name, info.region, info.project_id
+              ),
+              _k8s_delete_command(kubeconfig, yaml_config.namespace),
+          ]
+      ),
+      shell=True,
+      check=True,
+      env=env,
+      capture_output=True,
+      text=True,
   )
 
 
@@ -250,258 +271,217 @@ def get_tpu_info_from_pod(kubeconfig: str, pod_name: str) -> str:
   return result.stdout
 
 
+# TODO move to an tpu-info util file after validated this function work.
 @task
-def validate_table_structure(tpu_info_output: str):
-  """Validates the structural integrity of tables within the tpu-info output.
+def split_tables_by_structure(output: str) -> Dict[str, str]:
+  """Splits a multi-table string output into a dictionary of tables.
 
-  This task checks if expected tables ("TPU Chips", "TPU Runtime Utilization",
-  "TensorCore Utilization", and "TPU Buffer Transfer Latency") are present
-  and have a valid structure (header, body, and footer) in the provided
-  `tpu_info_output`.
+  Each table is identified by a title line followed by a block enclosed
+  in box-drawing characters.
 
   Args:
-    tpu_info_output: The string output from the 'tpu-info' command.
-
-  Raises:
-    AirflowException: If any of the expected tables are not found or have
-      an incomplete structure.
-  """
-  table_title = [
-      "TPU Chips",
-      "TPU Runtime Utilization",
-      "TensorCore Utilization",
-      "TPU Buffer Transfer Latency",
-  ]
-  flag = True
-  invaild_metric = ""
-  for title in table_title:
-    escaped_title = re.escape(title)
-    pattern = re.compile(
-        rf"{escaped_title}\s*"
-        rf"┏[━┳]+┓\s*"
-        rf"┃.*?┃\s*"
-        rf"┡[━╇]+┩"
-        rf"[\s\S]*?"
-        rf"└[─┴]+┘",
-        re.S,
-    )
-    output_validated = pattern.search(tpu_info_output)
-    if not output_validated:
-      logging.error("Table %s is not exist", title)
-      invaild_metric += title + " "
-      flag = False
-      continue
-    output_ = pattern.search(tpu_info_output).group(0)
-    print(output_)
-
-    if flag is False:
-      raise AirflowException(
-          f"Structure Error: Table '{invaild_metric}' not found or its"
-          " structure is incomplete."
-      )
-
-
-@task
-def validate_row_counts(tpu_info_output: str):
-  """Validates the number of rows in specific tables within the tpu-info output.
-
-  This task checks if the "TPU Chips", "TPU Runtime Utilization", and
-  "TensorCore Utilization" tables in the provided `tpu_info_output` contain
-  the expected number of data rows (excluding headers and footers).
-
-  Args:
-    tpu_info_output: The string output from the 'tpu-info' command.
+    output: The string containing one or more tables.
 
   Returns:
-    A tuple containing:
-      - bool: True if all checked tables have the expected row counts, False
-      otherwise.
-      - list[str]: A list of error messages for tables with incorrect row
-      counts.
+    A dictionary where keys are the table titles and values are the full
+    text content of each table, including the box-drawing characters.
   """
-  errors = []
-  tables_to_check = {
-      "TPU Chips": 4,
-      "TPU Runtime Utilization": 4,
-      "TensorCore Utilization": 4,
-  }
+  pattern = re.compile(
+      # Capture Group 1: The Title Line
+      # ^ - matches the beginning of a line (because of the re.M flag)
+      # [^\n] - matches any character that is not a '\n'
+      # .*? - non-greedily matches any character until the end of the line
+      r"(^[^\n].*?)\n\s*"
+      # Capture Group 2: The Full Table Block
+      r"(┏[━┳]+┓[\s\S]*?└[─┴]+┘)",
+      re.MULTILINE,
+  )
 
-  for title, expected_rows in tables_to_check.items():
-    escaped_title = re.escape(title)
-    pattern = re.compile(
-        rf"{escaped_title}\s*"
-        rf"┏[━┳]+┓\s*"
-        rf"┃.*?┃\s*"
-        rf"┡[━╇]+┩"
-        rf"([\s\S]*?)"
-        rf"└[─┴]+┘",
-        re.S,
+  matches = pattern.findall(output)
+
+  tables_dict = {}
+  for title, table_block in matches:
+    tables_dict[title.strip()] = table_block.strip()
+
+  return tables_dict
+
+
+@task
+def verify_all_table_exist(
+    tables_dict: Dict[str, str], expected_count: int = 4
+):
+  """Receives a dictionary of parsed tables and verifies if the total number
+
+  of tables matches the expected count.
+
+  Args:
+      tables_dict: A dictionary where keys are table titles and values are the
+        full text content for each table.
+      expected_count: The expected number of tables, defaults to 4.
+
+  Returns:
+      A tuple containing:
+      - bool: True if the table count is correct, otherwise False.
+      - str: A message describing the verification result.
+  """
+  actual_count = len(tables_dict)
+
+  if actual_count != expected_count:
+    raise AirflowException(
+        f"Verification FAILED: Found {actual_count} tables, but expected"
+        f" {expected_count}.\nFound table titles: {list(tables_dict.keys())}"
     )
-    match = pattern.search(tpu_info_output)
-    if not match:
+
+
+@task
+def validate_chips_table(metric_tables_dict: str, expected_tpu_type: str):
+  """Validates the row count and content for the 'TPU Chips' table."""
+  errors = []
+  content = metric_tables_dict["TPU Chips"]
+  match = re.search(r"┡[━╇]+┩\s*(.*?)\s*└[─┴]+┘", content, re.S)
+  if not match:
+    raise AirflowException(
+        "[TPU Chips] Table structure is incomplete (missing body or footer)."
+    )
+  tpu_type = expected_tpu_type.split("-")[1]
+  rows = match.group(1).strip().split("\n")
+
+  expected_rows = 4
+  if len(rows) != expected_rows:
+    raise AirflowException(
+        f"[TPU Chips] Row count is incorrect. (Actual: {len(rows)}, Expected:"
+        f" {expected_rows})"
+    )
+
+  for i, row_str in enumerate(rows, 1):
+    cols = [col.strip() for col in row_str.split("│") if col.strip()]
+
+    chip, type_str, _, pid_str = cols
+    if not re.match(r"/dev/vfio/\d+", chip):
+      errors.append(f"[TPU Chips] Row {i}: Invalid 'Chip' format: {chip}")
+    if tpu_type not in type_str:
       errors.append(
-          f"Row count check error: Could not find table '{title}' to count its"
-          " rows."
+          f"[TPU Chips] Row {i}: 'Type' column value '{type_str}' does not"
+          f" contain the expected version '{tpu_type}'."
       )
-      continue
-
-    body_content = match.group(1).strip()
-    actual_rows = len(body_content.split("\n")) if body_content else 0
-    if actual_rows != expected_rows:
-      error_msg = (
-          f"Row count for '{title}' is incorrect"
-          f"(Actual: {actual_rows}, Expected: {expected_rows})."
+    if not (pid_str.isdigit() and int(pid_str) > 0):
+      errors.append(
+          f"[TPU Chips] Row {i}: 'PID' must be a number greater than 0, got:"
+          f" {pid_str}"
       )
-      print(error_msg)
-      errors.append(error_msg)
   if errors:
-    raise AirflowException(f"Row count check error: {errors}")
+    raise AirflowException(errors)
 
 
 @task
-def validate_table_contents(tpu_info_output: str):
-  """Validates the content format of tables within the tpu-info output.
-
-  This task parses the output of the 'tpu-info' command and checks if the
-  data within each expected table ("TPU Chips", "TPU Runtime Utilization",
-  "TensorCore Utilization", and "TPU Buffer Transfer Latency") conforms to
-  the expected format and constraints (e.g., numeric ranges, specific units).
-
-  Args:
-    tpu_info_output: The string output from the 'tpu-info' command.
-
-  Returns:
-    A boolean indicating whether all table contents are valid.
-    (Note: Currently, this function only populates an `errors` list but doesn't
-    explicitly return it or raise an exception based on it).
-  """
-  table_title = [
-      "TPU Chips",
-      "TPU Runtime Utilization",
-      "TensorCore Utilization",
-      "TPU Buffer Transfer Latency",
-  ]
+def validate_runtime_table(metric_tables_dict: str) -> List[str]:
+  """Validates the row count and content for the 'TPU Runtime Utilization' table."""
   errors = []
-  for title in table_title:
-    escaped_title = re.escape(title)
-    pattern = re.compile(
-        rf"{escaped_title}\s*"
-        rf"┏[━┳]+┓\s*"
-        rf"┃.*?┃\s*"
-        rf"┡[━╇]+┩"
-        rf"([\s\S]*?)"
-        rf"└[─┴]+┘",
-        re.S,
+  content = metric_tables_dict["TPU Runtime Utilization"]
+  match = re.search(r"┡[━╇]+┩\s*(.*?)\s*└[─┴]+┘", content, re.S)
+  if not match:
+    raise AirflowException(
+        "[Runtime] Table structure is incomplete (missing body or footer)."
     )
-    output_validated = pattern.search(tpu_info_output)
-    rows = output_validated.group(1).strip().split("\n")
 
-    match title:
-      case "TPU Chips":
-        for i, row_str in enumerate(rows, 1):
-          cols = [col.strip() for col in row_str.split("│") if col.strip()]
+  rows = match.group(1).strip().split("\n")
 
-          chip, type_str, devices_str, pid_str = cols
-          if not re.match(r"/dev/vfio/\d+", chip):
-            errors.append(f"TPU Chips, Row {i}: Invalid 'Chip' format: {chip}")
-          if "TPU" not in type_str:
-            errors.append(
-                f"TPU Chips, Row {i}: 'Type' does not seem valid: {type_str}"
-            )
-          if not (devices_str.isdigit() and int(devices_str) > 0):
-            errors.append(
-                f"TPU Chips, Row {i}: 'Devices' must be > 0, but got:"
-                f" {devices_str}"
-            )
+  expected_rows = 4
+  if len(rows) != expected_rows:
+    raise AirflowException(
+        f"[Runtime] Row count is incorrect. (Actual: {len(rows)}, Expected:"
+        f" {expected_rows})"
+    )
 
-          if not (pid_str.isdigit() and int(pid_str) > 0):
-            errors.append(
-                f"TPU Chips, Row {i}: 'PID' must be > 0, but got: {pid_str}"
-            )
+  for i, row_str in enumerate(rows, 1):
+    cols = [col.strip() for col in row_str.split("│") if col.strip()]
 
-      case "TPU Runtime Utilization":
-        for i, row_str in enumerate(rows, 1):
-          cols = [col.strip() for col in row_str.split("│") if col.strip()]
+    _, hbm_usage, duty_cycle = cols
+    hbm_match = re.match(r"(\d+\.\d+)\s*GiB\s*/\s*(\d+\.\d+)\s*GiB", hbm_usage)
+    if hbm_match:
+      used, total = float(hbm_match.group(1)), float(hbm_match.group(2))
+      if used > total:
+        errors.append(
+            f"[Runtime] Row {i}: Used HBM ({used}) cannot be greater than Total"
+            f" HBM ({total})."
+        )
+    else:
+      errors.append(
+          f"[Runtime] Row {i}: Invalid 'HBM Usage' format: {hbm_usage}"
+      )
 
-          _, hbm_usage, duty_cycle = cols
-          hbm_match = re.match(
-              r"(\d+\.\d+)\s*GiB\s*/\s*(\d+\.\d+)\s*GiB", hbm_usage
-          )
-          if hbm_match:
-            used, total = float(hbm_match.group(1)), float(hbm_match.group(2))
-            if total == 0:
-              errors.append(f"Runtime Util, Row {i}: Total HBM cannot be 0.")
-            if used > total:
-              errors.append(
-                  f"Runtime Util, Row {i}: Used HBM ({used}) cannot be"
-                  f" greater than Total HBM ({total})."
-              )
-          else:
-            errors.append(
-                f"Runtime Util, Row {i}: Invalid 'HBM Usage' format:"
-                f" {hbm_usage}"
-            )
-
-          duty_match = re.match(r"(\d+\.\d+)%", duty_cycle)
-          if duty_match:
-            percent = float(duty_match.group(1))
-            if not (0.0 <= percent <= 100.0):
-              errors.append(
-                  f"Runtime Util, Row {i}: 'Duty cycle' is not between"
-                  f" 0-100%: {duty_cycle}"
-              )
-          else:
-            errors.append(
-                f"Runtime Util, Row {i}: Invalid 'Duty cycle' format:"
-                f" {duty_cycle}"
-            )
-
-      case "TensorCore Utilization":
-        for i, row_str in enumerate(rows, 1):
-          cols = [col.strip() for col in row_str.split("│") if col.strip()]
-
-          _, util_str = cols
-          util_match = re.match(r"(\d+\.\d+)%", util_str)
-          if util_match:
-            percent = float(util_match.group(1))
-            if not (0.0 <= percent <= 100.0):
-              errors.append(
-                  f"TensorCore Util, Row {i}: 'Utilization' is not between"
-                  f" 0-100%: {util_str}"
-              )
-          else:
-            errors.append(
-                f"TensorCore Util, Row {i}: Invalid 'Utilization' format:"
-                f" {util_str}"
-            )
-
-      case "TPU Buffer Transfer Latency":
-        for i, row_str in enumerate(rows, 1):
-          cols = [col.strip() for col in row_str.split("│") if col.strip()]
-
-          if not cols[0]:
-            errors.append(f"Latency, Row {i}: 'Buffer Size' cannot be empty.")
-          for j, val_str in enumerate(cols[1:], 1):  # Check P50, P90, etc.
-            if val_str.endswith(" us"):
-              try:
-                if float(val_str.replace(" us", "")) <= 0:
-                  errors.append(
-                      f"Latency, Row {i}, Col {j+1}: Value must be > 0,"
-                      f" but got {val_str}"
-                  )
-              except ValueError:
-                errors.append(
-                    f"Latency, Row {i}, Col {j+1}: Could not parse numeric"
-                    f" part of {val_str}"
-                )
-            else:
-              errors.append(
-                  f"Latency, Row {i}, Col {j+1}: Value must end with ' us',"
-                  f" but got {val_str}"
-              )
-
+    duty_match = re.match(r"(\d+\.\d+)%", duty_cycle)
+    if not (duty_match and 0.0 <= float(duty_match.group(1)) <= 100.0):
+      errors.append(
+          f"[Runtime] Row {i}: 'Duty cycle' not between 0-100%: {duty_cycle}"
+      )
   if errors:
-    raise AirflowException(f"Table content check error: {errors}")
+    raise AirflowException(errors)
+
+
+@task
+def validate_tensorcore_table(metric_tables_dict: str):
+  """Validates the row count and content for the 'TensorCore Utilization' table."""
+  errors = []
+  content = metric_tables_dict["TensorCore Utilization"]
+  match = re.search(r"┡[━╇]+┩\s*(.*?)\s*└[─┴]+┘", content, re.S)
+  if not match:
+    raise AirflowException(
+        "[TensorCore] Table structure is incomplete (missing body or footer)."
+    )
+
+  rows = match.group(1).strip().split("\n")
+
+  expected_rows = 4
+  if len(rows) != expected_rows:
+    raise AirflowException(
+        f"[TensorCore] Row count is incorrect. (Actual: {len(rows)}, Expected:"
+        f" {expected_rows})"
+    )
+
+  for i, row_str in enumerate(rows, 1):
+    cols = [col.strip() for col in row_str.split("│") if col.strip()]
+
+    _, util_str = cols
+    util_match = re.match(r"(\d+\.\d+)%", util_str)
+    if not (util_match and 0.0 < float(util_match.group(1)) <= 100.0):
+      errors.append(
+          f"[TensorCore] Row {i}: 'Utilization' not between 0-100%: {util_str}"
+      )
+  if errors:
+    raise AirflowException(errors)
+
+
+@task
+def validate_latency_table(metric_tables_dict: str) -> List[str]:
+  """Validates the row count and content for the TPU Buffer Transfer Latency table."""
+  errors = []
+  content = metric_tables_dict["TPU Buffer Transfer Latency"]
+  match = re.search(r"┡[━╇]+┩\s*(.*?)\s*└[─┴]+┘", content, re.S)
+  if not match:
+    raise AirflowException(
+        "[Latency] Table structure is incomplete (missing body or footer)."
+    )
+
+  rows = match.group(1).strip().split("\n")
+
+  if len(rows) == 0:
+    raise AirflowException(
+        "[Latency] Row count is incorrect. At least one row is expected."
+    )
+
+  for i, row_str in enumerate(rows, 1):
+    cols = [col.strip() for col in row_str.split("│") if col.strip()]
+
+    for j, val_str in enumerate(cols[1:]):
+      if not (
+          val_str.endswith(" us") and float(val_str.replace(" us", "")) > 0
+      ):
+        errors.append(
+            f"[Latency] Row {i}, Col {j+2}: Invalid latency value: {val_str}"
+        )
+  if errors:
+    raise AirflowException(errors)
 
 
 with models.DAG(
@@ -526,10 +506,10 @@ with models.DAG(
           "TCU_PROJECT_ID", default_var="cienet-cmcs"
       ),
       cluster_name=models.Variable.get(
-          "TCU_CLUSTER_NAME", default_var="qmcgarry-auto"
+          "TCU_CLUSTER_NAME", default_var="yuna-xpk-v6e-ew4"
       ),
       region=models.Variable.get("TCU_REGION", default_var="europe-west4"),
-      zone=models.Variable.get("TCU_ZONE", default_var="europe-west4-a"),
+      zone=models.Variable.get("TCU_ZONE", default_var=Zone.EUROPE_WEST4_A),
   )
 
   kubeconfig_path = "/tmp/kubeconfig"
@@ -640,26 +620,44 @@ with models.DAG(
       .expand(pod_name=active_pods)
   )
 
+  metric_tables_dict = (
+      split_tables_by_structure.override(task_id="get_each_metric_table")
+      .partial()
+      .expand(output=tpu_info_outputs)
+  )
+
   with TaskGroup(group_id="verification_group") as verification_group:
-    validate_table_structure_task = (
-        validate_table_structure.override(
-            task_id="validate_table_structure_task"
-        )
-        .partial()
-        .expand(tpu_info_output=tpu_info_outputs)
+
+    verify_all_table_exist_task = (
+        verify_all_table_exist.override(task_id="verify_all_table_exist_task")
+        .partial(expected_count=4)
+        .expand(tables_dict=metric_tables_dict)
     )
 
-    validate_row_counts_task = (
-        validate_row_counts.override(task_id="validate_row_counts_task")
-        .partial()
-        .expand(tpu_info_output=tpu_info_outputs)
+    validate_tpu_chips_metric = (
+        validate_chips_table.override(task_id="validate_tpu_chips_metric")
+        .partial(expected_tpu_type=yaml_config_instance.tpu_accelerator_type)
+        .expand(metric_tables_dict=metric_tables_dict)
     )
 
-    validate_table_contents_task = (
-        validate_table_contents.override(task_id="validate_table_contents_task")
+    validate_runtime_metric = (
+        validate_runtime_table.override(task_id="validate_runtime_metric")
         .partial()
-        .expand(tpu_info_output=tpu_info_outputs)
+        .expand(metric_tables_dict=metric_tables_dict)
     )
+
+    validate_tensorcore_metric = (
+        validate_tensorcore_table.override(task_id="validate_tensorcore_metric")
+        .partial()
+        .expand(metric_tables_dict=metric_tables_dict)
+    )
+
+    validate_latency_metric = (
+        validate_latency_table.override(task_id="validate_latency_metric")
+        .partial()
+        .expand(metric_tables_dict=metric_tables_dict)
+    )
+
   clean_up = end_workload.override(
       task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
   )(
@@ -671,9 +669,13 @@ with models.DAG(
   )
 
   (
-      validate_table_structure_task
-      >> validate_row_counts_task
-      >> validate_table_contents_task
+      verify_all_table_exist_task
+      >> [
+          validate_tpu_chips_metric,
+          validate_runtime_metric,
+          validate_tensorcore_metric,
+          validate_latency_metric,
+      ]
   )
 
   (
@@ -682,6 +684,7 @@ with models.DAG(
       >> active_pods
       >> wait_for_job_start
       >> tpu_info_outputs
+      >> metric_tables_dict
       >> verification_group
       >> clean_up
   )
