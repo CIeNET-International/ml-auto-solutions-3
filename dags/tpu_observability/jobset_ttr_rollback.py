@@ -340,13 +340,11 @@ with models.DAG(
       setups=start_workload,
   )
 
-  '''
   cleanup_node_pool = node_pool.delete.override(
       trigger_rule=TriggerRule.ALL_DONE
   )(node_pool=cluster_info).as_teardown(
       setups=create_node_pool,
   )
-  '''
 
   (
       # create_node_pool
