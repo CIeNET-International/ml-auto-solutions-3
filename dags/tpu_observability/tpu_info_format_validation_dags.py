@@ -22,8 +22,8 @@ from dags.common.vm_resource import Project
 from dags.common.vm_resource import Region
 from dags.common.vm_resource import Zone
 from dags.map_reproducibility.utils import constants
-from dags.tpu_observability.utils.jobset_yaml_generator import create_jobset_yaml
-from dags.tpu_observability.utils.jobset_yaml_generator import YamlConfig
+from dags.tpu_observability.utils.jobset_yaml_generator import JobSet
+from dags.tpu_observability.utils.jobset_yaml_generator import Workload
 from dags.tpu_observability.utils.monitoring import query_time_series
 
 
@@ -45,45 +45,45 @@ class Info:
 
 
 def _get_credentials_command(cluster_name: str, region: str, project_id: str):
-  return " ".join(
-      [
-          "gcloud container clusters",
-          f"get-credentials {cluster_name}",
-          f"--region={region}",
-          f"--project={project_id}",
-      ]
-  )
+  return " ".join([
+      "gcloud container clusters",
+      f"get-credentials {cluster_name}",
+      f"--region={region}",
+      f"--project={project_id}",
+  ])
 
 
 def _k8s_apply_command(kubeconfig: str, yaml_path: str, namespace: str):
-  return " ".join(
-      [
-          f"kubectl --kubeconfig={kubeconfig} apply",
-          f"-f {yaml_path}",
-          f"-n {namespace}",
-      ]
-  )
+  return " ".join([
+      f"kubectl --kubeconfig={kubeconfig} apply",
+      f"-f {yaml_path}",
+      f"-n {namespace}",
+  ])
 
 
 def _k8s_delete_command(kubeconfig: str, namespace: str):
-  return " ".join(
-      [
-          f"kubectl --kubeconfig={kubeconfig} delete jobsets --all",
-          f"-n {namespace} --timeout=60s --ignore-not-found=true",
-      ]
-  )
+  return " ".join([
+      f"kubectl --kubeconfig={kubeconfig} delete jobsets --all",
+      f"-n {namespace} --timeout=60s --ignore-not-found=true",
+  ])
 
 
 @task
-def run_workload(info: Info, kubeconfig: str, yaml_config: YamlConfig):
-  """
-  Applies the specified YAML file to the GKE cluster.
+def run_workload(info: Info, kubeconfig: str, yaml_config: JobSet, script: str):
+  """Applies the specified YAML file to the GKE cluster.
+
+  Args:
+    info: Configuration object with cluster details.
+    kubeconfig: The path to the kubeconfig file.
+    yaml_config: The JobSet object containing YAML configuration.
+    script: The workload script to be executed.
   """
   env = os.environ.copy()
   env["KUBECONFIG"] = kubeconfig
 
   # Get GKE cluster credentials
-  yaml_path = create_jobset_yaml(yaml_config)
+  yaml_path = yaml_config_instance.generate_yaml(workload_script=script)
+
   result = subprocess.run(
       " && ".join(
           [
@@ -107,7 +107,7 @@ def run_workload(info: Info, kubeconfig: str, yaml_config: YamlConfig):
 
 
 @task
-def end_workload(info: Info, kubeconfig: str, yaml_config: YamlConfig):
+def end_workload(info: Info, kubeconfig: str, yaml_config: JobSet):
   """Deletes all JobSets from the GKE cluster to clean up resources.
 
   This task executes a bash script to:
@@ -123,14 +123,12 @@ def end_workload(info: Info, kubeconfig: str, yaml_config: YamlConfig):
   env["KUBECONFIG"] = kubeconfig
 
   subprocess.run(
-      " && ".join(
-          [
-              _get_credentials_command(
-                  info.cluster_name, info.region, info.project_id
-              ),
-              _k8s_delete_command(kubeconfig, yaml_config.namespace),
-          ]
-      ),
+      " && ".join([
+          _get_credentials_command(
+              info.cluster_name, info.region, info.project_id
+          ),
+          _k8s_delete_command(kubeconfig, yaml_config.namespace),
+      ]),
       shell=True,
       check=True,
       env=env,
@@ -140,7 +138,7 @@ def end_workload(info: Info, kubeconfig: str, yaml_config: YamlConfig):
 
 
 @task
-def get_active_pods(info: Info, kubeconfig: str, yaml_config: YamlConfig):
+def get_active_pods(info: Info, kubeconfig: str, yaml_config: JobSet):
   """Deletes all JobSets from the GKE cluster to clean up resources.
 
   This task executes a bash script to:
@@ -334,7 +332,7 @@ def verify_all_table_exist(
 
 
 @task
-def validate_chips_table(metric_tables_dict: str, expected_tpu_type: str):
+def validate_chips_table(metric_tables_dict: str, yaml_config: str):
   """Validates the row count and content for the 'TPU Chips' table."""
   errors = []
   content = metric_tables_dict["TPU Chips"]
@@ -343,7 +341,7 @@ def validate_chips_table(metric_tables_dict: str, expected_tpu_type: str):
     raise AirflowException(
         "[TPU Chips] Table structure is incomplete (missing body or footer)."
     )
-  tpu_type = expected_tpu_type.split("-")[1]
+  tpu_type = yaml_config.tpu_accelerator_type.split("-")[1]
   rows = match.group(1).strip().split("\n")
 
   expected_rows = 4
@@ -513,7 +511,7 @@ with models.DAG(
   )
 
   kubeconfig_path = "/tmp/kubeconfig"
-  yaml_config_instance = YamlConfig(
+  yaml_config_instance = JobSet(
       jobset_name="tpu-info-v6e-workload",
       namespace="default",
       max_restarts=5,
@@ -527,66 +525,10 @@ with models.DAG(
       container_name="jax-tpu-worker",
       image="asia-northeast1-docker.pkg.dev/cienet-cmcs/yuna-docker/tpu-info:v0.4.0",
       command=["bash", "-c"],
-      command_args=[
-          """
-          python -c 'import jax; print("TPU cores:", jax.device_count())'
-          python -c '
-          import jax
-          import jax.numpy as jnp
-          import time
-          import os
-          from jax.sharding import Mesh, NamedSharding
-          from jax.experimental.pjit import pjit
-
-          os.environ.setdefault("JAX_USE_PJIT", "true")
-          jax.distributed.initialize()
-
-          global_devices = jax.devices()
-          print(f"[Host {jax.process_index()}] Got {len(global_devices)} global devices")
-          mesh = Mesh(global_devices, ("x",))
-
-          print(f"[Host {jax.process_index()}] Allocating data...")
-          size = 32768
-          x_global = jnp.ones((size, size), dtype=jnp.float32)
-          y_global = jnp.ones((size, size), dtype=jnp.float32)
-
-          print(f"[Host {jax.process_index()}] Sharding data...")
-          sharding = NamedSharding(mesh, jax.sharding.PartitionSpec("x", None))
-          x = jax.device_put(x_global, sharding)
-          y = jax.device_put(y_global, sharding)
-          print(f"[Host {jax.process_index()}] Data on device")
-
-          # ========= Define heavy workload =========
-          @pjit
-          def matmul_ultra_heavy(x, y):
-              tmp1 = jnp.dot(x, y)
-              tmp2 = jnp.dot(tmp1, y.T)
-              tmp3 = jnp.dot(tmp2, x.T)
-              tmp4 = jnp.dot(tmp3, x)
-              tmp5 = jnp.dot(tmp4, y)
-              return tmp5
-
-          print(f"[Host {jax.process_index()}] Warming up...")
-          matmul_ultra_heavy(x, y).block_until_ready()
-
-          # ========= Benchmark =========
-          print(f"[Host {jax.process_index()}] Starting benchmark...")
-
-          start = time.time()
-          for i in range(1_000_000): # Remember to control loop time to control experiment time
-              result = matmul_ultra_heavy(x, y)
-          result.block_until_ready()
-          end = time.time()
-
-          if jax.process_index() == 0:
-              print(f"Total time: {end - start:.2f} seconds (on full v6e-16)")
-          '
-          echo "sleep..."
-          sleep 10000
-          """
-      ],
       tpu_cores_per_pod=4,
   )
+
+  workload_script = Workload.JAX_TPU_BENCHMARK
 
   # Clean up any pre-existing workloads to ensure a clean environment for the
   # test.
@@ -602,6 +544,7 @@ with models.DAG(
       info=cluster_info,
       kubeconfig=kubeconfig_path,
       yaml_config=yaml_config_instance,
+      script=workload_script,
   )
 
   active_pods = get_active_pods.override(task_id="get_active_pod")(
@@ -627,7 +570,6 @@ with models.DAG(
   )
 
   with TaskGroup(group_id="verification_group") as verification_group:
-
     verify_all_table_exist_task = (
         verify_all_table_exist.override(task_id="verify_all_table_exist_task")
         .partial(expected_count=4)
@@ -636,7 +578,7 @@ with models.DAG(
 
     validate_tpu_chips_metric = (
         validate_chips_table.override(task_id="validate_tpu_chips_metric")
-        .partial(expected_tpu_type=yaml_config_instance.tpu_accelerator_type)
+        .partial(yaml_config=yaml_config_instance)
         .expand(metric_tables_dict=metric_tables_dict)
     )
 
