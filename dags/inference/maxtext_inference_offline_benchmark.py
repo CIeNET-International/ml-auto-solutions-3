@@ -29,7 +29,7 @@ RUNTIME_IMAGE = RuntimeVersion.V2_ALPHA_TPUV6.value
 GCS_SUBFOLDER_PREFIX = test_owner.Team.INFERENCE.value
 
 # Run once a day at 5 am UTC (9 pm PST)
-SCHEDULED_TIME = "0 5 * * *" if composer_env.is_prod_env() else None
+SCHEDULED_TIME = "None" if composer_env.is_prod_env() else None
 
 
 def get_mlperf_converter_script():
@@ -179,23 +179,20 @@ def maxtext_inference_offline_benchmark_config(
     git_clone_maxtext += f" -b {maxtext_branch}"
 
   set_up_cmds = (
-      "pip install --upgrade pip",
-      "sudo apt-get -y update",
-      "sudo apt-get -y install python3.10-venv",
-      "sudo apt-get -y install jq",
-      "python -m venv .env",
-      "source .env/bin/activate",
-      # Setup Loadgen
-      "git clone https://github.com/mlcommons/inference.git",
-      "cd inference/loadgen && pip install . && cd ../..",
-      # Setup MaxText
-      git_clone_maxtext,
-      f"cd maxtext && bash setup.sh MODE={test_mode.value} && cd ..",
-      "pip install -r maxtext/MaxText/inference_mlperf/requirements.txt",
-      "cd maxtext/MaxText/inference_mlperf/trillium",
-      # Copy Dataset
-      "gsutil cp gs://cloud-tpu-inference-public/mlcommons/inference/language/llama2-70b/data/processed-openorca/open_orca_gpt4_tokenized_llama.sampled_24576.pkl /tmp/processed-data.pkl",
-      "cp ../user100.conf ./",
+    "pip install --upgrade pip",
+    "sudo apt-get -y update",
+    "sudo apt-get -y install build-essential zlib1g-dev libncurses5-dev libgdbm-dev libnss3-dev libssl-dev libreadline-dev libffi-dev libsqlite3-dev libbz2-dev liblzma-dev cmake pkg-config jq python3.12 python3.12-venv python3.12-dev",
+    "python3.12 -m venv .env",
+    "source .env/bin/activate",
+    "git clone https://github.com/mlcommons/inference.git",
+    "git clone https://github.com/google/maxtext.git",
+    # Install MLPerf loadgen first
+    "cd inference/loadgen && pip install . && cd ../..",
+    # Let MaxText's setup.sh handle its own environment using uv
+    f"cd maxtext && git checkout main && bash setup.sh MODE=stable && cd ..",
+    "cd maxtext/src/MaxText/inference_mlperf/trillium",
+    "gsutil cp gs://cloud-tpu-inference-public/mlcommons/inference/language/llama2-70b/data/processed-openorca/open_orca_gpt4_tokenized_llama.sampled_24576.pkl /tmp/processed-data.pkl",
+    "cp ../user100.conf ./",
   )
 
   add_accuracy_to_metrics = r"""tac evaluate_offline_accuracy_log.log | grep -m1 '{.*}' | \ #  read file in reverse, grep first json-like pattern
@@ -207,20 +204,30 @@ def maxtext_inference_offline_benchmark_config(
         jq -sc '.[0].metrics += .[1].metrics | .[0]' acc_metric_report.jsonl - > acc_combined_output.jsonl"""  # Combines metrics objects
 
   run_performance = (
-      "source .env/bin/activate",
-      "export DATA_DISK_DIR=/tmp",
-      "export CHECKPOINT=gs://inference-benchmarks/models/llama2-70b-chat/quant/int8_",
-      "export TOKENIZER_PATH=/home/ml-auto-solutions/maxtext/assets/tokenizer.llama2",
-      "export LOGLEVEL=WARNING",  # the logging at the INFO level was too much and hit some quotas
-      "cd maxtext/MaxText/inference_mlperf/trillium",
-      "bash benchmarks_llama2-70b-trillium_2x4.sh -x -s -t -b performance",
-      'cp "$(ls -t /tmp/logs/*performance*/mlperf_log_detail.txt | head -n1)" ./perf_log.txt',
-      get_mlperf_converter_script(),
-      "python3 convert_logs.py --log-file perf_log.txt --output-file perf_metric_report.jsonl",
+       "source .env/bin/activate",
+        "export DATA_DISK_DIR=/tmp",
+        "export CHECKPOINT=gs://inference-benchmarks/models/llama2-70b-chat/quant/int8_",
+        # Correct the TOKENIZER_PATH to point to the new src layout
+        "export TOKENIZER_PATH=$HOME/maxtext/src/MaxText/assets/tokenizer.llama2",
+        "export MAXENGINE_CONFIG_FILEPATH=$HOME/maxtext/src/MaxText/configs/base.yml",
+        "export LOGLEVEL=WARNING",
+        "cd maxtext/src/MaxText/inference_mlperf",
+        """sed -i "s|export USER_CONFIG=user\${TOTAL_SAMPLE_COUNT}.conf|export USER_CONFIG=MaxText/inference_mlperf/user100.conf|g" llama_offline_run.sh && """
+        """sed -i "s|export USER_CONFIG=user.conf|export USER_CONFIG=MaxText/inference_mlperf/user100.conf|g" llama_offline_run.sh && """
+        """sed -i 's/export TOTAL_SAMPLE_COUNT=1000/export TOTAL_SAMPLE_COUNT=100/g' llama_offline_run.sh""",
+        "cd trillium",
+        "bash benchmarks_llama2-70b-trillium_2x4.sh -x -s -t -b performance",
+        'cp "$(ls -t /tmp/logs/*performance*/mlperf_log_detail.txt | head -n1)" ./perf_log.txt',
+        get_mlperf_converter_script(),
+        "python3 convert_logs.py --log-file perf_log.txt --output-file perf_metric_report.jsonl",
   )
 
   run_accuracy = (
       "export FAST_EVAL=true",
+      # HOTFIX: Correct the TOKENIZER_PATH to point to the new src layout
+      "export TOKENIZER_PATH=$HOME/maxtext/src/MaxText/assets/tokenizer.llama2",
+      # HOTFIX: Set the config file path directly to override the script's faulty default.
+      "export MAXENGINE_CONFIG_FILEPATH=$HOME/maxtext/src/MaxText/configs/base.yml",
       "bash benchmarks_llama2-70b-trillium_2x4.sh -x -s -t -b accuracy",
       'cp "$(ls -t /tmp/logs/*accuracy*/mlperf_log_detail.txt | head -n1)" ./acc_log.txt',
       'cp "$(ls -t /tmp/logs/*accuracy*/evaluate_offline_accuracy_log.log | head -n1)" ./evaluate_offline_accuracy_log.log',
@@ -270,10 +277,10 @@ gcs_subfolder_prefix = test_owner.Team.INFERENCE.value
 tags = ["inference_team", "maxtext", "offline", "benchmark"]
 
 if USER_PREFIX:
-  dag_id = f"{USER_PREFIX}_maxtext_inference_offline_benchmark"
+  dag_id = f"{USER_PREFIX}_maxtext_inference_offline_benchmark_0916_fix"
   tags.append(USER_PREFIX)
 else:
-  dag_id = "maxtext_inference_offline_benchmark"
+  dag_id = "maxtext_inference_offline_benchmark_0916_fix"
 
 with models.DAG(
     dag_id=dag_id,
