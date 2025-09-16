@@ -6,18 +6,18 @@ import logging
 import os
 import subprocess
 import time
-
 from typing import Dict, List, Optional
+
 from airflow import models
 from airflow.decorators import task
 from airflow.models import Variable
 from airflow.utils.trigger_rule import TriggerRule
+from google.cloud import monitoring_v3
+
 from dags.common.vm_resource import Project, Region, Zone
 from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils.jobset_yaml_generator import create_jobset_yaml
-from google.cloud import monitoring_v3
-
 
 # Will be moved to node_pool_utils
 @dataclasses.dataclass
@@ -65,10 +65,10 @@ def run_jobset_workload(info: node_pool.Info, yaml_config: YamlConfig):
   """Generates and runs a JobSet manifest.
 
   Args:
-    info(Info): An instance of the Info class that encapsulates
-    the configuration and metadata of a GKE node pool and workload.
-    yaml_config(YamlConfig): All parameters needing to generate the
-    JobSet file which will be run by this function.
+      info(Info): An instance of the Info class that encapsulates
+        the configuration and metadata of a GKE node pool and workload.
+        yaml_config(YamlConfig): All parameters needing to generate the
+        JobSet file which will be run by this function.
   """
   params = dataclasses.asdict(yaml_config)
 
@@ -116,7 +116,7 @@ def wait(seconds: int):
   """sleeps for a given number of seconds.
 
   Args:
-    seconds(int): The number of seconds to sleep for.
+      seconds(int): The number of seconds to sleep for.
   """
   command = f"sleep {seconds}"
 
@@ -137,7 +137,7 @@ def end_workload(info: node_pool.Info):
   2. Delete all JobSets in the `default` namespace using `kubectl`.
 
   Args:
-    info(Info): Configuration object with cluster details.
+      info(Info): Configuration object with cluster details.
   """
   command = (
       "export KUBECONFIG=/tmp/kubeconfig && "
@@ -156,7 +156,9 @@ def end_workload(info: node_pool.Info):
 
 @task.sensor(poke_interval=60, timeout=3600, mode="reschedule")
 def wait_for_jobset_ttr(info: node_pool.Info) -> bool:
-  """A sensor task which polls the jobset time_between_interruptions metric
+  """Polls the jobset time_between_interruptions metric.
+
+  A sensor task which polls the jobset time_between_interruptions metric
   every 60 seconds for 60 minutes.
 
   Args:
@@ -210,24 +212,25 @@ with models.DAG(
         "if it is updated."
     ),
     doc_md="""
-  # JobSet Time-To-Recover (TTR) Test Using Node-Pool Rollback
+      # JobSet Time-To-Recover (TTR) Test Using Node-Pool Rollback
 
-  ### Description
-  This DAG automates the process of creating a node-pool, launching a jobset
-  then using a node-pool rollback to interrupt the node-pool, and afterwards
-  monitors if the jobset TTR metric gets updated. Finally the DAG cleans up the
-  jobset and node-pool which were created.
+      ### Description
+      This DAG automates the process of creating a node-pool, launching a jobset
+      then using a node-pool rollback to interrupt the node-pool, and afterwards
+      monitors if the jobset TTR metric gets updated. Finally the DAG cleans up
+      the jobset and node-pool which were created.
 
-  ### Prerequisites
-  This test requires an existing cluster and a jobset file to run.
+      ### Prerequisites
+      This test requires an existing cluster to run.
 
-  ### Procedures
-  First the node-pool is created, a jobset yaml is then launched on the cluster
-  and given a short period of time to initiate. After this a rollback is run on
-  the previously created node-pool to interrupt it. A sensor is finally run
-  which will either detect that the jobset time-to-recover metric has been
-  updated, resulting in a success, or timeout, and fail.
-  """,
+      ### Procedures
+      First the node-pool is created, a jobset yaml is then launched on the
+      cluster and given a short period of time to initialize. After this a
+      rollback is run on the previously created node-pool to interrupt it.
+      A sensor is finally run which will either detect that the jobset
+      time-to-recover metric has been updated, resulting in a success, or
+      timeout, and fail.
+      """,
 ) as dag:
   cluster_info = node_pool.Info(
       project_id=Project.TPU_PROD_ENV_ONE_VM.value,
@@ -319,7 +322,7 @@ with models.DAG(
       config_map_name=None,
   )
 
-  create_node_pool = node_pool.create(node_pool=cluster_info)
+  # create_node_pool = node_pool.create(node_pool=cluster_info)
 
   start_workload = run_jobset_workload(
       info=cluster_info, yaml_config=yaml_config_instance
@@ -337,18 +340,20 @@ with models.DAG(
       setups=start_workload,
   )
 
+  '''
   cleanup_node_pool = node_pool.delete.override(
       trigger_rule=TriggerRule.ALL_DONE
   )(node_pool=cluster_info).as_teardown(
       setups=create_node_pool,
   )
+  '''
 
   (
-      create_node_pool
-      >> start_workload
+      # create_node_pool
+      start_workload
       >> wait_three_minutes
       >> rollback_node_pool
       >> wait_for_metric_upload
       >> cleanup_workload
-      >> cleanup_node_pool
+      # >> cleanup_node_pool
   )
