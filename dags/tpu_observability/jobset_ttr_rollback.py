@@ -322,7 +322,7 @@ with models.DAG(
       config_map_name=None,
   )
 
-  # create_node_pool = node_pool.create(node_pool=cluster_info)
+  create_node_pool = node_pool.create(node_pool=cluster_info)
 
   start_workload = run_jobset_workload(
       info=cluster_info, yaml_config=yaml_config_instance
@@ -347,11 +347,11 @@ with models.DAG(
   )
 
   (
-      # create_node_pool
-      start_workload
+      create_node_pool
+      >> start_workload
       >> wait_three_minutes
       >> rollback_node_pool
       >> wait_for_metric_upload
       >> cleanup_workload
-      # >> cleanup_node_pool
+      >> cleanup_node_pool
   )
