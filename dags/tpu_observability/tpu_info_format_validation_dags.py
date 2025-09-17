@@ -3,7 +3,6 @@
 This is done by comparing data from Cloud Logging and Cloud Monitoring.
 """
 
-import dataclasses
 import datetime
 import logging
 import os
@@ -15,33 +14,17 @@ from typing import List, Tuple, Dict
 from airflow import models
 from airflow.decorators import task
 from airflow.utils.task_group import TaskGroup
-from airflow.exceptions import AirflowException
+from airflow.exceptions import AirflowFailException
 from airflow.utils.trigger_rule import TriggerRule
 
 from dags.common.vm_resource import Project
 from dags.common.vm_resource import Region
 from dags.common.vm_resource import Zone
 from dags.map_reproducibility.utils import constants
-from dags.tpu_observability.utils.jobset_yaml_generator import JobSet
-from dags.tpu_observability.utils.jobset_yaml_generator import Workload
+from dags.tpu_observability.utils.jobset_generator import JobSet
+from dags.tpu_observability.utils.jobset_generator import Workload
 from dags.tpu_observability.utils.monitoring import query_time_series
-
-
-@dataclasses.dataclass
-class Info:
-  """Configuration for the GKE Node Pool and Monitoring.
-
-  Attributes:
-    project_id: The Google Cloud project ID.
-    region: The region of the GKE cluster.
-    zone: The zone of the GKE cluster.
-    cluster_name: The name of the GKE cluster.
-  """
-
-  project_id: str
-  region: str
-  zone: str
-  cluster_name: str
+from dags.tpu_observability.utils.node_pool_util import Info
 
 
 def _get_credentials_command(cluster_name: str, region: str, project_id: str):
@@ -68,6 +51,13 @@ def _k8s_delete_command(kubeconfig: str, namespace: str):
   ])
 
 
+def _k8s_get_pod_command(kubeconfig: str, namespace: str):
+  return " ".join([
+      f"kubectl --kubeconfig={kubeconfig} get pods",
+      f"-n {namespace} -o jsonpath={{.items[*].metadata.name}}",
+  ])
+
+
 @task
 def run_workload(info: Info, kubeconfig: str, yaml_config: JobSet, script: str):
   """Applies the specified YAML file to the GKE cluster.
@@ -81,26 +71,30 @@ def run_workload(info: Info, kubeconfig: str, yaml_config: JobSet, script: str):
   env = os.environ.copy()
   env["KUBECONFIG"] = kubeconfig
 
-  # Get GKE cluster credentials
   yaml_path = yaml_config_instance.generate_yaml(workload_script=script)
 
   result = subprocess.run(
-      " && ".join(
-          [
-              _get_credentials_command(
-                  info.cluster_name, info.region, info.project_id
-              ),
-              _k8s_apply_command(kubeconfig, yaml_path, yaml_config.namespace),
-          ]
-      ),
+      " && ".join([
+          _get_credentials_command(
+              info.cluster_name, info.region, info.project_id
+          ),
+          _k8s_apply_command(
+              kubeconfig, yaml_path, yaml_config.params.get("namespace")
+          ),
+      ]),
       shell=True,
-      check=True,
+      check=False,
       env=env,
       capture_output=True,
       text=True,
   )
 
-  print("STDOUT:", result.stdout)
+  if result.returncode != 0:
+    raise AirflowFailException(
+        f"Command failed with exit code {result.returncode}.\n ,STDERR"
+        f" message: {result.stderr}"
+    )
+  logging.info("STDOUT message: %s", result.stdout)
 
   current_time_utc = datetime.datetime.now(datetime.timezone.utc)
   return current_time_utc.isoformat(timespec="milliseconds")
@@ -122,19 +116,23 @@ def end_workload(info: Info, kubeconfig: str, yaml_config: JobSet):
   env = os.environ.copy()
   env["KUBECONFIG"] = kubeconfig
 
-  subprocess.run(
+  result = subprocess.run(
       " && ".join([
           _get_credentials_command(
               info.cluster_name, info.region, info.project_id
           ),
-          _k8s_delete_command(kubeconfig, yaml_config.namespace),
+          _k8s_delete_command(kubeconfig, yaml_config.params.get("namespace")),
       ]),
       shell=True,
-      check=True,
+      check=False,
       env=env,
       capture_output=True,
       text=True,
   )
+  if result.returncode != 0:
+    logging.info("Command failed with exit code %s.", result.returncode)
+    logging.info("STDERR message: %s", result.stderr)
+  logging.info("STDOUT message: %s", result.stdout)
 
 
 @task
@@ -154,7 +152,12 @@ def get_active_pods(info: Info, kubeconfig: str, yaml_config: JobSet):
   env["KUBECONFIG"] = kubeconfig
 
   subprocess.run(
-      _get_credentials_command(info.cluster_name, info.region, info.project_id),
+      " && ".join([
+          _get_credentials_command(
+              info.cluster_name, info.region, info.project_id
+          ),
+          _k8s_get_pod_command(kubeconfig, yaml_config.params.get("namespace")),
+      ]),
       shell=True,
       check=True,
       env=env,
@@ -164,14 +167,15 @@ def get_active_pods(info: Info, kubeconfig: str, yaml_config: JobSet):
 
   kubectl_cmd = (
       f"kubectl --kubeconfig={kubeconfig} get pods -n"
-      f" {yaml_config.namespace} -o jsonpath={{.items[*].metadata.name}}"
+      f" {yaml_config.params.get('namespace')} -o"
+      " jsonpath={.items[*].metadata.name}"
   )
   process = subprocess.run(
       kubectl_cmd, shell=True, check=True, capture_output=True, text=True
   )
   if not process or not process.stdout.strip():
     logging.warning("Received empty pod list from bash task.")
-    raise AirflowException("Received empty pod list from bash task.")
+    raise AirflowFailException("Received empty pod list from bash task.")
 
   pod_list = process.stdout.strip().split()
   return pod_list
@@ -201,7 +205,7 @@ def query_to_wait_for_jobset_start(
   end_time_utc = datetime_job_apply_time + datetime.timedelta(minutes=10)
 
   if not pod_name_list:
-    raise AirflowException("pod_name_list is empty, sensor cannot proceed.")
+    raise AirflowFailException("pod_name_list is empty, sensor cannot proceed.")
 
   pod_name = random.choice(pod_name_list)
   filter_string = (
@@ -308,7 +312,7 @@ def split_tables_by_structure(output: str) -> Dict[str, str]:
 def verify_all_table_exist(
     tables_dict: Dict[str, str], expected_count: int = 4
 ):
-  """Receives a dictionary of parsed tables and verifies if the total number
+  """Receives a dictionary of parsed tables and verifies if the total number.
 
   of tables matches the expected count.
 
@@ -325,7 +329,7 @@ def verify_all_table_exist(
   actual_count = len(tables_dict)
 
   if actual_count != expected_count:
-    raise AirflowException(
+    raise AirflowFailException(
         f"Verification FAILED: Found {actual_count} tables, but expected"
         f" {expected_count}.\nFound table titles: {list(tables_dict.keys())}"
     )
@@ -338,15 +342,15 @@ def validate_chips_table(metric_tables_dict: str, yaml_config: str):
   content = metric_tables_dict["TPU Chips"]
   match = re.search(r"┡[━╇]+┩\s*(.*?)\s*└[─┴]+┘", content, re.S)
   if not match:
-    raise AirflowException(
+    raise AirflowFailException(
         "[TPU Chips] Table structure is incomplete (missing body or footer)."
     )
-  tpu_type = yaml_config.tpu_accelerator_type.split("-")[1]
+  tpu_type = yaml_config.params.get("tpu_accelerator_type").split("-")[1]
   rows = match.group(1).strip().split("\n")
 
   expected_rows = 4
   if len(rows) != expected_rows:
-    raise AirflowException(
+    raise AirflowFailException(
         f"[TPU Chips] Row count is incorrect. (Actual: {len(rows)}, Expected:"
         f" {expected_rows})"
     )
@@ -368,7 +372,7 @@ def validate_chips_table(metric_tables_dict: str, yaml_config: str):
           f" {pid_str}"
       )
   if errors:
-    raise AirflowException(errors)
+    raise AirflowFailException(errors)
 
 
 @task
@@ -378,7 +382,7 @@ def validate_runtime_table(metric_tables_dict: str) -> List[str]:
   content = metric_tables_dict["TPU Runtime Utilization"]
   match = re.search(r"┡[━╇]+┩\s*(.*?)\s*└[─┴]+┘", content, re.S)
   if not match:
-    raise AirflowException(
+    raise AirflowFailException(
         "[Runtime] Table structure is incomplete (missing body or footer)."
     )
 
@@ -386,7 +390,7 @@ def validate_runtime_table(metric_tables_dict: str) -> List[str]:
 
   expected_rows = 4
   if len(rows) != expected_rows:
-    raise AirflowException(
+    raise AirflowFailException(
         f"[Runtime] Row count is incorrect. (Actual: {len(rows)}, Expected:"
         f" {expected_rows})"
     )
@@ -414,7 +418,7 @@ def validate_runtime_table(metric_tables_dict: str) -> List[str]:
           f"[Runtime] Row {i}: 'Duty cycle' not between 0-100%: {duty_cycle}"
       )
   if errors:
-    raise AirflowException(errors)
+    raise AirflowFailException(errors)
 
 
 @task
@@ -424,7 +428,7 @@ def validate_tensorcore_table(metric_tables_dict: str):
   content = metric_tables_dict["TensorCore Utilization"]
   match = re.search(r"┡[━╇]+┩\s*(.*?)\s*└[─┴]+┘", content, re.S)
   if not match:
-    raise AirflowException(
+    raise AirflowFailException(
         "[TensorCore] Table structure is incomplete (missing body or footer)."
     )
 
@@ -432,7 +436,7 @@ def validate_tensorcore_table(metric_tables_dict: str):
 
   expected_rows = 4
   if len(rows) != expected_rows:
-    raise AirflowException(
+    raise AirflowFailException(
         f"[TensorCore] Row count is incorrect. (Actual: {len(rows)}, Expected:"
         f" {expected_rows})"
     )
@@ -447,7 +451,7 @@ def validate_tensorcore_table(metric_tables_dict: str):
           f"[TensorCore] Row {i}: 'Utilization' not between 0-100%: {util_str}"
       )
   if errors:
-    raise AirflowException(errors)
+    raise AirflowFailException(errors)
 
 
 @task
@@ -457,14 +461,14 @@ def validate_latency_table(metric_tables_dict: str) -> List[str]:
   content = metric_tables_dict["TPU Buffer Transfer Latency"]
   match = re.search(r"┡[━╇]+┩\s*(.*?)\s*└[─┴]+┘", content, re.S)
   if not match:
-    raise AirflowException(
+    raise AirflowFailException(
         "[Latency] Table structure is incomplete (missing body or footer)."
     )
 
   rows = match.group(1).strip().split("\n")
 
   if len(rows) == 0:
-    raise AirflowException(
+    raise AirflowFailException(
         "[Latency] Row count is incorrect. At least one row is expected."
     )
 
@@ -479,7 +483,7 @@ def validate_latency_table(metric_tables_dict: str) -> List[str]:
             f"[Latency] Row {i}, Col {j+2}: Invalid latency value: {val_str}"
         )
   if errors:
-    raise AirflowException(errors)
+    raise AirflowFailException(errors)
 
 
 with models.DAG(
@@ -489,15 +493,16 @@ with models.DAG(
     schedule=constants.Schedule.WEEKDAY_PDT_6AM_7AM_EXCEPT_THURSDAY,
     catchup=False,
     tags=["gke", "tpu-observability", "tpu-info"],
-    # TODO modify the description and after dag finish.
+    # TODO check the description and after dag finish.
     description=(
-        "This DAG verifies TensorCore utilization metrics by comparing data"
-        " from Cloud Logging and Cloud Monitoring."
+        "This DAG verifies the format of the tables in the tpu-info output "
+        "using tpu-info CLI tool. It includes 4 tables: TPU Chips, TPU "
+        "Runtime Utilization, TensorCore Utilization, and TPU Buffer Transfer "
+        "Latency."
     ),
     doc_md="""
-      # TensorCore Utilization Verification DAG
-      # This DAG verifies TensorCore utilization metrics by comparing data from
-      # Cloud Logging and Cloud Monitoring.""",
+      # Format Validation DAG
+      # This DAG verifies the format of the tables in the tpu-info output.""",
 ) as dag:
   cluster_info = Info(
       project_id=models.Variable.get(

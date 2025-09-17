@@ -40,14 +40,29 @@ class Status(enum.Enum):
 class Info:
   """Encapsulates information related to a GKE node pool and represents a specific node pool."""
 
-  project_id: str
-  cluster_name: str
-  node_pool_name: str
-  location: str
-  node_locations: str
-  machine_type: str
-  num_nodes: int
-  tpu_topology: str
+  def __init__(
+      self,
+      project_id: str = None,
+      cluster_name: str = None,
+      node_pool_name: str = None,
+      region: str = None,
+      zone: str = None,
+      location: str = None,
+      node_locations: str = None,
+      machine_type: str = None,
+      num_nodes: int = None,
+      tpu_topology: str = None,
+  ):
+    self.project_id = project_id
+    self.cluster_name = cluster_name
+    self.node_pool_name = node_pool_name
+    self.region = region
+    self.zone = zone
+    self.location = location
+    self.node_locations = node_locations
+    self.machine_type = machine_type
+    self.num_nodes = num_nodes
+    self.tpu_topology = tpu_topology
 
 
 @task
@@ -76,10 +91,14 @@ def create(
     command += "2>&1 || true "
 
   process = subprocess.run(
-      command, shell=True, check=True, capture_output=True, text=True
+      command, shell=True, check=False, capture_output=True, text=True
   )
+  if process.returncode != 0:
+    raise AirflowFailException(
+        f"Command failed with exit code {process.returncode}.\n ,STDERR"
+        f" message: {process.stderr}"
+    )
   logging.info("STDOUT message: %s", process.stdout)
-  logging.info("STDERR message: %s", process.stderr)
 
 
 @task
@@ -95,10 +114,15 @@ def delete(node_pool: Info) -> None:
   )
 
   process = subprocess.run(
-      command, shell=True, check=True, capture_output=True, text=True
+      command, shell=True, check=False, capture_output=True, text=True
   )
+
+  if process.returncode != 0:
+    raise AirflowFailException(
+        f"Command failed with exit code {process.returncode}.\n ,STDERR"
+        f" message: {process.stderr}"
+    )
   logging.info("STDOUT message: %s", process.stdout)
-  logging.info("STDERR message: %s", process.stderr)
 
 
 def list_nodes(node_pool: Info) -> List[str]:
