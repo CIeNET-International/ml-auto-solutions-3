@@ -193,11 +193,8 @@ class JobSet:
     final_params["args"] = workload_script
 
     yaml_content = _TEMPLATE.substitute(final_params)
-    output_file_path = (f"/tmp/{final_params['jobset_name']}.yaml")
-    with open(output_file_path, "w", encoding="utf-8") as f:
-      f.write(yaml_content)
 
-    return output_file_path
+    return yaml_content
 
 if __name__ == "__main__":
   my_jobset = JobSet(
@@ -217,4 +214,6 @@ if __name__ == "__main__":
   )
 
   script_to_run = Workload.JAX_TPU_BENCHMARK
-  yaml_path = my_jobset.generate_yaml(workload_script=script_to_run)
+  yaml_content = my_jobset.generate_yaml(workload_script=script_to_run)
+  print(f"kubectl apply -f - -n default <<EOF\n {yaml_content}\nEOF")
+
