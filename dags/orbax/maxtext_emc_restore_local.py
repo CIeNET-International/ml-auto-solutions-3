@@ -73,7 +73,7 @@ with models.DAG(
       name="emc", enable_multi_tier_checkpointing=False
   )
   test_configs = [
-      test_config_util.Checkpointing(
+      test_config_util.TestConfig(
           cluster=XpkClusters.TPU_V5P_128_CLUSTER,
           machine_type="ct5p-hightpu-4t",
           accelerator="v5p-128",
@@ -84,7 +84,7 @@ with models.DAG(
           step=150,
           checkpoint_step=20,
           local_checkpoint_step=20,
-          base_dir=test_config_utilDEFAULT_BUCKET,
+          base_dir=test_config_util.DEFAULT_BUCKET,
       ),
   ]
 
