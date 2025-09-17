@@ -36,11 +36,11 @@ def _get_credentials_command(cluster_name: str, region: str, project_id: str):
   ])
 
 
-def _k8s_apply_command(kubeconfig: str, yaml_path: str, namespace: str):
+def _k8s_apply_command(kubeconfig: str, yaml_content: str, namespace: str):
   return " ".join([
       f"kubectl --kubeconfig={kubeconfig} apply",
-      f"-f {yaml_path}",
-      f"-n {namespace}",
+      f"-f - -n {namespace} <<EOF\n",
+      f"{yaml_content}\nEOF",
   ])
 
 
@@ -71,7 +71,7 @@ def run_workload(info: Info, kubeconfig: str, yaml_config: JobSet, script: str):
   env = os.environ.copy()
   env["KUBECONFIG"] = kubeconfig
 
-  yaml_path = yaml_config_instance.generate_yaml(workload_script=script)
+  yaml_content = yaml_config_instance.generate_yaml(workload_script=script)
 
   result = subprocess.run(
       " && ".join([
@@ -79,7 +79,7 @@ def run_workload(info: Info, kubeconfig: str, yaml_config: JobSet, script: str):
               info.cluster_name, info.region, info.project_id
           ),
           _k8s_apply_command(
-              kubeconfig, yaml_path, yaml_config.params.get("namespace")
+              kubeconfig, yaml_content, yaml_config.params.get("namespace")
           ),
       ]),
       shell=True,
@@ -88,7 +88,17 @@ def run_workload(info: Info, kubeconfig: str, yaml_config: JobSet, script: str):
       capture_output=True,
       text=True,
   )
-
+  logging.info(
+      "Command Execute:\n %s",
+      " && ".join([
+          _get_credentials_command(
+              info.cluster_name, info.region, info.project_id
+          ),
+          _k8s_apply_command(
+              kubeconfig, yaml_content, yaml_config.params.get("namespace")
+          ),
+      ]),
+  )
   if result.returncode != 0:
     raise AirflowFailException(
         f"Command failed with exit code {result.returncode}.\n ,STDERR"
@@ -269,7 +279,7 @@ def get_tpu_info_from_pod(kubeconfig: str, pod_name: str) -> str:
       capture_output=True,
       text=True,
   )
-  print("STDOUT:", result.stdout)
+  logging.info("STDOUT: %s", result.stdout)
   return result.stdout
 
 
