@@ -4,20 +4,13 @@ This script provides classes to define TPU workloads and generate the
 corresponding JobSet YAML files, allowing for customization of various
 parameters like TPU topology, container image, and the script to be executed.
 """
+import dataclasses
+import json
 import string
 import textwrap
 
 import yaml
 from typing import List, Optional
-
-class LiteralScalarString(str):
-  pass
-
-
-def literal_presenter(dumper, data):
-  return dumper.represent_scalar("tag:yaml.org,2002:str", data, style="|")
-
-yaml.add_representer(LiteralScalarString, literal_presenter)
 
 
 class Workload:
@@ -25,9 +18,7 @@ class Workload:
 
   Each workload is a JSON-escaped string, ready to be used as a shell argument.
   """
-  JAX_TPU_BENCHMARK = textwrap.dedent("""
-      python -c 'import jax; print("TPU cores:", jax.device_count())'
-      # Chain commands with '&&' for better error handling
+  JAX_TPU_BENCHMARK = json.dumps(textwrap.dedent("""
       python -c '
       import jax
       import jax.numpy as jnp
@@ -81,7 +72,7 @@ class Workload:
       ' &&
       echo "Workload finished, sleeping now..." &&
       sleep 10000
-      """)
+      """), ensure_ascii=False)
 
 
 _TEMPLATE = string.Template("""
@@ -111,8 +102,9 @@ spec:
             containers:
             - name: $container_name
               image: $image
-              command: ["/bin/bash", "-c"]
-$args
+              command: $command
+              args:
+                - $args
               stdin: true
               tty: true
               resources:
@@ -123,6 +115,7 @@ $args
 """)
 
 
+@dataclasses.dataclass
 class JobSet:
   """Generates YAML configurations for Kubernetes JobSets.
 
@@ -145,19 +138,30 @@ class JobSet:
       tpu_topology: str = "4x4",
       container_name: str = "jax-tpu-worker",
       image: str = "python:3.10",
-      tpu_cores_per_pod: int = 4,
-      **kwargs):
+      command: Optional[List[str]] = None,
+      tpu_cores_per_pod: int = 4):
     """Initializes a JobSet configuration object.
 
     Args:
         jobset_name: The name of the JobSet.
         namespace: The Kubernetes namespace for the JobSet. Defaults to
-        "default".
-        **kwargs: Additional parameters to override the default JobSet
-          configuration.
+          "default".
+        max_restarts: The maximum number of restarts for the JobSet.
+        replicated_job_name: The name for the replicated Job within the JobSet.
+        replicas: The number of replicas for the replicated Job.
+        backoff_limit: The number of failed pods to tolerate before marking the
+          Job as failed.
+        completions: The number of pods that must complete successfully.
+        parallelism: The number of pods to run in parallel.
+        tpu_accelerator_type: The type of TPU accelerator (e.g.,
+          "tpu-v6e-slice").
+        tpu_topology: The TPU topology (e.g., "4x4").
+        container_name: The name of the container in the pod.
+        image: The container image to use.
+        command: The command to run in the container.
+        tpu_cores_per_pod: The number of TPU cores requested per pod.
     """
     self.params = {
-        # Default values
         "jobset_name": jobset_name,
         "namespace": namespace,
         "max_restarts": max_restarts,
@@ -170,11 +174,11 @@ class JobSet:
         "tpu_topology": tpu_topology,
         "container_name": container_name,
         "image": image,
+        "command": command if command is not None else ["bash", "-c"],
         "tpu_cores_per_pod": tpu_cores_per_pod,
     }
-    self.params.update(kwargs)
 
-  def generate_yaml(self, workload_script: str) -> str:
+  def generate_yaml(self, workload_script: Workload) -> str:
     """Generates the final JobSet YAML content.
 
     Args:
@@ -184,24 +188,16 @@ class JobSet:
     Returns:
         A string containing the complete JobSet YAML.
     """
-    command_data = {
-        "args:": [LiteralScalarString(workload_script)]
-    }
-
-    command_snippet = yaml.dump(
-        command_data, default_flow_style=False, indent=2)
-
-    indented_args_block = textwrap.indent(command_snippet, " " * 14)
 
     final_params = self.params.copy()
-    final_params["args"] = indented_args_block
+    final_params["args"] = workload_script
 
     yaml_content = _TEMPLATE.substitute(final_params)
     output_file_path = (f"/tmp/{final_params['jobset_name']}.yaml")
     with open(output_file_path, "w", encoding="utf-8") as f:
       f.write(yaml_content)
-    print(yaml_content)
-    return yaml_content
+
+    return output_file_path
 
 if __name__ == "__main__":
   my_jobset = JobSet(
@@ -221,4 +217,4 @@ if __name__ == "__main__":
   )
 
   script_to_run = Workload.JAX_TPU_BENCHMARK
-  final_yaml_content = my_jobset.generate_yaml(workload_script=script_to_run)
+  yaml_path = my_jobset.generate_yaml(workload_script=script_to_run)
