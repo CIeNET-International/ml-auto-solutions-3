@@ -54,7 +54,9 @@ with models.DAG(
       node_pool_name=Variable.get(
           "NODE_POOL_NAME", default_var="multi_host_nodepool_rollback_auto"
       ),
-      location=Variable.get("LOCATION", default_var=Region.US_EAST5.value),
+      location=Variable.get(
+          "LOCATION", default_var=Region.US_EAST5.value
+      ),
       node_locations=Variable.get(
           "NODE_LOCATIONS", default_var=Zone.US_EAST5_B.value
       ),
