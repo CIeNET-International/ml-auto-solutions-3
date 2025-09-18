@@ -10,14 +10,19 @@ from typing import Dict, List, Optional
 
 from airflow import models
 from airflow.decorators import task
+from airflow.exceptions import AirflowException
 from airflow.models import Variable
 from airflow.utils.trigger_rule import TriggerRule
+from google.auth import default
+from google.auth.transport.requests import Request
 from google.cloud import monitoring_v3
+from kubernetes import client
 
 from dags.common.vm_resource import Project, Region, Zone
 from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils.jobset_yaml_generator import create_jobset_yaml
+
 
 # Will be moved to node_pool_utils
 @dataclasses.dataclass
@@ -59,16 +64,60 @@ class YamlConfig:
   config_map_name: Optional[str]
 
 
+def get_replica_num(replica_type: str, job_name: str) -> int:
+  """Get the number of a certain type of replicas from a running jobset.
+
+  This uses the Kubernetes API to connect to a desired cluster and returns
+  the number of replicas in a certain status.
+
+  Args:
+    replica_type(str): The type of replica being searched for.
+    job_name(str): The name of the job replica which is run from the jobset.
+  Returns:
+    The number of replicas of the specific type in the jobset.
+  """
+  creds, _ = default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+  creds.refresh(Request())
+
+  configuration = client.Configuration()
+  configuration.host = "https://34.34.8.85"  # cmcs europe-west4
+  configuration.verify_ssl = True
+  configuration.ssl_ca_cert = "/home/airflow/gcs/data/europe-gke-ca.pem"
+  configuration.api_key = {"authorization": "Bearer " + creds.token}
+  client.Configuration.set_default(configuration)
+
+  api = client.CustomObjectsApi()
+  jobsets = api.list_namespaced_custom_object(
+      group="jobset.x-k8s.io",
+      version="v1alpha2",
+      namespace="default",
+      plural="jobsets",
+  )
+  if not jobsets["items"]:
+    raise AirflowException("No items found" f"JobSet output: {jobsets}")
+  jobset = jobsets["items"][0]
+  if (
+      jobset.get("status")
+      and jobset["status"].get("replicatedJobsStatus")
+      and jobset["status"]["replicatedJobsStatus"][0].get("name") == job_name
+      and jobset["status"]["replicatedJobsStatus"][0].get(replica_type)
+      is not None
+  ):
+    number_replicas = jobset["status"]["replicatedJobsStatus"][0][replica_type]
+    logging.info("Found %s replicas", number_replicas)
+  return number_replicas
+
+
 # Will be moved to a util file
 @task
 def run_jobset_workload(info: node_pool.Info, yaml_config: YamlConfig):
   """Generates and runs a JobSet manifest.
 
   Args:
-      info(Info): An instance of the Info class that encapsulates
-        the configuration and metadata of a GKE node pool and workload.
-        yaml_config(YamlConfig): All parameters needing to generate the
-        JobSet file which will be run by this function.
+    info(Info): An instance of the Info class that encapsulates
+      the configuration and metadata of a GKE node pool and workload.
+      yaml_config(YamlConfig): All parameters needing to generate the
+      JobSet file which will be run by this function.
   """
   params = dataclasses.asdict(yaml_config)
 
@@ -89,43 +138,31 @@ def run_jobset_workload(info: node_pool.Info, yaml_config: YamlConfig):
       f"--region={info.location} "
       f"--project={info.project_id} "
   )
-  subprocess.run(
-      gcloud_cmd,
-      shell=True,
-      check=True,
-      env=env,
-      capture_output=True,
-      text=True,
-  )
-  logging.info(
-      "Successfully got credentials for cluster %s.", info.cluster_name
-  )
 
   kubectl_cmd = (
       f"kubectl --kubeconfig=/tmp/kubeconfig apply -f {output_path} "
       "-n default"
   )
+
   subprocess.run(
-      kubectl_cmd, shell=True, check=True, capture_output=True, text=True
+      " && ".join([
+          gcloud_cmd, kubectl_cmd
+      ]), shell=True, check=True, capture_output=True, text=True, env=env
   )
   logging.info("Successfully applied YAML to the cluster.")
 
 
-@task
-def wait(seconds: int):
-  """sleeps for a given number of seconds.
+@task.sensor(poke_interval=30, timeout=600, mode="reschedule")
+def wait_for_jobset_status(replica_type: str, job_name: str):
+  """A sensor which checks if are any jobset replicas in a status type.
 
   Args:
-      seconds(int): The number of seconds to sleep for.
+    replica_type(str): The type of status being checked for.
+    job_name(str): The name of the job replica which is run from the jobset.
   """
-  command = f"sleep {seconds}"
-
-  process = subprocess.run(
-      command, shell=True, check=True, capture_output=True, text=True
-  )
-
-  logging.info("STDOUT message: %s", process.stdout)
-  logging.info("STDERR message: %s", process.stderr)
+  ready_replicas = get_replica_num(replica_type=replica_type, job_name=job_name)
+  if ready_replicas > 0:
+    return True
 
 
 @task
@@ -137,7 +174,7 @@ def end_workload(info: node_pool.Info):
   2. Delete all JobSets in the `default` namespace using `kubectl`.
 
   Args:
-      info(Info): Configuration object with cluster details.
+    info(Info): Configuration object with cluster details.
   """
   command = (
       "export KUBECONFIG=/tmp/kubeconfig && "
@@ -162,8 +199,8 @@ def wait_for_jobset_ttr(info: node_pool.Info) -> bool:
   every 60 seconds for 60 minutes.
 
   Args:
-      info(Info): An instance of the Info class that encapsulates
-      the configuration and metadata of a GKE node pool and workload.
+    info(Info): An instance of the Info class that encapsulates
+    the configuration and metadata of a GKE node pool and workload.
   """
   now = int(time.time())
   api_client = monitoring_v3.MetricServiceClient()
@@ -328,7 +365,9 @@ with models.DAG(
       info=cluster_info, yaml_config=yaml_config_instance
   )
 
-  wait_three_minutes = wait(seconds=180)
+  wait_for_jobset_ready = wait_for_jobset_status(
+      replica_type="ready", job_name=yaml_config_instance.replicated_job_name
+  )
 
   rollback_node_pool = node_pool.rollback(node_pool=cluster_info)
 
@@ -349,7 +388,7 @@ with models.DAG(
   (
       create_node_pool
       >> start_workload
-      >> wait_three_minutes
+      >> wait_for_jobset_ready
       >> rollback_node_pool
       >> wait_for_metric_upload
       >> cleanup_workload
