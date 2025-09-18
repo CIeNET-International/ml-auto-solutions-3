@@ -1,27 +1,16 @@
 
 from google.cloud import monitoring_v3
-import time
-import datetime
+import time, datetime
 from airflow.providers.standard.operators.bash import BashOperator
 from airflow.decorators import task, dag
 from airflow.utils.trigger_rule import TriggerRule
 from airflow.sensors.time_delta import TimeDeltaSensor
-
 from airflow import models
 from airflow.models import Variable
 
-# ################################################
-# # create cluster related (will be deleted after)
-# from google.cloud import container_v1
-# from airflow.providers.google.cloud.operators.kubernetes_engine import GKECreateClusterOperator
-# from google.cloud.container_v1.types import Cluster, PrivateClusterConfig, IPAllocationPolicy
-# from google.api_core.exceptions import NotFound
-# from airflow.operators.python import BranchPythonOperator
-# from airflow.operators.empty import EmptyOperator
-# ################################################
-
+from dags.common.vm_resource import Project, Region, Zone
+from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.utils import node_pool_util as node_pool
-
 
 
 QUERY_WINDOW_DURATION_SECONDS = 600
@@ -96,20 +85,6 @@ def create_time_interval():
     print(f"Returning time interval parameters: {interval_dict}")
     return interval_dict
 
-# # create cluster related
-# def decide_create_cluster(project_id: str, location: str, cluster_name: str, **_):
-    
-#     """Return the next task_id: 'skip_cluster' if exists, else 'create_cluster'."""
-#     client = container_v1.ClusterManagerClient()
-#     name = f"projects/{project_id}/locations/{location}/clusters/{cluster_name}"
-#     try:
-#         client.get_cluster(name=name)
-#         return "skip_cluster"
-#     except NotFound:
-#         return "create_cluster"
-#     except Exception:
-#         # If the API is temporarily flaky, try creating — downstream will error if it truly exists.
-#         return "create_cluster"
 
 
 
@@ -156,7 +131,7 @@ with models.DAG(
 ) as dag:
   
   node_pool_info = node_pool.Info(
-      project_id="cienet-cmcs", # Project.TPU_PROD_ENV_ONE_VM.value
+      project_id="cienet-cmcs", # Project.TPU_PROD_ENV_ONE_VM.value (cienet-cmcs doenst exist in the constant)
       cluster_name=Variable.get(
           "CLUSTER_NAME", default_var="athielee-auto-test-4"
       ),
@@ -164,10 +139,10 @@ with models.DAG(
           "NODE_POOL_NAME", default_var="nodepool-auto"
       ),
       location=Variable.get(
-          "LOCATION", default_var="europe-west4" # Region.ASIA_NORTHEAST1.value
+          "LOCATION", default_var="europe-west4" # Region.ASIA_NORTHEAST1.value (EUROPE_WEST4 doenst exist in the constant)
       ),
       node_locations=Variable.get(
-          "NODE_LOCATIONS", default_var="europe-west4-a" # Zone.ASIA_NORTHEAST1_B.value
+          "NODE_LOCATIONS", default_var=Zone.EUROPE_WEST4_A.value 
       ),
       num_nodes=Variable.get("NUM_NODES", default_var=1),
       machine_type=Variable.get("MACHINE_TYPE", default_var="ct6e-standard-4t"),
@@ -182,43 +157,6 @@ with models.DAG(
   time_interval = create_time_interval()
   poll_nodepool = wait_for_nodepool(UPTIME_FILTER_QRY, time_interval, node_pool_info.project_id)    
     
-
-#   # Branch: decide whether to create the cluster
-#   check_on_cluster = BranchPythonOperator(
-#     task_id="check_on_cluster",
-#     python_callable=decide_create_cluster,
-#     op_kwargs=dict(
-#         project_id=node_pool_info.project_id,
-#         location=node_pool_info.location,
-#         cluster_name=node_pool_info.cluster_name,
-#       ),
-#   )
-
-#   skip = EmptyOperator(task_id="skip_cluster")
-
-#   # Merge point so downstream continues whether we created or skipped
-#   join_after_branch = EmptyOperator(
-#     task_id="join_after_branch",
-#     trigger_rule=TriggerRule.NONE_FAILED_MIN_ONE_SUCCESS,
-#   )
-
-  
-#   create_cluster = GKECreateClusterOperator(
-#     task_id="create_cluster",
-#     project_id=node_pool_info.project_id,
-#     location=node_pool_info.location,      # us-central1
-#     body=Cluster(
-#         name=f"{node_pool_info.cluster_name}",
-#         network="athie-cmcs-vpc",
-#         subnetwork="athie-subnet-euw4",
-#         initial_node_count=2,
-#         node_config={"machine_type": "e2-standard-8"},
-#         ip_allocation_policy=IPAllocationPolicy(use_ip_aliases=True),
-#         release_channel={"channel": "REGULAR"},
-#     ),
-#     retries=0,
-#   )
-
   create_nodepool = node_pool.create(node_pool=node_pool_info)
 
   disk_size_change = BashOperator(
@@ -277,14 +215,6 @@ with models.DAG(
   )
 
   
-
-#   (
-#     check_on_cluster >> [create_cluster, skip],
-#     [create_cluster, skip] >> join_after_branch,
-#     join_after_branch >> create_nodepool >> [disk_size_change, wait_time],
-#     wait_time >> check_for_negative ,
-#     [disk_size_change, check_for_negative] >> time_interval >> poll_nodepool >> cleanup_node_pool,
-#   )
 
   (
     create_nodepool >> [disk_size_change, wait_time],
