@@ -86,7 +86,6 @@ def create(
         f" message: {process.stderr}"
     )
   logging.info("STDOUT message: %s", process.stdout)
-  logging.info("STDERR message: %s", process.stderr)
 
 
 @task
@@ -110,7 +109,6 @@ def delete(node_pool: Info) -> None:
         f" message: {process.stderr}"
     )
   logging.info("STDOUT message: %s", process.stdout)
-  logging.info("STDERR message: %s", process.stderr)
 
 
 def list_nodes(node_pool: Info) -> List[str]:
@@ -238,7 +236,6 @@ def delete_one_random_node(node_pool: Info) -> None:
         f" message: {process.stderr}"
     )
   logging.info("STDOUT message: %s", process.stdout)
-  logging.info("STDERR message: %s", process.stderr)
 
 
 def _query_status_metric(node_pool: Info) -> Status:
@@ -359,7 +356,6 @@ def rollback(node_pool: Info) -> None:
         f" message: {process.stderr}"
     )
   logging.info("STDOUT message: %s", process.stdout)
-  logging.info("STDERR message: %s", process.stderr)
 
 
 @task.sensor(poke_interval=30, timeout=1200, mode="reschedule")
