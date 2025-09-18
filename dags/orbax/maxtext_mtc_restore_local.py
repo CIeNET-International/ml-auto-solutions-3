@@ -11,6 +11,10 @@ from dags import composer_env
 from dags.common import test_owner
 from dags.common.vm_resource import XpkClusters
 from dags.multipod.configs import gke_config
+<<<<<<< HEAD
+=======
+from dags.multipod.configs.common import SetupMode
+>>>>>>> 8c4628d (Resolving conflicts)
 from dags.orbax.util import checkpoint_util
 from dags.orbax.util import test_config_util
 from dags.orbax.util import validation_util
@@ -18,7 +22,15 @@ from xlml.utils.gke import zone_to_region
 from xlml.utils.xpk import BRANCH_ABHINAV_MTC
 
 DAG_TEST_NAME = "maxtext_mtc_orbax_res_local"
+<<<<<<< HEAD
 SCHEDULE = "0 16 * * *" if composer_env.is_prod_env() else None
+=======
+SCHEDULE = "0 14 * * *" if composer_env.is_prod_env() else None
+
+# Only one version of the Docker image is supported at the moment.
+# Other versions (e.g., "stable") may be introduced later.
+DOCKER_IMAGES = [(SetupMode.NIGHTLY, DockerImage.MAXTEXT_TPU_JAX_ORBAX_HEAD)]
+>>>>>>> 8c4628d (Resolving conflicts)
 
 with models.DAG(
     dag_id=DAG_TEST_NAME,
@@ -133,8 +145,13 @@ with models.DAG(
                 project_id=test_config.cluster.project,
                 location=zone_to_region(test_config.cluster.zone),
                 cluster_name=test_config.cluster.name,
+<<<<<<< HEAD
                 pod_pattern=f"{test_config.short_id}-mtc.*0-0",
                 interrupt_at_step=step_to_interrupt,
+=======
+                pod_pattern=".*0-0",
+                interrupt_at_step=40,
+>>>>>>> 8c4628d (Resolving conflicts)
                 start_time=start_time,
                 end_time=end_time,
             )
