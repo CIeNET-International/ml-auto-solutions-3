@@ -103,19 +103,18 @@ def query_time_series(
   else:
     view_enum = view
 
-  request_kwargs = {
+  request = monitoring_v3.ListTimeSeriesRequest({
       "name": project_name,
       "filter": filter_str,
       "interval": interval,
       "view": view_enum,
-  }
-  if aggregation:
-    request_kwargs["aggregation"] = aggregation
-  if page_size:
-    request_kwargs["page_size"] = page_size
+  })
 
-  request = monitoring_v3.ListTimeSeriesRequest(**request_kwargs)
+  if aggregation:
+    request.aggregation = aggregation
+  if page_size:
+    request.page_size = page_size
 
   results = client.list_time_series(request)
 
-  return results
+  return list(results)
