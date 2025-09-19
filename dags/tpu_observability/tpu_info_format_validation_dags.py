@@ -17,9 +17,7 @@ from airflow.utils.task_group import TaskGroup
 from airflow.exceptions import AirflowFailException
 from airflow.utils.trigger_rule import TriggerRule
 
-from dags.common.vm_resource import Project
-from dags.common.vm_resource import Region
-from dags.common.vm_resource import Zone
+from dags.common.vm_resource import Project, Region, Zone
 from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.utils.jobset_generator import JobSet
 from dags.tpu_observability.utils.jobset_generator import Workload
@@ -27,16 +25,22 @@ from dags.tpu_observability.utils.monitoring import query_time_series
 from dags.tpu_observability.utils.node_pool_util import Info
 
 
-def _get_credentials_command(cluster_name: str, region: str, project_id: str):
+def _get_credentials_command(node_pool: Info):
+  for attr_name in ["cluster_name", "region", "project_id"]:
+    if not getattr(node_pool, attr_name):
+      raise ValueError(f"{attr_name} must be set in the Info object.")
+
   return " ".join([
       "gcloud container clusters",
-      f"get-credentials {cluster_name}",
-      f"--region={region}",
-      f"--project={project_id}",
+      f"get-credentials {node_pool.cluster_name}",
+      f"--region={node_pool.region}",
+      f"--project={node_pool.project_id}",
   ])
 
 
-def _k8s_apply_command(kubeconfig: str, yaml_content: str, namespace: str):
+def _k8s_apply_jobset_command(
+    kubeconfig: str, yaml_content: str, namespace: str
+):
   return " ".join([
       f"kubectl --kubeconfig={kubeconfig} apply",
       f"-f - -n {namespace} <<EOF\n",
@@ -44,7 +48,7 @@ def _k8s_apply_command(kubeconfig: str, yaml_content: str, namespace: str):
   ])
 
 
-def _k8s_delete_command(kubeconfig: str, namespace: str):
+def _k8s_delete_jobset_command(kubeconfig: str, namespace: str):
   return " ".join([
       f"kubectl --kubeconfig={kubeconfig} delete jobsets --all",
       f"-n {namespace} --timeout=60s --ignore-not-found=true",
@@ -75,10 +79,8 @@ def run_workload(info: Info, kubeconfig: str, yaml_config: JobSet, script: str):
 
   result = subprocess.run(
       " && ".join([
-          _get_credentials_command(
-              info.cluster_name, info.region, info.project_id
-          ),
-          _k8s_apply_command(
+          _get_credentials_command(info),
+          _k8s_apply_jobset_command(
               kubeconfig, yaml_content, yaml_config.params.get("namespace")
           ),
       ]),
@@ -91,10 +93,8 @@ def run_workload(info: Info, kubeconfig: str, yaml_config: JobSet, script: str):
   logging.info(
       "Command Execute:\n %s",
       " && ".join([
-          _get_credentials_command(
-              info.cluster_name, info.region, info.project_id
-          ),
-          _k8s_apply_command(
+          _get_credentials_command(info),
+          _k8s_apply_jobset_command(
               kubeconfig, yaml_content, yaml_config.params.get("namespace")
           ),
       ]),
@@ -128,10 +128,8 @@ def end_workload(info: Info, kubeconfig: str, yaml_config: JobSet):
 
   result = subprocess.run(
       " && ".join([
-          _get_credentials_command(
-              info.cluster_name, info.region, info.project_id
-          ),
-          _k8s_delete_command(kubeconfig, yaml_config.params.get("namespace")),
+          _get_credentials_command(info),
+          _k8s_delete_jobset_command(kubeconfig, yaml_config.params.get("namespace")),
       ]),
       shell=True,
       check=False,
@@ -163,9 +161,7 @@ def get_active_pods(info: Info, kubeconfig: str, yaml_config: JobSet):
 
   subprocess.run(
       " && ".join([
-          _get_credentials_command(
-              info.cluster_name, info.region, info.project_id
-          ),
+          _get_credentials_command(info),
           _k8s_get_pod_command(kubeconfig, yaml_config.params.get("namespace")),
       ]),
       shell=True,
@@ -218,30 +214,29 @@ def query_to_wait_for_jobset_start(
     raise AirflowFailException("pod_name_list is empty, sensor cannot proceed.")
 
   pod_name = random.choice(pod_name_list)
-  filter_string = (
-      "metric.type ="
-      ' "kubernetes.io/container/accelerator/tensorcore_utilization" AND'
-      f' resource.labels.cluster_name = "{info.cluster_name}" AND'
-      f' resource.labels.pod_name = "{pod_name}"'
-  )
+  metric_name = "kubernetes.io/container/accelerator/tensorcore_utilization"
+  filter_string = [
+      f'metric.type = "{metric_name}"',
+      f'resource.labels.cluster_name = "{info.cluster_name}"',
+      f'resource.labels.pod_name = "{pod_name}"'
+  ]
   time_series_data = query_time_series(
       project_id=info.project_id,
-      filter_str=filter_string,
+      filter_str=" AND ".join(filter_string),
       start_time=datetime_job_apply_time,
       end_time=end_time_utc,
       view="FULL",
   )
-  time_series_data_list = list(time_series_data)
 
   # Retrieve the last three records to ensure stable workload startup.
-  if not time_series_data_list or len(time_series_data_list[0].points) < 3:
+  if not time_series_data or len(time_series_data[0].points) < 3:
     return False
   last_n_data_points = [
       round(point.value.double_value, 2)
-      for point in time_series_data_list[0].points[0:3]
+      for point in time_series_data[0].points[0:3]
   ]
-  minimal_activity_threshold = 1.0
-  return all(p > minimal_activity_threshold for p in last_n_data_points)
+  # 0 means 0.0% of tensorcore util
+  return all(p > 0 for p in last_n_data_points)
 
 
 @task
@@ -262,15 +257,13 @@ def get_tpu_info_from_pod(kubeconfig: str, pod_name: str) -> str:
   env = os.environ.copy()
   env["KUBECONFIG"] = kubeconfig
 
-  command_string = (
-      f"kubectl --kubeconfig={kubeconfig} "
-      f"exec {pod_name} -n default "
-      f"-- "
-      f"tpu-info"
-  )
-
   result = subprocess.run(
-      command_string,
+      (
+          f"kubectl --kubeconfig={kubeconfig} "
+          f"exec {pod_name} -n default "
+          f"-- "
+          f"tpu-info"
+      ),
       shell=True,
       # Since tpu-info feature still has some issues, so the command will
       # inevitably throw an error. To avoid marking the task as failed,
@@ -298,22 +291,19 @@ def split_tables_by_structure(output: str) -> Dict[str, str]:
     A dictionary where keys are the table titles and values are the full
     text content of each table, including the box-drawing characters.
   """
-  pattern = re.compile(
-      # Capture Group 1: The Title Line
-      # ^ - matches the beginning of a line (because of the re.M flag)
-      # [^\n] - matches any character that is not a '\n'
-      # .*? - non-greedily matches any character until the end of the line
-      r"(^[^\n].*?)\n\s*"
-      # Capture Group 2: The Full Table Block
-      r"(┏[━┳]+┓[\s\S]*?└[─┴]+┘)",
-      re.MULTILINE,
+  title_pattern = re.compile(
+      r"(^[^\n].*)\n┏",
+      re.MULTILINE
+  )
+  table_block_pattern = re.compile(
+      r"(^┏[\s\S]*?┘)",
+      re.MULTILINE
   )
 
-  matches = pattern.findall(output)
+  title = title_pattern.findall(output)
 
-  tables_dict = {}
-  for title, table_block in matches:
-    tables_dict[title.strip()] = table_block.strip()
+  table_block = table_block_pattern.findall(output)
+  tables_dict = dict(zip(title, table_block))
 
   return tables_dict
 
@@ -386,7 +376,7 @@ def validate_chips_table(metric_tables_dict: str, yaml_config: str):
 
 
 @task
-def validate_runtime_table(metric_tables_dict: str) -> List[str]:
+def validate_runtime_table(metric_tables_dict: str):
   """Validates the row count and content for the 'TPU Runtime Utilization' table."""
   errors = []
   content = metric_tables_dict["TPU Runtime Utilization"]
@@ -465,7 +455,7 @@ def validate_tensorcore_table(metric_tables_dict: str):
 
 
 @task
-def validate_latency_table(metric_tables_dict: str) -> List[str]:
+def validate_latency_table(metric_tables_dict: str):
   """Validates the row count and content for the TPU Buffer Transfer Latency table."""
   errors = []
   content = metric_tables_dict["TPU Buffer Transfer Latency"]
@@ -516,13 +506,12 @@ with models.DAG(
 ) as dag:
   cluster_info = Info(
       project_id=models.Variable.get(
-          "TCU_PROJECT_ID", default_var="cienet-cmcs"
+          "TCU_PROJECT_ID", default_var=Project.TPU_PROD_ENV_LARGE_CONT.value
       ),
       cluster_name=models.Variable.get(
-          "TCU_CLUSTER_NAME", default_var="yuna-xpk-v6e-ew4"
+          "TCU_CLUSTER_NAME", default_var="yuna-auto-testing"
       ),
-      region=models.Variable.get("TCU_REGION", default_var="europe-west4"),
-      zone=models.Variable.get("TCU_ZONE", default_var=Zone.EUROPE_WEST4_A),
+      region=models.Variable.get("TCU_REGION", default_var=Region.US_EAST5.value),
   )
 
   kubeconfig_path = "/tmp/kubeconfig"
