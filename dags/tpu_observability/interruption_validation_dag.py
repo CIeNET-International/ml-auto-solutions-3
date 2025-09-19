@@ -9,6 +9,7 @@ from typing import List
 from airflow import models
 from airflow.decorators import task
 from airflow.exceptions import AirflowSkipException
+from airflow.utils.task_group import TaskGroup
 from dags.common.vm_resource import Project
 from dags.map_reproducibility.utils.constants import Schedule
 from dags.multipod.configs.common import Platform
@@ -477,54 +478,18 @@ def validate_interruption_count(
       )
 
 
-def create_interruption_dag(
-    dag_id: str,
-    platform: Platform,
-    interruption_reason: InterruptionReason,
-) -> models.DAG:
-  """Creates an Airflow DAG for interruption event validation.
+def create_validation_task_group(
+    project_id: str,
+    platform: str,
+    interruption_reason: str,
+):
+  with TaskGroup(
+      group_id=f'validation_for_{project_id}',
+      tooltip=f'Validation pipeline for Project ID: {project_id}'
+  ) as group:
 
-  This function generates a DAG that validates the accuracy of interruption
-  events between metrics and logs for a specific platform and interruption
-  reason.
-
-  Args:
-    dag_id: The unique identifier for the DAG.
-    platform: The platform (GCE or GKE) to validate.
-    interruption_reason: The specific interruption reason to validate.
-
-  Returns:
-    An Airflow DAG object."""
-  with models.DAG(
-      dag_id=dag_id,
-      start_date=datetime.datetime(2025, 7, 20),
-      schedule=Schedule.WEEKDAY_PST_6PM_EXCEPT_THURSDAY,
-      catchup=False,
-      tags=[platform.value, 'tpu-observability', 'interruption-count'],
-      description=(
-          'This DAG validates the accuracy of the interruption count metric by '
-          'comparing it against logs.'
-      ),
-      doc_md="""
-        # Interruption Event Validation DAG
-
-        ### Description
-        This DAG automates the validation of the interruption count metric.
-        It compares the number of interruption events from the logs with the
-        number of events from the metrics to ensure accuracy.
-
-        ### Procedures
-        This DAG first determines a time range for validation, then fetches the
-        interruption events from both the Cloud Monitoring API (metrics) and the
-        Cloud Logging API (logs). Finally, it compares the number of events from
-        both sources to ensure they match.
-      """,
-  ) as dag:
     configs = Configs(
-        project_id=models.Variable.get(
-            'INTERRUPTION_PROJECT_ID',
-            default_var=Project.TPU_PROD_ENV_ONE_VM.value,
-        ),
+        project_id=project_id,
         platform=platform,
         interruption_reason=interruption_reason,
     )
@@ -548,6 +513,64 @@ def create_interruption_dag(
     check_event_count = validate_interruption_count(metric_records, log_records)
 
     proper_time_range >> [metric_records, log_records] >> check_event_count
+
+    return group
+
+
+def create_interruption_dag(
+    dag_id: str,
+    platform: Platform,
+    interruption_reason: InterruptionReason,
+) -> models.DAG:
+  """Creates an Airflow DAG for interruption event validation.
+
+  This function generates a DAG that validates the accuracy of interruption
+  events between metrics and logs for a specific platform and interruption
+  reason.
+
+  Args:
+    dag_id: The unique identifier for the DAG.
+    platform: The platform (GCE or GKE) to validate.
+    interruption_reason: The specific interruption reason to validate.
+
+  Returns:
+    An Airflow DAG object."""
+  with models.DAG(
+      dag_id=dag_id,
+      start_date=datetime.datetime(2025, 7, 20),
+      schedule=Schedule.WEEKDAY_PST_6PM_EXCEPT_THURSDAY,
+      catchup=False,
+      default_args={'retries': 0},
+      tags=[platform.value, 'tpu-observability', 'interruption-count'],
+      description=(
+          'This DAG validates the accuracy of the interruption count metric by '
+          'comparing it against logs.'
+      ),
+      doc_md="""
+        # Interruption Event Validation DAG
+
+        ### Description
+        This DAG automates the validation of the interruption count metric.
+        It compares the number of interruption events from the logs with the
+        number of events from the metrics to ensure accuracy.
+
+        ### Procedures
+        This DAG first determines a time range for validation, then fetches the
+        interruption events from both the Cloud Monitoring API (metrics) and the
+        Cloud Logging API (logs). Finally, it compares the number of events from
+        both sources to ensure they match.
+      """,
+  ) as dag:
+    # Loop through the project list and create a TaskGroup for each project.
+    for project in Project:
+        # So far, we don't have permission to access these two projects, so just ignore them.
+        if project == Project.TPU_PROD_ENV_AUTOMATED or project == Project.CLOUD_TPU_INFERENCE_TEST:
+          continue
+        group = create_validation_task_group(
+            project_id=project.value,
+            platform=platform,
+            interruption_reason=interruption_reason,
+        )
 
     return dag
 
