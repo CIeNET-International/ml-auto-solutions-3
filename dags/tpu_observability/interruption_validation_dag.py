@@ -478,45 +478,6 @@ def validate_interruption_count(
       )
 
 
-def create_validation_task_group(
-    project_id: str,
-    platform: str,
-    interruption_reason: str,
-):
-  with TaskGroup(
-      group_id=f'validation_for_{project_id}',
-      tooltip=f'Validation pipeline for Project ID: {project_id}'
-  ) as group:
-
-    configs = Configs(
-        project_id=project_id,
-        platform=platform,
-        interruption_reason=interruption_reason,
-    )
-
-    @task
-    def fetch_interruption_metric_records_task(
-        configs: Configs,
-        proper_time_range: TimeRange,
-    ) -> List[EventRecord]:
-      return fetch_interruption_metric_records(configs, proper_time_range)
-
-    proper_time_range = determine_time_range(configs)
-    metric_records = fetch_interruption_metric_records_task(
-        configs,
-        proper_time_range,
-    )
-    log_records = fetch_interruption_log_records(
-        configs,
-        proper_time_range,
-    )
-    check_event_count = validate_interruption_count(metric_records, log_records)
-
-    proper_time_range >> [metric_records, log_records] >> check_event_count
-
-    return group
-
-
 def create_interruption_dag(
     dag_id: str,
     platform: Platform,
@@ -563,14 +524,40 @@ def create_interruption_dag(
   ) as dag:
     # Loop through the project list and create a TaskGroup for each project.
     for project in Project:
-        # So far, we don't have permission to access these two projects, so just ignore them.
-        if project == Project.TPU_PROD_ENV_AUTOMATED or project == Project.CLOUD_TPU_INFERENCE_TEST:
+      match project:
+        # Production composer lacks permission for these projects; ignore them.
+        case Project.TPU_PROD_ENV_AUTOMATED | Project.CLOUD_TPU_INFERENCE_TEST:
           continue
-        group = create_validation_task_group(
-            project_id=project.value,
-            platform=platform,
-            interruption_reason=interruption_reason,
-        )
+        case _:
+          with TaskGroup(
+              group_id=f'validation_for_{project.value}',
+              tooltip=f'Validation pipeline for Project ID: {project.value}'
+          ) as group:
+            configs = Configs(
+                project_id=project.value,
+                platform=platform,
+                interruption_reason=interruption_reason,
+            )
+
+            @task
+            def fetch_interruption_metric_records_task(
+                configs: Configs,
+                proper_time_range: TimeRange,
+            ) -> List[EventRecord]:
+              return fetch_interruption_metric_records(configs, proper_time_range)
+
+            proper_time_range = determine_time_range(configs)
+            metric_records = fetch_interruption_metric_records_task(
+                configs,
+                proper_time_range,
+            )
+            log_records = fetch_interruption_log_records(
+                configs,
+                proper_time_range,
+            )
+            check_event_count = validate_interruption_count(metric_records, log_records)
+
+            proper_time_range >> [metric_records, log_records] >> check_event_count
 
     return dag
 
