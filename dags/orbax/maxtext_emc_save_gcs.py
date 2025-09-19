@@ -71,11 +71,7 @@ with models.DAG(
       name="emc", enable_multi_tier_checkpointing=False
   )
   test_configs = [
-<<<<<<< HEAD
       test_config_util.TestConfig(
-=======
-      orbax.TestConfig(
->>>>>>> 0b0501bd (Add a new DAG that tests Maxtext EMC restoring from GCS feature)
           cluster=XpkClusters.TPU_V5P_128_CLUSTER,
           machine_type="ct5p-hightpu-4t",
           accelerator="v5p-128",
