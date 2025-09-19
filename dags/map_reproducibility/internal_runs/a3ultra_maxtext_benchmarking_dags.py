@@ -18,10 +18,13 @@ import datetime
 import os
 
 from airflow import models
+from airflow.operators.python import PythonOperator
+from airflow.utils.trigger_rule import TriggerRule
 from dags import composer_env
 from dags.map_reproducibility.utils.constants import Image, WorkloadLauncher
 from dags.map_reproducibility.internal_runs.dag_configs import DAG_CONFIGS_ULTRA
 from dags.map_reproducibility.utils.internal_aotc_workload import run_internal_dag_united_workload
+from dags.map_reproducibility.utils.common_utils import create_lease, delete_lease
 
 
 # Configuration parameters
@@ -70,7 +73,12 @@ for config_path, config_info in DAG_CONFIGS_ULTRA.items():
       start_date=datetime.datetime(2025, 4, 3),
       catchup=False,
   ) as dag:
-    run_internal_dag_united_workload(
+    create_lease_task = PythonOperator(
+        task_id="create_lease",
+        python_callable=create_lease,
+        op_args=["a3ultra_workloads"],
+    )
+    run_workload_task = run_internal_dag_united_workload(
         relative_config_yaml_path=config_path,
         test_run=TEST_RUN,
         backfill=BACKFILL,
@@ -78,6 +86,13 @@ for config_path, config_info in DAG_CONFIGS_ULTRA.items():
         image_version=NIGHTLY_IMAGE,
         workload_launcher=WorkloadLauncher.MAXTEXT_LAUNCHER_NIGHTLY,
     )
+    delete_lease_task = PythonOperator(
+        task_id="delete_lease",
+        python_callable=delete_lease,
+        op_args=["a3ultra_workloads"],
+        trigger_rule=TriggerRule.ALL_DONE,
+    ).as_teardown(setups=create_lease_task)
+    create_lease_task >> run_workload_task >> delete_lease_task
 
   # Create DAG for stable release
   with models.DAG(
@@ -88,7 +103,12 @@ for config_path, config_info in DAG_CONFIGS_ULTRA.items():
       start_date=datetime.datetime(2025, 4, 3),
       catchup=False,
   ) as dag:
-    run_internal_dag_united_workload(
+    create_lease_task = PythonOperator(
+        task_id="create_lease",
+        python_callable=create_lease,
+        op_args=["a3ultra_workloads"],
+    )
+    run_workload_task = run_internal_dag_united_workload(
         relative_config_yaml_path=config_path,
         test_run=TEST_RUN,
         backfill=BACKFILL,
@@ -96,3 +116,10 @@ for config_path, config_info in DAG_CONFIGS_ULTRA.items():
         image_version=RELEASE_IMAGE,
         workload_launcher=WorkloadLauncher.MAXTEXT_LAUNCHER_NIGHTLY,
     )
+    delete_lease_task = PythonOperator(
+        task_id="delete_lease",
+        python_callable=delete_lease,
+        op_args=["a3ultra_workloads"],
+        trigger_rule=TriggerRule.ALL_DONE,
+    ).as_teardown(setups=create_lease_task)
+    create_lease_task >> run_workload_task >> delete_lease_task
