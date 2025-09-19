@@ -301,9 +301,10 @@ def split_tables_by_structure(output: str) -> Dict[str, str]:
   )
 
   title = title_pattern.findall(output)
-
+  clean_title = [s.strip() for s in title]
   table_block = table_block_pattern.findall(output)
-  tables_dict = dict(zip(title, table_block))
+
+  tables_dict = dict(zip(clean_title, table_block))
 
   return tables_dict
 
@@ -506,12 +507,14 @@ with models.DAG(
 ) as dag:
   cluster_info = Info(
       project_id=models.Variable.get(
-          "TCU_PROJECT_ID", default_var=Project.TPU_PROD_ENV_LARGE_CONT.value
+          "TCU_PROJECT_ID", default_var=Project.TPU_PROD_ENV_ONE_VM.value
       ),
       cluster_name=models.Variable.get(
           "TCU_CLUSTER_NAME", default_var="yuna-auto-testing"
       ),
-      region=models.Variable.get("TCU_REGION", default_var=Region.US_EAST5.value),
+      region=models.Variable.get(
+          "TCU_REGION", default_var=Region.US_EAST5.value
+      ),
   )
 
   kubeconfig_path = "/tmp/kubeconfig"
@@ -527,7 +530,7 @@ with models.DAG(
       tpu_accelerator_type="tpu-v6e-slice",
       tpu_topology="4x4",
       container_name="jax-tpu-worker",
-      image="asia-northeast1-docker.pkg.dev/cienet-cmcs/yuna-docker/tpu-info:v0.4.0",
+      image="us-docker.pkg.dev/tpu-prod-env-one-vm/yuna-docker-repo/tpu-info:v0.4.0",
       command=["bash", "-c"],
       tpu_cores_per_pod=4,
   )
