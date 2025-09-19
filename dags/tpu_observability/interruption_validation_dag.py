@@ -9,6 +9,7 @@ from typing import List
 from airflow import models
 from airflow.decorators import task
 from airflow.exceptions import AirflowSkipException
+from airflow.utils.task_group import TaskGroup
 from dags.common.vm_resource import Project
 from dags.map_reproducibility.utils.constants import Schedule
 from dags.multipod.configs.common import Platform
@@ -500,6 +501,7 @@ def create_interruption_dag(
       start_date=datetime.datetime(2025, 7, 20),
       schedule=Schedule.WEEKDAY_PST_6PM_EXCEPT_THURSDAY,
       catchup=False,
+      default_args={'retries': 0},
       tags=[platform.value, 'tpu-observability', 'interruption-count'],
       description=(
           'This DAG validates the accuracy of the interruption count metric by '
@@ -520,34 +522,50 @@ def create_interruption_dag(
         both sources to ensure they match.
       """,
   ) as dag:
-    configs = Configs(
-        project_id=models.Variable.get(
-            'INTERRUPTION_PROJECT_ID',
-            default_var=Project.TPU_PROD_ENV_ONE_VM.value,
-        ),
-        platform=platform,
-        interruption_reason=interruption_reason,
-    )
+    # Loop through the project list and create a TaskGroup for each project.
+    for project in Project:
+      match project:
+        # Production composer lacks permission for these projects; ignore them.
+        case Project.TPU_PROD_ENV_AUTOMATED | Project.CLOUD_TPU_INFERENCE_TEST:
+          continue
+        case _:
+          with TaskGroup(
+              group_id=f'validation_for_{project.value}',
+              tooltip=f'Validation pipeline for Project ID: {project.value}',
+          ) as group:
+            configs = Configs(
+                project_id=project.value,
+                platform=platform,
+                interruption_reason=interruption_reason,
+            )
 
-    @task
-    def fetch_interruption_metric_records_task(
-        configs: Configs,
-        proper_time_range: TimeRange,
-    ) -> List[EventRecord]:
-      return fetch_interruption_metric_records(configs, proper_time_range)
+            @task
+            def fetch_interruption_metric_records_task(
+                configs: Configs,
+                proper_time_range: TimeRange,
+            ) -> List[EventRecord]:
+              return fetch_interruption_metric_records(
+                  configs, proper_time_range
+              )
 
-    proper_time_range = determine_time_range(configs)
-    metric_records = fetch_interruption_metric_records_task(
-        configs,
-        proper_time_range,
-    )
-    log_records = fetch_interruption_log_records(
-        configs,
-        proper_time_range,
-    )
-    check_event_count = validate_interruption_count(metric_records, log_records)
+            proper_time_range = determine_time_range(configs)
+            metric_records = fetch_interruption_metric_records_task(
+                configs,
+                proper_time_range,
+            )
+            log_records = fetch_interruption_log_records(
+                configs,
+                proper_time_range,
+            )
+            check_event_count = validate_interruption_count(
+                metric_records, log_records
+            )
 
-    proper_time_range >> [metric_records, log_records] >> check_event_count
+            (
+                proper_time_range
+                >> [metric_records, log_records]
+                >> check_event_count
+            )
 
     return dag
 
