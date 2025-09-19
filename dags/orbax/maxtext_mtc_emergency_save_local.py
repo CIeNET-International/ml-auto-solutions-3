@@ -23,10 +23,7 @@ from xlml.utils.xpk import BRANCH_ABHINAV_MTC
 from xlml.utils.gke import zone_to_region
 from dags.orbax.util import test_config_util
 
-<<<<<<< HEAD
 
-=======
->>>>>>> 0b0501bd (Add a new DAG that tests Maxtext EMC restoring from GCS feature)
 SCHEDULE = "0 13 * * *" if composer_env.is_prod_env() else None
 DAG_TEST_NAME = "maxtext_emc_and_mtc_orbax_save_local"
 
@@ -85,11 +82,7 @@ with models.DAG(
   # Only one set of test configurations (e.g., v5p-128) is supported at the moment.
   # Other configurations (e.g., v5e and/or v6e) may be introduced later.
   test_configs = [
-<<<<<<< HEAD
       test_config_util.TestConfig(
-=======
-      orbax.TestConfig(
->>>>>>> 0b0501bd (Add a new DAG that tests Maxtext EMC restoring from GCS feature)
           cluster=XpkClusters.TPU_V5P_128_CLUSTER,
           machine_type="ct5p-hightpu-4t",
           accelerator="v5p-128",

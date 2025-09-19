@@ -14,7 +14,7 @@ from dags.common.vm_resource import XpkClusters
 from dags.multipod.configs import gke_config
 from dags.multipod.configs.common import SetupMode
 from dags.orbax.util import checkpoint_util
-from dags.orbax.util import orbax
+from dags.orbax.util import test_config_util
 from dags.orbax.util import validation_util
 from xlml.utils.gke import zone_to_region
 from xlml.utils.xpk import BRANCH_ABHINAV_MTC
@@ -72,11 +72,11 @@ with models.DAG(
       """,
     concurrency=2,
 ) as dag:
-  checkpointing = orbax.Checkpointing(
+  checkpointing = test_config_util.Checkpointing(
       name="emc", enable_multi_tier_checkpointing=False
   )
   test_configs = [
-      orbax.TestConfig(
+      test_config_util.TestConfig(
           cluster=XpkClusters.TPU_V5P_128_CLUSTER,
           machine_type="ct5p-hightpu-4t",
           accelerator="v5p-128",
@@ -87,8 +87,7 @@ with models.DAG(
           step=150,
           checkpoint_step=20,
           local_checkpoint_step=20,
-          ram_disk_size_in_mi="800000Mi",
-          base_dir=orbax.DEFAULT_BUCKET,
+          base_dir=test_config_util.DEFAULT_BUCKET,
       ),
   ]
 
@@ -110,8 +109,9 @@ with models.DAG(
         )
 
         workload_command = test_config.generate_workload_command(
-            checkpoint_dir=orbax.DEFAULT_RAM_DISK,
+            checkpoint_dir=test_config_util.DEFAULT_RAM_DISK,
             run_name=run_name,
+            slice_num=slice_num,
             out_folder="maxtext_emc_orbax_res_gcs",
             enable_multi_tier_checkp=checkpointing.enable_multi_tier_checkpointing,
         )
@@ -129,7 +129,7 @@ with models.DAG(
             docker_image=image.value,
             test_owner=test_owner.DEPP_L,
         ).run_with_node_interruption(
-            ramdisk_directory=orbax.DEFAULT_RAM_DISK,
+            ramdisk_directory=test_config_util.DEFAULT_RAM_DISK,
             mtc_enabled=True,
             xpk_branch=BRANCH_ABHINAV_MTC,
             skip_post_process=True,
@@ -145,6 +145,7 @@ with models.DAG(
                 project_id=test_config.cluster.project,
                 location=zone_to_region(test_config.cluster.zone),
                 cluster_name=test_config.cluster.name,
+                pod_pattern=".*0-0",
                 interrupt_at_step=40,
                 start_time=start_time,
                 end_time=end_time,

@@ -12,13 +12,7 @@ from dags.common.vm_resource import DockerImage
 from dags.common.vm_resource import XpkClusters
 from dags.multipod.configs import gke_config
 from dags.multipod.configs.common import SetupMode
-<<<<<<< HEAD
 from dags.orbax.util import checkpoint_util, test_config_util, validation_util
-=======
-from dags.orbax.util import checkpoint_util
-from dags.orbax.util import orbax
-from dags.orbax.util import validation_util
->>>>>>> 0b0501bd (Add a new DAG that tests Maxtext EMC restoring from GCS feature)
 from xlml.utils.gke import zone_to_region
 from xlml.utils.xpk import BRANCH_ABHINAV_MTC
 
@@ -79,11 +73,7 @@ with models.DAG(
       name="emc", enable_multi_tier_checkpointing=False
   )
   test_configs = [
-<<<<<<< HEAD
       test_config_util.TestConfig(
-=======
-      orbax.TestConfig(
->>>>>>> 0b0501bd (Add a new DAG that tests Maxtext EMC restoring from GCS feature)
           cluster=XpkClusters.TPU_V5P_128_CLUSTER,
           machine_type="ct5p-hightpu-4t",
           accelerator="v5p-128",
@@ -118,10 +108,7 @@ with models.DAG(
         workload_command = test_config.generate_workload_command(
             checkpoint_dir=test_config_util.DEFAULT_RAM_DISK,
             run_name=run_name,
-<<<<<<< HEAD
             slice_num=slice_num,
-=======
->>>>>>> 0b0501bd (Add a new DAG that tests Maxtext EMC restoring from GCS feature)
             out_folder="maxtext_emc_orbax_res_local",
             enable_multi_tier_checkp=checkpointing.enable_multi_tier_checkpointing,
         )
@@ -154,10 +141,7 @@ with models.DAG(
                 project_id=test_config.cluster.project,
                 location=zone_to_region(test_config.cluster.zone),
                 cluster_name=test_config.cluster.name,
-<<<<<<< HEAD
                 pod_pattern=".*0-0",
-=======
->>>>>>> 0b0501bd (Add a new DAG that tests Maxtext EMC restoring from GCS feature)
                 interrupt_at_step=40,
                 start_time=start_time,
                 end_time=end_time,

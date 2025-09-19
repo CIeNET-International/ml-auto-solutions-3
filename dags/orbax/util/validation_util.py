@@ -432,17 +432,12 @@ def validate_restored_correct_checkpoint(
   if not entries:
     raise AirflowFailException("No event_type found in the log.")
 
-<<<<<<< HEAD
   saved_steps_before_restore = []
-=======
-  save_step_before_restore = None
->>>>>>> 0b0501bd (Add a new DAG that tests Maxtext EMC restoring from GCS feature)
   for entry in entries:
     if not isinstance(entry, logging_api.StructEntry):
       raise AirflowFailException(
           "Log entry must be contain a jsonPayload attribute."
       )
-<<<<<<< HEAD
 
     message = entry.payload.get("message")
 
@@ -524,36 +519,3 @@ def get_gcs_checkpoint(output_path: str) -> List[str]:
   files = hook.list(bucket_name=bucket_name, prefix=prefix)
   logging.info(f"Files ===> {files}")
   return files
-=======
-    message = entry.payload.get("message")
-    if not message:
-      continue
-
-    if re.search(r"'event_type': 'save'", message):
-      match = re.search(r"'step': (\d+)", message)
-      if match:
-        save_step_before_restore = int(match.group(1))
-      else:
-        raise AirflowFailException(
-            f"Found save event with no step number, message: {message}"
-        )
-    elif re.search(r"'event_type': '(emergency_)?restore'", message):
-      logging.info("Found restore event: %s", message)
-      if save_step_before_restore is None:
-        raise AirflowFailException(
-            "Found a restore event before any save event."
-        )
-      match = re.search(r"'step':\s*(?:np\.int32\()?(\d+)", message)
-      if match and int(match.group(1)) >= interrupt_at_step:
-        return
-
-      raise AirflowFailException(
-          f"Restore event did not contain the expected step. Expect step "
-          f"{match.group(1)} to be greater than or equal to step "
-          f"{interrupt_at_step}, but the log was: {message}."
-      )
-
-  raise AirflowFailException(
-      "Failed to validate that restored happened at correct step."
-  )
->>>>>>> 0b0501bd (Add a new DAG that tests Maxtext EMC restoring from GCS feature)
