@@ -531,7 +531,7 @@ def create_interruption_dag(
         case _:
           with TaskGroup(
               group_id=f'validation_for_{project.value}',
-              tooltip=f'Validation pipeline for Project ID: {project.value}'
+              tooltip=f'Validation pipeline for Project ID: {project.value}',
           ) as group:
             configs = Configs(
                 project_id=project.value,
@@ -544,7 +544,9 @@ def create_interruption_dag(
                 configs: Configs,
                 proper_time_range: TimeRange,
             ) -> List[EventRecord]:
-              return fetch_interruption_metric_records(configs, proper_time_range)
+              return fetch_interruption_metric_records(
+                  configs, proper_time_range
+              )
 
             proper_time_range = determine_time_range(configs)
             metric_records = fetch_interruption_metric_records_task(
@@ -555,9 +557,15 @@ def create_interruption_dag(
                 configs,
                 proper_time_range,
             )
-            check_event_count = validate_interruption_count(metric_records, log_records)
+            check_event_count = validate_interruption_count(
+                metric_records, log_records
+            )
 
-            proper_time_range >> [metric_records, log_records] >> check_event_count
+            (
+                proper_time_range
+                >> [metric_records, log_records]
+                >> check_event_count
+            )
 
     return dag
 
