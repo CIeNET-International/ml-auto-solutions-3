@@ -16,7 +16,7 @@ from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
-from dags.common.vm_resource import Project, Region, Zone
+from dags.common.vm_resource import Project, Region, Zone, MachineVersion
 from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.utils.jobset_generator import JobSet
 from dags.tpu_observability.utils.jobset_generator import Workload
@@ -25,6 +25,12 @@ from dags.tpu_observability.utils.node_pool_util import Info
 from dags.tpu_observability.utils.time_util import TimeUtil
 from dags.tpu_observability.utils.tpu_info_util import parse_tpu_info_output
 from dags.tpu_observability.utils.tpu_info_util import TABLE_NAME_TO_ATTR
+
+
+MACHINE_TYPE_TO_TPU_VERSION = {
+    "ct6e-standard-4t": "v6e",
+    "ct5p-hightpu-4t": "v5p",
+}
 
 
 def _get_credentials_command(node_pool: Info):
@@ -111,7 +117,7 @@ def run_workload(
   logging.info("STDOUT message: %s", result.stdout)
 
   current_time_utc = datetime.datetime.now(datetime.timezone.utc)
-  return current_time_utc.isoformat(timespec="milliseconds")
+  return current_time_utc
 
 
 @task
@@ -187,7 +193,7 @@ def get_active_pods(info: Info, kubeconfig: str, yaml_config: JobSet):
 
 @task.sensor(poke_interval=30, timeout=900, mode="reschedule")
 def wait_for_jobset_started(
-    info: Info, pod_name_list: str, job_apply_time: str
+    info: Info, pod_name_list: str, job_apply_time: datetime.datetime
 ) -> bool:
   """Waits for the jobset to start by polling Cloud Logging for positive tensorcore utilization metrics.
 
@@ -198,11 +204,12 @@ def wait_for_jobset_started(
   Args:
     info: An Info dataclass instance containing project and cluster details.
     pod_name_list: A list of pod names.
-    job_apply_time: The ISO formatted string of the time the job was applied.
+    job_apply_time: The datetime object of the time the job was applied.
   """
 
-  datetime_job_apply_time = datetime.datetime.fromisoformat(job_apply_time)
-  end_time_utc = datetime_job_apply_time + datetime.timedelta(minutes=10)
+  end_time_datatime = job_apply_time + datetime.timedelta(minutes=10)
+  start_time = TimeUtil.from_datetime(job_apply_time)
+  end_time = TimeUtil.from_datetime(end_time_datatime)
 
   if not pod_name_list:
     raise AirflowFailException("pod_name_list is empty, sensor cannot proceed.")
@@ -217,8 +224,8 @@ def wait_for_jobset_started(
   time_series_data = query_time_series(
       project_id=info.project_id,
       filter_str=" AND ".join(filter_string),
-      start_time=datetime_job_apply_time,
-      end_time=end_time_utc,
+      start_time=start_time,
+      end_time=end_time,
       view="FULL",
   )
 
@@ -309,7 +316,7 @@ def validate_chips_table(tpu_info_dict: str, info: Info):
         f" Expected: {expected_rows})"
     )
 
-  tpu_type = info.machine_type
+  tpu_type = MACHINE_TYPE_TO_TPU_VERSION[info.machine_type]
 
   for i, row_dict in enumerate(content, 1):
     if not re.match(r"/dev/vfio/\d+", row_dict["Chip"]):
@@ -447,7 +454,7 @@ with models.DAG(
           "TCU_REGION", default_var=Region.US_EAST5.value
       ),
       machine_type=models.Variable.get(
-          "TCU_MACHINE_TYPE", default_var="v6e"
+          "TCU_MACHINE_TYPE", default_var=MachineVersion.CT6E_STAND_4T.value
       ),
   )
 

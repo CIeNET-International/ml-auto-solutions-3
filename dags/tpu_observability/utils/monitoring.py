@@ -3,24 +3,21 @@ import datetime
 import logging
 from typing import List, Optional, Union
 
-from dags.tpu_observability.utils.time_util import TimeUtil, TimeInput
+from dags.tpu_observability.utils.time_util import TimeUtil
 
 from airflow.exceptions import AirflowException
 from google.cloud import monitoring_v3
 from google.cloud.monitoring_v3 import types
 
-TimeInput = Union[datetime.datetime, str, int, float]
-
 
 def query_time_series(
     project_id: str,
     filter_str: str,
-    start_time: TimeInput,
-    end_time: TimeInput,
+    start_time: TimeUtil,
+    end_time: TimeUtil,
     aggregation: Optional[types.Aggregation] = None,
-    view: Union[
-        str, types.ListTimeSeriesRequest.TimeSeriesView
-    ] = types.ListTimeSeriesRequest.TimeSeriesView.FULL,
+    view: types.ListTimeSeriesRequest.TimeSeriesView =
+    types.ListTimeSeriesRequest.TimeSeriesView.FULL,
     page_size: Optional[int] = None,
 ) -> List[types.TimeSeries]:
   """A reusable function to query time series data from Google Cloud Monitoring.
@@ -55,12 +52,9 @@ def query_time_series(
   client = monitoring_v3.MetricServiceClient()
   project_name = f"projects/{project_id}"
 
-  start_time_obj = TimeUtil.build(start_time, arg_name="start_time")
-  end_time_obj = TimeUtil.build(end_time, arg_name="end_time")
-
   interval = types.TimeInterval(
-      start_time=start_time_obj.to_protobuf_timestamp(),
-      end_time=end_time_obj.to_protobuf_timestamp(),
+      start_time=start_time.to_protobuf_timestamp(),
+      end_time=end_time.to_protobuf_timestamp(),
   )
 
   if isinstance(view, str):
