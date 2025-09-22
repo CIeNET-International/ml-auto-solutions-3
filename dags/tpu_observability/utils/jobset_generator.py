@@ -72,10 +72,14 @@ class Workload:
       ' &&
       echo "Workload finished, sleeping now..." &&
       sleep 10000
-      """), ensure_ascii=False)
+      """
+      ),
+      ensure_ascii=False,
+  )
 
 
-_TEMPLATE = string.Template("""
+_TEMPLATE = string.Template(
+    """
 apiVersion: jobset.x-k8s.io/v1alpha2
 kind: JobSet
 metadata:
@@ -138,8 +142,9 @@ class JobSet:
       tpu_topology: str = "4x4",
       container_name: str = "jax-tpu-worker",
       image: str = "python:3.10",
-      command: Optional[List[str]] = None,
-      tpu_cores_per_pod: int = 4):
+      command: Optional[List[str]] = ["bash", "-c"],
+      tpu_cores_per_pod: int = 4,
+  ):
     """Initializes a JobSet configuration object.
 
     Args:
@@ -174,7 +179,7 @@ class JobSet:
         "tpu_topology": tpu_topology,
         "container_name": container_name,
         "image": image,
-        "command": command if command is not None else ["bash", "-c"],
+        "command": command,
         "tpu_cores_per_pod": tpu_cores_per_pod,
     }
 
@@ -195,6 +200,7 @@ class JobSet:
     yaml_content = _TEMPLATE.substitute(final_params)
 
     return yaml_content
+
 
 if __name__ == "__main__":
   my_jobset = JobSet(
