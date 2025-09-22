@@ -19,7 +19,7 @@ import tempfile
 import uuid
 import sys
 import re
-from typing import Tuple
+from typing import Tuple, Union, List
 from absl import logging
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
@@ -29,6 +29,7 @@ from google.cloud import compute_v1
 from xlml.apis import metric_config, gcs
 from xlml.utils import gke, composer
 from dags.common.vm_resource import GpuVersion
+from dags.orbax.util import validation_util
 
 # b/411426745 - Using sed workaround to comment out validate_dependencies()
 # in xpk main.py to upgrade the version from 0.4.1 to 0.12.0.
