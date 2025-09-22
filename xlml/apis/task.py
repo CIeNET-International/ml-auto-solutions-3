@@ -235,6 +235,8 @@ class XpkTask(BaseTask):
       xpk_branch: The specific git branch of the xpk tool to use.
       last_node: If True, the interruption will target the last node in the
         workload; otherwise, it targets the first node.
+      max_restart: By default, this is 0.
+        This will restart the job with flag "--max-restarts"
     Returns:
       A task group with the following tasks chained: run_model and
       post_process.
@@ -284,6 +286,8 @@ class XpkTask(BaseTask):
       xpk_branch: The specific git branch of the xpk tool to use.
       last_node: If True, the interruption will target the last node in the
         workload; otherwise, it targets the first node.
+      max_restart: By default, this is 0.
+        This will restart the job with flag "--max-restarts"
 
     Returns:
       A DAG node that executes the model test.

@@ -17,15 +17,14 @@ from dags.multipod.configs import gke_config
 from dags.orbax.util import validation_util, test_config_util
 from xlml.utils.xpk import MAIN_BRANCH
 from xlml.utils.gke import zone_to_region
-from xlml.utils import name_format
 
-SCHEDULE = "0 17 * * *" if composer_env.is_prod_env() else None
-DAG_TEST_NAME = "maxtext_regular_restore_with_node_disruption"
+SCHEDULE = "0 18 * * *" if composer_env.is_prod_env() else None
+DAG_TEST_NAME = "maxtext_regular_restore_with_resumed_workload"
 
 
 with models.DAG(
     dag_id=DAG_TEST_NAME,
-    start_date=datetime.datetime(2025, 10, 13),
+    start_date=datetime.datetime(2025, 10, 16),
     schedule_interval=SCHEDULE,
     catchup=False,
     tags=[
@@ -35,7 +34,7 @@ with models.DAG(
         "nightly",
         "orbax",
     ],
-    description="DAG that verifies MaxText regular checkpointing restoring functionality from GCS bucket .",
+    description="DAG that verify MaxText regular checkpoint restoring functionality from GCS bucket.",
     doc_md="""
       # MaxText Regular Checkpointing Validation DAG
 
@@ -50,22 +49,21 @@ with models.DAG(
       - An existing TPU cluster configured for MaxText training.
       - A GCS bucket for storing logs and checkpoints.
 
-      ### Procedures
-      1.  **Run MaxText Training:** A MaxText training job is initiated with
-          regular checkpointing enabled. The job runs for 120 steps and saves
+      ### Test Flow
+      1. **Start Training:** A MaxText training job is initiated with
+          regular checkpointing enabled.The job runs for 40 steps and saves
           checkpoints to GCS every 20 steps.
-      2.  **Node Interruption:** Simulate a node interruption while step 40
-          is saved into GCS bucket completely (commit_message.txt is generated)
-      3.  **Log Validation:** Verify checkpoint save events in logs
+         - Saves regular checkpoints to GCS every 20 steps (0, 20, 39)
+      2. **Restart the Same Training:** Change job steps to 100 and run job.
+      3. **Log Validation:** Verify checkpoint save events in logs
          - Looks for 'Finished async_save (blocking + background)' messages
          - Validates that saves occurred at expected steps
       4. **File Validation:** Verify checkpoint files exist in GCS bucket
          - Checks that actual checkpoint files are present for each expected step
-      5.  **Validate Restore:** The DAG inspects the application logs to confirm
+      5. **Node Interruption:** A MaxText training job is initiated.
+          During its execution, a node interruption is simulated
+      6.  **Validate Restore:** The DAG inspects the application logs to confirm
           that an `'restore'` event occurred.
-      6.  **Validate Checkpoint Integrity:** It then verifies that the training job
-          resumed and continued to save checkpoints correctly after the restore,
-          ensuring no data was lost.
     """,
     concurrency=2,
 ) as dag:
@@ -81,14 +79,12 @@ with models.DAG(
           accelerator="v5p-128",
           slices=[2],
           model_name="llama2-7b",
-          short_id="max-reg-res-gcs-node",
-          steps=120,
+          short_id="max-reg-res-gcs-resume-training",
+          steps=40,
           checkpoint_period=20,
           base_dir=test_config_util.DEFAULT_BUCKET,
       ),
   ]
-
-  step_to_interrupt = 40
 
   for mode, image in test_config_util.DOCKER_IMAGES:
     for test_config in test_configs:
@@ -100,7 +96,7 @@ with models.DAG(
             accelerator=test_config.accelerator,
         )
 
-        workload_command = test_config.generate_workload_command(
+        initial_workload_command = test_config.generate_workload_command(
             checkpoint_dir=test_config_util.DEFAULT_RAM_DISK,
             run_name=run_name,
             slice_num=slice_num,
@@ -108,29 +104,46 @@ with models.DAG(
             enable_multi_tier_checkpointing=checkpointing.enable_multi_tier_checkpointing,
             enable_emergency_checkpoint=checkpointing.enable_emergency_checkpoint,
         )
-        gcs_location = (
-            name_format.generate_workload_checkpoints_location.override(
-                task_id="gcs_bucket_checkpoints_location"
-            )(f"{test_config.base_dir}/{DAG_TEST_NAME}/{run_name}")
-        )
 
         start_time = validation_util.generate_timestamp.override(
             task_id="generate_start_time"
         )()
 
-        maxtext_chkpt_run_test = gke_config.get_gke_config(
+        initial_maxtext_chkpt_run_test = gke_config.get_gke_config(
             num_slices=slice_num,
             cluster=test_config.cluster,
             time_out_in_min=60,
             test_name=f"{test_config.short_id}",
-            run_model_cmds=workload_command,
+            run_model_cmds=initial_workload_command,
             docker_image=image.value,
             test_owner=test_owner.SHARON_Y,
-        ).run_with_node_interruption(
-            gcs_location=gcs_location,
+        ).run(
             xpk_branch=MAIN_BRANCH,
             skip_post_process=True,
-            expect_reach_to_step=step_to_interrupt,
+            max_restart=15,
+        )
+
+        test_config.steps = 100
+        resume_workload_command = test_config.generate_workload_command(
+            checkpoint_dir=test_config_util.DEFAULT_RAM_DISK,
+            run_name=run_name,
+            slice_num=slice_num,
+            out_folder=DAG_TEST_NAME,
+            enable_multi_tier_checkpointing=checkpointing.enable_multi_tier_checkpointing,
+            enable_emergency_checkpoint=checkpointing.enable_emergency_checkpoint,
+        )
+
+        resume_maxtext_chkpt_run_test = gke_config.get_gke_config(
+            num_slices=slice_num,
+            cluster=test_config.cluster,
+            time_out_in_min=60,
+            test_name=f"{test_config.short_id}-re",
+            run_model_cmds=resume_workload_command,
+            docker_image=image.value,
+            test_owner=test_owner.SHARON_Y,
+        ).run(
+            xpk_branch=MAIN_BRANCH,
+            skip_post_process=True,
             max_restart=15,
         )
 
@@ -144,7 +157,7 @@ with models.DAG(
                 location=zone_to_region(test_config.cluster.zone),
                 cluster_name=test_config.cluster.name,
                 pod_pattern=".*0-0",
-                interrupt_at_step=40,
+                interrupt_at_step=39,
                 start_time=start_time,
                 end_time=end_time,
             )
@@ -182,9 +195,9 @@ with models.DAG(
 
         (
             run_name
-            >> gcs_location
             >> start_time
-            >> maxtext_chkpt_run_test
+            >> initial_maxtext_chkpt_run_test
+            >> resume_maxtext_chkpt_run_test
             >> end_time
             >> validate_restore_step
             >> validate_restored_source

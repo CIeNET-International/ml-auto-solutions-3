@@ -26,10 +26,9 @@ from airflow.exceptions import AirflowFailException
 from airflow.hooks.subprocess import SubprocessHook
 from kubernetes import client as k8s_client
 from google.cloud import compute_v1
-from xlml.apis import metric_config
+from xlml.apis import metric_config, gcs
 from xlml.utils import gke, composer
 from dags.common.vm_resource import GpuVersion
-from dags.orbax.util import validation_util
 
 # b/411426745 - Using sed workaround to comment out validate_dependencies()
 # in xpk main.py to upgrade the version from 0.4.1 to 0.12.0.
@@ -514,7 +513,7 @@ def wait_for_file_to_exist(
 ) -> bool:
   if file_path:
     target_file = "commit_success.txt"
-    checkpoint_files = validation_util.get_gcs_checkpoint(
+    checkpoint_files = gcs.generate_gcs_file_list(
         f"{file_path}/{step_to_interrupt}/"
     )
     logging.info(f"Found step folder in GCS: {checkpoint_files}")
