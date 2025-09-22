@@ -103,3 +103,8 @@ def generate_gcs_folder_location(subfolder: str, benchmark_id: str) -> str:
       subfolder,
       f"{benchmark_id}-{current_datetime}/",
   )
+
+
+@task
+def generate_workload_checkpoints_location(gcs_location: str) -> str:
+  return f"{gcs_location}/checkpoints"
