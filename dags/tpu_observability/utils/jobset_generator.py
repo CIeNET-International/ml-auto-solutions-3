@@ -78,7 +78,7 @@ class Workload:
   )
 
 
-_TEMPLATE = string.Template(
+_TEMPLATE = string.Template(textwrap.dedent(
     """
 apiVersion: jobset.x-k8s.io/v1alpha2
 kind: JobSet
@@ -116,7 +116,8 @@ spec:
                   google.com/tpu: $tpu_cores_per_pod
                 limits:
                   google.com/tpu: $tpu_cores_per_pod
-""")
+"""
+))
 
 
 @dataclasses.dataclass

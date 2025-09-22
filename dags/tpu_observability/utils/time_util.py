@@ -4,15 +4,12 @@ import datetime
 from dataclasses import dataclass
 from typing import Union
 
-from airflow.exceptions import AirflowException
 from google.protobuf import timestamp_pb2
-
-TimeInput = Union[datetime.datetime, str, int, float, "TimeUtil"]
 
 
 @dataclass
 class TimeUtil:
-  """A utility class to handle various time representations and provide a unified interface."""
+  """A utility that represents time in multiple forms and converting between them."""
   time: int
 
   @classmethod
@@ -38,10 +35,10 @@ class TimeUtil:
     """Builds a TimeUtil object from a Unix timestamp (seconds)."""
     return cls(int(unix_seconds))
 
-  def to_seconds(self) -> int:
+  def to_unix_seconds(self) -> int:
     return self.time
 
-  def to_protobuf_timestamp(self) -> timestamp_pb2.Timestamp:
+  def to_timestamp_pb2(self) -> timestamp_pb2.Timestamp:
     timestamp = timestamp_pb2.Timestamp()
     timestamp.FromSeconds(self.time)
     return timestamp
@@ -49,7 +46,7 @@ class TimeUtil:
   def to_datetime(self) -> datetime.datetime:
     return datetime.datetime.fromtimestamp(self.time, tz=datetime.timezone.utc)
 
-  def to_iso_format(self) -> str:
+  def to_iso_string(self) -> str:
     iso_str = self.to_datetime().isoformat()
     return iso_str.replace("+00:00", "Z")
 
@@ -57,8 +54,8 @@ if __name__ == "__main__":
 
   time = "2025-09-19T04:08:35.951+00:00"
   time_obj = TimeUtil.from_iso_string(time)
-  print(time_obj.to_iso_format())
-  print(time_obj.to_protobuf_timestamp())
+  print(time_obj.to_iso_string())
+  print(time_obj.to_timestamp_pb2())
 
 
   start_time = datetime.datetime.fromisoformat("2025-09-19T04:08:35.951+00:00")
@@ -67,5 +64,5 @@ if __name__ == "__main__":
   start_time_obj = TimeUtil.from_datetime(start_time)
   end_time_obj = TimeUtil.from_datetime(end_time)
 
-  print(start_time_obj.to_protobuf_timestamp())
-  print(end_time_obj.to_protobuf_timestamp())
+  print(start_time_obj.to_timestamp_pb2())
+  print(end_time_obj.to_timestamp_pb2())

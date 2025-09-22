@@ -16,11 +16,10 @@ def query_time_series(
     start_time: TimeUtil,
     end_time: TimeUtil,
     aggregation: Optional[types.Aggregation] = None,
-    view: types.ListTimeSeriesRequest.TimeSeriesView =
-    types.ListTimeSeriesRequest.TimeSeriesView.FULL,
+    view: types.ListTimeSeriesRequest.TimeSeriesView = types.ListTimeSeriesRequest.TimeSeriesView.FULL,
     page_size: Optional[int] = None,
 ) -> List[types.TimeSeries]:
-  """A reusable function to query time series data from Google Cloud Monitoring.
+  """A utility that queries metrics (time series data) from Google Cloud Monitoring API.
 
   This function provides a flexible interface to the list_time_series API,
   with robust error handling and convenient parameter types.
@@ -53,8 +52,8 @@ def query_time_series(
   project_name = f"projects/{project_id}"
 
   interval = types.TimeInterval(
-      start_time=start_time.to_protobuf_timestamp(),
-      end_time=end_time.to_protobuf_timestamp(),
+      start_time=start_time.to_timestamp_pb2(),
+      end_time=end_time.to_timestamp_pb2(),
   )
 
   if isinstance(view, str):
@@ -68,12 +67,12 @@ def query_time_series(
   else:
     view_enum = view
 
-  request = monitoring_v3.ListTimeSeriesRequest({
-      "name": project_name,
-      "filter": filter_str,
-      "interval": interval,
-      "view": view_enum,
-  })
+  request = monitoring_v3.ListTimeSeriesRequest(
+      name=project_name,
+      filter=filter_str,
+      interval=interval,
+      view=view_enum,
+  )
 
   if aggregation:
     request.aggregation = aggregation

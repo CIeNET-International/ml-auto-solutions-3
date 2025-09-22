@@ -414,7 +414,8 @@ def validate_latency_table(tpu_info_dict: str):
 
   for i, row_dict in enumerate(content, 1):
     for title, val_str in row_dict.items():
-      if title == "Buffer Size": continue
+      if title == "Buffer Size":
+        continue
       if not (
           val_str.endswith(" us") and float(val_str.replace(" us", "")) > 0
       ):

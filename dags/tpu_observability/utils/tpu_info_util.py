@@ -76,15 +76,13 @@ def parse_tpu_info_output(output: str) -> dict:
       tpu_info_dict[attribute_name] = {
           "name": table.name,
           "raw_body": table.raw_body,
-          "body": table.body
+          "body": table.body,
       }
 
   return tpu_info_dict
 
 
 if __name__ == "__main__":
-    # --- (Sample data and test functions are now updated) ---
-
   full_output = """
 TPU Chips
 ┏━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━┓
