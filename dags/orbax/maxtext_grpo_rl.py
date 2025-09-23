@@ -25,7 +25,7 @@ DAG_TEST_NAME = "maxtext_grpo_rl"
 # TODO: Add Docker image configuration for GRPO training with MaxText and Tunix
 DOCKER_IMAGES = [(
     SetupMode.NIGHTLY,
-    DockerImage.MAXTEXT_TPU_JAX_NIGHTLY,
+    DockerImage.MAXTEXT_GRPO_RL_IMAGE,
 )]
 
 
