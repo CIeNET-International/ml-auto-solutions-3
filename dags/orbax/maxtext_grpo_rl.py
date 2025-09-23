@@ -104,7 +104,7 @@ with models.DAG(
       accelerator="v5p-128",
       slices=[1],  # Single slice for GRPO training
       model_name="llama3.1-8b",
-      short_id="max-grpo",
+      short_id="max-rl", # This short_id can't not exceed 6 characters due to Pathway limitation
       step=200,  # Number of training batches
       local_checkpoint_step=None,
       replicator_backup_time=None,
@@ -136,7 +136,7 @@ with models.DAG(
           num_slices=slice_num,
           cluster=training_config.cluster,
           time_out_in_min=180,  # 3 hours timeout for GRPO training
-          test_name=f"{training_config.short_id}-grpo",
+          test_name=f"{training_config.short_id}",
           run_model_cmds=grpo_training_command,
           docker_image=image.value,
           test_owner=test_owner.JACKY_F,
