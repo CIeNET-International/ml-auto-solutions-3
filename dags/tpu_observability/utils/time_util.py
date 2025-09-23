@@ -49,6 +49,7 @@ class TimeUtil:
     iso_str = self.to_datetime().isoformat()
     return iso_str.replace("+00:00", "Z")
 
+
 if __name__ == "__main__":
   time = "2025-09-19T04:08:35.951+00:00"
   time_obj = TimeUtil.from_iso_string(time)

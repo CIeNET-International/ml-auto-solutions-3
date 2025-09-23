@@ -18,6 +18,7 @@ class Workload:
 
   Each workload is a JSON-escaped string, ready to be used as a shell argument.
   """
+
   JAX_TPU_BENCHMARK = json.dumps(
       textwrap.dedent(
           """
@@ -150,6 +151,7 @@ class JobSet:
       command: The command to run in the container.
       tpu_cores_per_pod: The number of TPU cores requested per pod.
   """
+
   jobset_name: str
   namespace: str
   max_restarts: int

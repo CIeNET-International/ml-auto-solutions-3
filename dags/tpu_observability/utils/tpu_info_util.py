@@ -13,6 +13,7 @@ _TableRow = Dict[str, str]
 @dataclass
 class Table:
   """Represents a single parsed table from the tpu-info output."""
+
   name: str
   raw_body: str
   body: List[_TableRow] = field(init=False, repr=False)

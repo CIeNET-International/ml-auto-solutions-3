@@ -139,9 +139,7 @@ def end_workload(info: Info, kubeconfig: str, yaml_config: JobSet):
   result = subprocess.run(
       " && ".join([
           _get_credentials_command(info),
-          _k8s_delete_jobset_command(
-              kubeconfig, yaml_config.namespace
-          ),
+          _k8s_delete_jobset_command(kubeconfig, yaml_config.namespace),
       ]),
       shell=True,
       check=False,
