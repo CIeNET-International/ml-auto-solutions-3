@@ -18,7 +18,9 @@ class Workload:
 
   Each workload is a JSON-escaped string, ready to be used as a shell argument.
   """
-  JAX_TPU_BENCHMARK = json.dumps(textwrap.dedent("""
+  JAX_TPU_BENCHMARK = json.dumps(
+      textwrap.dedent(
+          """
       python -c '
       import jax
       import jax.numpy as jnp
@@ -78,46 +80,48 @@ class Workload:
   )
 
 
-_TEMPLATE = string.Template(textwrap.dedent(
-    """
-apiVersion: jobset.x-k8s.io/v1alpha2
-kind: JobSet
-metadata:
-  name: $jobset_name
-  annotations:
-    alpha.jobset.sigs.k8s.io/exclusive-topology: cloud.google.com/gke-nodepool
-  namespace: $namespace
-spec:
-  failurePolicy:
-    maxRestarts: $max_restarts
-  replicatedJobs:
-  - name: $replicated_job_name
-    replicas: $replicas
-    template:
-      spec:
-        backoffLimit: $backoff_limit
-        completions: $completions
-        parallelism: $parallelism
-        template:
-          spec:
-            nodeSelector:
-              cloud.google.com/gke-tpu-accelerator: $tpu_accelerator_type
-              cloud.google.com/gke-tpu-topology: $tpu_topology
-            containers:
-            - name: $container_name
-              image: $image
-              command: $command
-              args:
-                - $args
-              stdin: true
-              tty: true
-              resources:
-                requests:
-                  google.com/tpu: $tpu_cores_per_pod
-                limits:
-                  google.com/tpu: $tpu_cores_per_pod
-"""
-))
+_TEMPLATE = string.Template(
+    textwrap.dedent(
+        """
+        apiVersion: jobset.x-k8s.io/v1alpha2
+        kind: JobSet
+        metadata:
+          name: $jobset_name
+          annotations:
+            alpha.jobset.sigs.k8s.io/exclusive-topology: cloud.google.com/gke-nodepool
+          namespace: $namespace
+        spec:
+          failurePolicy:
+            maxRestarts: $max_restarts
+          replicatedJobs:
+          - name: $replicated_job_name
+            replicas: $replicas
+            template:
+              spec:
+                backoffLimit: $backoff_limit
+                completions: $completions
+                parallelism: $parallelism
+                template:
+                  spec:
+                    nodeSelector:
+                      cloud.google.com/gke-tpu-accelerator: $tpu_accelerator_type
+                      cloud.google.com/gke-tpu-topology: $tpu_topology
+                    containers:
+                    - name: $container_name
+                      image: $image
+                      command: $command
+                      args:
+                        - $args
+                      stdin: true
+                      tty: true
+                      resources:
+                        requests:
+                          google.com/tpu: $tpu_cores_per_pod
+                        limits:
+                          google.com/tpu: $tpu_cores_per_pod
+        """
+    )
+)
 
 
 @dataclasses.dataclass
@@ -127,62 +131,39 @@ class JobSet:
   This class helps in creating JobSet YAMLs by providing a template and allowing
   customization of various parameters like jobset name, replicas, TPU
   configuration, and the workload script to be executed.
+
+  Attributes:
+      jobset_name: The name of the JobSet.
+      namespace: The Kubernetes namespace for the JobSet.
+      max_restarts: The maximum number of restarts for the JobSet.
+      replicated_job_name: The name for the replicated Job within the JobSet.
+      replicas: The number of replicas for the replicated Job.
+      backoff_limit: The number of failed pods to tolerate before marking the
+        Job as failed.
+      completions: The number of pods that must complete successfully.
+      parallelism: The number of pods to run in parallel.
+      tpu_accelerator_type: The type of TPU accelerator (e.g.,
+        "tpu-v6e-slice").
+      tpu_topology: The TPU topology (e.g., "4x4").
+      container_name: The name of the container in the pod.
+      image: The container image to use.
+      command: The command to run in the container.
+      tpu_cores_per_pod: The number of TPU cores requested per pod.
   """
-
-  def __init__(
-      self,
-      jobset_name: str,
-      namespace: str = "default",
-      max_restarts: int = 5,
-      replicated_job_name: str = "tpu-slice",
-      replicas: int = 2,
-      backoff_limit: int = 0,
-      completions: int = 4,
-      parallelism: int = 4,
-      tpu_accelerator_type: str = "tpu-v6e-slice",
-      tpu_topology: str = "4x4",
-      container_name: str = "jax-tpu-worker",
-      image: str = "python:3.10",
-      command: Optional[List[str]] = ["bash", "-c"],
-      tpu_cores_per_pod: int = 4,
-  ):
-    """Initializes a JobSet configuration object.
-
-    Args:
-        jobset_name: The name of the JobSet.
-        namespace: The Kubernetes namespace for the JobSet. Defaults to
-          "default".
-        max_restarts: The maximum number of restarts for the JobSet.
-        replicated_job_name: The name for the replicated Job within the JobSet.
-        replicas: The number of replicas for the replicated Job.
-        backoff_limit: The number of failed pods to tolerate before marking the
-          Job as failed.
-        completions: The number of pods that must complete successfully.
-        parallelism: The number of pods to run in parallel.
-        tpu_accelerator_type: The type of TPU accelerator (e.g.,
-          "tpu-v6e-slice").
-        tpu_topology: The TPU topology (e.g., "4x4").
-        container_name: The name of the container in the pod.
-        image: The container image to use.
-        command: The command to run in the container.
-        tpu_cores_per_pod: The number of TPU cores requested per pod.
-    """
-    self.params = {
-        "jobset_name": jobset_name,
-        "namespace": namespace,
-        "max_restarts": max_restarts,
-        "replicated_job_name": replicated_job_name,
-        "replicas": replicas,
-        "backoff_limit": backoff_limit,
-        "completions": completions,
-        "parallelism": parallelism,
-        "tpu_accelerator_type": tpu_accelerator_type,
-        "tpu_topology": tpu_topology,
-        "container_name": container_name,
-        "image": image,
-        "command": command,
-        "tpu_cores_per_pod": tpu_cores_per_pod,
-    }
+  jobset_name: str
+  namespace: str
+  max_restarts: int
+  replicated_job_name: str
+  replicas: int
+  backoff_limit: int
+  completions: int
+  parallelism: int
+  tpu_accelerator_type: str
+  tpu_topology: str
+  container_name: str
+  image: str
+  command: Optional[List[str]]
+  tpu_cores_per_pod: int
 
   def generate_yaml(self, workload_script: Workload) -> str:
     """Generates the final JobSet YAML content.
@@ -194,11 +175,11 @@ class JobSet:
     Returns:
         A string containing the complete JobSet YAML.
     """
+    params = dataclasses.asdict(self)
 
-    final_params = self.params.copy()
-    final_params["args"] = workload_script
+    params["args"] = workload_script
 
-    yaml_content = _TEMPLATE.substitute(final_params)
+    yaml_content = _TEMPLATE.substitute(params)
 
     return yaml_content
 
@@ -218,9 +199,10 @@ if __name__ == "__main__":
       container_name="jax-tpu-job",
       image="asia-northeast1-docker.pkg.dev/cienet-cmcs/yuna-docker/tpu-info:v0.4.0",
       command=["bash", "-c"],
+      tpu_cores_per_pod=4,
   )
 
   script_to_run = Workload.JAX_TPU_BENCHMARK
   yaml_content = my_jobset.generate_yaml(workload_script=script_to_run)
   print(f"kubectl apply -f - -n default <<EOF\n {yaml_content}\nEOF")
-
+  print(my_jobset.namespace)

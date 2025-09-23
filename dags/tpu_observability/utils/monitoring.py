@@ -56,22 +56,11 @@ def query_time_series(
       end_time=end_time.to_timestamp_pb2(),
   )
 
-  if isinstance(view, str):
-    try:
-      # Convert string like "FULL" to the enum member TimeSeriesView.FULL
-      view_enum = types.ListTimeSeriesRequest.TimeSeriesView[view.upper()]
-    except KeyError as exc:
-      raise ValueError(
-          f"Invalid view string: '{view}'. Must be 'FULL' or 'HEADERS'."
-      ) from exc
-  else:
-    view_enum = view
-
   request = monitoring_v3.ListTimeSeriesRequest(
       name=project_name,
       filter=filter_str,
       interval=interval,
-      view=view_enum,
+      view=view,
   )
 
   if aggregation:

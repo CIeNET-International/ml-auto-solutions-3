@@ -91,7 +91,7 @@ def run_workload(
       " && ".join([
           _get_credentials_command(info),
           _k8s_apply_jobset_command(
-              kubeconfig, yaml_content, yaml_config.params.get("namespace")
+              kubeconfig, yaml_content, yaml_config.namespace
           ),
       ]),
       shell=True,
@@ -105,7 +105,7 @@ def run_workload(
       " && ".join([
           _get_credentials_command(info),
           _k8s_apply_jobset_command(
-              kubeconfig, yaml_content, yaml_config.params.get("namespace")
+              kubeconfig, yaml_content, yaml_config.namespace
           ),
       ]),
   )
@@ -140,7 +140,7 @@ def end_workload(info: Info, kubeconfig: str, yaml_config: JobSet):
       " && ".join([
           _get_credentials_command(info),
           _k8s_delete_jobset_command(
-              kubeconfig, yaml_config.params.get("namespace")
+              kubeconfig, yaml_config.namespace
           ),
       ]),
       shell=True,
@@ -174,7 +174,7 @@ def get_active_pods(info: Info, kubeconfig: str, yaml_config: JobSet):
   process = subprocess.run(
       " && ".join([
           _get_credentials_command(info),
-          _k8s_get_pod_command(kubeconfig, yaml_config.params.get("namespace")),
+          _k8s_get_pod_command(kubeconfig, yaml_config.namespace),
       ]),
       shell=True,
       check=True,

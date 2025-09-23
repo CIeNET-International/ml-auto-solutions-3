@@ -10,6 +10,7 @@ from google.protobuf import timestamp_pb2
 @dataclass
 class TimeUtil:
   """A utility that represents time in multiple forms and converting between them."""
+
   time: int
 
   @classmethod
@@ -19,9 +20,7 @@ class TimeUtil:
     return cls(int(dt_object.timestamp()))
 
   @classmethod
-  def from_timestamp_pb2(
-      cls, ts_pb: timestamp_pb2.Timestamp
-  ) -> "TimeUtil":
+  def from_timestamp_pb2(cls, ts_pb: timestamp_pb2.Timestamp) -> "TimeUtil":
     """Builds a TimeUtil object from a Google Protobuf Timestamp."""
     return cls(int(ts_pb.seconds))
 
@@ -51,12 +50,10 @@ class TimeUtil:
     return iso_str.replace("+00:00", "Z")
 
 if __name__ == "__main__":
-
   time = "2025-09-19T04:08:35.951+00:00"
   time_obj = TimeUtil.from_iso_string(time)
   print(time_obj.to_iso_string())
   print(time_obj.to_timestamp_pb2())
-
 
   start_time = datetime.datetime.fromisoformat("2025-09-19T04:08:35.951+00:00")
   end_time = start_time + datetime.timedelta(minutes=10)
