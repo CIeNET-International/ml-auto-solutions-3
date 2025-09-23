@@ -501,7 +501,6 @@ def create_interruption_dag(
       start_date=datetime.datetime(2025, 7, 20),
       schedule=Schedule.WEEKDAY_PST_6PM_EXCEPT_THURSDAY,
       catchup=False,
-      default_args={'retries': 0},
       tags=[platform.value, 'tpu-observability', 'interruption-count'],
       description=(
           'This DAG validates the accuracy of the interruption count metric by '
@@ -522,11 +521,10 @@ def create_interruption_dag(
         both sources to ensure they match.
       """,
   ) as dag:
-    # Loop through the project list and create a TaskGroup for each project.
     for project in Project:
       match project:
-        # Production composer lacks permission for these projects; ignore them.
         case Project.TPU_PROD_ENV_AUTOMATED | Project.CLOUD_TPU_INFERENCE_TEST:
+          # Production composer lacks permission for these projects; ignore them.
           continue
         case _:
           with TaskGroup(
