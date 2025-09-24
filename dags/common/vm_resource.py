@@ -396,4 +396,4 @@ class DockerImage(enum.Enum):
   )
   MAXTEXT_GRPO_RL_IMAGE = (
       "gcr.io/tpu-prod-env-multipod/mazumdera_google_com_runner3:latest"
-)
+  )
