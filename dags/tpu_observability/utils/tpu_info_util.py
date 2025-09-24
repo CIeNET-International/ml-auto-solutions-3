@@ -1,7 +1,8 @@
 """Utility for parsing the output of the 'tpu-info' command."""
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
+from enum import IntEnum, auto
 from typing import Dict, List
 
 from airflow.decorators import task
@@ -20,27 +21,73 @@ class Table:
 
   def __post_init__(self):
     """Parses the raw_body string to populate the structured body attribute."""
-    self.body = []
+
+    class TableLineIndex(IntEnum):
+
+      """Defines the expected line indices for different parts of a raw table.
+
+      Output example:
+                                      Libtpu version: 0.0.20.dev20250722+nightly
+                                      Accelerator type: v6e
+
+      TPU Chips
+      ┏━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━┓
+      ┃ Chip        ┃ Type         ┃ Devices ┃ PID  ┃
+      ┡━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━┩
+      │ /dev/vfio/0 │ TPU v6e chip │ 1       │ 1016 │
+      │ /dev/vfio/1 │ TPU v6e chip │ 1       │ 1016 │
+      │ /dev/vfio/2 │ TPU v6e chip │ 1       │ 1016 │
+      │ /dev/vfio/3 │ TPU v6e chip │ 1       │ 1016 │
+      └─────────────┴──────────────┴─────────┴──────┘
+      TPU Runtime Utilization
+      ┏━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━┓
+      ┃ Device ┃ HBM Usage (GiB)       ┃ Duty cycle ┃
+      ┡━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━┩
+      │ 0      │ 18.45 GiB / 31.25 GiB │ 100.00%    │
+      │ 1      │ 10.40 GiB / 31.25 GiB │ 100.00%    │
+      │ 4      │ 10.40 GiB / 31.25 GiB │ 100.00%    │
+      │ 5      │ 10.40 GiB / 31.25 GiB │ 100.00%    │
+      └────────┴───────────────────────┴────────────┘
+      TensorCore Utilization
+      ┏━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━┓
+      ┃ Chip ID ┃ TensorCore Utilization ┃
+      ┡━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━┩
+      │ 0       │ 15.42%                 │
+      │ 1       │ 15.28%                 │
+      │ 2       │ 14.64%                 │
+      │ 3       │ 14.52%                 │
+      └─────────┴────────────────────────┘
+      TPU Buffer Transfer Latency
+      ┏━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┓
+      ┃ Buffer Size ┃ P50         ┃ P90          ┃ P95          ┃ P999         ┃
+      ┡━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━┩
+      │ 4MB+        │ 16524.14 us │ 29825.32 us  │ 33527.37 us  │ 44780.14 us  │
+      │ 8MB+        │ 34693.85 us │ 564965.07 us │ 608747.76 us │ 650846.50 us │
+      └─────────────┴─────────────┴──────────────┴──────────────┴──────────────┘
+      """
+      UPPER_BORDER = 0
+      HEADER = auto()
+      SEPARATOR = auto()
+      DATA = auto()
+      LOWER_BORDER = -1
+
     lines = self.raw_body.strip().split("\n")
-    if len(lines) < 4:
+    if len(lines) < max(TableLineIndex):
       return
-    header_line = lines[1]
+
+    self.body = []
+    header_line = lines[TableLineIndex.HEADER]
     headers = [h.strip() for h in header_line.split("┃") if h.strip()]
-    data_lines = lines[3:-1]
+    data_lines = lines[TableLineIndex.DATA:TableLineIndex.LOWER_BORDER]
     for line in data_lines:
       values = [v.strip() for v in line.split("│")][1:-1]
       if len(values) == len(headers):
         self.body.append(dict(zip(headers, values)))
 
 
-# A mapping from the exact table titles in the raw output to the
-# attribute names in the TpuInfo dataclass.
-TABLE_NAME_TO_ATTR = {
-    "TPU Chips": "chips",
-    "TPU Runtime Utilization": "runtime_utilization",
-    "TensorCore Utilization": "tensorcore_utilization",
-    "TPU Buffer Transfer Latency": "buffer_transfer_latency",
-}
+def _format_title_to_key(title: str) -> str:
+  """Converts a string like 'My Table Title' to 'my_table_title'."""
+  return title.lower().replace(" ", "_")
 
 
 @task
@@ -72,13 +119,9 @@ def parse_tpu_info_output(output: str) -> dict:
   ]
 
   for table in parsed_tables:
-    attribute_name = TABLE_NAME_TO_ATTR.get(table.name)
+    attribute_name = _format_title_to_key(table.name)
     if attribute_name:
-      tpu_info_dict[attribute_name] = {
-          "name": table.name,
-          "raw_body": table.raw_body,
-          "body": table.body,
-      }
+      tpu_info_dict[attribute_name] = asdict(table)
 
   return tpu_info_dict
 
@@ -125,7 +168,7 @@ TPU Buffer Transfer Latency
   tpu_info = parse_tpu_info_output(full_output)
   print(tpu_info)
   print(type(tpu_info))
-  print(tpu_info["chips"]["body"])
-  print(tpu_info["runtime_utilization"]["body"])
+  print(tpu_info["tpu_chips"]["body"])
+  print(tpu_info["tpu_runtime_utilization"]["body"])
   print(tpu_info["tensorcore_utilization"]["body"])
-  print(tpu_info["buffer_transfer_latency"]["body"])
+  print(tpu_info["tpu_buffer_transfer_latency"]["body"])

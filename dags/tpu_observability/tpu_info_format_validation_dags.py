@@ -21,10 +21,9 @@ from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.utils.jobset_generator import JobSet
 from dags.tpu_observability.utils.jobset_generator import Workload
 from dags.tpu_observability.utils.monitoring import query_time_series
-from dags.tpu_observability.utils.node_pool_util import Info
+from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils.time_util import TimeUtil
 from dags.tpu_observability.utils.tpu_info_util import parse_tpu_info_output
-from dags.tpu_observability.utils.tpu_info_util import TABLE_NAME_TO_ATTR
 
 
 MACHINE_TYPE_TO_TPU_VERSION = {
@@ -33,7 +32,7 @@ MACHINE_TYPE_TO_TPU_VERSION = {
 }
 
 
-def _get_credentials_command(node_pool: Info):
+def _get_credentials_command(node_pool: node_pool.Info):
   for attr_name in ["cluster_name", "region", "project_id"]:
     if not getattr(node_pool, attr_name):
       raise ValueError(f"{attr_name} must be set in the Info object.")
@@ -72,7 +71,7 @@ def _k8s_get_pod_command(kubeconfig: str, namespace: str):
 
 @task
 def run_workload(
-    info: Info, kubeconfig: str, yaml_config: JobSet, script: str
+    info: node_pool.Info, kubeconfig: str, yaml_config: JobSet, script: str
 ) -> TimeUtil:
   """Applies the specified YAML file to the GKE cluster.
 
@@ -85,7 +84,7 @@ def run_workload(
   env = os.environ.copy()
   env["KUBECONFIG"] = kubeconfig
 
-  yaml_content = yaml_config_instance.generate_yaml(workload_script=script)
+  yaml_content = generator.generate_yaml(workload_script=script)
 
   result = subprocess.run(
       " && ".join([
@@ -121,7 +120,7 @@ def run_workload(
 
 
 @task
-def end_workload(info: Info, kubeconfig: str, yaml_config: JobSet):
+def end_workload(info: node_pool.Info, kubeconfig: str, yaml_config: JobSet):
   """Deletes all JobSets from the GKE cluster to clean up resources.
 
   This task executes a bash script to:
@@ -154,7 +153,7 @@ def end_workload(info: Info, kubeconfig: str, yaml_config: JobSet):
 
 
 @task
-def get_active_pods(info: Info, kubeconfig: str, yaml_config: JobSet):
+def get_active_pods(info: node_pool.Info, kubeconfig: str, yaml_config: JobSet):
   """Deletes all JobSets from the GKE cluster to clean up resources.
 
   This task executes a bash script to:
@@ -191,7 +190,7 @@ def get_active_pods(info: Info, kubeconfig: str, yaml_config: JobSet):
 
 @task.sensor(poke_interval=30, timeout=900, mode="reschedule")
 def wait_for_jobset_started(
-    info: Info, pod_name_list: str, job_apply_time: datetime.datetime
+    info: node_pool.Info, pod_name_list: str, job_apply_time: datetime.datetime
 ) -> bool:
   """Waits for the jobset to start by polling Cloud Logging for positive tensorcore utilization metrics.
 
@@ -288,24 +287,33 @@ def get_tpu_info_from_pod(kubeconfig: str, pod_name: str) -> str:
 
 @task
 def verify_table_amount(tpu_info_dict: Dict[str, str]):
-  """Receives a dictionary of parsed tables and verifies if the total number.
-
-  of tables matches the expected count.
-
-  Args:
-      tpu_info_dict: A dictionary where keys are table titles and values are the
-        full text content for each table.
+  """Verifies if all expected tables are present in the parsed tpu_info dictionary.
   """
-  for attribute_name in TABLE_NAME_TO_ATTR.values():
-    if tpu_info_dict[attribute_name] is None:
-      raise AirflowFailException(f"{attribute_name} table not exist.")
+  expect_table_keys = {
+      "tpu_chips",
+      "tpu_runtime_utilization",
+      "tensorcore_utilization",
+      "tpu_buffer_transfer_latency",
+  }
+
+  found_keys = set(tpu_info_dict.keys())
+
+  missing_keys = expect_table_keys - found_keys
+
+  if missing_keys:
+    raise AirflowFailException(
+        "The following required tables were not found in the tpu-info output: "
+        f"{', '.join(sorted(list(missing_keys)))}"
+    )
+
+  print("All expected tables were found.")
 
 
 @task
-def validate_chips_table(tpu_info_dict: str, info: Info):
+def validate_chips_table(tpu_info_dict: str, info: node_pool.Info):
   """Validates the row count and content for the 'TPU Chips' table."""
   errors = []
-  content = tpu_info_dict["chips"]["body"]
+  content = tpu_info_dict["tpu_chips"]["body"]
 
   expected_rows = 4
   if len(content) != expected_rows:
@@ -339,7 +347,7 @@ def validate_chips_table(tpu_info_dict: str, info: Info):
 def validate_runtime_table(tpu_info_dict: str):
   """Validates the row count and content for the 'TPU Runtime Utilization' table."""
   errors = []
-  content = tpu_info_dict["runtime_utilization"]["body"]
+  content = tpu_info_dict["tpu_runtime_utilization"]["body"]
 
   expected_rows = 4
   if len(content) != expected_rows:
@@ -403,7 +411,7 @@ def validate_tensorcore_table(tpu_info_dict: str):
 def validate_latency_table(tpu_info_dict: str):
   """Validates the row count and content for the TPU Buffer Transfer Latency table."""
   errors = []
-  content = tpu_info_dict["buffer_transfer_latency"]["body"]
+  content = tpu_info_dict["tpu_buffer_transfer_latency"]["body"]
 
   if len(content) == 0:
     raise AirflowFailException(
@@ -442,7 +450,7 @@ with models.DAG(
       # Format Validation DAG
       # This DAG verifies the format of the tables in the tpu-info output.""",
 ) as dag:
-  cluster_info = Info(
+  cluster_info = node_pool.Info(
       project_id=models.Variable.get(
           "TCU_PROJECT_ID", default_var=Project.TPU_PROD_ENV_ONE_VM.value
       ),
@@ -458,7 +466,7 @@ with models.DAG(
   )
 
   kubeconfig_path = "/tmp/kubeconfig"
-  yaml_config_instance = JobSet(
+  generator = JobSet(
       jobset_name="tpu-info-v6e-workload",
       namespace="default",
       max_restarts=5,
@@ -471,7 +479,6 @@ with models.DAG(
       tpu_topology="4x4",
       container_name="jax-tpu-worker",
       image="us-docker.pkg.dev/tpu-prod-env-one-vm/yuna-docker-repo/tpu-info:v0.4.0",
-      command=["bash", "-c"],
       tpu_cores_per_pod=4,
   )
 
@@ -484,20 +491,20 @@ with models.DAG(
   )(
       info=cluster_info,
       kubeconfig=kubeconfig_path,
-      yaml_config=yaml_config_instance,
+      yaml_config=generator,
   )
 
   apply_time = run_workload(
       info=cluster_info,
       kubeconfig=kubeconfig_path,
-      yaml_config=yaml_config_instance,
+      yaml_config=generator,
       script=workload_script,
   )
 
   active_pods = get_active_pods.override(task_id="get_active_pod")(
       info=cluster_info,
       kubeconfig=kubeconfig_path,
-      yaml_config=yaml_config_instance,
+      yaml_config=generator,
   )
 
   wait_for_job_start = wait_for_jobset_started.override(
@@ -552,7 +559,7 @@ with models.DAG(
   )(
       info=cluster_info,
       kubeconfig=kubeconfig_path,
-      yaml_config=yaml_config_instance,
+      yaml_config=generator,
   ).as_teardown(
       setups=apply_time
   )

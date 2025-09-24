@@ -3,11 +3,10 @@ import datetime
 import logging
 from typing import List, Optional, Union
 
-from dags.tpu_observability.utils.time_util import TimeUtil
-
-from airflow.exceptions import AirflowException
 from google.cloud import monitoring_v3
 from google.cloud.monitoring_v3 import types
+
+from dags.tpu_observability.utils.time_util import TimeUtil
 
 
 def query_time_series(
@@ -18,6 +17,7 @@ def query_time_series(
     aggregation: Optional[types.Aggregation] = None,
     view: types.ListTimeSeriesRequest.TimeSeriesView = types.ListTimeSeriesRequest.TimeSeriesView.FULL,
     page_size: Optional[int] = None,
+    log_enable: bool = False,
 ) -> List[types.TimeSeries]:
   """A utility that queries metrics (time series data) from Google Cloud Monitoring API.
 
@@ -25,41 +25,38 @@ def query_time_series(
   with robust error handling and convenient parameter types.
 
   Args:
-      project_id: The Google Cloud project ID.
-      filter_str: A Cloud Monitoring filter string that specifies which time
-        series should be returned.
-      start_time: The start of the time interval. Can be a datetime object, an
-        ISO 8601 string, or a Unix timestamp (int/float).
-      end_time: The end of the time interval. Can be a datetime object, an ISO
-        8601 string, or a Unix timestamp (int/float).
-      aggregation: An Aggregation object that specifies how to align and combine
-        time series. Defaults to None (raw data).
-      view: The level of detail to return. Can be the TimeSeriesView enum (e.g.,
-        TimeSeriesView.FULL) or a string ("FULL", "HEADERS"). Defaults to FULL.
-      page_size: The maximum number of results to return per page.
+    project_id: The Google Cloud project ID.
+    filter_str: A Cloud Monitoring filter string that specifies which time
+      series should be returned.
+    start_time: The start of the time interval. Can be a datetime object, an
+      ISO 8601 string, or a Unix timestamp (int/float).
+    end_time: The end of the time interval. Can be a datetime object, an ISO
+      8601 string, or a Unix timestamp (int/float).
+    aggregation: An Aggregation object that specifies how to align and combine
+      time series. Defaults to None (raw data).
+    view: The level of detail to return. Can be the TimeSeriesView enum (e.g.,
+      TimeSeriesView.FULL) or a string ("FULL", "HEADERS"). Defaults to FULL.
+    page_size: The maximum number of results to return per page.
+    log_enable: Whether to enable logging. Defaults to False.
 
   Returns:
-      A list of TimeSeries objects matching the query.
+    A list of TimeSeries objects matching the query.
 
   Raises:
-      ValueError: If the time format or view string is invalid.
-      google.api_core.exceptions.GoogleAPICallError: If the API call fails.
+    ValueError: If the time format or view string is invalid.
+    google.api_core.exceptions.GoogleAPICallError: If the API call fails.
   """
-  logging.info("Querying monitoring data for project '%s'", project_id)
-  logging.info("Filter: %s", filter_str)
-
-  client = monitoring_v3.MetricServiceClient()
-  project_name = f"projects/{project_id}"
-
-  interval = types.TimeInterval(
-      start_time=start_time.to_timestamp_pb2(),
-      end_time=end_time.to_timestamp_pb2(),
-  )
+  if log_enable:
+    logging.info("Querying monitoring data for project '%s'", project_id)
+    logging.info("Filter: %s", filter_str)
 
   request = monitoring_v3.ListTimeSeriesRequest(
-      name=project_name,
+      name=f"projects/{project_id}",
       filter=filter_str,
-      interval=interval,
+      interval=types.TimeInterval(
+          start_time=start_time.to_timestamp_pb2(),
+          end_time=end_time.to_timestamp_pb2(),
+      ),
       view=view,
   )
 
@@ -68,6 +65,7 @@ def query_time_series(
   if page_size:
     request.page_size = page_size
 
+  client = monitoring_v3.MetricServiceClient()
   results = client.list_time_series(request)
 
   return list(results)
