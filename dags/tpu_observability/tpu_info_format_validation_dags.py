@@ -6,23 +6,20 @@ This is done by comparing data from Cloud Logging and Cloud Monitoring.
 import datetime
 import logging
 import os
-import random
 import re
 import subprocess
-from typing import Dict, Final, List, Tuple
+from typing import Dict
 
 from airflow import models
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
-from dags.common.vm_resource import Project, Region, Zone, MachineVersion
+from dags.common.vm_resource import Project, Region, MachineVersion
 from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.utils.jobset_generator import JobSet
 from dags.tpu_observability.utils.jobset_generator import Workload
-from dags.tpu_observability.utils.monitoring import query_time_series
 from dags.tpu_observability.utils import node_pool_util as node_pool
-from dags.tpu_observability.utils.time_util import TimeUtil
 from dags.tpu_observability.utils.tpu_info_util import parse_tpu_info_output
 from dags.tpu_observability.utils import jobset_util as jobset_util
 
@@ -252,7 +249,7 @@ with models.DAG(
   )
 
   kubeconfig_path = "/tmp/kubeconfig"
-  generator = JobSet(
+  jobset = JobSet(
       jobset_name="tpu-info-v6e-workload",
       namespace="default",
       max_restarts=5,
@@ -273,14 +270,14 @@ with models.DAG(
   apply_time = jobset_util.run_workload(
       info=cluster_info,
       kubeconfig=kubeconfig_path,
-      yaml_config=generator,
-      script=workload_script,
+      yaml_config=jobset.generate_yaml(workload_script=workload_script),
+      namespace=jobset.namespace,
   )
 
   active_pods = jobset_util.get_active_pods.override(task_id="get_active_pod")(
       info=cluster_info,
       kubeconfig=kubeconfig_path,
-      yaml_config=generator,
+      namespace=jobset.namespace,
   )
 
   wait_for_job_start = jobset_util.wait_for_jobset_started.override(
@@ -330,12 +327,12 @@ with models.DAG(
         .expand(tpu_info_dict=tpu_info_dict)
     )
 
-  clean_up = jobset_util.end_workload.override(
+  clean_up_workload = jobset_util.end_workload.override(
       task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
   )(
       info=cluster_info,
       kubeconfig=kubeconfig_path,
-      yaml_config=generator,
+      namespace=jobset.namespace,
   ).as_teardown(
       setups=apply_time
   )
@@ -357,5 +354,5 @@ with models.DAG(
       >> tpu_info_outputs
       >> tpu_info_dict
       >> verification_group
-      >> clean_up
+      >> clean_up_workload
   )

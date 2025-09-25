@@ -65,6 +65,7 @@ class Table:
       │ 8MB+        │ 34693.85 us │ 564965.07 us │ 608747.76 us │ 650846.50 us │
       └─────────────┴─────────────┴──────────────┴──────────────┴──────────────┘
       """
+
       UPPER_BORDER = 0
       HEADER = auto()
       SEPARATOR = auto()
@@ -78,7 +79,7 @@ class Table:
     self.body = []
     header_line = lines[TableLineIndex.HEADER]
     headers = [h.strip() for h in header_line.split("┃") if h.strip()]
-    data_lines = lines[TableLineIndex.DATA:TableLineIndex.LOWER_BORDER]
+    data_lines = lines[TableLineIndex.DATA : TableLineIndex.LOWER_BORDER]
     for line in data_lines:
       values = [v.strip() for v in line.split("│")][1:-1]
       if len(values) == len(headers):
