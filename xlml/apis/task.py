@@ -204,6 +204,7 @@ class XpkTask(BaseTask):
   def run_with_node_interruption(
       self,
       *,
+      expect_reach_to_step: int,
       gcs_location: Optional[airflow.XComArg] = None,
       use_vertex_tensorboard: bool = False,
       use_pathways: bool = False,
@@ -229,6 +230,7 @@ class XpkTask(BaseTask):
     """
     with TaskGroup(group_id=self.task_test_config.benchmark_id) as group:
       run_model, gcs_path = self.run_model_with_node_interruption(
+          expect_reach_to_step,
           gcs_location,
           use_vertex_tensorboard,
           use_pathways,
@@ -243,6 +245,7 @@ class XpkTask(BaseTask):
 
   def run_model_with_node_interruption(
       self,
+      expect_reach_to_step: int,
       gcs_location: Optional[airflow.XComArg] = None,
       use_vertex_tensorboard: bool = False,
       use_pathways: bool = False,
@@ -277,6 +280,7 @@ class XpkTask(BaseTask):
           self.launch_workload_with_node_interruption(
               workload_id,
               gcs_path,
+              expect_reach_to_step,
               use_vertex_tensorboard,
               use_pathways,
               ramdisk_directory,
@@ -315,6 +319,7 @@ class XpkTask(BaseTask):
       self,
       workload_id: str,
       gcs_path: str,
+      expect_reach_to_step: int,
       use_vertex_tensorboard: bool,
       use_pathways: bool = False,
       ramdisk_directory: str = "",
@@ -352,13 +357,13 @@ class XpkTask(BaseTask):
           region=self.task_gcp_config.zone[:-2],
           cluster_name=self.task_test_config.cluster_name,
       )
-      wait_to_reach_step_to_interrupt = xpk.wait_for_reach_step_to_interrupt(
+      wait_for_workload_to_reach_step = xpk.wait_for_workload_reach_step(
           task_id="wait_to_reach_step_to_interrupt",
           workload_id=workload_id,
           project_id=self.task_gcp_config.project_name,
           region=self.task_gcp_config.zone[:-2],
           cluster_name=self.task_test_config.cluster_name,
-          step_to_interrupt="40",
+          expect_reach_to_step=str(expect_reach_to_step),
       )
       run_node_interruption = xpk.delete_node.override(
           owner=self.task_test_config.task_owner
@@ -374,7 +379,7 @@ class XpkTask(BaseTask):
       (
           run_workload
           >> wait_for_workload_start
-          >> wait_to_reach_step_to_interrupt
+          >> wait_for_workload_to_reach_step
           >> run_node_interruption
       )
       return group
