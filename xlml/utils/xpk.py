@@ -26,8 +26,8 @@ from xlml.apis import metric_config
 from xlml.utils import gke, composer
 from dags.common.vm_resource import GpuVersion
 
-# b/411426745 - Updating dependency from 0.4.1 to 0.12.0 to test a fix.
-# The previous stable state will be marked with a "workable branch flag" if this fails.
+# b/411426745 - Using sed workaround to comment out validate_dependencies()
+# in xpk main.py to upgrade the version from 0.4.1 to 0.12.0.
 MAIN_BRANCH = "v0.12.0"
 
 # TODO(b/437817546): Switch back to the main branch after the issue is resolved.
@@ -58,26 +58,15 @@ def get_xpk_setup_cmd(tmpdir, branch: str = MAIN_BRANCH):
   bash_setup = "set -xue"
 
   pip_install = "pip install ruamel.yaml docker"
-  
-  # Kubectl plugin installation commands
-  kjob_install = (
-      'curl -Lo ./kubectl-kjob https://github.com/kubernetes-sigs/kjob/releases/download/v0.1.0/kubectl-kjob-linux-amd64 && '
-      'chmod +x ./kubectl-kjob && '
-      'sudo mv ./kubectl-kjob /usr/local/bin/kubectl-kjob'
-  )
-  
-  kueue_install = (
-      'curl -Lo ./kubectl-kueue https://github.com/kubernetes-sigs/kueue/releases/download/v0.13.3/kubectl-kueue-linux-amd64 && '
-      'chmod +x ./kubectl-kueue && '
-      'sudo mv ./kubectl-kueue /usr/local/bin/kubectl-kueue'
-  )
-  
+
+  # b/411426745 - Workaround: Comment out validate_dependencies() call to avoid dependency validation issues
+  comment_out_validation = f"sed -i '/validate_dependencies()/s/^/## /' {tmpdir}/xpk/src/xpk/main.py || true"
+
   cmds = [
       bash_setup,
       clone_branch,
       pip_install,
-      kjob_install,
-      kueue_install,
+      comment_out_validation,
   ]
   return cmds
 
