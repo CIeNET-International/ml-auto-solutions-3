@@ -53,13 +53,30 @@ def get_xpk_setup_cmd(tmpdir, branch: str = MAIN_BRANCH):
       f"git clone --branch {branch} https://github.com/AI-Hypercomputer/xpk"
       f" {tmpdir}/xpk"
   )
-  # TODO(b/411426745): Commenting out validation is a workaround for dependency issue
-  comment_out_validation = f"sed -i '/validate_dependencies()/s/^/## /' {tmpdir}/xpk/src/xpk/main.py || true"
+
+  bash_setup = "set -xue"
+
+  pip_install = "pip install ruamel.yaml docker"
+  
+  # Kubectl plugin installation commands
+  kjob_install = (
+      'curl -Lo ./kubectl-kjob https://github.com/kubernetes-sigs/kjob/releases/download/v0.1.0/kubectl-kjob-linux-amd64 && '
+      'chmod +x ./kubectl-kjob && '
+      'sudo mv ./kubectl-kjob /usr/local/bin/kubectl-kjob'
+  )
+  
+  kueue_install = (
+      'curl -Lo ./kubectl-kueue https://github.com/kubernetes-sigs/kueue/releases/download/v0.13.3/kubectl-kueue-linux-amd64 && '
+      'chmod +x ./kubectl-kueue && '
+      'sudo mv ./kubectl-kueue /usr/local/bin/kubectl-kueue'
+  )
+  
   cmds = [
-      "set -xue",
+      bash_setup,
       clone_branch,
-      comment_out_validation,
-      "pip install ruamel.yaml docker",
+      pip_install,
+      kjob_install,
+      kueue_install,
   ]
   return cmds
 
