@@ -19,7 +19,7 @@ import tempfile
 import uuid
 import sys
 import re
-from typing import Tuple
+from typing import Tuple, Union, List
 from absl import logging
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
@@ -29,6 +29,7 @@ from google.cloud import compute_v1
 from xlml.apis import metric_config
 from xlml.utils import gke
 from dags.common.vm_resource import GpuVersion
+from dags.orbax.util import validation_util
 
 # b/411426745 - Setting branch to 0.4.1 till the depdency issue is resolved.
 MAIN_BRANCH = "v0.4.1"
@@ -101,6 +102,7 @@ def run_workload(
     ramdisk_directory: str = "",  # Directory for enabling emergency checkpointing
     mtc_enabled: bool = False,  # It enables MTC phase-2 drivers
     xpk_branch: str = MAIN_BRANCH,
+    max_restart: int = 0,
 ):
   """Run workload through xpk tool."""
 
@@ -140,10 +142,11 @@ def run_workload(
     # For Orbax DAG add flag '--max-restars=50' it is need it to test
     # resiliency during Maxtext training with Emergency Checkpointer and
     # Multi-tier Checkpointing.
-    if ramdisk_directory and mtc_enabled:
-      workload_create_cmd += " --max-restarts=50"
+    if max_restart > 0:
+      workload_create_cmd += f" --max-restarts={max_restart}"
 
-    # If using a valid GPU and the XPK branch is set to "main", then branch is switch to "v0.4.1".
+    # If using a valid GPU and the XPK branch is set to "main"
+    # then branch is switch to "v0.4.1".
     if is_valid_gpu_version(accelerator_type) and xpk_branch == MAIN_BRANCH:
       xpk_branch = "v0.4.1"
 
@@ -334,7 +337,7 @@ def clean_up_workload(
     ), f"XPK clean-up failed with code {result.exit_code}"
 
 
-@task.sensor(poke_interval=120, timeout=3600, mode="reschedule")
+@task.sensor(poke_interval=5, timeout=3600, mode="reschedule")
 def wait_for_reach_step_to_interrupt(
     task_id: str,
     project_id: str,
@@ -369,9 +372,9 @@ def wait_for_reach_step_to_interrupt(
           name=pod.metadata.name, namespace=pod.metadata.namespace
       )
       # If the pod has reach the step (save) we can assume
-      # that we can savly interrupt, so make this task return true
+      # that we can safely interrupt, so make this task return true
       if f"completed step: {step_to_interrupt}" in logs:
-        logging.info("The step to be interrupt is {step_to_interrupt}")
+        logging.info(f"The step to be interrupt is {step_to_interrupt}")
         return True
   return False
 
@@ -468,3 +471,44 @@ def delete_node(
   except Exception as e:
     logging.info(f"Error deleting node {node_name}: {e}", file=sys.stderr)
     sys.exit(1)
+
+
+@task.sensor(poke_interval=3, timeout=300, mode="reschedule")
+def wait_for_file_to_exist(
+    file_path: str,
+    step_to_interrupt: str,
+) -> bool:
+  if file_path:
+    target_file = "commit_success.txt"
+    checkpoint_files = validation_util.get_gcs_checkpoint(
+        f"{file_path}/{step_to_interrupt}/"
+    )
+    logging.info(f"Found step folder in GCS: {checkpoint_files}")
+    if len(checkpoint_files) > 0:
+      for file in checkpoint_files:
+        if target_file in file:
+          logging.info(f"Found target file in the step folder in GCS: {file}")
+          return True
+  return False
+
+
+@task.branch
+def task_path_decider(workload_id: str, group_id: str) -> Union[str, List[str]]:
+  """
+  Decide whether the wait_for_file_to_exist should be
+  executed based on the workload_id
+
+  Attributes:
+  workload_id: Unique ID for identiying the workload
+  group_id: Unique ID for identiying the Taskgroup
+
+  Returns:
+    task id(s) that should be executed
+  """
+  short_id = ["max-reg-res-gcs-node"]
+  task_wait_reach_id = f"{group_id}.wait_to_reach_step_to_interrupt"
+  task_wait_file_id = f"{group_id}.wait_for_file_to_exist"
+  for item in short_id:
+    if item in workload_id:
+      return [task_wait_reach_id, task_wait_file_id]
+  return task_wait_reach_id
