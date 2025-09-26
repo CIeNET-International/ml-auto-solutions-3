@@ -26,7 +26,8 @@ from xlml.apis import metric_config
 from xlml.utils import gke, composer
 from dags.common.vm_resource import GpuVersion
 
-# b/411426745 - Upgrading from v0.4.1 to v0.12.0 using workaround until dependency issue is resolved.
+# b/411426745 - Updating dependency from 0.4.1 to 0.12.0 to test a fix.
+# The previous stable state will be marked with a "workable branch flag" if this fails.
 MAIN_BRANCH = "v0.12.0"
 
 # TODO(b/437817546): Switch back to the main branch after the issue is resolved.
