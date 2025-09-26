@@ -1,7 +1,6 @@
 """Utility functions for querying Google Cloud Monitoring data."""
-import datetime
 import logging
-from typing import List, Optional, Union
+from typing import List, Optional
 
 from google.cloud import monitoring_v3
 from google.cloud.monitoring_v3 import types

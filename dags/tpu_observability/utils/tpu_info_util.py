@@ -79,20 +79,23 @@ class Table:
     self.body = []
     header_line = lines[TableLineIndex.HEADER]
     headers = [h.strip() for h in header_line.split("┃") if h.strip()]
+
     data_lines = lines[TableLineIndex.DATA : TableLineIndex.LOWER_BORDER]
+
     for line in data_lines:
-      values = [v.strip() for v in line.split("│")][1:-1]
-      if len(values) == len(headers):
-        self.body.append(dict(zip(headers, values)))
+      columns = line.split("│")[1:-1]
+      if len(columns) != len(headers):
+        continue
 
+      row_data: _TableRow = {
+          header: col.strip() for header, col in zip(headers, columns)
+      }
 
-def _format_title_to_key(title: str) -> str:
-  """Converts a string like 'My Table Title' to 'my_table_title'."""
-  return title.lower().replace(" ", "_")
+      self.body.append(row_data)
 
 
 @task
-def parse_tpu_info_output(output: str) -> dict:
+def parse_tpu_info_output(output: str) -> List[Table]:
   """Splits a multi-table string from tpu-info into a structured TpuInfo object.
 
   Args:
@@ -113,18 +116,11 @@ def parse_tpu_info_output(output: str) -> dict:
         f"Found {len(titles)} titles and {len(blocks)} blocks."
     )
 
-  tpu_info_dict = {}
-
   parsed_tables = [
       Table(name=name, raw_body=body) for name, body in zip(titles, blocks)
   ]
 
-  for table in parsed_tables:
-    attribute_name = _format_title_to_key(table.name)
-    if attribute_name:
-      tpu_info_dict[attribute_name] = asdict(table)
-
-  return tpu_info_dict
+  return parsed_tables
 
 
 if __name__ == "__main__":
@@ -166,10 +162,11 @@ TPU Buffer Transfer Latency
 │ 8MB+        │ 53752.55 us │ 96313.78 us │ 103951.79 us │ 348016.24 us │
 └─────────────┴─────────────┴─────────────┴──────────────┴──────────────┘
 """
-  tpu_info = parse_tpu_info_output(full_output)
-  print(tpu_info)
-  print(type(tpu_info))
-  print(tpu_info["tpu_chips"]["body"])
-  print(tpu_info["tpu_runtime_utilization"]["body"])
-  print(tpu_info["tensorcore_utilization"]["body"])
-  print(tpu_info["tpu_buffer_transfer_latency"]["body"])
+
+  tpu_info_output = parse_tpu_info_output(full_output)
+  print(tpu_info_output)
+  content = next(
+      (table.body for table in tpu_info_output if table.name == "TPU Chips"),
+      None,
+  )
+  print(content)

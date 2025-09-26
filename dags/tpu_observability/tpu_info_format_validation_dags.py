@@ -9,7 +9,7 @@ import logging
 import os
 import re
 import subprocess
-from typing import Dict
+from typing import Dict, List
 
 from airflow import models
 from airflow.decorators import task
@@ -17,13 +17,16 @@ from airflow.exceptions import AirflowFailException
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
-from dags.common.vm_resource import Project, Region, Zone, MachineVersion
+from dags.common.vm_resource import MachineVersion
+from dags.common.vm_resource import Project
+from dags.common.vm_resource import Region
+from dags.common.vm_resource import Zone
 from dags.map_reproducibility.utils import constants
-from dags.tpu_observability.utils.jobset_generator import JobSet
-from dags.tpu_observability.utils.jobset_generator import Workload
+from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
-from dags.tpu_observability.utils.tpu_info_util import parse_tpu_info_output
-from dags.tpu_observability.utils import jobset_util as jobset_util
+from dags.tpu_observability.utils import tpu_info_util as tpu_info
+from dags.tpu_observability.utils.jobset_util import JobSet
+from dags.tpu_observability.utils.jobset_util import Workload
 
 
 
@@ -72,33 +75,38 @@ def get_tpu_info_from_pod(kubeconfig: str, pod_name: str) -> str:
 
 
 @task
-def verify_table_amount(tpu_info_dict: Dict[str, str]):
+def verify_table_amount(tpu_info_output: List[tpu_info.Table]):
   """Verifies if all expected tables are present in the parsed tpu_info dictionary."""
-  expect_table_keys = {
-      "tpu_chips",
-      "tpu_runtime_utilization",
-      "tensorcore_utilization",
-      "tpu_buffer_transfer_latency",
+  expect_table_names = {
+      "TPU Chips",
+      "TPU Runtime Utilization",
+      "TensorCore Utilization",
+      "TPU Buffer Transfer Latency",
   }
 
-  found_keys = set(tpu_info_dict.keys())
+  found_names = {table.name for table in tpu_info_output}
 
-  missing_keys = expect_table_keys - found_keys
+  missing_names = expect_table_names - found_names
 
-  if missing_keys:
+  if missing_names:
     raise AirflowFailException(
         "The following required tables were not found in the tpu-info output: "
-        f"{', '.join(sorted(list(missing_keys)))}"
+        f"{', '.join(sorted(list(missing_names)))}"
     )
 
   print("All expected tables were found.")
 
 
 @task
-def validate_chips_table(tpu_info_dict: str, info: node_pool.Info):
+def validate_chips_table(
+    tpu_info_output: List[tpu_info.Table], info: node_pool.Info
+):
   """Validates the row count and content for the 'TPU Chips' table."""
   errors = []
-  content = tpu_info_dict["tpu_chips"]["body"]
+  content = next(
+      (table.body for table in tpu_info_output if table.name == "TPU Chips"),
+      None,
+  )
 
   expected_rows = 4
   if len(content) != expected_rows:
@@ -129,10 +137,17 @@ def validate_chips_table(tpu_info_dict: str, info: node_pool.Info):
 
 
 @task
-def validate_runtime_table(tpu_info_dict: str):
+def validate_runtime_table(tpu_info_output: List[tpu_info.Table]):
   """Validates the row count and content for the 'TPU Runtime Utilization' table."""
   errors = []
-  content = tpu_info_dict["tpu_runtime_utilization"]["body"]
+  content = next(
+      (
+          table.body
+          for table in tpu_info_output
+          if table.name == "TPU Runtime Utilization"
+      ),
+      None,
+  )
 
   expected_rows = 4
   if len(content) != expected_rows:
@@ -169,10 +184,17 @@ def validate_runtime_table(tpu_info_dict: str):
 
 
 @task
-def validate_tensorcore_table(tpu_info_dict: str):
+def validate_tensorcore_table(tpu_info_output: List[tpu_info.Table]):
   """Validates the row count and content for the 'TensorCore Utilization' table."""
   errors = []
-  content = tpu_info_dict["tensorcore_utilization"]["body"]
+  content = next(
+      (
+          table.body
+          for table in tpu_info_output
+          if table.name == "TensorCore Utilization"
+      ),
+      None,
+  )
 
   expected_rows = 4
   if len(content) != expected_rows:
@@ -193,10 +215,17 @@ def validate_tensorcore_table(tpu_info_dict: str):
 
 
 @task
-def validate_latency_table(tpu_info_dict: str):
+def validate_latency_table(tpu_info_output: List[tpu_info.Table]):
   """Validates the row count and content for the TPU Buffer Transfer Latency table."""
   errors = []
-  content = tpu_info_dict["tpu_buffer_transfer_latency"]["body"]
+  content = next(
+      (
+          table.body
+          for table in tpu_info_output
+          if table.name == "TPU Buffer Transfer Latency"
+      ),
+      None,
+  )
 
   if len(content) == 0:
     raise AirflowFailException(
@@ -268,7 +297,7 @@ with models.DAG(
   )
 
   kubeconfig_path = "/tmp/kubeconfig"
-  jobset = JobSet(
+  jobset_config = JobSet(
       jobset_name="tpu-info-v6e-workload",
       namespace="default",
       max_restarts=5,
@@ -287,33 +316,36 @@ with models.DAG(
   workload_script = Workload.JAX_TPU_BENCHMARK
 
   with TaskGroup(group_id="create_node_pool") as create_node_pool:
-    create_first_node_pool = node_pool.create.override(task_id="node_pool_1")(
-        node_pool=cluster_info, reservation="cloudtpu-20250131131310-2118578099"
+    create_first_node_pool = node_pool.create.override(
+        task_id="node_pool_1",
+        retries=2,
+    )(
+        node_pool=cluster_info,
+        reservation="cloudtpu-20250131131310-2118578099",
     )
 
-    create_second_node_pool = node_pool.create.override(task_id="node_pool_2")(
+    create_second_node_pool = node_pool.create.override(
+        task_id="node_pool_2",
+        retries=2,
+    )(
         node_pool=cluster_info_2,
         reservation="cloudtpu-20250131131310-2118578099",
     )
 
-  wait_for_running = node_pool.wait_for_status.override(
-      task_id="wait_for_running"
-  )(node_pool=cluster_info, status=node_pool.Status.RUNNING)
-
-  apply_time = jobset_util.run_workload(
+  apply_time = jobset.run_workload(
       info=cluster_info,
       kubeconfig=kubeconfig_path,
-      yaml_config=jobset.generate_yaml(workload_script=workload_script),
-      namespace=jobset.namespace,
+      yaml_config=jobset_config.generate_yaml(workload_script=workload_script),
+      namespace=jobset_config.namespace,
   )
 
-  active_pods = jobset_util.get_active_pods.override(task_id="get_active_pod")(
+  active_pods = jobset.get_active_pods.override(task_id="get_active_pod")(
       info=cluster_info,
       kubeconfig=kubeconfig_path,
-      namespace=jobset.namespace,
+      namespace=jobset_config.namespace,
   )
 
-  wait_for_job_start = jobset_util.wait_for_jobset_started.override(
+  wait_for_job_start = jobset.wait_for_jobset_started.override(
       task_id="wait_for_job_start"
   )(cluster_info, pod_name_list=active_pods, job_apply_time=apply_time)
 
@@ -323,8 +355,8 @@ with models.DAG(
       .expand(pod_name=active_pods)
   )
 
-  tpu_info_dict = (
-      parse_tpu_info_output.override(task_id="get_each_metric_table")
+  tpu_info_output = (
+      tpu_info.parse_tpu_info_output.override(task_id="get_each_metric_table")
       .partial()
       .expand(output=tpu_info_outputs)
   )
@@ -333,52 +365,52 @@ with models.DAG(
     verify_table_amount_task = (
         verify_table_amount.override(task_id="verify_table_amount_task")
         .partial()
-        .expand(tpu_info_dict=tpu_info_dict)
+        .expand(tpu_info_output=tpu_info_output)
     )
 
     validate_tpu_chips_metric = (
         validate_chips_table.override(task_id="validate_tpu_chips_metric")
         .partial(info=cluster_info)
-        .expand(tpu_info_dict=tpu_info_dict)
+        .expand(tpu_info_output=tpu_info_output)
     )
 
     validate_runtime_metric = (
         validate_runtime_table.override(task_id="validate_runtime_metric")
         .partial()
-        .expand(tpu_info_dict=tpu_info_dict)
+        .expand(tpu_info_output=tpu_info_output)
     )
 
     validate_tensorcore_metric = (
         validate_tensorcore_table.override(task_id="validate_tensorcore_metric")
         .partial()
-        .expand(tpu_info_dict=tpu_info_dict)
+        .expand(tpu_info_output=tpu_info_output)
     )
 
     validate_latency_metric = (
         validate_latency_table.override(task_id="validate_latency_metric")
         .partial()
-        .expand(tpu_info_dict=tpu_info_dict)
+        .expand(tpu_info_output=tpu_info_output)
     )
 
-  clean_up_workload = jobset_util.end_workload.override(
+  clean_up_workload = jobset.end_workload.override(
       task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
   )(
       info=cluster_info,
       kubeconfig=kubeconfig_path,
-      namespace=jobset.namespace,
+      namespace=jobset_config.namespace,
   ).as_teardown(
       setups=apply_time
   )
 
   with TaskGroup(group_id="cleanup_node_pool") as cleanup_node_pool:
     cleanup_first_node_pool = node_pool.delete.override(
-        task_id="cleanup_node_pool_1", trigger_rule=TriggerRule.ALL_DONE
+        task_id="cleanup_node_pool_1", trigger_rule=TriggerRule.ALL_DONE, retries=2,
     )(node_pool=cluster_info).as_teardown(
         setups=create_node_pool,
     )
 
     cleanup_second_node_pool = node_pool.delete.override(
-        task_id="cleanup_node_pool_2", trigger_rule=TriggerRule.ALL_DONE
+        task_id="cleanup_node_pool_2", trigger_rule=TriggerRule.ALL_DONE, retries=2,
     )(node_pool=cluster_info).as_teardown(
         setups=create_node_pool,
     )
@@ -398,12 +430,11 @@ with models.DAG(
 
   (
       create_node_pool
-      >> wait_for_running
       >> apply_time
       >> active_pods
       >> wait_for_job_start
       >> tpu_info_outputs
-      >> tpu_info_dict
+      >> tpu_info_output
       >> verification_group
       >> clean_up_workload
       >> cleanup_node_pool
