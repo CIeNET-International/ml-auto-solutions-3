@@ -3,6 +3,7 @@
 This is done by comparing data from Cloud Logging and Cloud Monitoring.
 """
 
+from dataclasses import replace
 import datetime
 import logging
 import os
@@ -15,7 +16,8 @@ from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
-from dags.common.vm_resource import Project, Region, MachineVersion
+
+from dags.common.vm_resource import Project, Region, Zone, MachineVersion
 from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.utils.jobset_generator import JobSet
 from dags.tpu_observability.utils.jobset_generator import Workload
@@ -57,10 +59,11 @@ def get_tpu_info_from_pod(kubeconfig: str, pod_name: str) -> str:
           f"tpu-info"
       ),
       shell=True,
+      env=env,
       # Since tpu-info feature still has some issues, so the command will
       # inevitably throw an error. To avoid marking the task as failed,
       # I set check to False so that the task status does not show as failed.
-      check=False,
+      check=True,
       capture_output=True,
       text=True,
   )
@@ -70,8 +73,7 @@ def get_tpu_info_from_pod(kubeconfig: str, pod_name: str) -> str:
 
 @task
 def verify_table_amount(tpu_info_dict: Dict[str, str]):
-  """Verifies if all expected tables are present in the parsed tpu_info dictionary.
-  """
+  """Verifies if all expected tables are present in the parsed tpu_info dictionary."""
   expect_table_keys = {
       "tpu_chips",
       "tpu_runtime_utilization",
@@ -235,16 +237,33 @@ with models.DAG(
 ) as dag:
   cluster_info = node_pool.Info(
       project_id=models.Variable.get(
-          "TCU_PROJECT_ID", default_var=Project.TPU_PROD_ENV_ONE_VM.value
+          "TFV_PROJECT_ID", default_var=Project.TPU_PROD_ENV_ONE_VM.value
       ),
       cluster_name=models.Variable.get(
-          "TCU_CLUSTER_NAME", default_var="yuna-auto-testing"
+          "TFV_CLUSTER_NAME", default_var="tpu-observability-automation"
+      ),
+      node_pool_name=models.Variable.get(
+          "TFV_NODE_POOL_NAME", default_var="tpu-info-fromat-test-v6e"
       ),
       region=models.Variable.get(
-          "TCU_REGION", default_var=Region.US_EAST5.value
+          "TFV_REGION", default_var=Region.US_EAST5.value
       ),
+      location=models.Variable.get(
+          "TFV_LOCATION", default_var=Region.US_EAST5.value
+      ),
+      node_locations=models.Variable.get(
+          "TFV_NODE_LOCATIONS", default_var=Zone.US_EAST5_B.value
+      ),
+      num_nodes=models.Variable.get("TFV_NUM_NODES", default_var=4),
       machine_type=models.Variable.get(
-          "TCU_MACHINE_TYPE", default_var=MachineVersion.CT6E_STAND_4T.value
+          "TFV_MACHINE_TYPE", default_var=MachineVersion.CT6E_STAND_4T.value
+      ),
+      tpu_topology=models.Variable.get("TFV_TPU_TOPOLOGY", default_var="4x4"),
+  )
+  cluster_info_2 = replace(
+      cluster_info,
+      node_pool_name=models.Variable.get(
+          "TFV_NODE_POOL_NAME", default_var="tpu-info-format-test-v6e-2"
       ),
   )
 
@@ -266,6 +285,20 @@ with models.DAG(
   )
 
   workload_script = Workload.JAX_TPU_BENCHMARK
+
+  with TaskGroup(group_id="create_node_pool") as create_node_pool:
+    create_first_node_pool = node_pool.create.override(task_id="node_pool_1")(
+        node_pool=cluster_info, reservation="cloudtpu-20250131131310-2118578099"
+    )
+
+    create_second_node_pool = node_pool.create.override(task_id="node_pool_2")(
+        node_pool=cluster_info_2,
+        reservation="cloudtpu-20250131131310-2118578099",
+    )
+
+  wait_for_running = node_pool.wait_for_status.override(
+      task_id="wait_for_running"
+  )(node_pool=cluster_info, status=node_pool.Status.RUNNING)
 
   apply_time = jobset_util.run_workload(
       info=cluster_info,
@@ -337,6 +370,19 @@ with models.DAG(
       setups=apply_time
   )
 
+  with TaskGroup(group_id="cleanup_node_pool") as cleanup_node_pool:
+    cleanup_first_node_pool = node_pool.delete.override(
+        task_id="cleanup_node_pool_1", trigger_rule=TriggerRule.ALL_DONE
+    )(node_pool=cluster_info).as_teardown(
+        setups=create_node_pool,
+    )
+
+    cleanup_second_node_pool = node_pool.delete.override(
+        task_id="cleanup_node_pool_2", trigger_rule=TriggerRule.ALL_DONE
+    )(node_pool=cluster_info).as_teardown(
+        setups=create_node_pool,
+    )
+
   (
       verify_table_amount_task
       >> [
@@ -347,12 +393,18 @@ with models.DAG(
       ]
   )
 
+  [create_first_node_pool, create_second_node_pool]
+  [cleanup_first_node_pool, cleanup_second_node_pool]
+
   (
-      apply_time
+      create_node_pool
+      >> wait_for_running
+      >> apply_time
       >> active_pods
       >> wait_for_job_start
       >> tpu_info_outputs
       >> tpu_info_dict
       >> verification_group
       >> clean_up_workload
+      >> cleanup_node_pool
   )
