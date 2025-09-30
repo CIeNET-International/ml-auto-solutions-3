@@ -58,8 +58,7 @@ def get_tpu_info_from_pod(kubeconfig: str, pod_name: str) -> str:
       (
           f"kubectl --kubeconfig={kubeconfig} "
           f"exec {pod_name} -n default "
-          f"-- "
-          f"tpu-info"
+          f"-- tpu-info"
       ),
       shell=True,
       env=env,
@@ -90,50 +89,57 @@ def verify_table_amount(tpu_info_output: List[tpu_info.Table]):
 
   if missing_names:
     raise AirflowFailException(
-        "The following required tables were not found in the tpu-info output: "
-        f"{', '.join(sorted(list(missing_names)))}"
+        "Mismatched tpu-info tables; "
+        f"required: {expect_table_names}; got: {found_names}"
     )
-
-  print("All expected tables were found.")
 
 
 @task
 def validate_chips_table(
-    tpu_info_output: List[tpu_info.Table], info: node_pool.Info
+    tpu_info_output: List[tpu_info.Table], node_pool: node_pool.Info
 ):
   """Validates the row count and content for the 'TPU Chips' table."""
   errors = []
   content = next(
-      (table.body for table in tpu_info_output if table.name == "TPU Chips"),
+      (table for table in tpu_info_output if table.name == "TPU Chips"),
       None,
   )
 
   expected_rows = 4
-  if len(content) != expected_rows:
+  if len(content.body) != expected_rows:
     raise AirflowFailException(
-        f"[TPU Chips] Row count is incorrect. (Actual: {len(content)},"
+        f"[TPU Chips] Row count is incorrect. (Actual: {len(content.body)},"
         f" Expected: {expected_rows})"
     )
 
-  tpu_type = MACHINE_TYPE_TO_TPU_VERSION[info.machine_type]
+  tpu_type = MACHINE_TYPE_TO_TPU_VERSION[node_pool.machine_type]
 
-  for i, row_dict in enumerate(content, 1):
-    if not re.match(r"/dev/vfio/\d+", row_dict["Chip"]):
-      errors.append(
-          f"[TPU Chips] Row {i}: Invalid 'Chip' format: {row_dict['Chip']}"
-      )
-    if tpu_type not in row_dict["Type"]:
-      errors.append(
-          f"[TPU Chips] Row {i}: 'Type' column value '{row_dict['Type']}' does"
-          f" not contain the expected version '{tpu_type}'."
-      )
-    if not (row_dict["PID"]).isdigit() and int((row_dict["PID"]) > 0):
-      errors.append(
-          f"[TPU Chips] Row {i}: 'PID' must be a number greater than 0, got:"
-          f" {row_dict['PID']}"
-      )
+  for i, row_dict in enumerate(content.body, 1):
+    for header, data in row_dict.items():
+      match header:
+        case "Chip":
+          if not re.match(r"/dev/vfio/\d+", data):
+            errors.append(
+                f"[Row {i}] Invalid Chip format; except: '/dev/vfio/NNN'; got: '{data}'"
+            )
+        case "Type":
+          if tpu_type not in data:
+            errors.append(
+                f"[Row {i}] Mismatched Type; except: contains '{tpu_type}'; got: '{data}'"
+            )
+        case "PID":
+          if not (data.isdigit() and int(data) > 0):
+            errors.append(
+                f"[Row {i}] Invalid PID; except: a positive integer; got: '{data}'"
+            )
+
   if errors:
-    raise AirflowFailException(errors)
+    error_summary = "\n".join(errors)
+    raise AirflowFailException(
+        f"Validation failed for {content.name} table with {len(errors)} error(s):\n"
+        f"{error_summary}\n\n"
+        f"Raw table output:\n{content.raw_body}"
+    )
 
 
 @task
@@ -142,7 +148,7 @@ def validate_runtime_table(tpu_info_output: List[tpu_info.Table]):
   errors = []
   content = next(
       (
-          table.body
+          table
           for table in tpu_info_output
           if table.name == "TPU Runtime Utilization"
       ),
@@ -150,37 +156,43 @@ def validate_runtime_table(tpu_info_output: List[tpu_info.Table]):
   )
 
   expected_rows = 4
-  if len(content) != expected_rows:
+  if len(content.body) != expected_rows:
     raise AirflowFailException(
-        f"[Runtime] Row count is incorrect. (Actual: {len(content)}, Expected:"
+        f"[Runtime] Row count is incorrect. (Actual: {len(content.body)}, Expected:"
         f" {expected_rows})"
     )
 
-  for i, row_dict in enumerate(content, 1):
-    hbm_match = re.match(
-        r"(\d+\.\d+)\s*GiB\s*/\s*(\d+\.\d+)\s*GiB", row_dict["HBM Usage (GiB)"]
-    )
-    if hbm_match:
-      used, total = float(hbm_match.group(1)), float(hbm_match.group(2))
-      if used > total:
-        errors.append(
-            f"[Runtime] Row {i}: Used HBM ({used}) cannot be greater than Total"
-            f" HBM ({total})."
-        )
-    else:
-      errors.append(
-          f"[Runtime] Row {i}: Invalid 'HBM Usage' format:"
-          f" {row_dict['HBM Usage (GiB)']}"
-      )
-
-    duty_match = re.match(r"(\d+\.\d+)%", row_dict["Duty cycle"])
-    if not (duty_match and 0.0 <= float(duty_match.group(1)) <= 100.0):
-      errors.append(
-          f"[Runtime] Row {i}: 'Duty cycle' not between 0-100%:"
-          f" {row_dict['Duty cycle']}"
-      )
+  for i, row_dict in enumerate(content.body, 1):
+    for header, data in row_dict.items():
+      match header:
+        case "HBM Usage (GiB)":
+          hbm_match = re.match(r"(\d+\.\d+)\s*GiB\s*/\s*(\d+\.\d+)\s*GiB", data)
+          if hbm_match:
+            used, total = float(hbm_match.group(1)), float(hbm_match.group(2))
+            if used > total:
+              errors.append(
+                  f"[Runtime] Row {i}: Used HBM ({used}) cannot be greater than"
+                  f" Total HBM ({total})."
+              )
+          else:
+            errors.append(
+                f"[Runtime] Row {i}: Invalid 'HBM Usage' format:"
+                f" {data}"
+            )
+        case "Duty cycle":
+          duty_match = re.match(r"(\d+\.\d+)%", data)
+          if not (duty_match and 0.0 <= float(duty_match.group(1)) <= 100.0):
+            errors.append(
+                f"[Runtime] Row {i}: 'Duty cycle' not between 0-100%:"
+                f" {data}"
+            )
   if errors:
-    raise AirflowFailException(errors)
+    error_summary = "\n".join(errors)
+    raise AirflowFailException(
+        f"Validation failed for {content.name} table with {len(errors)} error(s):\n"
+        f"{error_summary}\n\n"
+        f"Raw table output:\n{content.raw_body}"
+    )
 
 
 @task
@@ -189,7 +201,7 @@ def validate_tensorcore_table(tpu_info_output: List[tpu_info.Table]):
   errors = []
   content = next(
       (
-          table.body
+          table
           for table in tpu_info_output
           if table.name == "TensorCore Utilization"
       ),
@@ -197,19 +209,21 @@ def validate_tensorcore_table(tpu_info_output: List[tpu_info.Table]):
   )
 
   expected_rows = 4
-  if len(content) != expected_rows:
+  if len(content.body) != expected_rows:
     raise AirflowFailException(
-        f"[TensorCore] Row count is incorrect. (Actual: {len(content)},"
+        f"[TensorCore] Row count is incorrect. (Actual: {len(content.body)},"
         f" Expected: {expected_rows})"
     )
-
-  for i, row_dict in enumerate(content, 1):
-    util_match = re.match(r"(\d+\.\d+)%", row_dict["TensorCore Utilization"])
-    if not (util_match and 0.0 < float(util_match.group(1)) <= 100.0):
-      errors.append(
-          f"[TensorCore] Row {i}: 'Utilization' not between 0-100%:"
-          f" {row_dict['TensorCore Utilization']}"
-      )
+  for i, row_dict in enumerate(content.body, 1):
+    for header, data in row_dict.items():
+      match header:
+        case "TensorCore Utilization":
+          util_match = re.match(r"(\d+\.\d+)%", data)
+          if not (util_match and 0.0 < float(util_match.group(1)) <= 100.0):
+            errors.append(
+                f"[TensorCore] Row {i}: 'Utilization' not between 0-100%:"
+                f" {data}"
+            )
   if errors:
     raise AirflowFailException(errors)
 
@@ -220,27 +234,28 @@ def validate_latency_table(tpu_info_output: List[tpu_info.Table]):
   errors = []
   content = next(
       (
-          table.body
+          table
           for table in tpu_info_output
           if table.name == "TPU Buffer Transfer Latency"
       ),
       None,
   )
 
-  if len(content) == 0:
+  if len(content.body) == 0:
     raise AirflowFailException(
         "[Latency] Row count is incorrect. At least one row is expected."
     )
 
-  for i, row_dict in enumerate(content, 1):
-    for title, val_str in row_dict.items():
-      if title == "Buffer Size":
-        continue
+  for i, row_dict in enumerate(content.body, 1):
+    for header, data in row_dict.items():
+      match header:
+        case "Buffer Size":
+          continue
       if not (
-          val_str.endswith(" us") and float(val_str.replace(" us", "")) > 0
+          data.endswith(" us") and float(data.replace(" us", "")) > 0
       ):
         errors.append(
-            f"[Latency] Row {i}, Col {title}: Invalid latency value: {val_str}"
+            f"[Latency] Row {i}, Col {header}: Invalid latency value: {data}"
         )
   if errors:
     raise AirflowFailException(errors)
@@ -253,7 +268,6 @@ with models.DAG(
     schedule=constants.Schedule.WEEKDAY_PDT_6AM_7AM_EXCEPT_THURSDAY,
     catchup=False,
     tags=["gke", "tpu-observability", "tpu-info"],
-    # TODO check the description and after dag finish.
     description=(
         "This DAG verifies the format of the tables in the tpu-info output "
         "using tpu-info CLI tool. It includes 4 tables: TPU Chips, TPU "
@@ -262,7 +276,31 @@ with models.DAG(
     ),
     doc_md="""
       # Format Validation DAG
-      # This DAG verifies the format of the tables in the tpu-info output.""",
+      # This DAG verifies the format of the tables in the tpu-info output.
+
+      ### Description
+      This DAG automates the validation of the tpu-info command-line tool's
+      output format.It verifies the structure and content of key metric tables,
+      including "TPU Chips", "TPU Runtime Utilization", "TensorCore Utilization",
+      and "TPU Buffer Transfer Latency", by running the tool on a live GKE
+      cluster with TPU node pools.
+
+      ### Prerequisites
+      This test requires an existing GKE cluster.
+      A pre-built Docker image containing the necessary jax, libtpu, and
+      tpu-info packages must also be available in a repository accessible
+      by the GKE cluster.
+
+      ### Procedures
+      The DAG begins by creating temporary GKE TPU node pools for the test.
+      Once the node pools are running, it schedules a Kubernetes JobSet and
+      waits for the pods to become active. It then executes the tpu-info command
+      within these pods to capture the raw text output. This output is parsed
+      into structured tables, and a series of validation tasks check each table
+      for the correct structure, row counts, and data formats. Finally,
+      regardless of the test outcome, the DAG cleans up all created resources,
+      including the JobSet and the temporary node pools.
+      """,
 ) as dag:
   cluster_info = node_pool.Info(
       project_id=models.Variable.get(
@@ -333,14 +371,14 @@ with models.DAG(
     )
 
   apply_time = jobset.run_workload(
-      info=cluster_info,
+      node_pool=cluster_info,
       kubeconfig=kubeconfig_path,
       yaml_config=jobset_config.generate_yaml(workload_script=workload_script),
       namespace=jobset_config.namespace,
   )
 
   active_pods = jobset.get_active_pods.override(task_id="get_active_pod")(
-      info=cluster_info,
+      node_pool=cluster_info,
       kubeconfig=kubeconfig_path,
       namespace=jobset_config.namespace,
   )
@@ -370,7 +408,7 @@ with models.DAG(
 
     validate_tpu_chips_metric = (
         validate_chips_table.override(task_id="validate_tpu_chips_metric")
-        .partial(info=cluster_info)
+        .partial(node_pool=cluster_info)
         .expand(tpu_info_output=tpu_info_output)
     )
 
@@ -395,8 +433,9 @@ with models.DAG(
   clean_up_workload = jobset.end_workload.override(
       task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
   )(
-      info=cluster_info,
+      node_pool=cluster_info,
       kubeconfig=kubeconfig_path,
+      jobset_name=jobset_config.jobset_name,
       namespace=jobset_config.namespace,
   ).as_teardown(
       setups=apply_time
@@ -426,7 +465,7 @@ with models.DAG(
   )
 
   [create_first_node_pool, create_second_node_pool]
-  [cleanup_first_node_pool, cleanup_second_node_pool]
+  (cleanup_first_node_pool >> cleanup_second_node_pool)
 
   (
       create_node_pool

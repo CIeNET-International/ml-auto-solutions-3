@@ -189,6 +189,7 @@ class JobSet:
 
     return _TEMPLATE.substitute(params)
 
+
 def _get_credentials_command(node_pool: node_pool.Info):
   for attr_name in ["cluster_name", "region", "project_id"]:
     if not getattr(node_pool, attr_name):
@@ -212,9 +213,11 @@ def _k8s_apply_jobset_command(
   ])
 
 
-def _k8s_delete_jobset_command(kubeconfig: str, namespace: str):
+def _k8s_delete_jobset_command(
+    kubeconfig: str, jobset_name: str, namespace: str
+):
   return " ".join([
-      f"kubectl --kubeconfig={kubeconfig} delete jobsets --all",
+      f"kubectl --kubeconfig={kubeconfig} delete jobsets {jobset_name}",
       f"-n {namespace} --timeout=60s --ignore-not-found=true",
   ])
 
@@ -228,12 +231,12 @@ def _k8s_get_pod_name_command(kubeconfig: str, namespace: str):
 
 @task
 def run_workload(
-    info: node_pool.Info, kubeconfig: str, yaml_config: str, namespace: str
+    node_pool: node_pool.Info, kubeconfig: str, yaml_config: str, namespace: str
 ) -> TimeUtil:
   """Applies the specified YAML file to the GKE cluster.
 
   Args:
-    info: Configuration object with cluster details.
+    node_pool: Configuration object with cluster details.
     kubeconfig: The path to the kubeconfig file.
     yaml_config: The JobSet object containing YAML configuration.
     namespace: The Kubernetes namespace to apply the JobSet.
@@ -243,7 +246,7 @@ def run_workload(
 
   result = subprocess.run(
       " && ".join([
-          _get_credentials_command(info),
+          _get_credentials_command(node_pool),
           _k8s_apply_jobset_command(kubeconfig, yaml_config, namespace),
       ]),
       shell=True,
@@ -255,7 +258,7 @@ def run_workload(
   logging.info(
       "Command Execute:\n %s",
       " && ".join([
-          _get_credentials_command(info),
+          _get_credentials_command(node_pool),
           _k8s_apply_jobset_command(kubeconfig, yaml_config, namespace),
       ]),
   )
@@ -271,7 +274,9 @@ def run_workload(
 
 
 @task
-def end_workload(info: node_pool.Info, kubeconfig: str, namespace: str):
+def end_workload(
+    node_pool: node_pool.Info, kubeconfig: str, jobset_name: str, namespace: str
+):
   """Deletes all JobSets from the GKE cluster to clean up resources.
 
   This task executes a bash script to:
@@ -279,17 +284,18 @@ def end_workload(info: node_pool.Info, kubeconfig: str, namespace: str):
   2. Delete all JobSets in the `default` namespace using `kubectl`.
 
   Args:
-    info: Configuration object with cluster details.
+    node_pool: Configuration object with cluster details.
     kubeconfig: The path to the kubeconfig file.
-    namespace: The YamlConfig object containing namespace information.
+    jobset_name: The name of the JobSet to delete.
+    namespace: The Kubernetes namespace to delete the JobSet from.
   """
   env = os.environ.copy()
   env["KUBECONFIG"] = kubeconfig
 
   result = subprocess.run(
       " && ".join([
-          _get_credentials_command(info),
-          _k8s_delete_jobset_command(kubeconfig, namespace),
+          _get_credentials_command(node_pool),
+          _k8s_delete_jobset_command(kubeconfig, jobset_name, namespace),
       ]),
       shell=True,
       check=False,
@@ -304,7 +310,7 @@ def end_workload(info: node_pool.Info, kubeconfig: str, namespace: str):
 
 
 @task
-def get_active_pods(info: node_pool.Info, kubeconfig: str, namespace: str):
+def get_active_pods(node_pool: node_pool.Info, kubeconfig: str, namespace: str):
   """Deletes all JobSets from the GKE cluster to clean up resources.
 
   This task executes a bash script to:
@@ -312,7 +318,7 @@ def get_active_pods(info: node_pool.Info, kubeconfig: str, namespace: str):
   2. Delete all JobSets in the `default` namespace using `kubectl`.
 
   Args:
-    info: Configuration object with cluster details.
+    node_pool: Configuration object with cluster details.
     kubeconfig: The path to the kubeconfig file.
     namespace: The YamlConfig object containing namespace information.
   """
@@ -321,7 +327,7 @@ def get_active_pods(info: node_pool.Info, kubeconfig: str, namespace: str):
 
   process = subprocess.run(
       " && ".join([
-          _get_credentials_command(info),
+          _get_credentials_command(node_pool),
           _k8s_get_pod_name_command(kubeconfig, namespace),
       ]),
       shell=True,
@@ -341,7 +347,7 @@ def get_active_pods(info: node_pool.Info, kubeconfig: str, namespace: str):
 
 @task.sensor(poke_interval=30, timeout=900, mode="reschedule")
 def wait_for_jobset_started(
-    info: node_pool.Info, pod_name_list: str, job_apply_time: datetime.datetime
+    node_pool: node_pool.Info, pod_name_list: str, job_apply_time: datetime.datetime
 ) -> bool:
   """Waits for the jobset to start by polling Cloud Logging for positive tensorcore utilization metrics.
 
@@ -350,7 +356,7 @@ def wait_for_jobset_started(
   It times out if no such log is found within a defined period.
 
   Args:
-    info: An Info dataclass instance containing project and cluster details.
+    node_pool: An Info dataclass instance containing project and cluster details.
     pod_name_list: A list of pod names.
     job_apply_time: The datetime object of the time the job was applied.
   """
@@ -366,11 +372,11 @@ def wait_for_jobset_started(
   metric_name = "kubernetes.io/container/accelerator/tensorcore_utilization"
   filter_string = [
       f'metric.type = "{metric_name}"',
-      f'resource.labels.cluster_name = "{info.cluster_name}"',
+      f'resource.labels.cluster_name = "{node_pool.cluster_name}"',
       f'resource.labels.pod_name = "{pod_name}"',
   ]
   time_series_data = query_time_series(
-      project_id=info.project_id,
+      project_id=node_pool.project_id,
       filter_str=" AND ".join(filter_string),
       start_time=start_time,
       end_time=end_time,
