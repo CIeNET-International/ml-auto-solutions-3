@@ -19,7 +19,7 @@ import tempfile
 import uuid
 import sys
 import re
-from typing import List, Callable, Tuple
+from typing import Tuple
 from absl import logging
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
@@ -243,14 +243,47 @@ def wait_for_workload_completion(
     workload_id: str, project_id: str, region: str, cluster_name: str
 ) -> bool:
   """Check the workload status."""
+  core_api = _get_core_api_client(project_id, region, cluster_name)
+  pods = _list_workload_pods(core_api, workload_id)
 
-  def predicate(
-      pods: k8s_client.V1PodList,
-      core_api: k8s_client.CoreV1Api
-  ) -> bool:
-    # Pick last one running pod
-    pod = pods[len(pods) - 1]
+  if not pods.items:
+    logging.info(f"No pods found for workload selector: {workload_id}.")
 
+    # Pathways jobs delete all pods on failure so we must also check if the job
+    # is complete
+    batch_api = _get_batch_api_client(project_id, region, cluster_name)
+    job = _get_workload_job(batch_api, workload_id)
+    if job is None:
+      logging.info(
+          f"No pods or jobs were found for workload selector: {workload_id}"
+      )
+      return False
+
+    if any(condition.type == "Failed" for condition in job.status.conditions):
+      # Don't keep retrying if the job has failed
+      raise AirflowFailException('Job has condition type: "Failed"')
+
+    if any(condition.type == "Complete" for condition in job.status.conditions):
+      logging.info(
+          "No pods found but job is complete for workload selector:"
+          f" {workload_id}"
+      )
+      return True
+
+    return False
+
+  if any(pod.status.phase in ["Pending", "Running"] for pod in pods.items):
+    logging.info("At least one pod has yet to complete.")
+    return False
+
+  try:
+    for pod in pods.items:
+      if pod.status.phase == "Failed":
+        # Don't keep retrying if the pod has failed
+        raise AirflowFailException(f"Bad pod phase: {pod.status.phase}")
+      elif pod.status.phase in ["Unknown"]:
+        raise RuntimeError(f"Bad pod phase: {pod.status.phase}")
+  finally:
     # TODO(jonbolin): log printing for GPUs, which have multiple containers
     if len(pod.spec.containers) == 1:
       # Print the logs of the last pod checked - either the first failed pod or
@@ -261,64 +294,16 @@ def wait_for_workload_completion(
       logging.info(f"Logs for pod {pod.metadata.name}:")
       for line in logs.split("\n"):
         logging.info(line)
+    url = LOGGING_URL_FORMAT.format(
+        project=project_id,
+        region=region,
+        cluster=cluster_name,
+        workload_id=workload_id,
+    )
+    logging.info(f"Link to logs: {url}")
 
-      url = LOGGING_URL_FORMAT.format(
-          project=project_id,
-          region=region,
-          cluster=cluster_name,
-          workload_id=workload_id,
-      )
-      logging.info(f"Link to logs: {url}")
-
-    if pods:
-      logging.info("All pod(s) phase are succeeded.")
-    return True
-
-  return check_for_workload_status(
-      project_id,
-      region,
-      cluster_name,
-      workload_id,
-      ["Pending", "Running"],
-      predicate,
-  )
-
-
-@task.sensor(poke_interval=120, timeout=3600, mode="reschedule")
-def wait_for_workload_reach_step(
-    project_id: str,
-    region: str,
-    cluster_name: str,
-    workload_id: str,
-    expect_reach_to_step: str,
-) -> bool:
-  """Watch any given training pod, check the given step is reached."""
-
-  def predicate(
-      pods: k8s_client.V1PodList,
-      core_api: k8s_client.CoreV1Api
-  ) -> bool:
-    if all(pod.status.phase in ["Running"] for pod in pods):
-      # Pick last one running pod
-      pod = pods[len(pods) - 1]
-      logs = core_api.read_namespaced_pod_log(
-          name=pod.metadata.name, namespace=pod.metadata.namespace
-      )
-      # Check if the workload reached to the expected step
-      if f"completed step: {expect_reach_to_step}" in logs:
-        logging.info("Reached to the expected step %s.", expect_reach_to_step)
-        return True
-
-    return False
-
-  return check_for_workload_status(
-      project_id,
-      region,
-      cluster_name,
-      workload_id,
-      ["Pending"],
-      predicate
-  )
+  logging.info("All pod(s) phase are succeeded.")
+  return True
 
 
 @task(trigger_rule="all_done")
@@ -347,6 +332,50 @@ def clean_up_workload(
     assert (
         result.exit_code == 0
     ), f"XPK clean-up failed with code {result.exit_code}"
+
+
+@task.sensor(poke_interval=120, timeout=3600, mode="reschedule")
+def wait_for_workload_reach_step(
+    project_id: str,
+    region: str,
+    cluster_name: str,
+    workload_id: str,
+    expect_reach_to_step: str,
+) -> bool:
+  """
+  Watch any given training pod, check the given step is already reach before
+  deleting a node
+  """
+  core_api = _get_core_api_client(project_id, region, cluster_name)
+  pods = _list_workload_pods(core_api, workload_id)
+
+  if not pods.items:
+    logging.info("No pods found for workload selector: %s.", workload_id)
+    return False
+
+  if any(pod.status.phase in ["Pending"] for pod in pods.items):
+    logging.info("Some of the pods is still pending. Waiting to start")
+    return False
+
+  for pod in pods.items:
+    if pod.status.phase == "Failed":
+      # Don't keep retrying if the pod has failed
+      raise AirflowFailException(f"Bad pod phase: {pod.status.phase}")
+    elif pod.status.phase in ["Unknown"]:
+      raise RuntimeError(f"Bad pod phase: {pod.status.phase}")
+
+  if all(pod.status.phase in ["Running"] for pod in pods.items):
+    # Pick last one running pod
+    pod = pods.items[len(pods.items) - 1]
+    logs = core_api.read_namespaced_pod_log(
+        name=pod.metadata.name, namespace=pod.metadata.namespace
+    )
+    # Check if the workload completed step reached to the expected step
+    if f"completed step: {expect_reach_to_step}" in logs:
+      logging.info("Reached to the expected step %s.", expect_reach_to_step)
+      return True
+
+  return False
 
 
 def extract_numbers(pod_name: str) -> Tuple[int, int]:
@@ -441,59 +470,3 @@ def delete_node(
   except Exception as e:
     logging.info(f"Error deleting node {node_name}: {e}", file=sys.stderr)
     sys.exit(1)
-
-
-def check_for_workload_status(
-    project_id: str,
-    region: str,
-    cluster_name: str,
-    workload_id: str,
-    ignored_phases: List[str],
-    predicate: Callable[[k8s_client.V1PodList, k8s_client.CoreV1Api], bool],
-) -> bool:
-  """Check the workload status."""
-  core_api = _get_core_api_client(project_id, region, cluster_name)
-  pods = _list_workload_pods(core_api, workload_id)
-
-  if not pods.items:
-    logging.info("No pods found for workload selector: %s.", workload_id)
-
-    # Pathways jobs delete all pods on failure so we must also check if the job
-    # is complete
-    batch_api = _get_batch_api_client(project_id, region, cluster_name)
-    job = _get_workload_job(batch_api, workload_id)
-    if job is None:
-      logging.info(
-          "No pods or jobs found for workload selector: %s.", workload_id
-      )
-      return False
-
-    if any(condition.type == "Failed" for condition in job.status.conditions):
-      # Don't keep retrying if the job has failed
-      raise AirflowFailException('Job has condition type: "Failed"')
-
-    if any(condition.type == "Complete" for condition in job.status.conditions):
-      logging.info(
-          "No pods found but job is complete for workload selector: %s.",
-          workload_id
-      )
-      return True
-
-    return False
-
-  for pod in pods.items:
-    if pod.status.phase in ignored_phases:
-      logging.info(
-          "At least one pod's phase is %s, keep waiting",
-          pod.status.phase
-      )
-      return False
-
-  for pod in pods.items:
-    if pod.status.phase == "Failed":
-      # Don't keep retrying if the pod has failed
-      raise AirflowFailException(f"Bad pod phase: {pod.status.phase}")
-    elif pod.status.phase in ["Unknown"]:
-      raise RuntimeError(f"Bad pod phase: {pod.status.phase}")
-
-  return predicate(pods.items, core_api)
