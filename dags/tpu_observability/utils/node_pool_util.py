@@ -415,3 +415,28 @@ def wait_for_availability(
       timeout,
   )
   return availability == state
+
+@task
+def change_node_label(node_pool: Info) -> None:
+  """Change the label of the specified GKE node pool.
+
+  This function changes the label of the given node pool.
+
+  Args:
+      node_pool: An instance of the Info class that encapsulates
+        the configuration and metadata of a GKE node pool.
+  """
+
+  command = (
+      f"gcloud container node-pools update {node_pool.node_pool_name} "
+      f"--cluster={node_pool.cluster_name} "
+      "--labels=test_key=test_value "
+      f"--region={node_pool.node_locations} "
+      "--quiet"
+  )
+
+  process = subprocess.run(
+      command, shell=True, check=True, capture_output=True, text=True
+  )
+  logging.info("STDOUT message: %s", process.stdout)
+  logging.info("STDERR message: %s", process.stderr)
