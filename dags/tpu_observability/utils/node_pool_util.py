@@ -70,7 +70,10 @@ def create(
   )
 
   if reservation:
-    command += f" --reservation-affinity=specific --reservation={reservation}"
+    command += (
+        " --reservation-affinity=specific"
+        f" --reservation={reservation}"
+    )
 
   if ignore_failure:
     command += " 2>&1 || true"
