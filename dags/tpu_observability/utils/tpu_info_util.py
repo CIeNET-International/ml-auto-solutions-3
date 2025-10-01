@@ -19,81 +19,80 @@ class Table:
   raw_body: str
   body: List[_TableRow]
 
+  def parse_body(self):
+    """Parses the raw_body string to populate the structured body attribute."""
 
-def parse_body(raw_body):
-  """Parses the raw_body string to populate the structured body attribute."""
+    class TableLineIndex(IntEnum):
 
-  class TableLineIndex(IntEnum):
+      """Defines the expected line indices for different parts of a raw table.
 
-    """Defines the expected line indices for different parts of a raw table.
+      Output example:
+                                      Libtpu version: 0.0.20.dev20250722+nightly
+                                      Accelerator type: v6e
 
-    Output example:
-                                    Libtpu version: 0.0.20.dev20250722+nightly
-                                    Accelerator type: v6e
+      TPU Chips
+      ┏━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━┓
+      ┃ Chip        ┃ Type         ┃ Devices ┃ PID  ┃
+      ┡━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━┩
+      │ /dev/vfio/0 │ TPU v6e chip │ 1       │ 1016 │
+      │ /dev/vfio/1 │ TPU v6e chip │ 1       │ 1016 │
+      │ /dev/vfio/2 │ TPU v6e chip │ 1       │ 1016 │
+      │ /dev/vfio/3 │ TPU v6e chip │ 1       │ 1016 │
+      └─────────────┴──────────────┴─────────┴──────┘
+      TPU Runtime Utilization
+      ┏━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━┓
+      ┃ Device ┃ HBM Usage (GiB)       ┃ Duty cycle ┃
+      ┡━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━┩
+      │ 0      │ 18.45 GiB / 31.25 GiB │ 100.00%    │
+      │ 1      │ 10.40 GiB / 31.25 GiB │ 100.00%    │
+      │ 4      │ 10.40 GiB / 31.25 GiB │ 100.00%    │
+      │ 5      │ 10.40 GiB / 31.25 GiB │ 100.00%    │
+      └────────┴───────────────────────┴────────────┘
+      TensorCore Utilization
+      ┏━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━┓
+      ┃ Chip ID ┃ TensorCore Utilization ┃
+      ┡━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━┩
+      │ 0       │ 15.42%                 │
+      │ 1       │ 15.28%                 │
+      │ 2       │ 14.64%                 │
+      │ 3       │ 14.52%                 │
+      └─────────┴────────────────────────┘
+      TPU Buffer Transfer Latency
+      ┏━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┓
+      ┃ Buffer Size ┃ P50         ┃ P90          ┃ P95          ┃ P999         ┃
+      ┡━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━┩
+      │ 4MB+        │ 16524.14 us │ 29825.32 us  │ 33527.37 us  │ 44780.14 us  │
+      │ 8MB+        │ 34693.85 us │ 564965.07 us │ 608747.76 us │ 650846.50 us │
+      └─────────────┴─────────────┴──────────────┴──────────────┴──────────────┘
+      """
 
-    TPU Chips
-    ┏━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━┓
-    ┃ Chip        ┃ Type         ┃ Devices ┃ PID  ┃
-    ┡━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━┩
-    │ /dev/vfio/0 │ TPU v6e chip │ 1       │ 1016 │
-    │ /dev/vfio/1 │ TPU v6e chip │ 1       │ 1016 │
-    │ /dev/vfio/2 │ TPU v6e chip │ 1       │ 1016 │
-    │ /dev/vfio/3 │ TPU v6e chip │ 1       │ 1016 │
-    └─────────────┴──────────────┴─────────┴──────┘
-    TPU Runtime Utilization
-    ┏━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━┓
-    ┃ Device ┃ HBM Usage (GiB)       ┃ Duty cycle ┃
-    ┡━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━┩
-    │ 0      │ 18.45 GiB / 31.25 GiB │ 100.00%    │
-    │ 1      │ 10.40 GiB / 31.25 GiB │ 100.00%    │
-    │ 4      │ 10.40 GiB / 31.25 GiB │ 100.00%    │
-    │ 5      │ 10.40 GiB / 31.25 GiB │ 100.00%    │
-    └────────┴───────────────────────┴────────────┘
-    TensorCore Utilization
-    ┏━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━┓
-    ┃ Chip ID ┃ TensorCore Utilization ┃
-    ┡━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━┩
-    │ 0       │ 15.42%                 │
-    │ 1       │ 15.28%                 │
-    │ 2       │ 14.64%                 │
-    │ 3       │ 14.52%                 │
-    └─────────┴────────────────────────┘
-    TPU Buffer Transfer Latency
-    ┏━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┓
-    ┃ Buffer Size ┃ P50         ┃ P90          ┃ P95          ┃ P999         ┃
-    ┡━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━┩
-    │ 4MB+        │ 16524.14 us │ 29825.32 us  │ 33527.37 us  │ 44780.14 us  │
-    │ 8MB+        │ 34693.85 us │ 564965.07 us │ 608747.76 us │ 650846.50 us │
-    └─────────────┴─────────────┴──────────────┴──────────────┴──────────────┘
-    """
+      UPPER_BORDER = 0
+      HEADER = auto()
+      SEPARATOR = auto()
+      DATA = auto()
+      LOWER_BORDER = -1
 
-    UPPER_BORDER = 0
-    HEADER = auto()
-    SEPARATOR = auto()
-    DATA = auto()
-    LOWER_BORDER = -1
+    lines = self.raw_body.strip().split("\n")
+    if len(lines) < max(TableLineIndex):
+      return
 
-  lines = raw_body.strip().split("\n")
-  if len(lines) < max(TableLineIndex):
-    return
+    header_line = lines[TableLineIndex.HEADER]
+    headers = [h.strip() for h in header_line.split("┃") if h.strip()]
+    data_lines = lines[TableLineIndex.DATA : TableLineIndex.LOWER_BORDER]
 
-  header_line = lines[TableLineIndex.HEADER]
-  headers = [h.strip() for h in header_line.split("┃") if h.strip()]
-  data_lines = lines[TableLineIndex.DATA : TableLineIndex.LOWER_BORDER]
+    parsed_body = []
+    for line in data_lines:
+      columns = line.split("│")[1:-1]
+      if len(columns) != len(headers):
+        continue
 
-  parsed_body = []
-  for line in data_lines:
-    columns = line.split("│")[1:-1]
-    if len(columns) != len(headers):
-      continue
+      row_data: _TableRow = {
+          header: col.strip() for header, col in zip(headers, columns)
+      }
 
-    row_data: _TableRow = {
-        header: col.strip() for header, col in zip(headers, columns)
-    }
+      parsed_body.append(row_data)
 
-    parsed_body.append(row_data)
-
-  return parsed_body
+    return parsed_body
 
 
 @task
@@ -119,7 +118,7 @@ def parse_tpu_info_output(output: str) -> List[Table]:
     )
 
   parsed_tables = [
-      Table(name=name, raw_body=raw_body, body=parse_body(raw_body))
+      Table(name=name, raw_body=raw_body, body=Table.parse_body(raw_body))
       for name, raw_body in zip(titles, blocks)
   ]
 
@@ -168,8 +167,8 @@ TPU Buffer Transfer Latency
 
   tpu_info_output = parse_tpu_info_output(full_output)
   print(tpu_info_output)
-  content = next(
-      (table for table in tpu_info_output if table.name == "TPU Chips"),
-      None,
-  )
-  print(content)
+  # content = next(
+  #     (table for table in tpu_info_output if table.name == "TPU Chips"),
+  #     None,
+  # )
+  # print(content)

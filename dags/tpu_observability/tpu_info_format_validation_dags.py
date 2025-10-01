@@ -450,7 +450,7 @@ with models.DAG(
 
     cleanup_second_node_pool = node_pool.delete.override(
         task_id="cleanup_node_pool_2", trigger_rule=TriggerRule.ALL_DONE, retries=2,
-    )(node_pool=cluster_info).as_teardown(
+    )(node_pool=cluster_info_2).as_teardown(
         setups=create_node_pool,
     )
 
