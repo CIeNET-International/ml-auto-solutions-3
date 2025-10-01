@@ -66,17 +66,17 @@ def create(
       f"--node-locations={node_pool.node_locations} "
       f"--num-nodes={node_pool.num_nodes} "
       f"--machine-type={node_pool.machine_type} "
-      f"--tpu-topology={node_pool.tpu_topology}"
+      f"--tpu-topology={node_pool.tpu_topology} "
   )
 
   if reservation:
     command += (
-        " --reservation-affinity=specific"
-        f" --reservation={reservation}"
+        "--reservation-affinity=specific "
+        f"--reservation={reservation} "
     )
 
   if ignore_failure:
-    command += " 2>&1 || true"
+    command += "2>&1 || true"
 
   process = subprocess.run(
       command, shell=True, check=True, capture_output=True, text=True
