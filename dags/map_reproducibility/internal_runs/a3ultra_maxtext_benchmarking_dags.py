@@ -22,6 +22,8 @@ from dags import composer_env
 from dags.map_reproducibility.utils.constants import Image, WorkloadLauncher
 from dags.map_reproducibility.internal_runs.dag_configs import DAG_CONFIGS_ULTRA
 from dags.map_reproducibility.utils.internal_aotc_workload import run_internal_dag_united_workload
+from xlml.utils.xpk import wait_and_create_lease, delete_lease
+from dags.map_reproducibility.utils.common_utils import sanitize_k8s_name
 
 
 # Configuration parameters
@@ -32,6 +34,8 @@ BACKFILL = False
 utc_date = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
 NIGHTLY_IMAGE = f"{Image.MAXTEXT_JAX_STABLE_NIGHTLY}:{utc_date}"
 RELEASE_IMAGE = f"{Image.MAXTEXT_JAX_STABLE_RELEASE}:{utc_date}"
+lease_name = sanitize_k8s_name(f"a3ultra_workloads_{utc_date}")
+date = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d")
 
 # Common DAG tags
 DAG_TAGS = [
@@ -70,7 +74,11 @@ for config_path, config_info in DAG_CONFIGS_ULTRA.items():
       start_date=datetime.datetime(2025, 4, 3),
       catchup=False,
   ) as dag:
-    run_internal_dag_united_workload(
+    create_lease_task = wait_and_create_lease(
+        lease_name=lease_name,
+        holder_identity="airflow",
+    )
+    run_workload_task = run_internal_dag_united_workload(
         relative_config_yaml_path=config_path,
         test_run=TEST_RUN,
         backfill=BACKFILL,
@@ -78,6 +86,10 @@ for config_path, config_info in DAG_CONFIGS_ULTRA.items():
         image_version=NIGHTLY_IMAGE,
         workload_launcher=WorkloadLauncher.MAXTEXT_LAUNCHER_NIGHTLY,
     )
+    delete_lease_task = delete_lease(
+        lease_name=lease_name,
+    ).as_teardown(setups=create_lease_task)
+    create_lease_task >> run_workload_task >> delete_lease_task
 
   # Create DAG for stable release
   with models.DAG(
@@ -88,7 +100,11 @@ for config_path, config_info in DAG_CONFIGS_ULTRA.items():
       start_date=datetime.datetime(2025, 4, 3),
       catchup=False,
   ) as dag:
-    run_internal_dag_united_workload(
+    create_lease_task = wait_and_create_lease(
+        lease_name=lease_name,
+        holder_identity="airflow",
+    )
+    run_workload_task = run_internal_dag_united_workload(
         relative_config_yaml_path=config_path,
         test_run=TEST_RUN,
         backfill=BACKFILL,
@@ -96,3 +112,7 @@ for config_path, config_info in DAG_CONFIGS_ULTRA.items():
         image_version=RELEASE_IMAGE,
         workload_launcher=WorkloadLauncher.MAXTEXT_LAUNCHER_NIGHTLY,
     )
+    delete_lease_task = delete_lease(
+        lease_name=lease_name,
+    ).as_teardown(setups=create_lease_task)
+    create_lease_task >> run_workload_task >> delete_lease_task

@@ -24,6 +24,7 @@ import time
 import subprocess
 import getpass
 import logging
+import re
 
 from airflow.decorators import task
 from airflow.hooks.subprocess import SubprocessHook
@@ -1454,6 +1455,80 @@ def parse_internal_config_content(yaml_path, config=None):
   except Exception as e:
     print(f"Unexpected error: {e}")
     raise e
+
+
+def create_lease(lease_name: str):
+  logger.info(f"Creating lease: {lease_name} in namespace: default")
+
+  lease_yaml = f"""
+    apiVersion: coordination.k8s.io/v1
+    kind: Lease
+    metadata:
+      name: {lease_name}
+      namespace: default
+    spec:
+      holderIdentity: "airflow"
+    """
+
+  cmd = ["bash", "-c", f"kubectl create -f - <<'YAML'\n{lease_yaml}\nYAML"]
+  logger.info(
+      f"Creating lease: {lease_name} in namespace: default\nCommand: {cmd}"
+  )
+
+  hook = SubprocessHook()
+  while True:
+    result = hook.run_command(cmd)
+    if result.exit_code == 0:
+      logger.info(f"Successfully created. Output: {result.output}")
+      break
+    if "already exists" in result.output or "already exists" in result.error:
+      logger.warning(
+          f"Lease '{lease_name}' already exists. Retrying after one minute..."
+      )
+      time.sleep(60)
+      continue
+    else:
+      raise RuntimeError(
+          f"kubectl create failed with a non-409 error. Exit code: {result.exit_code}, Output: {result.output}, Error: {result.error}"
+      )
+
+
+def delete_lease(lease_to_delete: str):
+  """
+  Deletes a Kubernetes Lease using kubectl.
+
+  Args:
+    lease_to_delete: Name of the lease to delete.
+  """
+  cmd = [
+      "kubectl",
+      "delete",
+      "lease",
+      lease_to_delete,
+      "--namespace",
+      "default",
+      "--ignore-not-found",
+  ]
+  logger.info(
+      f"Deleting lease: {lease_to_delete} in namespace: default\nCommand: {cmd}"
+  )
+
+  hook = SubprocessHook()
+  result = hook.run_command(cmd)
+  logger.info(f"Command output: {result.output}")
+
+
+def sanitize_k8s_name(name: str) -> str:
+  """
+  Sanitizes a string to comply with Kubernetes RFC 1123 subdomain naming rules.
+  Replaces disallowed characters with '-' and trims invalid edges.
+  """
+  name = name.lower()
+  name = re.sub(r"[^a-z0-9.-]", "-", name)
+  name = re.sub(r"^[^a-z0-9]+", "", name)
+  name = re.sub(r"[^a-z0-9]+$", "", name)
+  name = name[:253]
+  return name
 
 
 @task
