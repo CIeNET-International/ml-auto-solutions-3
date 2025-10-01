@@ -1,8 +1,9 @@
 """Utility for parsing the output of the 'tpu-info' command."""
 
+from dataclasses import dataclass
+from enum import auto
+from enum import IntEnum
 import re
-from dataclasses import dataclass, field, asdict
-from enum import IntEnum, auto
 from typing import Dict, List
 
 from airflow.decorators import task
@@ -23,12 +24,7 @@ class Table:
     """Parses the raw_body string to populate the structured body attribute."""
 
     class TableLineIndex(IntEnum):
-
-      """Defines the expected line indices for different parts of a raw table.
-
-      Output example:
-                                      Libtpu version: 0.0.20.dev20250722+nightly
-                                      Accelerator type: v6e
+      """Below is an example of the text returned by tpu-info, formatted as a table.
 
       TPU Chips
       ┏━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━┓
@@ -39,31 +35,6 @@ class Table:
       │ /dev/vfio/2 │ TPU v6e chip │ 1       │ 1016 │
       │ /dev/vfio/3 │ TPU v6e chip │ 1       │ 1016 │
       └─────────────┴──────────────┴─────────┴──────┘
-      TPU Runtime Utilization
-      ┏━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━┓
-      ┃ Device ┃ HBM Usage (GiB)       ┃ Duty cycle ┃
-      ┡━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━┩
-      │ 0      │ 18.45 GiB / 31.25 GiB │ 100.00%    │
-      │ 1      │ 10.40 GiB / 31.25 GiB │ 100.00%    │
-      │ 4      │ 10.40 GiB / 31.25 GiB │ 100.00%    │
-      │ 5      │ 10.40 GiB / 31.25 GiB │ 100.00%    │
-      └────────┴───────────────────────┴────────────┘
-      TensorCore Utilization
-      ┏━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━┓
-      ┃ Chip ID ┃ TensorCore Utilization ┃
-      ┡━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━┩
-      │ 0       │ 15.42%                 │
-      │ 1       │ 15.28%                 │
-      │ 2       │ 14.64%                 │
-      │ 3       │ 14.52%                 │
-      └─────────┴────────────────────────┘
-      TPU Buffer Transfer Latency
-      ┏━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┓
-      ┃ Buffer Size ┃ P50         ┃ P90          ┃ P95          ┃ P999         ┃
-      ┡━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━┩
-      │ 4MB+        │ 16524.14 us │ 29825.32 us  │ 33527.37 us  │ 44780.14 us  │
-      │ 8MB+        │ 34693.85 us │ 564965.07 us │ 608747.76 us │ 650846.50 us │
-      └─────────────┴─────────────┴──────────────┴──────────────┴──────────────┘
       """
 
       UPPER_BORDER = 0
@@ -124,52 +95,3 @@ def parse_tpu_info_output(output: str) -> List[Table]:
     parsed_tables.append(table)
 
   return parsed_tables
-
-
-if __name__ == "__main__":
-  full_output = """
-                                       Libtpu version: 0.0.20.dev20250722+nightly
-                                      Accelerator type: v6e
-
-TPU Chips
-┏━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━┓
-┃ Chip        ┃ Type         ┃ Devices ┃ PID ┃
-┡━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━┩
-│ /dev/vfio/0 │ TPU v6e chip │ 1       │ 7   │
-│ /dev/vfio/1 │ TPU v6e chip │ 1       │ 7   │
-│ /dev/vfio/2 │ TPU v6e chip │ 1       │ 7   │
-│ /dev/vfio/3 │ TPU v6e chip │ 1       │ 7   │
-└─────────────┴──────────────┴─────────┴─────┘
-TPU Runtime Utilization
-┏━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━┓
-┃ Device ┃ HBM Usage (GiB)       ┃ Duty cycle ┃
-┡━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━┩
-│ 8      │ 17.26 GiB / 31.25 GiB │ 100.00%    │
-│ 9      │ 9.26 GiB / 31.25 GiB  │ 100.00%    │
-│ 12     │ 9.26 GiB / 31.25 GiB  │ 100.00%    │
-│ 13     │ 9.26 GiB / 31.25 GiB  │ 100.00%    │
-└────────┴───────────────────────┴────────────┘
-TensorCore Utilization
-┏━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃ Chip ID ┃ TensorCore Utilization ┃
-┡━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━┩
-│ 0       │ 7.71%                  │
-│ 1       │ 7.62%                  │
-│ 2       │ 7.64%                  │
-│ 3       │ 7.62%                  │
-└─────────┴────────────────────────┘
-TPU Buffer Transfer Latency
-┏━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┓
-┃ Buffer Size ┃ P50         ┃ P90         ┃ P95          ┃ P999         ┃
-┡━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━┩
-│ 8MB+        │ 53752.55 us │ 96313.78 us │ 103951.79 us │ 348016.24 us │
-└─────────────┴─────────────┴─────────────┴──────────────┴──────────────┘
-"""
-
-  tpu_info_output = parse_tpu_info_output(full_output)
-  print(tpu_info_output)
-  # content = next(
-  #     (table for table in tpu_info_output if table.name == "TPU Chips"),
-  #     None,
-  # )
-  # print(content)

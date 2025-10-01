@@ -155,7 +155,6 @@ class JobSet:
     tpu_topology: The TPU topology (e.g., "4x4").
     container_name: The name of the container in the pod.
     image: The container image to use.
-    command: The command to run in the container.
     tpu_cores_per_pod: The number of TPU cores requested per pod.
   """
 
@@ -190,7 +189,16 @@ class JobSet:
     return _TEMPLATE.substitute(params)
 
 
-def _get_credentials_command(node_pool: node_pool.Info):
+def _get_credentials_command(node_pool: node_pool.Info) -> str:
+  """Returns the command to authenticate `gcloud` with the specified GKE cluster.
+
+  Args:
+    node_pool: Configuration object with cluster details.
+
+  Returns:
+    A string containing the command to authenticate `gcloud` with the specified
+    GKE cluster.
+  """
   for attr_name in ["cluster_name", "region", "project_id"]:
     if not getattr(node_pool, attr_name):
       raise ValueError(f"{attr_name} must be set in the Info object.")
@@ -205,7 +213,7 @@ def _get_credentials_command(node_pool: node_pool.Info):
 
 def _k8s_apply_jobset_command(
     kubeconfig: str, yaml_content: str, namespace: str
-):
+) -> str:
   return " ".join([
       f"kubectl --kubeconfig={kubeconfig} apply",
       f"-f - -n {namespace} <<EOF\n",
@@ -215,14 +223,14 @@ def _k8s_apply_jobset_command(
 
 def _k8s_delete_jobset_command(
     kubeconfig: str, jobset_name: str, namespace: str
-):
+) -> str:
   return " ".join([
       f"kubectl --kubeconfig={kubeconfig} delete jobsets {jobset_name}",
       f"-n {namespace} --timeout=60s --ignore-not-found=true",
   ])
 
 
-def _k8s_get_pod_name_command(kubeconfig: str, namespace: str):
+def _k8s_get_pod_name_command(kubeconfig: str, namespace: str) -> str:
   return " ".join([
       f"kubectl --kubeconfig={kubeconfig} get pods",
       f"-n {namespace} -o jsonpath={{.items[*].metadata.name}}",
@@ -244,24 +252,21 @@ def run_workload(
   env = os.environ.copy()
   env["KUBECONFIG"] = kubeconfig
 
+  cmd = " && ".join([
+      _get_credentials_command(node_pool),
+      _k8s_apply_jobset_command(kubeconfig, yaml_config, namespace),
+  ])
+
   result = subprocess.run(
-      " && ".join([
-          _get_credentials_command(node_pool),
-          _k8s_apply_jobset_command(kubeconfig, yaml_config, namespace),
-      ]),
+      cmd,
       shell=True,
       check=False,
       env=env,
       capture_output=True,
       text=True,
   )
-  logging.info(
-      "Command Execute:\n %s",
-      " && ".join([
-          _get_credentials_command(node_pool),
-          _k8s_apply_jobset_command(kubeconfig, yaml_config, namespace),
-      ]),
-  )
+  logging.info("Command Execute:\n %s", cmd)
+
   if result.returncode != 0:
     raise AirflowFailException(
         f"Command failed with exit code {result.returncode}.\n ,STDERR"
@@ -292,17 +297,21 @@ def end_workload(
   env = os.environ.copy()
   env["KUBECONFIG"] = kubeconfig
 
+  cmd = " && ".join([
+      _get_credentials_command(node_pool),
+      _k8s_delete_jobset_command(kubeconfig, jobset_name, namespace),
+  ])
+
   result = subprocess.run(
-      " && ".join([
-          _get_credentials_command(node_pool),
-          _k8s_delete_jobset_command(kubeconfig, jobset_name, namespace),
-      ]),
+      cmd,
       shell=True,
       check=False,
       env=env,
       capture_output=True,
       text=True,
   )
+  logging.info("Command Execute:\n %s", cmd)
+
   if result.returncode != 0:
     logging.info("Command failed with exit code %s.", result.returncode)
     logging.info("STDERR message: %s", result.stderr)
@@ -310,7 +319,9 @@ def end_workload(
 
 
 @task
-def get_active_pods(node_pool: node_pool.Info, kubeconfig: str, namespace: str):
+def get_active_pods(
+    node_pool: node_pool.Info, kubeconfig: str, namespace: str
+) -> list[str]:
   """Deletes all JobSets from the GKE cluster to clean up resources.
 
   This task executes a bash script to:
@@ -321,21 +332,27 @@ def get_active_pods(node_pool: node_pool.Info, kubeconfig: str, namespace: str):
     node_pool: Configuration object with cluster details.
     kubeconfig: The path to the kubeconfig file.
     namespace: The YamlConfig object containing namespace information.
+
+  Returns:
+    A list of pod names.
   """
   env = os.environ.copy()
   env["KUBECONFIG"] = kubeconfig
 
+  cmd = " && ".join([
+      _get_credentials_command(node_pool),
+      _k8s_get_pod_name_command(kubeconfig, namespace),
+  ])
+
   process = subprocess.run(
-      " && ".join([
-          _get_credentials_command(node_pool),
-          _k8s_get_pod_name_command(kubeconfig, namespace),
-      ]),
+      cmd,
       shell=True,
       check=True,
       env=env,
       capture_output=True,
       text=True,
   )
+  logging.info("Command Execute:\n %s", cmd)
 
   if not process or not process.stdout.strip():
     logging.warning("Received empty pod list from bash task.")
@@ -358,7 +375,8 @@ def wait_for_jobset_started(
   It times out if no such log is found within a defined period.
 
   Args:
-    node_pool: An Info dataclass instance containing project and cluster details.
+    node_pool: An Info dataclass instance containing project and cluster
+      details.
     pod_name_list: A list of pod names.
     job_apply_time: The datetime object of the time the job was applied.
   """
