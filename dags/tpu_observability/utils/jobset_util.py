@@ -347,7 +347,9 @@ def get_active_pods(node_pool: node_pool.Info, kubeconfig: str, namespace: str):
 
 @task.sensor(poke_interval=30, timeout=900, mode="reschedule")
 def wait_for_jobset_started(
-    node_pool: node_pool.Info, pod_name_list: str, job_apply_time: datetime.datetime
+    node_pool: node_pool.Info,
+    pod_name_list: str,
+    job_apply_time: datetime.datetime,
 ) -> bool:
   """Waits for the jobset to start by polling Cloud Logging for positive tensorcore utilization metrics.
 

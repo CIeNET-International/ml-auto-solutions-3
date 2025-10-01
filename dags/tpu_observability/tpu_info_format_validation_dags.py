@@ -28,8 +28,6 @@ from dags.tpu_observability.utils import tpu_info_util as tpu_info
 from dags.tpu_observability.utils.jobset_util import JobSet
 from dags.tpu_observability.utils.jobset_util import Workload
 
-
-
 MACHINE_TYPE_TO_TPU_VERSION = {
     "ct6e-standard-4t": "v6e",
     "ct5p-hightpu-4t": "v5p",
@@ -108,36 +106,38 @@ def validate_chips_table(
   expected_rows = 4
   if len(content.body) != expected_rows:
     raise AirflowFailException(
-        f"[TPU Chips] Row count is incorrect. (Actual: {len(content.body)},"
-        f" Expected: {expected_rows})"
+        f"Unexpected row count; except: {expected_rows}; got:"
+        f" {len(content.body)}"
     )
 
   tpu_type = MACHINE_TYPE_TO_TPU_VERSION[node_pool.machine_type]
 
-  for i, row_dict in enumerate(content.body, 1):
+  for row_dict in content.body:
     for header, data in row_dict.items():
       match header:
         case "Chip":
           if not re.match(r"/dev/vfio/\d+", data):
             errors.append(
-                f"[Row {i}] Invalid Chip format; except: '/dev/vfio/NNN'; got: '{data}'"
+                f"Unexpected {header}; except: '/dev/vfio/NNN'; got: '{data}'"
             )
         case "Type":
           if tpu_type not in data:
             errors.append(
-                f"[Row {i}] Mismatched Type; except: contains '{tpu_type}'; got: '{data}'"
+                f"Unexpected {header}; except: string contains '{tpu_type}';"
+                f" got: '{data}'"
             )
         case "PID":
           if not (data.isdigit() and int(data) > 0):
             errors.append(
-                f"[Row {i}] Invalid PID; except: a positive integer; got: '{data}'"
+                f"Unexpected {header}; except: a positive integer; got: "
+                f"'{data}'"
             )
 
   if errors:
     error_summary = "\n".join(errors)
     raise AirflowFailException(
-        f"Validation failed for {content.name} table with {len(errors)} error(s):\n"
-        f"{error_summary}\n\n"
+        f"Validation failed for {content.name} table with {len(errors)} "
+        f"error(s):\n{error_summary}\n\n"
         f"Raw table output:\n{content.raw_body}"
     )
 
@@ -158,11 +158,11 @@ def validate_runtime_table(tpu_info_output: List[tpu_info.Table]):
   expected_rows = 4
   if len(content.body) != expected_rows:
     raise AirflowFailException(
-        f"[Runtime] Row count is incorrect. (Actual: {len(content.body)}, Expected:"
-        f" {expected_rows})"
+        f"Unexpected row count; except: {expected_rows}; got:"
+        f" {len(content.body)}"
     )
 
-  for i, row_dict in enumerate(content.body, 1):
+  for row_dict in content.body:
     for header, data in row_dict.items():
       match header:
         case "HBM Usage (GiB)":
@@ -171,27 +171,27 @@ def validate_runtime_table(tpu_info_output: List[tpu_info.Table]):
             used, total = float(hbm_match.group(1)), float(hbm_match.group(2))
             if used > total:
               errors.append(
-                  f"[Runtime] Row {i}: Used HBM ({used}) cannot be greater than"
-                  f" Total HBM ({total})."
+                  f"Unexpected {header}; expect: 'used HBM <= total HBM'; got:"
+                  f" '{used} GiB > {total} GiB'"
               )
           else:
             errors.append(
-                f"[Runtime] Row {i}: Invalid 'HBM Usage' format:"
-                f" {data}"
+                f"Unexpected {header}; expect: 'N.NN GiB / N.NN GiB'; got:"
+                f" '{data}'"
             )
         case "Duty cycle":
           duty_match = re.match(r"(\d+\.\d+)%", data)
           if not (duty_match and 0.0 <= float(duty_match.group(1)) <= 100.0):
             errors.append(
-                f"[Runtime] Row {i}: 'Duty cycle' not between 0-100%:"
-                f" {data}"
+                f"Unexpected {header}; expect: 'a percentage between"
+                f" 0.0-100.0'; got: '{data}'"
             )
   if errors:
     error_summary = "\n".join(errors)
     raise AirflowFailException(
-        f"Validation failed for {content.name} table with {len(errors)} error(s):\n"
-        f"{error_summary}\n\n"
-        f"Raw table output:\n{content.raw_body}"
+        f"Validation failed for {content.name} table with"
+        f" {len(errors)} error(s):\n{error_summary}\n\nRaw table"
+        f" output:\n{content.raw_body}"
     )
 
 
@@ -211,21 +211,26 @@ def validate_tensorcore_table(tpu_info_output: List[tpu_info.Table]):
   expected_rows = 4
   if len(content.body) != expected_rows:
     raise AirflowFailException(
-        f"[TensorCore] Row count is incorrect. (Actual: {len(content.body)},"
-        f" Expected: {expected_rows})"
+        f"Unexpected row count; except: {expected_rows}; got:"
+        f" {len(content.body)}"
     )
-  for i, row_dict in enumerate(content.body, 1):
+  for row_dict in content.body:
     for header, data in row_dict.items():
       match header:
         case "TensorCore Utilization":
           util_match = re.match(r"(\d+\.\d+)%", data)
           if not (util_match and 0.0 < float(util_match.group(1)) <= 100.0):
             errors.append(
-                f"[TensorCore] Row {i}: 'Utilization' not between 0-100%:"
-                f" {data}"
+                f"Unexpected {header}; expect: 'a percentage > 0.0 and <="
+                f" 100.0'; got: '{data}'"
             )
   if errors:
-    raise AirflowFailException(errors)
+    error_summary = "\n".join(errors)
+    raise AirflowFailException(
+        f"Validation failed for {content.name} table with"
+        f" {len(errors)} error(s):\n{error_summary}\n\nRaw table"
+        f" output:\n{content.raw_body}"
+    )
 
 
 @task
@@ -241,24 +246,30 @@ def validate_latency_table(tpu_info_output: List[tpu_info.Table]):
       None,
   )
 
-  if len(content.body) == 0:
+  if content.body is None or len(content.body) == 0:
     raise AirflowFailException(
-        "[Latency] Row count is incorrect. At least one row is expected."
+        "Unexpected row count; expects at least one data row; got: 0"
     )
 
-  for i, row_dict in enumerate(content.body, 1):
+  for row_dict in content.body:
     for header, data in row_dict.items():
       match header:
         case "Buffer Size":
           continue
-      if not (
-          data.endswith(" us") and float(data.replace(" us", "")) > 0
-      ):
-        errors.append(
-            f"[Latency] Row {i}, Col {header}: Invalid latency value: {data}"
-        )
+        case "P50" | "P90" | "P95" | "P999":
+          if not (data.endswith(" us") and float(data.replace(" us", "")) > 0):
+            errors.append(
+                f"Unexpected {header}; expect: 'a positive float ending in \""
+                f" us\"'; got: '{data}'"
+            )
+
   if errors:
-    raise AirflowFailException(errors)
+    error_summary = "\n".join(errors)
+    raise AirflowFailException(
+        f"Validation failed for {content.name} table with"
+        f" {len(errors)} error(s):\n{error_summary}\n\nRaw table"
+        f" output:\n{content.raw_body}"
+    )
 
 
 with models.DAG(
@@ -443,13 +454,17 @@ with models.DAG(
 
   with TaskGroup(group_id="cleanup_node_pool") as cleanup_node_pool:
     cleanup_first_node_pool = node_pool.delete.override(
-        task_id="cleanup_node_pool_1", trigger_rule=TriggerRule.ALL_DONE, retries=2,
+        task_id="cleanup_node_pool_1",
+        trigger_rule=TriggerRule.ALL_DONE,
+        retries=2,
     )(node_pool=cluster_info).as_teardown(
         setups=create_node_pool,
     )
 
     cleanup_second_node_pool = node_pool.delete.override(
-        task_id="cleanup_node_pool_2", trigger_rule=TriggerRule.ALL_DONE, retries=2,
+        task_id="cleanup_node_pool_2",
+        trigger_rule=TriggerRule.ALL_DONE,
+        retries=2,
     )(node_pool=cluster_info_2).as_teardown(
         setups=create_node_pool,
     )

@@ -74,6 +74,7 @@ class Table:
 
     lines = self.raw_body.strip().split("\n")
     if len(lines) < max(TableLineIndex):
+      self.body = []
       return
 
     header_line = lines[TableLineIndex.HEADER]
@@ -89,10 +90,9 @@ class Table:
       row_data: _TableRow = {
           header: col.strip() for header, col in zip(headers, columns)
       }
-
       parsed_body.append(row_data)
 
-    return parsed_body
+    self.body = parsed_body
 
 
 @task
@@ -117,10 +117,11 @@ def parse_tpu_info_output(output: str) -> List[Table]:
         f"Found {len(titles)} titles and {len(blocks)} blocks."
     )
 
-  parsed_tables = [
-      Table(name=name, raw_body=raw_body, body=Table.parse_body(raw_body))
-      for name, raw_body in zip(titles, blocks)
-  ]
+  parsed_tables = []
+  for name, raw_body in zip(titles, blocks):
+    table = Table(name=name, raw_body=raw_body, body=None)
+    table.parse_body()
+    parsed_tables.append(table)
 
   return parsed_tables
 
