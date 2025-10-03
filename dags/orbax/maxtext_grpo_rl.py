@@ -62,9 +62,9 @@ with models.DAG(
     concurrency=1,
 ) as dag:
   training_config = test_config_util.TestConfig(
-      cluster=XpkClusters.TPU_V5P_128_CLUSTER,
+      cluster=XpkClusters.TPU_V5P_8_CLUSTER,
       machine_type="ct5p-hightpu-4t",
-      accelerator="v5p-128",
+      accelerator="v5p-8",
       slices=[1],  # Single slice for GRPO training
       model_name="llama3.1-8b",
       short_id="max-rl",
@@ -73,6 +73,8 @@ with models.DAG(
       replicator_backup_time=None,
       base_dir=test_config_util.DEFAULT_BUCKET,
   )
+
+  HF_TOKEN_LLAMA3_1_8B = models.Variable.get("HF_TOKEN_LLAMA3_1_8B", None)
 
   for mode, image in DOCKER_IMAGES:
     for slice_num in training_config.slices:
@@ -85,7 +87,7 @@ with models.DAG(
 
       # TODO: use secret manager for HF token and extract parameters from script
       grpo_training_command = [
-          "HF_TOKEN=$HF_TOKEN JAX_PLATFORMS=proxy,cpu python src/MaxText/examples/grpo_llama3_demo.py",
+          f"HF_TOKEN={HF_TOKEN_LLAMA3_1_8B} JAX_PLATFORMS=proxy,cpu python src/MaxText/examples/grpo_llama3_demo.py",
       ]
 
       start_time = validation_util.generate_timestamp()
