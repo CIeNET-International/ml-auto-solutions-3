@@ -393,3 +393,6 @@ class DockerImage(enum.Enum):
   MAXTEXT_JAX_052_RECIPES_012 = (
       "gcr.io/tpu-prod-env-multipod/maxtext_tpu_recipes:jax0.5.2-recipes0.1.2"
   )
+  MAXTEXT_GRPO_RL_IMAGE = (
+      "gcr.io/tpu-prod-env-multipod/mazumdera_google_com_runner3:latest"
+  )
