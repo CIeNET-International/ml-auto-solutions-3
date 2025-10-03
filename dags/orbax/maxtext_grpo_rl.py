@@ -22,10 +22,12 @@ from xlml.utils.gke import zone_to_region
 SCHEDULE = "0 20 * * *" if composer_env.is_prod_env() else None
 DAG_TEST_NAME = "maxtext_grpo_rl"
 
-DOCKER_IMAGES = [(
-    SetupMode.NIGHTLY,
-    DockerImage.MAXTEXT_GRPO_RL_IMAGE,
-)]
+DOCKER_IMAGES = [
+    (
+        SetupMode.NIGHTLY,
+        DockerImage.MAXTEXT_GRPO_RL_IMAGE,
+    )
+]
 
 with models.DAG(
     dag_id=DAG_TEST_NAME,
