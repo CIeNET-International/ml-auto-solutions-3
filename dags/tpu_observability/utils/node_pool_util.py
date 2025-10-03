@@ -42,12 +42,14 @@ class Info:
 
   project_id: str
   cluster_name: str
-  node_pool_name: str
-  location: str
-  node_locations: str
-  machine_type: str
-  num_nodes: int
-  tpu_topology: str
+  node_pool_name: str = None
+  location: str = None
+  region: str = None
+  zone: str = None
+  node_locations: str = None
+  machine_type: str = None
+  num_nodes: int = 0
+  tpu_topology: str = None
 
 
 @task
