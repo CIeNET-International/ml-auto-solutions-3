@@ -51,7 +51,11 @@ class Info:
 
 
 @task
-def create(node_pool: Info, ignore_failure: bool = False) -> None:
+def create(
+    node_pool: Info,
+    reservation: str = None,
+    ignore_failure: bool = False,
+) -> None:
   """Creates a GKE node pool by the given node pool information."""
 
   command = (
@@ -59,19 +63,27 @@ def create(node_pool: Info, ignore_failure: bool = False) -> None:
       f"--project={node_pool.project_id} "
       f"--cluster={node_pool.cluster_name} "
       f"--location={node_pool.location} "
-      f"--node-locations {node_pool.node_locations} "
+      f"--node-locations={node_pool.node_locations} "
       f"--num-nodes={node_pool.num_nodes} "
       f"--machine-type={node_pool.machine_type} "
       f"--tpu-topology={node_pool.tpu_topology}"
   )
+
+  if reservation:
+    command += f" --reservation-affinity=specific --reservation={reservation}"
+
   if ignore_failure:
     command += " 2>&1 || true"
 
   process = subprocess.run(
-      command, shell=True, check=True, capture_output=True, text=True
+      command, shell=True, check=False, capture_output=True, text=True
   )
+  if process.returncode != 0:
+    raise AirflowFailException(
+        f"Command failed with exit code {process.returncode}.\n ,STDERR"
+        f" message: {process.stderr}"
+    )
   logging.info("STDOUT message: %s", process.stdout)
-  logging.info("STDERR message: %s", process.stderr)
 
 
 @task
@@ -87,10 +99,14 @@ def delete(node_pool: Info) -> None:
   )
 
   process = subprocess.run(
-      command, shell=True, check=True, capture_output=True, text=True
+      command, shell=True, check=False, capture_output=True, text=True
   )
+  if process.returncode != 0:
+    raise AirflowFailException(
+        f"Command failed with exit code {process.returncode}.\n ,STDERR"
+        f" message: {process.stderr}"
+    )
   logging.info("STDOUT message: %s", process.stdout)
-  logging.info("STDERR message: %s", process.stderr)
 
 
 def list_nodes(node_pool: Info) -> List[str]:
@@ -210,10 +226,14 @@ def delete_one_random_node(node_pool: Info) -> None:
   )
 
   process = subprocess.run(
-      command, shell=True, check=True, capture_output=True, text=True
+      command, shell=True, check=False, capture_output=True, text=True
   )
+  if process.returncode != 0:
+    raise AirflowFailException(
+        f"Command failed with exit code {process.returncode}.\n ,STDERR"
+        f" message: {process.stderr}"
+    )
   logging.info("STDOUT message: %s", process.stdout)
-  logging.info("STDERR message: %s", process.stderr)
 
 
 def _query_status_metric(node_pool: Info) -> Status:
@@ -326,10 +346,14 @@ def rollback(node_pool: Info) -> None:
   )
 
   process = subprocess.run(
-      command, shell=True, check=True, capture_output=True, text=True
+      command, shell=True, check=False, capture_output=True, text=True
   )
+  if process.returncode != 0:
+    raise AirflowFailException(
+        f"Command failed with exit code {process.returncode}.\n ,STDERR"
+        f" message: {process.stderr}"
+    )
   logging.info("STDOUT message: %s", process.stdout)
-  logging.info("STDERR message: %s", process.stderr)
 
 
 @task.sensor(poke_interval=30, timeout=1200, mode="reschedule")
