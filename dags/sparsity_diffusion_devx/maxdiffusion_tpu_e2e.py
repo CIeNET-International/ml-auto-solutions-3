@@ -96,13 +96,18 @@ with models.DAG(
   for accelerator, slices in maxdiffusion_test_configs_sdxl.items():
     cluster = config.clusters[accelerator]
     for slice_num in slices:
+      # TODO(b/448773251): Remove this once the issue is resolved.
+      # Downgrade JAX version since v0.7.2 causes an XlaRuntimeError due to the compiled graph size exceeding the 4GB serialization limit.
+      downgrade_jax_cmd = "pip install --force-reinstall jax[tpu]==0.7.1 jaxlib==0.7.1 && pip show jax jaxlib"
+
       maxdiffusion_sdxl_test = config.get_gke_config(
           num_slices=slice_num,
           cluster=cluster,
           time_out_in_min=60,
           run_model_cmds=(
               f"JAX_PLATFORMS=tpu,cpu ENABLE_PJRT_COMPATIBILITY=true TPU_SLICE_BUILDER_DUMP_CHIP_FORCE=true TPU_SLICE_BUILDER_DUMP_ICI=true JAX_FORCE_TPU_INIT=true ENABLE_TPUNETD_CLIENT=true && "
-              f"pip install --force-reinstall jax[tpu]==0.7.1 jaxlib==0.7.1 && pip show jax jaxlib && pip install . && python src/maxdiffusion/train_sdxl.py src/maxdiffusion/configs/base_xl.yml "
+              + downgrade_jax_cmd
+              + " && pip install . && python src/maxdiffusion/train_sdxl.py src/maxdiffusion/configs/base_xl.yml "
               f"pretrained_model_name_or_path=gs://maxdiffusion-github-runner-test-assets/checkpoints/models--stabilityai--stable-diffusion-xl-base-1.0 "
               f"revision=refs/pr/95 activations_dtype=bfloat16 weights_dtype=bfloat16 "
               f"dataset_name=gs://jfacevedo-maxdiffusion-v5p/pokemon-datasets/pokemon-gpt4-captions_sdxl resolution=1024 per_device_batch_size=1 "
@@ -126,7 +131,8 @@ with models.DAG(
           time_out_in_min=60,
           run_model_cmds=(
               f"JAX_PLATFORMS=tpu,cpu ENABLE_PJRT_COMPATIBILITY=true TPU_SLICE_BUILDER_DUMP_CHIP_FORCE=true TPU_SLICE_BUILDER_DUMP_ICI=true JAX_FORCE_TPU_INIT=true ENABLE_TPUNETD_CLIENT=true && "
-              f"pip install --force-reinstall jax[tpu]==0.7.1 jaxlib==0.7.1 && pip show jax jaxlib && pip install . && bash end_to_end/tpu/test_sdxl_training_loss.sh "
+              + downgrade_jax_cmd
+              + " && pip install . && bash end_to_end/tpu/test_sdxl_training_loss.sh "
               f"OUTPUT_DIR={sdxl_nan_base_output_dir} "
               f"RUN_NAME='' "
               f"STEPS=20 "
