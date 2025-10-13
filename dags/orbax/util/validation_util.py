@@ -434,19 +434,7 @@ def validate_restored_correct_checkpoint(
   if not entries:
     raise AirflowFailException("No event_type found in the log.")
 
-<<<<<<< HEAD
-<<<<<<< HEAD
   local_saved_steps_before_restore = []
-=======
-<<<<<<< HEAD
-  saved_steps_before_restore = []
-=======
-  save_step_before_restore = None
->>>>>>> 0b0501bd (Add a new DAG that tests Maxtext EMC restoring from GCS feature)
->>>>>>> 00cfbf3 (Add a new DAG that tests Maxtext EMC restoring from GCS feature)
-=======
-  saved_steps_before_restore = []
->>>>>>> 0178af9 (Resolving conflicts)
   for entry in entries:
     if not isinstance(entry, logging_api.StructEntry):
       raise AirflowFailException(

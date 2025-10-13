@@ -10,14 +10,6 @@ from dags import composer_env
 from dags.common import test_owner
 from dags.common.vm_resource import XpkClusters
 from dags.multipod.configs import gke_config
-<<<<<<< HEAD
-=======
-from dags.multipod.configs.common import SetupMode
-<<<<<<< HEAD
-<<<<<<< HEAD
->>>>>>> 00cfbf3 (Add a new DAG that tests Maxtext EMC restoring from GCS feature)
-=======
->>>>>>> 0178af9 (Resolving conflicts)
 from dags.orbax.util import checkpoint_util, test_config_util, validation_util
 from xlml.utils.gke import zone_to_region
 from xlml.utils.xpk import BRANCH_ABHINAV_MTC
@@ -144,17 +136,8 @@ with models.DAG(
                 project_id=test_config.cluster.project,
                 location=zone_to_region(test_config.cluster.zone),
                 cluster_name=test_config.cluster.name,
-<<<<<<< HEAD
-<<<<<<< HEAD
                 pod_pattern=f"{test_config.short_id}-emc.*1-0",
                 interrupt_at_step=step_to_interrupt,
-=======
-<<<<<<< HEAD
-=======
->>>>>>> 0178af9 (Resolving conflicts)
-                pod_pattern=".*0-0",
-                interrupt_at_step=40,
->>>>>>> 00cfbf3 (Add a new DAG that tests Maxtext EMC restoring from GCS feature)
                 start_time=start_time,
                 end_time=end_time,
             )
