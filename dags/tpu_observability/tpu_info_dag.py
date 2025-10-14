@@ -19,14 +19,24 @@ from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 from google.cloud.monitoring_v3 import types
 
+from dags.common.vm_resource import MachineVersion
 from dags.common.vm_resource import Project
 from dags.common.vm_resource import Region
 from dags.common.vm_resource import Zone
 from dags.map_reproducibility.utils import constants
-from dags.tpu_observability.utils.jobset_yaml_generator import create_jobset_yaml
-from dags.tpu_observability.utils.jobset_yaml_generator import YamlConfig
+from dags.tpu_observability.utils import jobset_util as jobset
+from dags.tpu_observability.utils import node_pool_util as node_pool
+from dags.tpu_observability.utils import tpu_info_util as tpu_info
+from dags.tpu_observability.utils.jobset_util import JobSet
+from dags.tpu_observability.utils.jobset_util import Workload
 from dags.tpu_observability.utils.monitoring import query_time_series
 from dags.tpu_observability.utils.node_pool_util import Info
+from dags.tpu_observability.utils.time_util import TimeUtil
+
+MACHINE_TYPE_TO_TPU_VERSION = {
+    "ct6e-standard-4t": "v6e",
+    "ct5p-hightpu-4t": "v5p",
+}
 
 
 class BaseMetricStrategy(ABC):
@@ -41,6 +51,12 @@ class BaseMetricStrategy(ABC):
     """The name of the metric as it appears in the Monitoring filter."""
     pass
 
+  @property
+  @abstractmethod
+  def tpu_info_metric_name(self) -> str:
+    """The name of the metric be searched from tpu-info command."""
+    pass
+
   @abstractmethod
   def parse_from_monitoring(
       self, time_series_data: List[types.TimeSeries], **kwargs
@@ -49,7 +65,7 @@ class BaseMetricStrategy(ABC):
     pass
 
   @abstractmethod
-  def parse_from_tpu_info(self, tpu_info_text: str) -> List[float]:
+  def parse_from_tpu_info(self, tpu_info_metric_output: str) -> List[float]:
     """Parses the desired value from the raw tpu-info command output."""
     pass
 
@@ -59,6 +75,10 @@ class TensorcoreUtilizationStrategy(BaseMetricStrategy):
 
   @property
   def metric_name(self) -> str:
+    return "kubernetes.io/container/accelerator/tensorcore_utilization"
+
+  @property
+  def tpu_info_metric_name(self) -> str:
     return "tensorcore_utilization"
 
   def parse_from_monitoring(
@@ -77,17 +97,13 @@ class TensorcoreUtilizationStrategy(BaseMetricStrategy):
         )
     ]
 
-  def parse_from_tpu_info(self, tpu_info_text: str) -> List[float]:
+  def parse_from_tpu_info(self, tpu_info_metric_output: str) -> List[float]:
     util_values = []
-    in_section = False
-    for line in tpu_info_text.strip().split("\n"):
-      if "TensorCore Utilization" in line:
-        in_section = True
-        continue
-      if in_section:
-        match = re.search(r"│\s*\d+\s*│\s*([\d.]+)%", line)
-        if match:
-          util_values.append(float(match.group(1)))
+    for metric_table in tpu_info_metric_output:
+      if metric_table.name == "TensorCore Utilization":
+        for row_dict in metric_table.body:
+          tcu_value = row_dict["TensorCore Utilization"].replace("%", "")
+          util_values.append(float(tcu_value))
     return util_values
 
 
@@ -96,7 +112,11 @@ class MemoryUsedStrategy(BaseMetricStrategy):
 
   @property
   def metric_name(self) -> str:
-    return "memory_used"
+    return "kubernetes.io/container/accelerator/memory_used"
+
+  @property
+  def tpu_info_metric_name(self) -> str:
+    return "hbm_usage"
 
   def parse_from_monitoring(
       self, time_series_data: List[types.TimeSeries], **kwargs
@@ -116,19 +136,15 @@ class MemoryUsedStrategy(BaseMetricStrategy):
         )
     ]
 
-  def parse_from_tpu_info(self, tpu_info_text: str) -> List[float]:
+  def parse_from_tpu_info(self, tpu_info_metric_output: str) -> List[float]:
     util_values = []
-    in_section = False
-    for line in tpu_info_text.strip().split("\n"):
-      if "TPU Runtime Utilization" in line:
-        in_section = True
-        continue
-      if in_section:
-        match = re.search(r"(\d+\.\d+)\s*GiB\s*\/\s*(\d+\.\d+)\s*GiB", line)
-        if match:
-          util_values.append(float(match.group(1)))
-      if len(util_values) == 4:
-        break
+    for metric_table in tpu_info_metric_output:
+      if metric_table.name == "TPU Runtime Utilization":
+        for row_dict in metric_table.body:
+          hbm_value = row_dict["HBM Usage (GiB)"]
+          match = re.search(r"(\d+\.\d+)\s*GiB\s*\/\s*(\d+\.\d+)\s*GiB", hbm_value)
+          if match:
+            util_values.append(float(match.group(1)))
     return util_values
 
 
@@ -181,210 +197,7 @@ def compare_metric_values(
 
 
 @task
-def run_workload(info: Info, kubeconfig: str, yaml_config: YamlConfig):
-  """Applies the workload YAML to the GKE cluster using subprocess.
-
-  This task executes a series of shell commands using Python's subprocess
-  module to perform the following steps:
-  1. Defines temporary paths for kubeconfig and the YAML file.
-  2. Copies the workload YAML file from GCS to the local temp path.
-  3. Authenticates gcloud and gets credentials for the specified GKE cluster,
-      storing them in the temporary kubeconfig file.
-  4. Applies the YAML file to the `default` namespace using kubectl, pointing
-      to the temporary kubeconfig.
-  5. Returns the current UTC time as the job's start time, generated in Python.
-
-  Args:
-      info: Configuration object with cluster and workload details.
-      kubeconfig: The path to the kubeconfig file.
-      yaml_config: The YamlConfig object containing namespace information.
-
-  Returns:
-      The UTC timestamp (ISO 8601 format) of when the job was applied.
-  """
-  params = dataclasses.asdict(yaml_config)
-  base_job_name = yaml_config.jobset_name
-
-  logging.info("Generating YAML content for JobSet: %s", base_job_name)
-
-  yaml_content = create_jobset_yaml(**params)
-
-  yaml_path = f"/tmp/{base_job_name}.yaml"
-  with open(yaml_path, "w") as f:
-    f.write(yaml_content)
-  logging.info("Successfully generated YAML file at: %s", yaml_path)
-  with open(yaml_path, "r") as f:
-    logging.info("--- File Content ---\n%s", f.read())
-
-  env = os.environ.copy()
-  env["KUBECONFIG"] = kubeconfig
-
-  gcloud_cmd = (
-      f"gcloud container clusters get-credentials {info.cluster_name} "
-      f"--region={info.region} "
-      f"--project={info.project_id} "
-  )
-
-  subprocess.run(
-      gcloud_cmd,
-      shell=True,
-      check=True,
-      env=env,
-      capture_output=True,
-      text=True,
-  )
-  kubectl_cmd = (
-      f"kubectl --kubeconfig={kubeconfig} apply -f {yaml_path} -n"
-      f" {yaml_config.namespace}"
-  )
-  subprocess.run(
-      kubectl_cmd, shell=True, check=True, capture_output=True, text=True
-  )
-  current_time_utc = datetime.datetime.now(datetime.timezone.utc)
-  current_time_utc_format = current_time_utc.isoformat(timespec="milliseconds")
-  return current_time_utc_format
-
-
-@task
-def end_workload(info: Info, kubeconfig: str, yaml_config: YamlConfig):
-  """Deletes all JobSets from the GKE cluster to clean up resources.
-
-  This task executes a bash script to:
-  1. Authenticate `gcloud` with the specified GKE cluster.
-  2. Delete all JobSets in the `default` namespace using `kubectl`.
-
-  Args:
-    info: Configuration object with cluster details.
-    kubeconfig: The path to the kubeconfig file.
-    yaml_config: The YamlConfig object containing namespace information.
-  """
-  env = os.environ.copy()
-  env["KUBECONFIG"] = kubeconfig
-
-  gcloud_cmd = (
-      f"gcloud container clusters get-credentials {info.cluster_name} "
-      f"--region={info.region} "
-      f"--project={info.project_id} "
-  )
-
-  subprocess.run(
-      gcloud_cmd,
-      shell=True,
-      check=True,
-      env=env,
-      capture_output=True,
-      text=True,
-  )
-
-  kubectl_cmd = (
-      f"kubectl --kubeconfig={kubeconfig} delete jobsets --all -n"
-      f" {yaml_config.namespace} --timeout=60s --ignore-not-found=true"
-  )
-  subprocess.run(
-      kubectl_cmd, shell=True, check=True, capture_output=True, text=True
-  )
-
-
-@task
-def get_active_pods(info: Info, kubeconfig: str, yaml_config: YamlConfig):
-  """Deletes all JobSets from the GKE cluster to clean up resources.
-
-  This task executes a bash script to:
-  1. Authenticate `gcloud` with the specified GKE cluster.
-  2. Delete all JobSets in the `default` namespace using `kubectl`.
-
-  Args:
-    info: Configuration object with cluster details.
-    kubeconfig: The path to the kubeconfig file.
-    yaml_config: The YamlConfig object containing namespace information.
-  """
-  env = os.environ.copy()
-  env["KUBECONFIG"] = kubeconfig
-
-  gcloud_cmd = (
-      f"gcloud container clusters get-credentials {info.cluster_name} "
-      f"--region={info.region} "
-      f"--project={info.project_id} "
-  )
-
-  subprocess.run(
-      gcloud_cmd,
-      shell=True,
-      check=True,
-      env=env,
-      capture_output=True,
-      text=True,
-  )
-
-  kubectl_cmd = (
-      f"kubectl --kubeconfig={kubeconfig} get pods -n"
-      f" {yaml_config.namespace} -o jsonpath={{.items[*].metadata.name}}"
-  )
-  process = subprocess.run(
-      kubectl_cmd, shell=True, check=True, capture_output=True, text=True
-  )
-  if not process or not process.stdout.strip():
-    logging.warning("Received empty pod list from bash task.")
-    raise AirflowException("Received empty pod list from bash task.")
-
-  pod_list = process.stdout.strip().split()
-  return pod_list
-
-
-@task.sensor(poke_interval=30, timeout=900, mode="reschedule")
-def query_to_wait_for_jobset_start(
-    info: Info, pod_name_list: str, job_apply_time: str
-) -> bool:
-  """Waits for the first log entry indicating the job has started.
-
-  This task polls Cloud Logging for a specific log pattern that appears
-  shortly after the TPU job begins execution within the specified container.
-  It times out if no such log is found within a defined period.
-
-  Args:
-    info: An Info dataclass instance containing project and cluster details.
-    pod_name_list: A list of pod names.
-    job_apply_time: The ISO formatted string of the time the job was applied.
-
-  Returns:
-    True if the start log is found, otherwise it will raise an Airflow timeout
-    exception.
-  """
-
-  datetime_job_apply_time = datetime.datetime.fromisoformat(job_apply_time)
-  end_time_utc = datetime_job_apply_time + datetime.timedelta(minutes=10)
-
-  if not pod_name_list:
-    raise AirflowException("pod_name_list is empty, sensor cannot proceed.")
-
-  pod_name = random.choice(pod_name_list)
-  filter_string = (
-      "metric.type ="
-      ' "kubernetes.io/container/accelerator/tensorcore_utilization" AND'
-      f' resource.labels.cluster_name = "{info.cluster_name}" AND'
-      f' resource.labels.pod_name = "{pod_name}"'
-  )
-  time_series_data = query_time_series(
-      project_id=info.project_id,
-      filter_str=filter_string,
-      start_time=datetime_job_apply_time,
-      end_time=end_time_utc,
-      view="FULL",
-  )
-  time_series_data_list = list(time_series_data)
-  # Retrieve the last three records to ensure stable workload startup.
-  if not time_series_data_list or len(time_series_data_list[0].points) < 3:
-    return False
-  last_n_data_points = [
-      round(point.value.double_value, 2)
-      for point in time_series_data_list[0].points[0:3]
-  ]
-  minimal_activity_threshold = 1.0
-  return all(p > minimal_activity_threshold for p in last_n_data_points)
-
-
-@task
-def get_tpu_info_from_pod(kubeconfig: str, pod_name: str) -> str:
+def get_tpu_info_metric_from_pod(kubeconfig: str, pod_name: str, namespace: str, metric_name: str) -> str:
   """Executes the 'tpu-info' command within a specified pod and returns its output.
 
   This task uses kubectl to run the 'tpu-info' command inside the given pod
@@ -401,55 +214,54 @@ def get_tpu_info_from_pod(kubeconfig: str, pod_name: str) -> str:
   env = os.environ.copy()
   env["KUBECONFIG"] = kubeconfig
 
-  command_string = (
-      f"kubectl --kubeconfig={kubeconfig} "
-      f"exec {pod_name} -n default "
-      f"-- "
-      f"tpu-info"
-  )
-
   result = subprocess.run(
-      command_string,
+      (
+          f"kubectl --kubeconfig={kubeconfig} "
+          f"exec {pod_name} -n {namespace} "
+          f"-- tpu-info --metric {metric_name}"
+      ),
       shell=True,
-      # Since tpu-info feature still has some issues, so the command will
-      # inevitably throw an error. To avoid marking the task as failed,
-      # I set check to False so that the task status does not show as failed.
-      check=False,
+      env=env,
+      check=True,
       capture_output=True,
       text=True,
   )
-  print("STDOUT:", result.stdout)
+  logging.info("STDOUT: %s", result.stdout)
   return result.stdout
 
 
 @task
 def run_metric_verification(
-    info: Info,
+    node_pool: Info,
     job_apply_time: str,
     metric_strategy: BaseMetricStrategy,
-    comparison_data: Tuple[str, str],
+    comparison_data: Tuple[str, List[tpu_info.Table]],
 ) -> bool:
   """A generic task that uses a strategy object to verify a metric."""
-  pod_name, tpu_info_text = comparison_data
+  pod_name, tpu_info_output = comparison_data
   metric_name = metric_strategy.metric_name
   logging.info("Verifying metric '%s' for pod: %s...", metric_name, pod_name)
-  datetime_job_apply_time = datetime.datetime.fromisoformat(job_apply_time)
-  end_time_utc = datetime_job_apply_time + datetime.timedelta(minutes=10)
 
-  filter_string = (
-      f'metric.type = "kubernetes.io/container/accelerator/{metric_name}" '
-      f'AND resource.labels.cluster_name = "{info.cluster_name}" '
-      f'AND resource.labels.pod_name = "{pod_name}"'
-  )
+  end_time_datatime = job_apply_time + datetime.timedelta(minutes=10)
+  start_time = TimeUtil.from_datetime(job_apply_time)
+  end_time = TimeUtil.from_datetime(end_time_datatime)
+
+  metric_name = f"{metric_name}"
+  filter_string = [
+      f'metric.type = "{metric_name}"',
+      f'resource.labels.cluster_name = "{node_pool.cluster_name}"',
+      f'resource.labels.pod_name = "{pod_name}"',
+  ]
   time_series_data = query_time_series(
-      project_id=info.project_id,
-      filter_str=filter_string,
-      start_time=datetime_job_apply_time,
-      end_time=end_time_utc,
+      project_id=node_pool.project_id,
+      filter_str=" AND ".join(filter_string),
+      start_time=start_time,
+      end_time=end_time,
+      view=types.ListTimeSeriesRequest.TimeSeriesView.FULL,
   )
 
   monitoring_values = metric_strategy.parse_from_monitoring(time_series_data)
-  util_values = metric_strategy.parse_from_tpu_info(tpu_info_text)
+  util_values = metric_strategy.parse_from_tpu_info(tpu_info_output)
 
   compare_metric_values(util_values, monitoring_values, pod_name)
   return True
@@ -459,8 +271,7 @@ def run_metric_verification(
 def summarize_results(
     verification_results_dict: Dict[str, List[bool]], active_pods: List[str]
 ):
-  """
-  Summarizes the results for multiple metric verifications, checking each
+  """Summarizes the results for multiple metric verifications, checking each
   metric group individually.
   """
   if not active_pods:
@@ -521,29 +332,34 @@ with models.DAG(
       # This DAG verifies TensorCore utilization metrics by comparing data from
       # Cloud Logging and Cloud Monitoring.""",
 ) as dag:
-  cluster_info = Info(
+  cluster_info = node_pool.Info(
       project_id=models.Variable.get(
-          "TPU_INFO_PROJECT_ID", default_var=Project.TPU_PROD_ENV_ONE_VM.value
+          "TCU_PROJECT_ID", default_var="cienet-cmcs"
       ),
       cluster_name=models.Variable.get(
-          "TPU_INFO_CLUSTER_NAME", default_var="yuna-xpk-v6e"
+          "TCU_CLUSTER_NAME", default_var="yuna-xpk-v6e-ew4"
+      ),
+      node_pool_name=models.Variable.get(
+          "TCU_NODE_POOL_NAME", default_var="yuna-xpk-v6e-ew4-np-0"
       ),
       region=models.Variable.get(
-          "TPU_INFO_REGION", default_var=Region.ASIA_NORTHEAST1.value
+          "TCU_REGION", default_var="europe-west4"
       ),
-      zone=models.Variable.get(
-          "TPU_INFO_ZONE", default_var=Zone.ASIA_NORTHEAST1_B.value
+      location=models.Variable.get(
+          "TCU_LOCATION", default_var="europe-west4-a"
       ),
+      node_locations=models.Variable.get(
+          "TCU_NODE_LOCATIONS", default_var="europe-west4-a"
+      ),
+      num_nodes=models.Variable.get("TCU_NUM_NODES", default_var=4),
       machine_type=models.Variable.get(
-          "TPU_INFO_MACHINE_TYPE", default_var="tpu-v6e-slice"
+          "TCU_MACHINE_TYPE", default_var=MachineVersion.CT6E_STAND_4T.value
       ),
-      tpu_topology=models.Variable.get(
-          "TPU_INFO_TPU_TOPOLOGY", default_var="4x4"
-      ),
+      tpu_topology=models.Variable.get("TCU_TPU_TOPOLOGY", default_var="4x4"),
   )
 
   kubeconfig_path = "/tmp/kubeconfig"
-  yaml_config_instance = YamlConfig(
+  jobset_config = JobSet(
       jobset_name="tpu-info-v6e-workload",
       namespace="default",
       max_restarts=5,
@@ -552,109 +368,101 @@ with models.DAG(
       backoff_limit=0,
       completions=4,
       parallelism=4,
-      image="us-docker.pkg.dev/tpu-prod-env-one-vm/yuna-docker-repo/tpu-info:v0.4.0",
-      container_name="jax-tpu-job",
+      tpu_accelerator_type="tpu-v6e-slice",
+      tpu_topology="4x4",
+      container_name="jax-tpu-worker",
+      image="asia-northeast1-docker.pkg.dev/cienet-cmcs/yuna-docker/tpu-info:v0.5.1",
       tpu_cores_per_pod=4,
-      node_selector={
-          "cloud.google.com/gke-tpu-accelerator": cluster_info.machine_type,
-          "cloud.google.com/gke-tpu-topology": cluster_info.tpu_topology,
-      },
-      command=["/bin/bash", "-c"],
-      command_args=[
-          """
-          python -c 'import jax; print("TPU cores:", jax.device_count())'
-          python /app/jax_tpu_benchmark.py
-          echo "sleep..."
-          sleep 10000
-          """
-      ],
-      volume_name="code",
-      config_map_name="jax-tpu-benchmark-code-one-tpuinfo-output",
   )
 
+  workload_script = Workload.JAX_TPU_BENCHMARK
   # Clean up any pre-existing workloads to ensure a clean environment for the
   # test.
-  start_cleanup = end_workload.override(
-      task_id="start_cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
-  )(
-      info=cluster_info,
+  apply_time = jobset.run_workload(
+      node_pool=cluster_info,
       kubeconfig=kubeconfig_path,
-      yaml_config=yaml_config_instance,
+      yaml_config=jobset_config.generate_yaml(workload_script=workload_script),
+      namespace=jobset_config.namespace,
   )
 
-  apply_time = run_workload.override(task_id="run_workload")(
-      info=cluster_info,
+  active_pods = jobset.get_active_pods.override(task_id="get_active_pod")(
+      node_pool=cluster_info,
       kubeconfig=kubeconfig_path,
-      yaml_config=yaml_config_instance,
+      namespace=jobset_config.namespace,
   )
 
-  active_pods = get_active_pods.override(task_id="get_active_pod")(
-      info=cluster_info,
-      kubeconfig=kubeconfig_path,
-      yaml_config=yaml_config_instance,
-  )
-
-  wait_for_job_start = query_to_wait_for_jobset_start.override(
+  wait_for_job_start = jobset.wait_for_jobset_started.override(
       task_id="wait_for_job_start"
   )(cluster_info, pod_name_list=active_pods, job_apply_time=apply_time)
 
-  with TaskGroup(group_id="verification_group") as verification_group:
-    tpu_info_outputs = (
-        get_tpu_info_from_pod.override(task_id="get_tpu_info")
-        .partial(kubeconfig=kubeconfig_path)
-        .expand(pod_name=active_pods)
-    )
+  tpu_info_metric_outputs = (
+      get_tpu_info_metric_from_pod.override(task_id="get_tpu_info_metric_table")
+      .partial(
+          kubeconfig=kubeconfig_path,
+          namespace=jobset_config.namespace,
+          metric_name=TensorcoreUtilizationStrategy().tpu_info_metric_name
+      )
+      .expand(pod_name=active_pods)
+  )
 
-    verify_tensorcore = (
-        run_metric_verification.override(
-            task_id="verify_tensorcore_utilization"
-        )
-        .partial(
-            info=cluster_info,
-            job_apply_time=apply_time,
-            metric_strategy=TensorcoreUtilizationStrategy(),
-        )
-        .expand(comparison_data=active_pods.zip(tpu_info_outputs))
-    )
+  tpu_info_metric_output = (
+      tpu_info.parse_tpu_info_output.override(task_id="get_each_metric_table")
+      .partial()
+      .expand(output=tpu_info_metric_outputs)
+  )
 
-    verify_memory_used = (
-        run_metric_verification.override(task_id="verify_memory_used")
-        .partial(
-            info=cluster_info,
-            job_apply_time=apply_time,
-            metric_strategy=MemoryUsedStrategy(),
-        )
-        .expand(comparison_data=active_pods.zip(tpu_info_outputs))
-    )
+  verify_tensorcore = (
+      run_metric_verification.override(
+          task_id="verify_tensorcore_utilization"
+      )
+      .partial(
+          node_pool=cluster_info,
+          job_apply_time=apply_time,
+          metric_strategy=TensorcoreUtilizationStrategy(),
+      )
+      .expand(comparison_data=active_pods.zip(tpu_info_metric_output))
+  )
 
-    tpu_info_outputs >> [verify_tensorcore, verify_memory_used]
+    # verify_memory_used = (
+    #     run_metric_verification.override(task_id="verify_memory_used")
+    #     .partial(
+    #         node_pool=cluster_info,
+    #         job_apply_time=apply_time,
+    #         metric_strategy=MemoryUsedStrategy(),
+    #     )
+    #     .expand(comparison_data=active_pods.zip(tpu_info_metric_output))
+    # )
 
   summary = summarize_results.override(
       task_id="summarize_results", trigger_rule=TriggerRule.ALL_DONE
   )(
       verification_results_dict={
           "TensorCore Utilization": verify_tensorcore,
-          "HBM Memory Used": verify_memory_used,
+          # "HBM Memory Used": verify_memory_used,
       },
       active_pods=active_pods,
   )
 
-  clean_up = end_workload.override(
+  clean_up_workload = jobset.end_workload.override(
       task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
   )(
-      info=cluster_info,
+      node_pool=cluster_info,
       kubeconfig=kubeconfig_path,
-      yaml_config=yaml_config_instance,
+      jobset_name=jobset_config.jobset_name,
+      namespace=jobset_config.namespace,
   ).as_teardown(
       setups=apply_time
   )
 
+  # [verify_tensorcore, verify_memory_used]
+
   (
-      start_cleanup
-      >> apply_time
+      apply_time
       >> active_pods
       >> wait_for_job_start
-      >> verification_group
+      >> tpu_info_metric_outputs
+      >> tpu_info_metric_output
+      >> verify_tensorcore
       >> summary
-      >> clean_up
+      >> clean_up_workload
   )
