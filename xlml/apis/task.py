@@ -241,7 +241,11 @@ class AxlearnTask(BaseTask):
   ) -> DAGNode:
     """Create the workload and wait for it to provision."""
     with TaskGroup(group_id="launch_workload") as group:
-      setup_axlearn_dep = axlearn.set_up_axlearn_dpd(branch="main")
+      setup_axlearn_dep = axlearn.set_up_axlearn_dpd(
+          cluster_name=self.task_test_config.cluster_name,
+          project_id=self.task_gcp_config.project_name,
+          zone=self.task_gcp_config.zone,
+          branch="main")
       activate_axlearn = axlearn.activate_axlearn(
           cluster_name=self.task_test_config.cluster_name,
           project_id=self.task_gcp_config.project_name,
@@ -256,11 +260,11 @@ class AxlearnTask(BaseTask):
           benchmark_id=self.task_test_config.benchmark_id,
           workload_id=workload_id,
           gcs_path=gcs_path,
-          accelerator_type=self.task_test_config.accelerator.name,
+          accelerator_type=f"tpu-{self.task_test_config.accelerator.name}",
           run_cmds="",
           module=module,
           model_config=model_config,
-          trainer_dir="gs://axlearn-public/tensorflow_datasets",
+          trainer_dir="gs://axlearn-ml-solutions",
           num_replicas=self.task_test_config.num_slices,
           axlearn_branch=axlearn_branch,
           trace_steps=[40, 90, 140, 190, 240],
@@ -275,11 +279,22 @@ class AxlearnTask(BaseTask):
           cluster_name=self.task_test_config.cluster_name,
       )
 
+      wait_for_workload_completion = xpk.wait_for_workload_completion.override(
+          timeout=int(self.task_test_config.timeout.total_seconds()),
+      )(
+          workload_id=workload_id,
+          project_id=self.task_gcp_config.project_name,
+          region=gke.zone_to_region(self.task_gcp_config.zone),
+          cluster_name=self.task_test_config.cluster_name,
+      )
+
       (
         setup_axlearn_dep
-        >> activate_axlearn
+        >>activate_axlearn
         >> run_workload
         >> wait_for_workload_start
+        >> wait_for_workload_completion
+
       )
       return group
 

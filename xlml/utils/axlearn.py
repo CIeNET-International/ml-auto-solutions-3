@@ -28,12 +28,24 @@ MAIN_BRANCH = "main"
 # One of them is deleting some unuseful packages in [dev] dependencies.
 # We only need to run axlearn CLI
 @task
-def set_up_axlearn_dpd(branch: str = MAIN_BRANCH):
+def set_up_axlearn_dpd(
+    cluster_name: str,
+    project_id: str,
+    zone: str,
+    branch: str = MAIN_BRANCH,
+  ):
   """setup axlearn dependencies."""
   logging.info(f"Using custom branch  ==> {branch}")
   clone_branch = (
       f"git clone --branch {branch} https://github.com/Borklet-Labs/axlearn $HOME/axlearn"
   )
+
+  # Generate Axlearn config file.
+  axlearn_config_cmd = f'cat << \'CONFIG_EOF\' > ~/axlearn/.axlearn/axlearn.default.config\n    [gcp]\n_active = "{project_id}:{zone}"\n\n[gcp."{project_id}:{zone}"]\nproject = "{project_id}"\nregion = "{zone[:-2]}"\nzone = "{zone}"\ngke_cluster = "{cluster_name}"\ncluster = "{cluster_name}"\nlabels = "tpu-v5p"\ndocker_repo = "gcr.io/{project_id}"\ndefault_dockerfile = "Dockerfile"\nservice_account_email = "ml-auto-solutions-dev@cloud-tpu-multipod-dev.iam.gserviceaccount.com"\npermanent_bucket = "axlearn-ml-solutions"\nprivate_bucket = "axlearn-ml-solutions"\nttl_bucket = "axlearn-ml-solutions"\nCONFIG_EOF\n'
+  create_axlearn_conf = [axlearn_config_cmd.rstrip("\n")]
+
+  # Bypass permission issues for gcloud
+  KUBECONFIG_FILE = "/tmp/kubeconfig_gke"
 
   # Maybe add these lines
   install_python3_cmd = [
@@ -42,6 +54,8 @@ def set_up_axlearn_dpd(branch: str = MAIN_BRANCH):
       "curl https://pyenv.run | bash",
       f"echo 'export PYENV_ROOT=\"$HOME/.pyenv\"' >> ~/.bashrc ",
       f"echo 'export PYENV_ROOT=\"$HOME/.pyenv\"' >> ~/.profile ",
+      f"echo 'export KUBECONFIG=\"{KUBECONFIG_FILE}\"' >> ~/.profile ",
+      f"echo 'export KUBECONFIG=\"{KUBECONFIG_FILE}\"' >> ~/.bashrc",
       f"echo '[[ -d $PYENV_ROOT/bin ]] && export PATH=\"$PYENV_ROOT/bin:$PATH\"' >> ~/.bashrc ",
       f"echo '[[ -d $PYENV_ROOT/bin ]] && export PATH=\"$PYENV_ROOT/bin:$PATH\"' >> ~/.profile",
       f"echo 'eval \"$(pyenv init -)\"' >> ~/.bashrc ",
@@ -54,9 +68,9 @@ def set_up_axlearn_dpd(branch: str = MAIN_BRANCH):
   ]
 
   # We need to limit the number of total steps. Default is to 5000.
-  reduce_steps = (
-    "sed -i 's|max_step = TOTAL_TOKENS\[version\]\[model_size\] // tokens_per_batch|max_step = 100|; /max_step = 100/a save_every_n_steps=500' axlearn/experiments/text/gpt/fuji.py"
-  )
+  # reduce_steps = (
+  #   "sed -i 's|max_step = TOTAL_TOKENS\[version\]\[model_size\] // tokens_per_batch|max_step = 100|; /max_step = 100/a save_every_n_steps=500' axlearn/experiments/text/gpt/fuji.py"
+  # )
 
   cmds = [
       "set -xue",
@@ -65,12 +79,12 @@ def set_up_axlearn_dpd(branch: str = MAIN_BRANCH):
       *install_python3_cmd,
       "python --version",
       f"cd ~/axlearn/ ",
-      reduce_steps,
       f"pip  install -e '.[core,tpu]'",
       "pip list",
       "pyenv rehash",
       "which axlearn",
   ]
+  cmds.append(*create_axlearn_conf)
   hook = SubprocessHook()
   result = hook.run_command(["bash", "-c", ";".join(cmds)])
 
@@ -86,22 +100,18 @@ def activate_axlearn(
     zone: str,
 ):
   """Activate axlearn."""
-
   cmds = [
       "set -xue",
-      "cat ~/.bashrc",
+      "source ~/.bashrc",
+      "source ~/.profile",
       "cd ~/axlearn",
       "source ~/my_venv/bin/activate",
       "python --version",
       "which axlearn",
+      "echo $KUBECONFIG",
       f"gcloud container clusters get-credentials {cluster_name} \
         --region {zone[:-2]} --project {project_id}",
   ]
-
-  # Generate Axlearn config file.
-  axlearn_config_cmd = f'cat << \'CONFIG_EOF\' > ~/axlearn/.axlearn/axlearn.default.config\n    [gcp]\n_active = "{project_id}:{zone}"\n\n[gcp."{project_id}:{zone}"]\nproject = "{project_id}"\nregion = "{zone[:-2]}"\nzone = "{zone}"\ngke_cluster = "{cluster_name}"\ncluster = "{cluster_name}"\nlabels = "tpu-v5p"\ndocker_repo = "gcr.io/{project_id}"\ndefault_dockerfile = "Dockerfile"\npermanent_bucket = "mtc-automation-bucket"\nprivate_bucket = "mtc-automation-bucket"\nttl_bucket = "mtc-automation-bucket"\nCONFIG_EOF\n'
-  create_axlearn_conf = [axlearn_config_cmd.rstrip("\n")]
-  cmds.append(*create_axlearn_conf)
 
   # Execute given commands
   hook = SubprocessHook()
@@ -150,11 +160,12 @@ def run_workload_axlearn(
   )
   export_var = [
       f"export CLUSTER={cluster_name}",
-      f"export NAME=latest",
+      f"export NAME=axlearn-image-test-euh",
       f"export BASTION_TIER=disabled",
       f"export DEFAULT_PROJECT_ID=$(gcloud config get project)",
       "export PROJECT_ID=${PROJECT_ID:-$DEFAULT_PROJECT_ID}",
       f"export INSTANCE_TYPE={accelerator_type}",
+      f"export MESH_SELECTOR={accelerator_type}",
       f"export NUM_REPLICAS={num_replicas}",
       f"export MODULE={module}",
       f"export MODEL_CONFIG={model_config}",
@@ -170,33 +181,39 @@ def run_workload_axlearn(
       --module={module} \
       --config={model_config} \
       --trainer_dir={trainer_dir} \
-      --data_dir=gs://axlearn-public/tensorflow_datasets \
+      --data_dir=FAKE \
       --jax_backend=tpu \
       --mesh_selector={accelerator_type} \
       --initialization_timeout=1200 Trace: {trace_list}"
   )
 
+# f"--service_account_email=ml-auto-solutions-dev@cloud-tpu-multipod-dev.iam.gserviceaccount.com "
   workload_create_cmd = (
       f"axlearn gcp launch run --cluster=$CLUSTER "
       f"--runner_name gke_tpu_single "
-      f" --name=$NAME --instance_type=$INSTANCE_TYPE "
-      f" --max_tries=100 "
+      f"--name=$NAME "
+      f"--instance_type=$INSTANCE_TYPE "
+      f"--max_tries=100 "
       f"--num_replicas=$NUM_REPLICAS "
       f"--bundler_spec=allow_dirty=True "
       f"--bundler_type=artifactregistry "
-       f"--bundler_spec=image=axlearn-custom "
-      f"-- \"ulimit -n 1048576; ulimit -c 0; sed -i 's|max_step = TOTAL_TOKENS\[version\]\[model_size\] // tokens_per_batch|max_step = 200|; /max_step = 200/a \    save_every_n_steps=50' axlearn/experiments/text/gpt/fuji.py;python3 -c 'import jax; jax.devices()'; python3 -m axlearn.common.launch_trainer_main\" "
+      f"--bundler_spec=image=tpu "
+      f"-- \"ulimit -n 1048576; ulimit -c 0; python3 -c 'import jax; jax.devices()'; python3 -m axlearn.common.launch_trainer_main\" "
       f"--module=$MODULE --config=$MODEL_CONFIG "
       f"--trainer_dir=$TRAIN_DIR "
       f"--data_dir=gs://axlearn-public/tensorflow_datasets "
-      f"--jax_backend=tpu --mesh_selector=$INSTANCE_TYPE "
+      f"--mesh_selector=$MESH_SELECTOR "
+      f"--jax_backend=tpu "
       f"--initialization_timeout=1200 {trace_list} "
   )
 
   cmds = [
       "set -xue",
+      "source ~/.bashrc",
+      "source ~/.profile",
       "source ~/my_venv/bin/activate",
       "cd ~/axlearn",
+      "echo $KUBECONFIG",
       "axlearn gcp config activate",
       *export_var,
       workload_create_cmd,
