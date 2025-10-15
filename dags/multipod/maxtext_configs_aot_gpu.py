@@ -42,7 +42,6 @@ with models.DAG(
     catchup=False,
     concurrency=2,
 ) as dag:
-
   quarantine_task_group = TaskGroup(
       group_id="Quarantine", dag=dag, prefix_group_id=False
   )
