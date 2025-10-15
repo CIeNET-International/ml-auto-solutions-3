@@ -107,4 +107,3 @@ with models.DAG(
         >> maxtext_v5e_configs_test
         >> maxtext_v5p_configs_test
     )
-
