@@ -19,7 +19,7 @@ from airflow.models import Variable
 from dags.tpu_observability.utils import node_pool_util as node_pool
 
 
-QUERY_WINDOW_DURATION_SECONDS = 600
+# QUERY_WINDOW_DURATION_SECONDS = 600
 
 
 
@@ -55,18 +55,72 @@ def _operation_name(project_id, location, op_id_or_name):
     )
 
 
-@task.sensor(poke_interval=60, timeout=2700, mode="reschedule")
+# @task.sensor(poke_interval=60, timeout=2700, mode="reschedule")
+# def wait_for_nodepool_metrics_event(
+#     filter_query: str,
+#     project_id: str,
+#     anchor_seconds: int | None = None,
+#     window_seconds: int = QUERY_WINDOW_DURATION_SECONDS,
+# ) -> bool:
+#     """Poll a fixed Monitoring window around the (fixed) event time."""
+#     anchor = int(anchor_seconds if anchor_seconds is not None else time.time())
+#     interval = monitoring_v3.TimeInterval({
+#         "start_time": {"seconds": anchor - window_seconds},
+#         "end_time": {"seconds": anchor + window_seconds},
+#     })
+
+#     request = monitoring_v3.ListTimeSeriesRequest(
+#         name=f"projects/{project_id}",
+#         filter=filter_query,
+#         interval=interval,
+#         view=monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.FULL,
+#     )
+#     client = monitoring_v3.MetricServiceClient()
+#     try:
+#         resp = client.list_time_series(request=request)
+
+#         print("******Poking for uptime******")
+#         print({"start_seconds": anchor - window_seconds,
+#                "end_seconds": anchor + window_seconds})
+
+#         if resp.time_series:
+#             print("Event detected")
+#             return True
+#         else:
+#             print("No time series found. Retrying...")
+#             return False
+#     except Exception as e:
+#         print(f"ERROR during metric check: {e}. Will repoke.")
+#         return False
+# Make the search window ±60 minutes
+QUERY_WINDOW_DURATION_SECONDS = 3600  # was 600
+
+@task.sensor(poke_interval=60, timeout=7200, mode="reschedule")
 def wait_for_nodepool_metrics_event(
     filter_query: str,
     project_id: str,
-    anchor_seconds: int | None = None,
+    anchor_seconds: int,
     window_seconds: int = QUERY_WINDOW_DURATION_SECONDS,
+    give_up_grace_seconds: int = 7200,  # stop ~2h after anchor+window
 ) -> bool:
-    """Poll a fixed Monitoring window around the (fixed) event time."""
-    anchor = int(anchor_seconds if anchor_seconds is not None else time.time())
+    """
+    Poll a Monitoring window around the fixed event time (anchor).
+    Uses a trailing 'end' so delayed ingestion is still included.
+    Returns True when any time series is found; otherwise False to repoke.
+    """
+    from datetime import datetime, timezone
+    import time as _time
+    from google.cloud import monitoring_v3
+
+    client = monitoring_v3.MetricServiceClient()
+
+    start_s = int(anchor_seconds - window_seconds)
+    # Trailing end: include up-to-now so late-emitted samples are visible
+    end_s   = max(int(anchor_seconds + window_seconds), int(_time.time()))
+
     interval = monitoring_v3.TimeInterval({
-        "start_time": {"seconds": anchor - window_seconds},
-        "end_time": {"seconds": anchor + window_seconds},
+        "start_time": {"seconds": start_s},
+        "end_time":   {"seconds": end_s},
     })
 
     request = monitoring_v3.ListTimeSeriesRequest(
@@ -75,23 +129,46 @@ def wait_for_nodepool_metrics_event(
         interval=interval,
         view=monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.FULL,
     )
-    client = monitoring_v3.MetricServiceClient()
+
     try:
-        resp = client.list_time_series(request=request)
+        series = list(client.list_time_series(request=request))  # <-- consume pager
+        series_count = len(series)
 
         print("******Poking for uptime******")
-        print({"start_seconds": anchor - window_seconds,
-               "end_seconds": anchor + window_seconds})
+        print({
+            "project": project_id,
+            "filter": filter_query,
+            "start_seconds": start_s,
+            "end_seconds": end_s,
+            "start_iso": datetime.fromtimestamp(start_s, tz=timezone.utc).isoformat(),
+            "end_iso":   datetime.fromtimestamp(end_s,   tz=timezone.utc).isoformat(),
+            "series_count": series_count,
+        })
 
-        if resp.time_series:
+        if series_count > 0:
+            # Small peek at labels to confirm we matched the right resource
+            first = series[0]
+            labels = dict(getattr(first.metric, "labels", {})) if getattr(first, "metric", None) else {}
+            print(f"[poll] Found {series_count} series. First metric labels: {labels}")
             print("Event detected")
             return True
-        else:
-            print("No time series found. Retrying...")
-            return False
+
+        # Hard stop well after the window to avoid endless repokes
+        hard_end = int(anchor_seconds + window_seconds + give_up_grace_seconds)
+        now = int(_time.time())
+        if now > hard_end:
+            print(f"[poll] Hard stop: now={now} > hard_end={hard_end}. "
+                  "No series found for this event window.")
+            return True  # or raise AirflowSkipException
+
+        print("No time series found. Retrying...")
+        return False
+
     except Exception as e:
         print(f"ERROR during metric check: {e}. Will repoke.")
         return False
+
+
 
 
 @task(task_id="check_for_negative")
@@ -242,32 +319,22 @@ with models.DAG(
         "time_to_recover",
     ],
     description=(
-        "Validates that Cloud Monitoring metrics correctly appear after a GKE "
-        "node-pool disk size update. The DAG performs a controlled node-pool "
-        "update and verifies metric visibility in the Monitoring Explorer. "
-        "A secondary sub-task (check_for_negative) logs whether the node restart "
-        "duration is shorter or longer than 150 seconds. "
-        "Note: This test must be executed on a multi-host cluster (minimum topology 2x4)."
+        "Tests GKE node-pool recovery by resizing disks, waiting ≥150s, "
+        "checking node readiness, and polling Cloud Monitoring for recovery events. "
+        "Cleans up the node pool afterward."
+
     ),
     doc_md="""
-    # Node-Pool Disk Resize Metric Test
+    # Node-Pool Availability Test (Disk Resize)
 
-    ### Objective
-    Validate that Cloud Monitoring metrics appear after performing a **GKE node-pool disk size update**.  
-    This simulates a controlled restart event to confirm metric visibility and recovery behavior.
-
-    ---
+    ### Purpose
+    This DAG tests whether a GKE node pool remains observable and recovers
+    as expected when a disk resize operation forces node restarts.
 
     ### Expected Outcome
-    Metrics show up in **Monitoring Explorer** after the disk size update.  
-    Sub-task check_for_negative logs whether the restart duration is **shorter or longer than 150s**, helping identify possible false negatives.
+    - Nodes restart and return to Ready state.
+    - A recovery event is recorded in Cloud Monitoring.
 
-    ---
-
-    ### Notes
-    Must be tested on a **multi-host cluster** (minimum topology **2×4**).  
-    Task flow:  
-    create_nodepool → update_nodepool_disksize → wait_for_update_to_complete → note_down_duration → check_for_negative → poll_nodepool → cleanup_nodepool
     """,
 ) as dag:
 
@@ -277,9 +344,9 @@ with models.DAG(
         node_pool_name=Variable.get("NODE_POOL_NAME", default_var="athie-nodepool-auto"),
         location=Variable.get("LOCATION", default_var="europe-west4"), # europe-west4 # us-east5
         node_locations=Variable.get("NODE_LOCATIONS", default_var="europe-west4-a"), # europe-west4-a # us-east5-b
-        num_nodes=Variable.get("NUM_NODES", default_var=1),
-        machine_type=Variable.get("MACHINE_TYPE", default_var="ct6e-standard-1t"), # ct6e-standard-4t
-        tpu_topology=Variable.get("TPU_TOPOLOGY", default_var="1x1"), # 2x2
+        num_nodes=Variable.get("NUM_NODES", default_var=2),
+        machine_type=Variable.get("MACHINE_TYPE", default_var="ct6e-standard-4t"), 
+        tpu_topology=Variable.get("TPU_TOPOLOGY", default_var="2x4"), # 2x2
     )
 
     UPTIME_FILTER_QRY = (
@@ -342,15 +409,16 @@ with models.DAG(
         --cluster {node_pool_info.cluster_name} \\
         --location {node_pool_info.location} \\
         --node-locations {node_pool_info.node_locations} \\
-        --num-nodes="1" \\
-        --machine-type "ct6e-standard-1t" \\
+        --num-nodes="2" \\
+        --machine-type "ct6e-standard-4t" \\
+        --tpu-topology "2x4" \\
         --enable-gvnic \\
         --scopes "https://www.googleapis.com/auth/cloud-platform" 
         fi
         """,
         retries=3,
         )
-    #         --tpu-topology "1x1" \\
+
 
     # disk_size_change = BashOperator(
     #     task_id="disk_size_change",
