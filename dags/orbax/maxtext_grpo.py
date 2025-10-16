@@ -22,12 +22,10 @@ from xlml.utils.gke import zone_to_region
 SCHEDULE = "0 20 * * *" if composer_env.is_prod_env() else None
 DAG_TEST_NAME = "maxtext_grpo_rl"
 
-DOCKER_IMAGES = [
-    (
-        SetupMode.NIGHTLY,
-        DockerImage.MAXTEXT_GRPO_RL_IMAGE,
-    )
-]
+DOCKER_IMAGES = [(
+    SetupMode.NIGHTLY,
+    DockerImage.MAXTEXT_GRPO_RL_IMAGE,
+)]
 
 with models.DAG(
     dag_id=DAG_TEST_NAME,
@@ -64,15 +62,13 @@ with models.DAG(
     concurrency=1,
 ) as dag:
   training_config = test_config_util.TestConfig(
-      cluster=XpkClusters.TPU_V5P_8_CLUSTER,
+      cluster=XpkClusters.TPU_V5P_128_CLUSTER,
       machine_type="ct5p-hightpu-4t",
-      accelerator="v5p-8",
+      accelerator="v5p-128",
       slices=[1],  # Single slice for GRPO training
-      model_name="llama3.1-8b",
+      model_name="llama3.1-70b",
       short_id="max-rl",
-      step=200,
-      local_checkpoint_step=None,
-      replicator_backup_time=None,
+      steps=200,
       base_dir=test_config_util.DEFAULT_BUCKET,
   )
 
@@ -87,9 +83,9 @@ with models.DAG(
           accelerator=training_config.accelerator,
       )
 
-      # TODO: use secret manager for HF token and extract parameters from script
+      # HF token retrieved from Airflow Variables for secure credential management
       grpo_training_command = [
-          f"HF_TOKEN={HF_TOKEN_LLAMA3_1_8B} JAX_PLATFORMS=proxy,cpu python src/MaxText/examples/grpo_llama3_demo.py",
+          f"HF_TOKEN={HF_TOKEN_LLAMA3_1_8B} JAX_PLATFORMS=proxy JAX_BACKEND_TARGET=grpc://127.0.0.1:29000 ENABLE_PATHWAYS_PERSISTENCE='1' python src/MaxText/examples/grpo_llama3_1_70b_demo_pw.py",
       ]
 
       start_time = validation_util.generate_timestamp()

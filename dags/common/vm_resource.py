@@ -395,5 +395,6 @@ class DockerImage(enum.Enum):
       "gcr.io/tpu-prod-env-multipod/maxtext_tpu_recipes:jax0.5.2-recipes0.1.2"
   )
   MAXTEXT_GRPO_RL_IMAGE = (
-      "gcr.io/tpu-prod-env-multipod/mazumdera_google_com_runner3:latest"
+      "gcr.io/cloud-tpu-multipod-dev/maxtext-grpo-nightly:"
+      f"{datetime.datetime.today().strftime('%Y-%m-%d')}"
   )
