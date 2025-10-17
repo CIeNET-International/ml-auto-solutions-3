@@ -7,7 +7,6 @@ import logging
 import os
 import re
 import subprocess
-from typing import Dict, List, Tuple
 
 from airflow import models
 from airflow.decorators import task
@@ -26,20 +25,16 @@ from dags.tpu_observability.utils.jobset_util import Workload
 from dags.tpu_observability.utils.monitoring import query_time_series
 from dags.tpu_observability.utils.node_pool_util import Info
 from dags.tpu_observability.utils.time_util import TimeUtil
-
-# Import strategies from the strategy configuration file
-from dags.tpu_observability.metric_strategies import (
-    BaseMetricStrategy,
-    ALL_METRIC_STRATEGIES,
-)
+from dags.tpu_observability.metric_strategies import BaseMetricStrategy
+from dags.tpu_observability.metric_strategies import ALL_METRIC_STRATEGIES
 
 
 def compare_metric_values(
-    cmd_values: List[float],
-    monitoring_values: List[float],
+    cmd_values: list[float],
+    monitoring_values: list[float],
     pod_name: str,
     metric_display_name: str,
-    tolerance: float = 1.0,
+    tolerance_percent: float,
 ):
   """Compares two lists of metric values and checks if they are within a tolerance range."""
   if len(cmd_values) != len(monitoring_values):
@@ -54,35 +49,38 @@ def compare_metric_values(
       metric_display_name,
   )
   logging.info(
-      "%-12s%-15s%-17s%-12s%-10s",
+      "%-12s%-15s%-17s%-12s%-15s%-10s",
       "Device",
       "TPU-Info Val",
       "Monitoring Val",
       "Difference",
+      "Allowed Diff",
       "Result",
   )
-  logging.info("-" * 70)
+  logging.info("-" * 85)
 
   all_passed = True
   for i, (log_val, mon_val) in enumerate(zip(cmd_values, monitoring_values)):
     diff = abs(log_val - mon_val)
-    passed = diff <= tolerance
+    allowed_diff = mon_val * (tolerance_percent / 100.0)
+    passed = diff <= allowed_diff
     if not passed:
       all_passed = False
     logging.info(
-        "%-12s%-15.2f%-17.2f%-12.2f%-10s",
+        "%-12s%-15.2f%-17.2f%-12.2f%-15.2f%-10s",
         f"Device {i}",
         log_val,
         mon_val,
         diff,
+        allowed_diff,
         "PASS" if passed else "FAIL",
     )
   logging.info("-" * 70)
 
   if not all_passed:
     raise AirflowException(
-        f"Overall Result for Pod {pod_name} ({metric_display_name}): FAIL - Values do not"
-        " match within tolerance."
+        f"Overall Result for Pod {pod_name} ({metric_display_name}): FAIL - "
+        "Values do not match within {tolerance_percent}% tolerance."
     )
   logging.info(
       "Overall Result for Pod %s (%s): PASS", pod_name, metric_display_name
@@ -118,7 +116,7 @@ def run_metric_verification(
     node_pool: Info,
     job_apply_time: datetime.datetime,
     metric_strategy: BaseMetricStrategy,
-    comparison_data: Tuple[str, List[tpu_info.Table]],
+    comparison_data: tuple[str, list[tpu_info.Table]],
 ):
   """A generic task that uses a strategy object to verify a metric."""
   pod_name, tpu_info_output = comparison_data
@@ -145,17 +143,27 @@ def run_metric_verification(
   monitoring_values = metric_strategy.parse_from_monitoring(time_series_data)
   util_values = metric_strategy.parse_from_tpu_info(tpu_info_output)
 
+  tolerance_for_metric = metric_strategy.tolerance_percent
+  logging.info(
+      "Using a tolerance of %.2f%% for metric '%s' comparison.",
+      tolerance_for_metric,
+      metric_strategy.dag_id_suffix,
+  )
+
   compare_metric_values(
       util_values,
       monitoring_values,
       pod_name,
       metric_display_name=metric_strategy.dag_id_suffix,
+      tolerance_percent=tolerance_for_metric,
   )
+
   return True
+
 
 @task
 def summarize_results(
-    verification_results_dict: Dict[str, List[bool]], active_pods: List[str]
+    verification_results_dict: dict[str, list[bool]], active_pods: list[str]
 ):
   """
   Summarizes the results of metric verifications for all pods.
@@ -175,7 +183,7 @@ def summarize_results(
   logging.info("-" * 70)
 
   for metric_name, results in verification_results_dict.items():
-    num_passes = len(results) # Only successed task return result
+    num_passes = len(results)  # Only successed task return result
 
     if num_passes < num_expected_pods:
       status = "FAIL"
@@ -278,17 +286,21 @@ with models.DAG(
 
     with TaskGroup(group_id=group_id) as verification_group:
       tpu_info_metric_outputs = (
-          get_tpu_info_metric_from_pod.override(task_id="get_tpu_info_metric_table")
+          get_tpu_info_metric_from_pod.override(
+              task_id="get_tpu_info_metric_table"
+          )
           .partial(
               kubeconfig=kubeconfig_path,
               namespace=jobset_config.namespace,
-              metric_name=strategy.tpu_info_metric_name
+              metric_name=strategy.tpu_info_metric_name,
           )
           .expand(pod_name=active_pods)
       )
 
       tpu_info_metric_output = (
-          tpu_info.parse_tpu_info_output.override(task_id="get_each_metric_table")
+          tpu_info.parse_tpu_info_output.override(
+              task_id="get_each_metric_table"
+          )
           .partial()
           .expand(output=tpu_info_metric_outputs)
       )
@@ -307,10 +319,8 @@ with models.DAG(
 
     verification_results[strategy.dag_id_suffix] = verify_metric
 
-
   summary = summarize_results.override(
-      task_id="summarize_results",
-      trigger_rule=TriggerRule.ALL_DONE
+      task_id="summarize_results", trigger_rule=TriggerRule.ALL_DONE
   )(
       verification_results_dict=verification_results,
       active_pods=active_pods,
@@ -335,5 +345,3 @@ with models.DAG(
       >> summary
       >> clean_up_workload
   )
-
-
