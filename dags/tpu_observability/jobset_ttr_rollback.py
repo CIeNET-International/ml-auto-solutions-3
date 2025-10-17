@@ -1,62 +1,16 @@
 """A DAG to test the jobset time-to-recover metric from a node pool rollback."""
 
-import dataclasses
 import datetime
-from typing import Dict, List, Optional
 
 from airflow import models
 from airflow.models import Variable
 from airflow.utils.trigger_rule import TriggerRule
 
-from dags.common.vm_resource import Project
-from dags.common.vm_resource import Region
-from dags.common.vm_resource import Zone
+from dags.common.vm_resource import Project, Region, Zone
 from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
-from dags.tpu_observability.utils.jobset_generator import JobSet
-from dags.tpu_observability.utils.jobset_generator import Workload
-
-
-# Will be moved to node_pool_utils
-@dataclasses.dataclass
-class YamlConfig:
-  """A data structure to store dynamic parameters for the JobSet YAML.
-
-  This class centralizes all configurable parts of the YAML, making DAGs
-  cleaner and more maintainable.
-  """
-
-  # Metadata
-  jobset_name: str
-  namespace: str
-
-  # Failure Policy
-  max_restarts: int
-
-  # ReplicatedJob Spec
-  replicated_job_name: str
-  replicas: int
-
-  # Job Template Spec
-  backoff_limit: int
-  completions: int
-  parallelism: int
-
-  # Pod Template Spec
-  node_selector: Optional[Dict[str, str]]
-
-  # Container Spec
-  container_name: str
-  image: str
-  tpu_cores_per_pod: int
-  command: Optional[List[str]]
-  command_args: Optional[List[str]]
-
-  # Volume Spec
-  volume_name: Optional[str]
-  config_map_name: Optional[str]
-
+from dags.tpu_observability.utils.jobset_generator import JobSet, Workload
 
 with models.DAG(
     dag_id="jobset_rollback_ttr",
@@ -104,12 +58,8 @@ with models.DAG(
       node_pool_name=Variable.get(
           "NODE_POOL_NAME", default_var="jobset_ttr_rollback_v6e"
       ),
-      region=Variable.get(
-          "REGION", default_var=Region.US_EAST5.value
-      ),
-      location=Variable.get(
-          "LOCATION", default_var=Region.US_EAST5.value
-      ),
+      region=Variable.get("REGION", default_var=Region.US_EAST5.value),
+      location=Variable.get("LOCATION", default_var=Region.US_EAST5.value),
       node_locations=Variable.get(
           "NODE_LOCATIONS", default_var=Zone.US_EAST5_B.value
       ),
@@ -125,7 +75,7 @@ with models.DAG(
       namespace="default",
       max_restarts=5,
       replicated_job_name="tpu-job-slice",
-      replicas=2,
+      replicas=1,
       backoff_limit=0,
       completions=4,
       parallelism=4,
@@ -140,8 +90,7 @@ with models.DAG(
   workload_script = Workload.JAX_TPU_BENCHMARK
 
   create_node_pool = node_pool.create(
-      node_pool=cluster_info,
-      reservation="cloudtpu-20250131131310-2118578099"
+      node_pool=cluster_info, reservation="cloudtpu-20250131131310-2118578099"
   )
 
   start_workload = jobset.run_workload(
