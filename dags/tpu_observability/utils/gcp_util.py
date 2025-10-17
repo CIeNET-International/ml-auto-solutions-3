@@ -1,15 +1,15 @@
-"""Utility functions for querying Google Cloud Monitoring data."""
-import logging as log
+"""Utility functions for querying Google Cloud data."""
+import logging as logger
 from typing import List, Optional
 from tenacity import (
     retry,
     stop_after_attempt,
     wait_exponential,
-    retry_if_exception_type,
     retry_if_exception,
+    RetryCallState,
 )
 
-from google.cloud import monitoring_v3, logging
+from google.cloud import monitoring_v3, logging_v2
 from google.cloud.logging_v2 import types as logging_types
 from google.cloud.monitoring_v3 import types as monitoring_types
 from google.api_core.exceptions import ResourceExhausted
@@ -21,25 +21,23 @@ from dags.tpu_observability.utils.time_util import TimeUtil
 LOG_READ_QUOTA_EXCEED_ERROR = ErrorReason.Name(ErrorReason.RATE_LIMIT_EXCEEDED)
 
 
-def is_quota_exceeded(exception: BaseException) -> bool:
-    """Checks if the exception message contains the specific quota exceeded identifier."""
-    return LOG_READ_QUOTA_EXCEED_ERROR in str(exception)
+def api_quota_exceeded(exception: BaseException) -> bool:
+  check_instance: bool = isinstance(exception, ResourceExhausted)
+  check_message: bool = LOG_READ_QUOTA_EXCEED_ERROR in str(exception)
+  return check_instance and check_message
 
-
-# Composite Condition: Only retry if the exception is ResourceExhausted AND contains the specific error message.
-RETRY_CONDITION = (
-    retry_if_exception_type(ResourceExhausted)
-    & retry_if_exception(is_quota_exceeded)
-)
-
+def retry_log_before_sleep(rs: RetryCallState) -> None:
+    e = rs.outcome.exception() if rs.outcome else None
+    logger.info(
+        f"QUOTA HIT!!! Attempt {rs.attempt_number} failed with {e}. "
+        f"Retrying in {rs.idle_for:.2f} seconds..."
+    )
 
 @retry(
     stop=stop_after_attempt(5),
     wait=wait_exponential(multiplier=60, min=60, max=600),
-    retry=RETRY_CONDITION,
-    before_sleep=lambda retry_state: print(
-        f"--- QUOTA HIT --- Retrying attempt {retry_state.attempt_number} in {retry_state.idle_for:.2f} seconds..."
-    ),
+    retry=retry_if_exception(api_quota_exceeded),
+    before_sleep=retry_log_before_sleep,
 )
 def query_time_series(
     project_id: str,
@@ -48,7 +46,7 @@ def query_time_series(
     end_time: TimeUtil,
     aggregation: Optional[monitoring_types.Aggregation] = None,
     view: monitoring_types.ListTimeSeriesRequest.TimeSeriesView = monitoring_types.ListTimeSeriesRequest.TimeSeriesView.FULL,
-    page_size: Optional[int] = None,
+    page_size: Optional[int] = 500, # API's default is 50, we use 500 to avoid Quota issue
     log_enable: bool = False,
 ) -> List[monitoring_types.TimeSeries]:
   """A utility that queries metrics (time series data) from Google Cloud Monitoring API.
@@ -77,8 +75,8 @@ def query_time_series(
     google.api_core.exceptions.GoogleAPICallError: If the API call fails.
   """
   if log_enable:
-    log.info("Querying monitoring data for project '%s'", project_id)
-    log.info("Filter: %s", filter_str)
+    logger.info("Querying monitoring data for project '%s'", project_id)
+    logger.info("Filter: %s", filter_str)
 
   request = monitoring_v3.ListTimeSeriesRequest(
       name=f"projects/{project_id}",
@@ -87,13 +85,12 @@ def query_time_series(
           start_time=start_time.to_timestamp_pb2(),
           end_time=end_time.to_timestamp_pb2(),
       ),
+      page_size=page_size,
       view=view,
   )
 
   if aggregation:
     request.aggregation = aggregation
-  if page_size:
-    request.page_size = page_size
 
   client = monitoring_v3.MetricServiceClient()
   results = client.list_time_series(request)
@@ -104,19 +101,17 @@ def query_time_series(
 @retry(
     stop=stop_after_attempt(5),
     wait=wait_exponential(multiplier=60, min=60, max=600),
-    retry=RETRY_CONDITION,
-    before_sleep=lambda retry_state: print(
-        f"--- QUOTA HIT --- Retrying attempt {retry_state.attempt_number} in {retry_state.idle_for:.2f} seconds..."
-    ),
+    retry=retry_if_exception(api_quota_exceeded),
+    before_sleep=retry_log_before_sleep,
 )
 def query_log_entries(
     project_id: str,
     filter_str: str,
     start_time: TimeUtil,
     end_time: TimeUtil,
-    order_by: Optional[str] = logging.DESCENDING,
+    order_by: Optional[str] = logging_v2.DESCENDING,
     max_results: Optional[int] = None,
-    page_size: Optional[int] = None,
+    page_size: Optional[int] = 500, # API's default is 50, we use 500 to avoid Quota issue
     log_enable: bool = False,
 ) -> List[logging_types.LogEntry]:
   """Queries log entries from Google Cloud Logging API.
@@ -141,18 +136,19 @@ def query_log_entries(
     google.api_core.exceptions.GoogleAPICallError: If the API call fails.
   """
   if log_enable:
-    log.info("Querying logging data for project '%s'", project_id)
-    log.info("Filter: %s", filter_str)
+    logger.info("Querying logging data for project '%s'", project_id)
+    logger.info("Filter: %s", filter_str)
 
-  logging_api_client = logging.Client(project=project_id)
+  logging_api_client = logging_v2.Client(project=project_id)
 
-  time_range_str = (
-      f'timestamp>="{start_time.to_iso_string()}" AND'
-      f' timestamp<="{end_time.to_iso_string()}"'
-  )
+  filter_list = [
+    f'timestamp>="{start_time.to_iso_string()}"',
+    f'timestamp<="{end_time.to_iso_string()}"',
+    f'({filter_str})',
+  ]
 
   log_entries = logging_api_client.list_entries(
-      filter_=f"({time_range_str}) AND ({filter_str})",
+      filter_=" AND ".join(filter_list),
       order_by=order_by,
       max_results=max_results,
       page_size=page_size,

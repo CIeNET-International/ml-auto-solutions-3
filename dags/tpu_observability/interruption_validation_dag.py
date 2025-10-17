@@ -14,9 +14,8 @@ from dags.common.vm_resource import Project
 from dags.map_reproducibility.utils.constants import Schedule
 from dags.multipod.configs.common import Platform
 from dags.tpu_observability.utils.time_util import TimeUtil
-from dags.tpu_observability.utils import monitoring
+from dags.tpu_observability.utils import gcp_util
 from google.cloud import monitoring_v3
-from proto import datetime_helpers
 
 
 _UNKNOWN_RESOURCE_NAME = 'Unknown'
@@ -162,13 +161,11 @@ def fetch_interruption_metric_records(
 
   # key: resource_name, value: EventRecord
   event_records: dict[str, EventRecord] = {}
-  page_size = 500 # default is 50, we use 500 to avoid Quota issue.
-  response = monitoring.query_time_series(
+  response = gcp_util.query_time_series(
     project_id=configs.project_id,
     filter_str=metric_filter,
     start_time=TimeUtil.from_unix_seconds(time_range.start),
     end_time=TimeUtil.from_unix_seconds(time_range.end),
-    page_size=page_size,
   )
 
   for time_series in response:
@@ -232,14 +229,12 @@ def fetch_interruption_log_records(
       which case a manual inspection may be more appropriate.
   """
   max_results = 3000  # Avoid fetching too many logs.
-  page_size = 500 # default is 50, we use 500 to avoid Quota issue.
-  log_entries = monitoring.query_log_entries(
+  log_entries = gcp_util.query_log_entries(
     project_id=configs.project_id,
     filter_str=configs.interruption_reason.log_filter(),
     start_time=TimeUtil.from_unix_seconds(time_range.start),
     end_time=TimeUtil.from_unix_seconds(time_range.end),
     max_results=max_results,
-    page_size=page_size,
   )
 
   if len(log_entries) >= max_results:
