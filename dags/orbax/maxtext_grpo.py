@@ -1,9 +1,9 @@
 """
-GRPO (Group Relative Policy Optimization) training DAG for Llama3.1 8B model.
+GRPO (Group Relative Policy Optimization) training DAG for Llama3.1 70B model.
 
-This DAG runs GRPO training validation on a single TPU slice to test
-the MaxText RL pipeline. It executes E2E training with a 30-minute
-timeout and validates completion through log monitoring.
+This DAG runs GRPO training validation to test the MaxText reinforcement learning pipeline.
+The workflow deploys training jobs to GKE clusters using Pathways, executes the GRPO algorithm,
+and validates successful completion through comprehensive log monitoring of training signals.
 """
 
 import datetime
@@ -12,20 +12,14 @@ from airflow import models
 
 from dags import composer_env
 from dags.common import test_owner
-from dags.common.vm_resource import DockerImage, XpkClusters
+from dags.common.vm_resource import XpkClusters
 from dags.multipod.configs import gke_config
-from dags.multipod.configs.common import SetupMode
 from dags.orbax.util import validation_util, test_config_util
 from xlml.utils.xpk import MAIN_BRANCH
 from xlml.utils.gke import zone_to_region
 
 SCHEDULE = "0 20 * * *" if composer_env.is_prod_env() else None
-DAG_TEST_NAME = "maxtext_grpo_rl"
-
-DOCKER_IMAGES = [(
-    SetupMode.NIGHTLY,
-    DockerImage.MAXTEXT_GRPO_RL_IMAGE,
-)]
+DAG_TEST_NAME = "maxtext_grpo"
 
 with models.DAG(
     dag_id=DAG_TEST_NAME,
@@ -37,7 +31,6 @@ with models.DAG(
         "maxtext",
         "grpo",
         "nightly",
-        "rl",
     ],
     description="GRPO training for MaxText RL pipeline validation.",
     doc_md="""
@@ -45,19 +38,23 @@ with models.DAG(
 
       ### Overview
       This DAG runs GRPO (Group Relative Policy Optimization) training 
-      to validate the MaxText reinforcement learning pipeline.
+      to validate the MaxText reinforcement learning pipeline. The workflow
+      tests the complete RL training stack including infrastructure setup,
+      model initialization, training execution, and result validation.
 
       ### Execution Flow
-      1. **Job Launch:** Deploy GRPO training job to GKE cluster using Pathways
-      2. **Training Run:** Execute grpo_llama3_demo.py with JAX proxy/CPU platforms
-      3. **Log Validation:** Check for "Post GRPO Training" completion signal
-      4. **Success/Failure:** Report status based on timeout and log validation
+      1. **Job Launch:** Deploy GRPO training job to GKE cluster using Pathways infrastructure
+      2. **Model Loading:** Initialize Llama3.1 70B model with HuggingFace authentication
+      3. **Training Run:** Execute grpo_llama3_1_70b_demo_pw.py with JAX proxy/CPU platforms
+      4. **Log Validation:** Monitor and check for "Post GRPO Training" completion signal
+      5. **Success/Failure:** Report final status based on log validation and job completion
 
       ### Success Criteria
       The test passes when:
-      1. Training job completes within 30-minute timeout
-      2. "Post GRPO Training" log message appears in jax-tpu container
-      3. No infrastructure or container launch failures occur
+      1. Training job completes successfully without errors
+      2. "Post GRPO Training" log message appears in jax-tpu container logs
+      3. No infrastructure failures or container launch issues occur
+      4. All training steps execute within expected parameters
     """,
     concurrency=1,
 ) as dag:
@@ -67,14 +64,14 @@ with models.DAG(
       accelerator="v5p-128",
       slices=[1],  # Single slice for GRPO training
       model_name="llama3.1-70b",
-      short_id="max-rl",
+      short_id="max-grpo",
       steps=200,
       base_dir=test_config_util.DEFAULT_BUCKET,
   )
+  # HF token retrieved from Airflow Variables for secure credential management
+  HF_TOKEN_LLAMA3_1 = models.Variable.get("HF_TOKEN_LLAMA3_1", None)
 
-  HF_TOKEN_LLAMA3_1_8B = models.Variable.get("HF_TOKEN_LLAMA3_1_8B", None)
-
-  for mode, image in DOCKER_IMAGES:
+  for mode, image in test_config_util.DOCKER_IMAGES_GRPO:
     for slice_num in training_config.slices:
       run_name = validation_util.generate_run_name(
           short_id=training_config.short_id,
@@ -83,9 +80,12 @@ with models.DAG(
           accelerator=training_config.accelerator,
       )
 
-      # HF token retrieved from Airflow Variables for secure credential management
       grpo_training_command = [
-          f"HF_TOKEN={HF_TOKEN_LLAMA3_1_8B} JAX_PLATFORMS=proxy JAX_BACKEND_TARGET=grpc://127.0.0.1:29000 ENABLE_PATHWAYS_PERSISTENCE='1' python src/MaxText/examples/grpo_llama3_1_70b_demo_pw.py",
+          f"HF_TOKEN={HF_TOKEN_LLAMA3_1}",
+          "JAX_PLATFORMS=proxy",
+          "JAX_BACKEND_TARGET=grpc://127.0.0.1:29000",
+          "ENABLE_PATHWAYS_PERSISTENCE='1'",
+          "python src/MaxText/examples/grpo_llama3_1_70b_demo_pw.py",
       ]
 
       start_time = validation_util.generate_timestamp()
