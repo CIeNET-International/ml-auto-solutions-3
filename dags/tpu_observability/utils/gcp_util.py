@@ -18,12 +18,12 @@ from google.api.error_reason_pb2 import ErrorReason
 from dags.tpu_observability.utils.time_util import TimeUtil
 
 
-LOG_READ_QUOTA_EXCEED_ERROR = ErrorReason.Name(ErrorReason.RATE_LIMIT_EXCEEDED)
+READ_QUOTA_EXCEED_ERROR = ErrorReason.Name(ErrorReason.RATE_LIMIT_EXCEEDED)
 
 
 def api_quota_exceeded(exception: BaseException) -> bool:
   check_instance: bool = isinstance(exception, ResourceExhausted)
-  check_message: bool = LOG_READ_QUOTA_EXCEED_ERROR in str(exception)
+  check_message: bool = READ_QUOTA_EXCEED_ERROR in str(exception)
   return check_instance and check_message
 
 
