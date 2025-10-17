@@ -1,7 +1,7 @@
 """Utilities for managing JobSets in GKE clusters for TPU observability."""
 
-import datetime
 import dataclasses
+import datetime
 import logging
 import os
 import random
@@ -13,11 +13,17 @@ import textwrap
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
+from airflow.exceptions import AirflowException
 from google.cloud.monitoring_v3 import types
+from kubernetes import client
+from google.auth.transport.requests import Request
+from google.auth import default
+from google.cloud import monitoring_v3
 
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils.monitoring import query_time_series
 from dags.tpu_observability.utils.time_util import TimeUtil
+from dags.tpu_observability.utils.node_pool_util import Info
 
 
 class Workload:
@@ -237,6 +243,50 @@ def _k8s_get_pod_name_command(kubeconfig: str, namespace: str) -> str:
   ])
 
 
+def get_replica_num(replica_type: str, job_name: str) -> int:
+  """Get the number of a certain type of replicas from a running jobset.
+
+  This uses the Kubernetes API to connect to a desired cluster and returns
+  the number of replicas in a certain status.
+
+  Args:
+    replica_type(str): The type of replica being searched for.
+    job_name(str): The name of the job replica which is run from the jobset.
+  Returns:
+    The number of replicas of the specific type in the jobset.
+  """
+  creds, _ = default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+  creds.refresh(Request())
+
+  configuration = client.Configuration()
+  configuration.host = "https://34.162.162.237"
+  configuration.verify_ssl = True
+  configuration.ssl_ca_cert = "/home/airflow/gcs/data/reservation-gke-ca.pem"
+  configuration.api_key = {"authorization": "Bearer " + creds.token}
+  client.Configuration.set_default(configuration)
+
+  api = client.CustomObjectsApi()
+  jobsets = api.list_namespaced_custom_object(
+      group="jobset.x-k8s.io",
+      version="v1alpha2",
+      namespace="default",
+      plural="jobsets",
+  )
+  if not jobsets["items"]:
+    raise AirflowException("No items found" f"JobSet output: {jobsets}")
+  jobset = jobsets["items"][0]
+  if (
+      jobset.get("status")
+      and jobset["status"].get("replicatedJobsStatus")
+      and jobset["status"]["replicatedJobsStatus"][0].get("name") == job_name
+      and jobset["status"]["replicatedJobsStatus"][0].get(replica_type)
+      is not None
+  ):
+    number_replicas = jobset["status"]["replicatedJobsStatus"][0][replica_type]
+    logging.info("Found %s replicas", number_replicas)
+  return number_replicas
+
+
 @task
 def run_workload(
     node_pool: node_pool.Info, kubeconfig: str, yaml_config: str, namespace: str
@@ -423,3 +473,55 @@ def wait_for_jobset_started(
   ]
 
   return all(p > threshold_value for p in last_n_data_points)
+
+@task.sensor(poke_interval=60, timeout=3600, mode="reschedule")
+def wait_for_jobset_ttr(info: Info) -> bool:
+  """Polls the jobset time_between_interruptions metric.
+
+  A sensor task which polls the jobset time_between_interruptions metric
+  every 60 seconds for 60 minutes.
+
+  Args:
+    info(Info): An instance of the Info class that encapsulates
+    the configuration and metadata of a GKE node pool and workload.
+  """
+  now = int(datetime.time())
+  api_client = monitoring_v3.MetricServiceClient()
+  request = monitoring_v3.ListTimeSeriesRequest(
+      name=f"projects/{info.project_id}",
+      filter=(
+          'metric.type="kubernetes.io/jobset/times_to_recover" '
+          f'resource.labels.cluster_name="{info.cluster_name}" '
+      ),
+      interval=monitoring_v3.TimeInterval({
+          # This particular metric takes a long time to update
+          # to GCP, typically around 20-30 minutes.
+          # This means that the sensor must be long running and
+          # have a long search period to detect it.
+          "end_time": {"seconds": now},
+          "start_time": {"seconds": now - 3600},
+      }),
+      view=monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.FULL,
+  )
+  page_result = api_client.list_time_series(request=request)
+
+  # We just need to know that the event happened at all
+  if page_result.time_series:
+    logging.info("Event detected at %s", now)
+    return True
+  else:
+    logging.info("No time series found at %s. Continuing...", now)
+  return False
+
+
+@task.sensor(poke_interval=30, timeout=600, mode="reschedule")
+def wait_for_jobset_status(replica_type: str, job_name: str):
+  """A sensor which checks if are any jobset replicas in a status type.
+
+  Args:
+    replica_type(str): The type of status being checked for.
+    job_name(str): The name of the job replica which is run from the jobset.
+  """
+  ready_replicas = get_replica_num(replica_type=replica_type, job_name=job_name)
+  if ready_replicas > 0:
+    return True
