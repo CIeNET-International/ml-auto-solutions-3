@@ -162,10 +162,10 @@ def fetch_interruption_metric_records(
   # key: resource_name, value: EventRecord
   event_records: dict[str, EventRecord] = {}
   response = gcp_util.query_time_series(
-    project_id=configs.project_id,
-    filter_str=metric_filter,
-    start_time=TimeUtil.from_unix_seconds(time_range.start),
-    end_time=TimeUtil.from_unix_seconds(time_range.end),
+      project_id=configs.project_id,
+      filter_str=metric_filter,
+      start_time=TimeUtil.from_unix_seconds(time_range.start),
+      end_time=TimeUtil.from_unix_seconds(time_range.end),
   )
 
   for time_series in response:
@@ -230,11 +230,11 @@ def fetch_interruption_log_records(
   """
   max_results = 3000  # Avoid fetching too many logs.
   log_entries = gcp_util.query_log_entries(
-    project_id=configs.project_id,
-    filter_str=configs.interruption_reason.log_filter(),
-    start_time=TimeUtil.from_unix_seconds(time_range.start),
-    end_time=TimeUtil.from_unix_seconds(time_range.end),
-    max_results=max_results,
+      project_id=configs.project_id,
+      filter_str=configs.interruption_reason.log_filter(),
+      start_time=TimeUtil.from_unix_seconds(time_range.start),
+      end_time=TimeUtil.from_unix_seconds(time_range.end),
+      max_results=max_results,
   )
 
   if len(log_entries) >= max_results:
@@ -258,7 +258,9 @@ def fetch_interruption_log_records(
         event_records[log_node_name] = EventRecord(
             resource_name=log_node_name,
         )
-      event_records[log_node_name].record_timestamps.append(log_timestamp.to_unix_seconds())
+      event_records[log_node_name].record_timestamps.append(
+          log_timestamp.to_unix_seconds()
+      )
 
   return list(event_records.values())
 

@@ -26,12 +26,14 @@ def api_quota_exceeded(exception: BaseException) -> bool:
   check_message: bool = LOG_READ_QUOTA_EXCEED_ERROR in str(exception)
   return check_instance and check_message
 
+
 def retry_log_before_sleep(rs: RetryCallState) -> None:
-    e = rs.outcome.exception() if rs.outcome else None
-    logger.info(
-        f"QUOTA HIT!!! Attempt {rs.attempt_number} failed with {e}. "
-        f"Retrying in {rs.idle_for:.2f} seconds..."
-    )
+  e = rs.outcome.exception() if rs.outcome else None
+  logger.info(
+      f"QUOTA HIT!!! Attempt {rs.attempt_number} failed with {e}. "
+      f"Retrying in {rs.idle_for:.2f} seconds..."
+  )
+
 
 @retry(
     stop=stop_after_attempt(5),
@@ -46,7 +48,9 @@ def query_time_series(
     end_time: TimeUtil,
     aggregation: Optional[monitoring_types.Aggregation] = None,
     view: monitoring_types.ListTimeSeriesRequest.TimeSeriesView = monitoring_types.ListTimeSeriesRequest.TimeSeriesView.FULL,
-    page_size: Optional[int] = 500, # API's default is 50, we use 500 to avoid Quota issue
+    page_size: Optional[
+        int
+    ] = 500,  # API's default is 50, we use 500 to avoid Quota issue
     log_enable: bool = False,
 ) -> List[monitoring_types.TimeSeries]:
   """A utility that queries metrics (time series data) from Google Cloud Monitoring API.
@@ -111,7 +115,9 @@ def query_log_entries(
     end_time: TimeUtil,
     order_by: Optional[str] = logging_v2.DESCENDING,
     max_results: Optional[int] = None,
-    page_size: Optional[int] = 500, # API's default is 50, we use 500 to avoid Quota issue
+    page_size: Optional[
+        int
+    ] = 500,  # API's default is 50, we use 500 to avoid Quota issue
     log_enable: bool = False,
 ) -> List[logging_types.LogEntry]:
   """Queries log entries from Google Cloud Logging API.
@@ -142,9 +148,9 @@ def query_log_entries(
   logging_api_client = logging_v2.Client(project=project_id)
 
   filter_list = [
-    f'timestamp>="{start_time.to_iso_string()}"',
-    f'timestamp<="{end_time.to_iso_string()}"',
-    f'({filter_str})',
+      f'timestamp>="{start_time.to_iso_string()}"',
+      f'timestamp<="{end_time.to_iso_string()}"',
+      f"({filter_str})",
   ]
 
   log_entries = logging_api_client.list_entries(
