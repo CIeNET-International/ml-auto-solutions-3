@@ -16,48 +16,42 @@
 
 
 import datetime
-from typing import Optional
+from typing import Optional, Iterable
 from dags.common import test_owner
 from xlml.apis import gcp_config, metric_config, task, test_config
-from dags.common.vm_resource import TpuVersion, Project
+from xlml.apis.xpk_cluster_config import XpkClusterConfig
+from dags.common.vm_resource import TpuVersion, Project, XpkClusters
 from airflow.models.taskmixin import DAGNode
 
 def get_axlearn_tpu_config(
-    cluster_name: str,
+    test_name: str,
     docker_image: str,
-    tpu_version: TpuVersion,
-    tpu_cores: int,
-    tpu_zone: str,
-    runtime_version: str,
-    model_config: str,
+    test_owner: str,
+    run_model_cmds: Iterable[str],
     time_out_in_min: int,
-    task_owner: str,
-    num_replica: int,
-    is_tpu_reserved: bool = False,
-    project_name: Optional[Project] = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
-    network: str = "default",
-    subnetwork: str = "default",
+    cluster: XpkClusterConfig = XpkClusters.TPU_V5P_128_CLUSTER,
+    dataset_name: metric_config.DatasetOption = metric_config.DatasetOption.XLML_DATASET,
+    num_slices: int = 1,
 ) -> task.AxlearnTask:
   """Setup the axlearn tpu env config."""
-  job_gcp_config = gcp_config.GCPConfig(
-      project_name=project_name,
-      zone=tpu_zone,
-      dataset_name=metric_config.DatasetOption.XLML_DATASET,
-  )
-  test_name = f"axl-{model_config.lower()}"
 
+  job_gcp_config = gcp_config.GCPConfig(
+      project_name=cluster.project,
+      zone=cluster.zone,
+      dataset_name=dataset_name,
+  )
   job_test_config = test_config.TpuGkeTest(
       test_config.Tpu(
-          version=tpu_version,
-          cores=tpu_cores,
+          version=cluster.device_version,
+          cores=cluster.core_count,
       ),
       test_name=test_name,
       run_model_cmds=None,
       set_up_cmds=None,
       timeout=datetime.timedelta(minutes=time_out_in_min),
       task_owner=test_owner,
-      num_slices=num_replica,
-      cluster_name=cluster_name,
+      num_slices=num_slices,
+      cluster_name=cluster.name,
       docker_image=docker_image,
   )
 
