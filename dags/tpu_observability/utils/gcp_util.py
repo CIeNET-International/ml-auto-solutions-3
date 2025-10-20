@@ -47,7 +47,8 @@ def query_time_series(
     end_time: TimeUtil,
     aggregation: monitoring_types.Aggregation | None = None,
     view: monitoring_types.ListTimeSeriesRequest.TimeSeriesView = monitoring_types.ListTimeSeriesRequest.TimeSeriesView.FULL,
-    page_size: int | None = 500, # API's default is 50, we use 500 to avoid Quota issue
+    page_size: int
+    | None = 500,  # API's default is 50, we use 500 to avoid Quota issue
     log_enable: bool = False,
 ) -> list[monitoring_types.TimeSeries]:
   """A utility that queries metrics (time series data) from Google Cloud Monitoring API.
@@ -114,7 +115,8 @@ def query_log_entries(
     end_time: TimeUtil,
     order_by: str | None = logging_v2.DESCENDING,
     max_results: int | None = None,
-    page_size: int | None = 500, # API's default is 50, we use 500 to avoid Quota issue
+    page_size: int
+    | None = 500,  # API's default is 50, we use 500 to avoid Quota issue
     log_enable: bool = False,
 ) -> list[logging_types.LogEntry]:
   """Queries log entries from Google Cloud Logging API.
