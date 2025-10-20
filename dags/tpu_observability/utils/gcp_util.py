@@ -1,4 +1,13 @@
-"""Utility functions for querying Google Cloud data."""
+"""
+Utility functions for querying Google Cloud data.
+
+This module uses the **`tenacity`** package to implement a retry mechanism
+for API calls. This is specifically designed to handle **Quota issues**
+(e.g., hitting the limit for requests per minute).
+When a specific error type and message indicating a quota limit is encountered,
+the function will wait for a set period and then automatically retry the data query,
+improving resilience.
+"""
 import logging as logger
 from tenacity import (
     retry,
@@ -47,8 +56,7 @@ def query_time_series(
     end_time: TimeUtil,
     aggregation: monitoring_types.Aggregation | None = None,
     view: monitoring_types.ListTimeSeriesRequest.TimeSeriesView = monitoring_types.ListTimeSeriesRequest.TimeSeriesView.FULL,
-    page_size: int
-    | None = 500,  # API's default is 50, we use 500 to avoid Quota issue
+    page_size: int | None = 500,
     log_enable: bool = False,
 ) -> list[monitoring_types.TimeSeries]:
   """A utility that queries metrics (time series data) from Google Cloud Monitoring API.
@@ -69,6 +77,8 @@ def query_time_series(
     view: The level of detail to return. Can be the TimeSeriesView enum (e.g.,
       TimeSeriesView.FULL) or a string ("FULL", "HEADERS"). Defaults to FULL.
     page_size: The maximum number of results to return per page.
+      The API's default is 50, we use 500 to decrease the total number of requests
+      to avoid the quota issue.
     log_enable: Whether to enable logging. Defaults to False.
 
   Returns:
@@ -115,8 +125,7 @@ def query_log_entries(
     end_time: TimeUtil,
     order_by: str | None = logging_v2.DESCENDING,
     max_results: int | None = None,
-    page_size: int
-    | None = 500,  # API's default is 50, we use 500 to avoid Quota issue
+    page_size: int | None = 500,
     log_enable: bool = False,
 ) -> list[logging_types.LogEntry]:
   """Queries log entries from Google Cloud Logging API.
@@ -133,6 +142,8 @@ def query_log_entries(
       Defaults to descending timestamp.
     max_results: Optional. The maximum number of results to return overall.
     page_size: The maximum number of results to return per page.
+      The API's default is 50, we use 500 to decrease the total number of requests
+      to avoid the quota issue.
     log_enable: Whether to enable logging. Defaults to False.
 
   Returns:

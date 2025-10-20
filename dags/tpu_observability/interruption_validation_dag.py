@@ -12,8 +12,7 @@ from airflow.utils.task_group import TaskGroup
 from dags.common.vm_resource import Project
 from dags.map_reproducibility.utils.constants import Schedule
 from dags.multipod.configs.common import Platform
-from dags.tpu_observability.utils.time_util import TimeUtil
-from dags.tpu_observability.utils import gcp_util
+from dags.tpu_observability.utils import gcp_util, time_util
 from google.cloud import monitoring_v3
 
 
@@ -163,8 +162,8 @@ def fetch_interruption_metric_records(
   response = gcp_util.query_time_series(
       project_id=configs.project_id,
       filter_str=metric_filter,
-      start_time=TimeUtil.from_unix_seconds(time_range.start),
-      end_time=TimeUtil.from_unix_seconds(time_range.end),
+      start_time=time_util.TimeUtil.from_unix_seconds(time_range.start),
+      end_time=time_util.TimeUtil.from_unix_seconds(time_range.end),
   )
 
   for time_series in response:
@@ -178,7 +177,7 @@ def fetch_interruption_metric_records(
       )
 
     for point in time_series.points:
-      end_time = TimeUtil.from_datetime(point.interval.end_time)
+      end_time = time_util.TimeUtil.from_datetime(point.interval.end_time)
       match monitoring_v3.TypedValue.pb(point.value).WhichOneof('value'):
         case 'int64_value':
           event_count = point.value.int64_value
@@ -231,8 +230,8 @@ def fetch_interruption_log_records(
   log_entries = gcp_util.query_log_entries(
       project_id=configs.project_id,
       filter_str=configs.interruption_reason.log_filter(),
-      start_time=TimeUtil.from_unix_seconds(time_range.start),
-      end_time=TimeUtil.from_unix_seconds(time_range.end),
+      start_time=time_util.TimeUtil.from_unix_seconds(time_range.start),
+      end_time=time_util.TimeUtil.from_unix_seconds(time_range.end),
       max_results=max_results,
   )
 
@@ -251,7 +250,7 @@ def fetch_interruption_log_records(
     match = re.match(regex_pattern, resource_name)
     if match:
       log_node_name = match.group(1)
-      log_timestamp = TimeUtil.from_datetime(entry.timestamp)
+      log_timestamp = time_util.TimeUtil.from_datetime(entry.timestamp)
 
       if log_node_name not in event_records:
         event_records[log_node_name] = EventRecord(
