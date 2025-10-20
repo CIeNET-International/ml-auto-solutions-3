@@ -13,15 +13,17 @@
 # limitations under the License.
 
 from airflow.models.param import Param
-from dags.maxtext_pathways.configs.model_configs import MaxTextV5eModelConfigs, MaxTextV5pModelConfigs, MaxTextTrilliumModelConfigs
+from dags.maxtext_pathways.configs import model_configs as model_cfg
 from dags.common.vm_resource import TpuVersion
 
 MODEL_FRAMEWORK = ["mcjax", "pathways"]
 
 MODEL_NAME = []
-V5E_MODEL_NAME = [config.value for config in MaxTextV5eModelConfigs]
-V5P_MODEL_NAME = [config.value for config in MaxTextV5pModelConfigs]
-V6E_MODEL_NAME = [config.value for config in MaxTextTrilliumModelConfigs]
+V5E_MODEL_NAME = [config.value for config in model_cfg.MaxTextV5eModelConfigs]
+V5P_MODEL_NAME = [config.value for config in model_cfg.MaxTextV5pModelConfigs]
+V6E_MODEL_NAME = [
+    config.value for config in model_cfg.MaxTextTrilliumModelConfigs
+]
 MODEL_NAME.extend(V5E_MODEL_NAME)
 MODEL_NAME.extend(V5P_MODEL_NAME)
 MODEL_NAME.extend(V6E_MODEL_NAME)
@@ -29,20 +31,27 @@ MODEL_NAME.extend(V6E_MODEL_NAME)
 DEVICE_VERSION = ["v" + version.value for version in TpuVersion]
 
 PARAMETERS = {
-    "user": Param("username", type="string", title="User", description="User name."),
+    "user": Param(
+        "username",
+        type="string",
+        title="User",
+        description="User name is used to confirm the first three characters of the pod in the cluster.",
+    ),
     "cluster_name": Param(
         "pw-scale-test-v5e-32",
         type="string",
         title="Cluster Name",
-        description="GKE/GCP cluster name.",
+        description="GCP cluster name for training model.",
     ),
     "project": Param(
         "cloud-tpu-multipod-dev",
         type="string",
         title="Project",
-        description="GCP project ID.",
+        description="GCP project ID for training model.",
     ),
-    "zone": Param("us-south1-a", type="string", title="Zone", description="GCP zone."),
+    "zone": Param(
+        "us-south1-a", type="string", title="Zone", description="Cluster zone."
+    ),
     "device_version": Param(
         "v5litepod",
         type="string",
@@ -75,19 +84,22 @@ PARAMETERS = {
         description="Number of slices",
     ),
     "server_image": Param(
-        "gcr.io/tpu-prod-env-one-vm/lidanny/unsanitized_server:latest", # TODO: adjust to official path
+        # TODO(b/451750407): Replace this temporary image with a formal one.
+        "gcr.io/tpu-prod-env-one-vm/lidanny/unsanitized_server:latest",
         type="string",
         title="Server Image",
-        description="Server image for the cluster.",
+        description="Server image for pathways.",
     ),
     "proxy_image": Param(
-        "gcr.io/tpu-prod-env-one-vm/lidanny/unsanitized_proxy_server:latest", # TODO: adjust to official path
+        # TODO(b/451750407): Replace this temporary image with a formal one.
+        "gcr.io/tpu-prod-env-one-vm/lidanny/unsanitized_proxy_server:latest",
         type="string",
         title="Proxy Image",
-        description="Proxy image for the cluster.",
+        description="Proxy image for pathways.",
     ),
     "runner": Param(
-        "gcr.io/tpu-prod-env-one-vm/lidanny_latest:latest", # TODO: adjust to official path
+        # TODO(b/451750407): Replace this temporary image with a formal one.
+        "gcr.io/tpu-prod-env-one-vm/lidanny_latest:latest",
         type="string",
         title="Runner Image",
         description="Runner image for the cluster.",
@@ -103,8 +115,14 @@ PARAMETERS = {
         "llama3_1_8b_8192_v5e_256",
         type="string",
         title="Model Name",
-        description="Select a model name to run.",
-        enum=MODEL_NAME,
+        description='Select a model name to run. Only when "customized_model_name" is selected for "Model Name", the input value of "customized_model_name" parameter will take effect.',
+        enum=["customized_model_name"] + MODEL_NAME,
+    ),
+    "customized_model_name": Param(
+        "your_model_name",
+        type="string",
+        title="Customized Model Name",
+        description='Select a customized model name to run. Only when "customized_model_name" is selected for "Model Name", the input value of "customized_model_name" parameter will take effect.',
     ),
     "priority": Param(
         "medium",
@@ -132,15 +150,22 @@ PARAMETERS = {
         description="The Project of BigQuery Database",
     ),
     "bq_db_dataset": Param(
-        "chzheng_test_100steps", # TODO: adjust to official path
+        # TODO(b/451750407): Replace this temporary image with a formal one.
+        "chzheng_test_100steps",
         type="string",
         title="BigQuery Database Dataset",
         description="The Dataset of BigQuery Database",
     ),
-    "time_out_in_min": Param(
+    "timeout_enable": Param(
+        False,
+        type="boolean",
+        title="Timeout Enable",
+        description="Enable custom timeout settings. Only when enabled will the timeout_in_min setting take effect.",
+    ),
+    "timeout_in_min": Param(
         60,
         type="integer",
-        title="Time Out In Minutes",
-        description="Time out in minutes for the workload task, adjust it when your meet (airflow.exceptions.AirflowSensorTimeout: Sensor has timed out).",
+        title="Timeout In Minutes",
+        description="Timeout in minutes for the workload task, adjust it when your meet (airflow.exceptions.AirflowSensorTimeout: Sensor has timed out).",
     ),
 }
