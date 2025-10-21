@@ -367,7 +367,7 @@ class XpkTask(BaseTask):
       xpk_branch: str = xpk.MAIN_BRANCH,
       max_restart: int = 0,
   ) -> DAGNode:
-    """ Create the workload and wait for it to provision."""
+    """Create the workload and wait for it to provision."""
     with TaskGroup(group_id="launch_workload_with_node_reach_to_step") as group:
       run_workload = xpk.run_workload.override(
           owner=self.task_test_config.task_owner
@@ -416,6 +416,7 @@ class XpkTask(BaseTask):
           file_path=f"{gcs_path}/{str(expect_reach_to_step)}/commit_success.txt",
       )
       do_nothing = EmptyOperator(task_id="do_nothing")
+
       @task.branch
       def task_path_decider(workload_id: str, group_id: str) -> list[str]:
         """
@@ -429,12 +430,18 @@ class XpkTask(BaseTask):
           if item in workload_id:
             return [task_wait_file_id]
         return [task_do_nothing]
+
       # Conditional Execution: Not all test scenarios require checking for
       # the existence of commit_message.txt (in task: wait_for_file_to_exist).
       # using the @task.branch decorator to dynamically route the workflow.
       decider = task_path_decider(workload_id, group.group_id)
 
-      (run_workload >> wait_for_workload_start >> wait_for_workload_to_reach_step >> decider)
+      (
+          run_workload
+          >> wait_for_workload_start
+          >> wait_for_workload_to_reach_step
+          >> decider
+      )
       decider >> [wait_for_file_to_exist, do_nothing]
 
       return group
