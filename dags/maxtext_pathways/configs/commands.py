@@ -34,7 +34,7 @@ INSTALL_DOCKER = [
     'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null',
     "sudo apt-get update",
     "sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin",
-    "sudo /usr/bin/dockerd & sleep 0",
+    "sudo /usr/bin/dockerd & sleep 5",
     "while ! sudo docker info > /dev/null 2>&1; do echo 'Waiting for Docker to start...'; sleep 5; done",  # check whether Docker is started successfully
 ]
 
@@ -80,16 +80,3 @@ BACK_MAXTEXT = [
 ]
 
 RUN_RECIPE = ["python3 -m benchmarks.recipes.{recipe_name}"]
-
-ENV_COMMAND = (
-    UPDATE_APT
-    + INSTALL_MAKE
-    + INSTALL_KUBECTL
-    + INSTALL_DOCKER
-    + INSTALL_GCLOUD
-    + SWITCH_SERVICE_ACCOUNT
-    + INSTALL_KUBECTL_KJOB
-    + INSTALL_KUBECTL_KUEUE
-    + INSTALL_XPK
-    + BACK_MAXTEXT
-)

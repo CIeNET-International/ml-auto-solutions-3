@@ -17,8 +17,14 @@
 import enum
 
 
-class RecipeConfigs(enum.Enum):
-  # Refers to model configs in https://github.com/AI-Hypercomputer/maxtext/blob/main/benchmarks/recipes
+class Recipe(enum.Enum):
+  """
+  An enumeration of known recipe names used for configuring training workload.
+
+  These recipe names correspond to defined execution flows or scripts,
+  often found in the referenced MaxText repository:
+  https://github.com/AI-Hypercomputer/maxtext/blob/main/benchmarks/recipes
+  """
   PW_MCJAX_BENCHMARK_RECIPE = "pw_mcjax_benchmark_recipe"
 
 
