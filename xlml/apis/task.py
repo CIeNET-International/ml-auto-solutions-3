@@ -19,7 +19,7 @@ import dataclasses
 import datetime
 import shlex
 from dags.common.quarantined_tests import QuarantineTests
-from typing import Optional, Tuple, Union, List
+from typing import Optional, Tuple, Union
 import airflow
 from airflow.models.taskmixin import DAGNode
 from airflow.utils.task_group import TaskGroup
@@ -369,17 +369,10 @@ class XpkTask(BaseTask):
     @task.branch
     def task_path_decider(
         workload_id: str, group_id: str
-    ) -> Union[str, List[str]]:
+    ) -> list[str]:
       """
       Decide whether the wait_for_file_to_exist should be
       executed based on the workload_id
-
-      Attributes:
-      workload_id: Unique ID for identiying the workload
-      group_id: Unique ID for identiying the Taskgroup
-
-      Returns:
-        task id(s) that should be executed
       """
       short_id = ["max-reg-res-gcs-node"]
       task_wait_reach_id = f"{group_id}.wait_for_workload_reach_step"
@@ -387,7 +380,7 @@ class XpkTask(BaseTask):
       for item in short_id:
         if item in workload_id:
           return [task_wait_reach_id, task_wait_file_id]
-      return task_wait_reach_id
+      return [task_wait_reach_id]
 
     # Create the workload and wait for it to provision.
     with TaskGroup(group_id="launch_workload_with_node_reach_to_step") as group:
