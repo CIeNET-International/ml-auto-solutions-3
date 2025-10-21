@@ -423,7 +423,7 @@ class XpkTask(BaseTask):
         Decide whether the wait_for_file_to_exist should be
         executed based on the workload_id
         """
-        #Future work: Add new workload short IDs to this list if required.
+        # Future work: Add new workload short IDs to this list if required.
         short_id = ["max-reg-res-gcs-node"]
         task_do_nothing = f"{group_id}.do_nothing"
         task_wait_file_id = f"{group_id}.wait_for_file_to_exist"

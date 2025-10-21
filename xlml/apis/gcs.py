@@ -77,7 +77,8 @@ def wait_for_file_to_exist(file_path: str) -> bool:
   if not directory_path.startswith("gs://"):
     raise ValueError(
         f"Invalid GCS path provided: {file_path}. "
-        "Path must start with 'gs://'.")
+        "Path must start with 'gs://'."
+    )
   checkpoint_files = obtain_file_list(directory_path)
   for file in checkpoint_files:
     if target_file in file:
