@@ -30,7 +30,7 @@ def generate_workload_checkpoints_location(gcs_ckpt_location: str) -> str:
 
 with models.DAG(
     dag_id=DAG_TEST_NAME,
-    start_date=datetime.datetime(2025, 10, 13),
+    start_date=datetime.datetime(2025, 10, 21),
     schedule_interval=SCHEDULE,
     catchup=False,
     tags=[
@@ -83,7 +83,7 @@ with models.DAG(
       test_config_util.TestConfig(
           cluster=XpkClusters.TPU_V5P_128_CLUSTER,
           machine_type="ct5p-hightpu-4t",
-          accelerator="v5p-16",
+          accelerator="v5p-128",
           slices=[2],
           model_name="llama2-7b",
           short_id="max-reg-res-gcs-node",

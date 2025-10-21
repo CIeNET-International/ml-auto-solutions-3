@@ -203,7 +203,7 @@ def validate_log_with_gcs(
           gcs_checkpoint_path = match_gcs.group(0)
           step = match_step.group(1)
           logging.info(f"get gcs path from: {gcs_checkpoint_path}")
-          bucket_files = gcs.generate_gcs_file_list(
+          bucket_files = gcs.obtain_file_list(
               f"{checkpoint_dir}/{gcs_checkpoint_path}/"
           )
           logging.info(f"gcs bucket files lenght: {len(bucket_files)}")
@@ -279,7 +279,7 @@ def validate_gcs_checkpoint_files(
 
   logging.info("Validate GCS checkpoint files on path: %s", bucket_path)
   try:
-    checkpoint_files = gcs.generate_gcs_file_list(bucket_path)
+    checkpoint_files = gcs.obtain_file_list(bucket_path)
     logging.info(f"Found checkpoint files in GCS: {checkpoint_files}")
 
     # Extract step directories from checkpoint files

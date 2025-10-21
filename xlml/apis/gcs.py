@@ -15,13 +15,15 @@
 """Functions for GCS Bucket"""
 
 from absl import logging
+from airflow.decorators import task
 import re
+import os
 
 from airflow.providers.google.cloud.operators.gcs import GCSHook
 from typing import List
 
 
-def generate_gcs_file_list(output_path: str) -> List[str]:
+def obtain_file_list(gcs_path: str) -> List[str]:
   """
   Lists files in a GCS bucket at a specified path.
 
@@ -38,19 +40,51 @@ def generate_gcs_file_list(output_path: str) -> List[str]:
   """
   hook = GCSHook()
   pattern = re.compile(r"^gs://(?P<bucket>[^/]+)/(?P<prefix>.+)$")
-  m = pattern.match(output_path)
+  m = pattern.match(gcs_path)
 
   if not m:
-    logging.error(f"Invalid GCS path format: {output_path}")
+    logging.error(f"Invalid GCS path format: {gcs_path}")
     return []
 
   bucket_name = m.group("bucket")
   prefix = m.group("prefix")
 
-  logging.info(f"output_path:{output_path}")
+  logging.info(f"output_path:{gcs_path}")
   logging.info(f"bucket:{bucket_name}")
   logging.info(f"prefix:{prefix}")
 
   files = hook.list(bucket_name=bucket_name, prefix=prefix)
   logging.info(f"Files ===> {files}")
   return files
+
+
+@task.sensor(poke_interval=3, timeout=300, mode="reschedule")
+def wait_for_file_to_exist(file_path: str) -> bool:
+  """
+  Check the target file is existing in the gsc
+
+  Args:
+    file_path (str): The full path of the target
+      file (e.g gs://mybucket/commit_message.txt)
+
+  Returns:
+    bool: return True if target file is found
+  """
+  directory_path = os.path.dirname(file_path)
+  target_file = os.path.basename(file_path)
+  logging.info(f"Directory to check: {directory_path}")
+  logging.info(f"Target file name: {target_file}")
+
+  if not directory_path.startswith("gs://"):
+    logging.error(f"Invalid GCS path provided: {file_path}")
+    return False
+  checkpoint_files = obtain_file_list(directory_path)
+  logging.info(f"Found files in GCS directory: {checkpoint_files}")
+  if len(checkpoint_files) > 0:
+    for file in checkpoint_files:
+      if target_file in file:
+        logging.info(f"Found target file in the GCS path: {file}")
+        return True
+
+  logging.info("Target file not found in the specified GCS path.")
+  return False

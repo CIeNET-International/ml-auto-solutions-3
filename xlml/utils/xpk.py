@@ -26,7 +26,7 @@ from airflow.exceptions import AirflowFailException
 from airflow.hooks.subprocess import SubprocessHook
 from kubernetes import client as k8s_client
 from google.cloud import compute_v1
-from xlml.apis import metric_config, gcs
+from xlml.apis import metric_config
 from xlml.utils import gke, composer
 from dags.common.vm_resource import GpuVersion
 
@@ -504,22 +504,3 @@ def delete_node(
   except Exception as e:
     logging.info(f"Error deleting node {node_name}: {e}", file=sys.stderr)
     sys.exit(1)
-
-
-@task.sensor(poke_interval=3, timeout=300, mode="reschedule")
-def wait_for_file_to_exist(
-    file_path: str,
-    step_to_interrupt: str,
-) -> bool:
-  if file_path:
-    target_file = "commit_success.txt"
-    checkpoint_files = gcs.generate_gcs_file_list(
-        f"{file_path}/{step_to_interrupt}/"
-    )
-    logging.info(f"Found step folder in GCS: {checkpoint_files}")
-    if len(checkpoint_files) > 0:
-      for file in checkpoint_files:
-        if target_file in file:
-          logging.info(f"Found target file in the step folder in GCS: {file}")
-          return True
-  return False
