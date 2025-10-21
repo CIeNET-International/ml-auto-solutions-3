@@ -367,9 +367,7 @@ class XpkTask(BaseTask):
       max_restart: int = 0,
   ) -> DAGNode:
     @task.branch
-    def task_path_decider(
-        workload_id: str, group_id: str
-    ) -> list[str]:
+    def task_path_decider(workload_id: str, group_id: str) -> list[str]:
       """
       Decide whether the wait_for_file_to_exist should be
       executed based on the workload_id
