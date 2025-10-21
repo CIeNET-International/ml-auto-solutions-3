@@ -14,13 +14,12 @@
 
 """Functions for GCS Bucket"""
 
+import os
+import re
+from typing import List
 from absl import logging
 from airflow.decorators import task
-import re
-import os
-
 from airflow.providers.google.cloud.operators.gcs import GCSHook
-from typing import List
 
 
 def obtain_file_list(gcs_path: str) -> List[str]:
@@ -76,15 +75,14 @@ def wait_for_file_to_exist(file_path: str) -> bool:
   logging.info(f"Target file name: {target_file}")
 
   if not directory_path.startswith("gs://"):
-    logging.error(f"Invalid GCS path provided: {file_path}")
-    return False
+    raise ValueError(
+        f"Invalid GCS path provided: {file_path}. "
+        "Path must start with 'gs://'.")
   checkpoint_files = obtain_file_list(directory_path)
-  logging.info(f"Found files in GCS directory: {checkpoint_files}")
-  if len(checkpoint_files) > 0:
-    for file in checkpoint_files:
-      if target_file in file:
-        logging.info(f"Found target file in the GCS path: {file}")
-        return True
+  for file in checkpoint_files:
+    if target_file in file:
+      logging.info(f"Found target file in the GCS path: {file}")
+      return True
 
   logging.info("Target file not found in the specified GCS path.")
   return False
