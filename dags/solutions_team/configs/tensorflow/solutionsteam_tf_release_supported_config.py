@@ -173,13 +173,19 @@ def get_tf_dlrm_config(
       tpu_name, is_pod, is_pjrt, is_v5p_sc=is_v5p
   )
 
-  set_up_cmds = common.set_up_tensorflow_models() + common.install_tf()
+  set_up_cmds = common.set_up_tensorflow_models(MODELS_BRANCH, KERAS_VERSION)
+  # ! modify
+  set_up_cmds += (
+      "pip install https://storage.googleapis.com/cloud-tpu-tpuvm-artifacts/tensorflow/tf-2.19.0/arm64_compatible/tensorflow_tpu-2.19.0-cp310-cp310-linux_x86_64.whl --force",
+  )
+  set_up_cmds += ("python3 -c \"import tensorflow; print('Running using TensorFlow Version: ' + tensorflow.__version__)\"",)
+
   if is_pod:
     if not is_pjrt:
       set_up_cmds += common.set_up_se()
     else:
       set_up_cmds += common.set_up_pjrt()
-  global_batch_size = 16384 * (tpu_cores // 8)
+  global_batch_size = 1024
   params_override = {
       "runtime": {
           "distribution_strategy": "tpu",
@@ -264,9 +270,9 @@ def get_tf_dlrm_config(
               "concat_dense": "false",
               "dcn_use_bias": "true",
               "max_ids_per_chip_per_sample": 128,
-              "max_ids_per_table": 15000,
-              "max_unique_ids_per_table": 4096,
-              "initialize_tables_on_host": "false",
+              "max_ids_per_table": [280, 128, 64, 272, 432, 624, 64, 104, 368, 352, 288, 328, 304, 576, 336, 368, 312, 392, 408, 552, 2880, 1248, 720, 112, 320, 256],
+              "max_unique_ids_per_table": [160, 88, 64, 48, 112, 48, 64, 48, 48, 192, 88, 256, 48, 64, 160, 48, 48, 48, 48, 304, 1664, 576, 160, 112, 48, 48],
+              "initialize_tables_on_host": "true",
               "use_partial_tpu_embedding": "false",
               "size_threshold": 0,
           },
@@ -314,7 +320,7 @@ def get_tf_dlrm_config(
           version=tpu_version,
           cores=tpu_cores,
           runtime_version=runtime_version,
-          reserved=True,
+          reserved=False,
           network=network,
           subnetwork=subnetwork,
       ),

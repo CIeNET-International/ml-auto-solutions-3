@@ -79,8 +79,10 @@ def install_tf(
   tf_installation_command = f"pip install tf-nightly-tpu -f https://storage.googleapis.com/libtpu-tf-releases/index.html --force"
   if release_candidate is None:
     release_candidate = ""
-  if major is not None:
+  if major is not None and int(major) <= 18:
     tf_installation_command = f"pip install tensorflow-tpu=={major}.{minor}.{patch}{release_candidate} -f https://storage.googleapis.com/libtpu-tf-releases/index.html --force"
+  else:
+    tf_installation_command = "pip install https://storage.googleapis.com/cloud-tpu-tpuvm-artifacts/tensorflow/tf-2.19.0/arm64_compatible/tensorflow_tpu-2.19.0-cp310-cp310-linux_x86_64.whl --force"
   cmds_install_tf_whl = tf_installation_command
 
   return (
