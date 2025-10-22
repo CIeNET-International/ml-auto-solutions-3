@@ -28,14 +28,14 @@ from dags.tpu_observability.utils.jobset_util import JobSet
 from dags.tpu_observability.utils.jobset_util import Workload
 
 MACHINE_TYPE_CONFIG = {
-  "ct6e-standard-4t": {
-    "tpu_type": "v6e",
-    "tpu_topology": "4x4",
-  },
-  "ct5p-hightpu-4t": {
-    "tpu_type": "v5p",
-    "tpu_topology": "4x4",
-  },
+    "ct6e-standard-4t": {
+        "tpu_type": "v6e",
+        "tpu_topology": "4x4",
+    },
+    "ct5p-hightpu-4t": {
+        "tpu_type": "v5p",
+        "tpu_topology": "4x4",
+    },
 }
 
 
@@ -368,7 +368,9 @@ with models.DAG(
 
     workload_script = Workload.JAX_TPU_BENCHMARK
 
-    with TaskGroup(group_id=f"tpu_info_format_validation_dag-{MACHINE_TYPE_CONFIG[machine_type_name].get('tpu_type')}"):
+    with TaskGroup(
+        group_id=f"tpu_info_format_validation_dag-{MACHINE_TYPE_CONFIG[machine_type_name].get('tpu_type')}"
+    ):
       with TaskGroup(group_id="create_node_pool") as create_node_pool:
         create_first_node_pool = node_pool.create.override(
             task_id="node_pool_1",
@@ -389,7 +391,9 @@ with models.DAG(
       apply_time = jobset.run_workload(
           node_pool=cluster_info,
           kubeconfig=kubeconfig_path,
-          yaml_config=jobset_config.generate_yaml(workload_script=workload_script),
+          yaml_config=jobset_config.generate_yaml(
+              workload_script=workload_script
+          ),
           namespace=jobset_config.namespace,
       )
 
@@ -410,7 +414,9 @@ with models.DAG(
       )
 
       tpu_info_output = (
-          tpu_info.parse_tpu_info_output.override(task_id="get_each_metric_table")
+          tpu_info.parse_tpu_info_output.override(
+              task_id="get_each_metric_table"
+          )
           .partial()
           .expand(output=tpu_info_outputs)
       )
@@ -435,7 +441,9 @@ with models.DAG(
         )
 
         validate_tensorcore_metric = (
-            validate_tensorcore_table.override(task_id="validate_tensorcore_metric")
+            validate_tensorcore_table.override(
+                task_id="validate_tensorcore_metric"
+            )
             .partial()
             .expand(tpu_info_output=tpu_info_output)
         )

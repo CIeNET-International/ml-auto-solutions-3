@@ -12,14 +12,14 @@ from dags.tpu_observability.utils import node_pool_util as node_pool
 
 
 MACHINE_TYPE_CONFIG = {
-  "ct6e-standard-4t": {
-    "tpu_type": "v6e",
-    "tpu_topology": "4x4",
-  },
-  "ct5p-hightpu-4t": {
-    "tpu_type": "v5p",
-    "tpu_topology": "4x4",
-  },
+    "ct6e-standard-4t": {
+        "tpu_type": "v6e",
+        "tpu_topology": "4x4",
+    },
+    "ct5p-hightpu-4t": {
+        "tpu_type": "v5p",
+        "tpu_topology": "4x4",
+    },
 }
 
 with models.DAG(
@@ -76,9 +76,12 @@ with models.DAG(
         tpu_topology=MACHINE_TYPE_CONFIG[machine_type_name].get("tpu_topology"),
     )
 
-    with TaskGroup(group_id=f'multi-host-availability-rollback-{MACHINE_TYPE_CONFIG[machine_type_name].get("tpu_type")}'):
+    with TaskGroup(
+        group_id=f'multi-host-availability-rollback-{MACHINE_TYPE_CONFIG[machine_type_name].get("tpu_type")}'
+    ):
       create_node_pool = node_pool.create(
-          node_pool=node_pool_info, reservation="cloudtpu-20250131131310-2118578099"
+          node_pool=node_pool_info,
+          reservation="cloudtpu-20250131131310-2118578099",
       )
 
       wait_node_pool_available = node_pool.wait_for_availability(
