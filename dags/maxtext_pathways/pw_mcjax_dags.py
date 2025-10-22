@@ -17,7 +17,9 @@ import random
 import string
 import time
 from absl import logging
+
 from airflow.decorators import task
+from airflow.exceptions import AirflowException
 from airflow.hooks.subprocess import SubprocessHook
 from airflow.models.dag import DAG
 from airflow.providers.google.cloud.operators.kubernetes_engine import GKEStartPodOperator
@@ -55,12 +57,22 @@ def generate_derived_parameters(dag_params: dict) -> dict:
   # Generate region by zone
   derived_params["region"] = gke.zone_to_region(dag_params["zone"])
 
+  # Generate device_type.
+  device_type = (
+      dag_params["device_version"] + "-" + str(dag_params["core_count"])
+  )
+  derived_params["device_type"] = device_type
+
+  # Confirm whether to use customized_model_name.
+  if dag_params["selected_model_names"] == "customized_model_name":
+    derived_params["selected_model_names"] = dag_params["customized_model_name"]
+
   return derived_params
 
 
 @task
 def generate_commands(
-    dag_params: dict, derived_params: dict, recipe_name: str
+    dag_params: dict, derived_params: dict, recipe_instance: recipe_cfg.Recipe
 ) -> str:
   """
   Generates a command string using the initial DAG parameters and derived parameters.
@@ -68,51 +80,37 @@ def generate_commands(
   dag_params = dag_params.copy()
 
   # Initialization command.
-  env_cmds_list = generate_install_dependencies_commands()
-
-  env_cmds = " && ".join(env_cmds_list)
-  recipe_cmds = " && ".join(cmds.RUN_RECIPE)
-
-  env_cmds = env_cmds.format(service_account = dag_params["service_account"])
-  recipe_cmds = recipe_cmds.format(recipe_name=recipe_name)
-
-  # Generate device_type.
-  device_type = (
-      dag_params["device_version"] + "-" + str(dag_params["core_count"])
+  env_cmds = generate_install_dependencies_commands(
+      service_account=dag_params["service_account"]
   )
-  dag_params["device_type"] = device_type
+  recipe_cmd = recipe_instance.run_command
 
-  # Confirm whether to use customized_model_name.
-  if dag_params["selected_model_names"] == "customized_model_name":
-    dag_params["selected_model_names"] = dag_params["customized_model_name"]
-
-  # Combine command.
+  # Combine parameters to further generate the final command.
   all_params = {**dag_params, **derived_params}
   for key, value in all_params.items():
     if key in recipe_cfg.RECIPE_FLAG:
       if isinstance(value, int):
-        recipe_cmds += f" --{key}={value}"
+        recipe_cmd += f" --{key}={value}"
       else:
-        recipe_cmds += f" --{key}='{value}'"
+        recipe_cmd += f" --{key}='{value}'"
 
-  formatted_cmds = recipe_cmds.replace(" --", " \n  --")
+  formatted_cmds = recipe_cmd.replace(" --", " \n  --")
   logging.info(f"\n {formatted_cmds}")
 
-  commands = " && ".join([env_cmds, recipe_cmds])
+  commands = " && ".join([env_cmds, recipe_cmd])
 
   return commands
 
 
-def generate_install_dependencies_commands() -> list[str]:
+def generate_install_dependencies_commands(service_account: str) -> str:
   """
-  Generate the list of shell commands to install necessary dependencies in the Pod.
+  Generate the shell commands to install necessary dependencies in the Pod.
   """
   env_cmds_list = (
       cmds.UPDATE_APT
       + cmds.INSTALL_MAKE
       + cmds.INSTALL_KUBECTL
       + cmds.INSTALL_DOCKER
-      + cmds.INSTALL_GCLOUD
       + cmds.SWITCH_SERVICE_ACCOUNT
       + cmds.INSTALL_KUBECTL_KJOB
       + cmds.INSTALL_KUBECTL_KUEUE
@@ -120,7 +118,10 @@ def generate_install_dependencies_commands() -> list[str]:
       + cmds.BACK_MAXTEXT
   )
 
-  return env_cmds_list
+  env_cmds = " && ".join(env_cmds_list)
+  env_cmds = env_cmds.format(service_account=service_account)
+
+  return env_cmds
 
 
 def generate_recipe_workload_id(params: dict) -> tuple[str, str]:
@@ -178,24 +179,89 @@ def clean_up_pod(
   ), f"kubectl clean-up failed with code {result.exit_code}"
 
 
-def set_sensor_timeout(context: dict) -> None:
+def set_sensor_timeout(
+    timeout_enable: bool, benchmark_steps: int, timeout_in_min: int
+) -> None:
   """
   Dynamically sets the Airflow task timeout based on a custom flag or calculates it using a benchmark step count.
   """
-  if context["params"]["timeout_enable"]:
-    context["ti"].task.timeout = context["params"]["timeout_in_min"] * 60
+  if timeout_enable:
+    timeout_in_min = timeout_in_min
   else:
     max_step_min = 5  # Average time required for each step in lama3-1-405b.
-    context["ti"].task.timeout = (
-        context["params"]["benchmark_steps"] * max_step_min * 60
+    timeout_in_min = benchmark_steps * max_step_min
+
+  timeout_in_sec = timeout_in_min * 60
+
+  return timeout_in_sec, timeout_in_min
+
+
+@task(task_id="check_recipe_log")
+def wait_workload_complete(
+    workload_id: str,
+    project_id: str,
+    region: str,
+    cluster_name: str,
+    timeout_enable: bool,
+    benchmark_steps: int,
+    timeout_in_min: int = 10,
+    poke_interval: int = 60,
+) -> bool:
+  """
+  Checks for the completion of an workload by repeatedly executing its core logic.
+  The core logic uses workload logs to report the detailed status of successful or failed completion.
+  """
+  # Attempt to extract the underlying callable function (the core check logic).
+  impl = getattr(
+      xpk.wait_for_workload_completion, "python_callable", None
+  ) or getattr(
+      xpk.wait_for_workload_completion, "__wrapped__", None
+  )
+
+  # If the core function cannot be found, raise an exception.
+  if impl is None:
+    raise AirflowException(
+        f"Cannot extract core callable from {xpk.wait_for_workload_completion}."
+        "It might not be a valid task/sensor or is wrapped too deeply."
     )
 
+  # Dynamically sets the Airflow task timeout and calculate the total timeout duration in seconds.
+  timeout_in_sec, timeout_in_min = set_sensor_timeout(
+      timeout_enable, benchmark_steps, timeout_in_min
+  )
+  logging.info(
+      f"The timeout for this task is {timeout_in_min}min({timeout_in_sec}s)."
+  )
 
-RECIPE_NAME = recipe_cfg.Recipe.PW_MCJAX_BENCHMARK_RECIPE.value
-RECIPE = RECIPE_NAME.lower()
+  # Start the polling loop (sensor-like behavior).
+  deadline = datetime.datetime.now() + datetime.timedelta(
+      seconds=timeout_in_sec
+  )
+  while datetime.datetime.now() < deadline:
+    # Call the core function to check if the workload is complete.
+    if impl(workload_id, project_id, region, cluster_name):
+      return True
+
+    # Calculate the remaining time until the deadline.
+    time_to_sleep = (deadline - datetime.datetime.now()).total_seconds()
+
+    # Break the loop if the deadline has been exceeded or reached.
+    if time_to_sleep <= 0:
+      break
+
+    # Sleep for the smaller duration.
+    time.sleep(min(poke_interval, time_to_sleep))
+
+  raise AirflowException(
+      f"Timed out after {timeout_in_min}min({timeout_in_sec}s). Please enable `timeout_enable` and set `timeout_in_min` in UI input."
+  )
+
+
+RECIPE_INSTANCE = recipe_cfg.Recipe.PW_MCJAX_BENCHMARK_RECIPE
+RECIPE_NAME = RECIPE_INSTANCE.value.lower()
 
 with DAG(
-    dag_id=RECIPE,
+    dag_id=RECIPE_NAME,
     start_date=datetime.datetime(2025, 1, 1),
     schedule_interval=None,
     catchup=False,
@@ -209,13 +275,13 @@ with DAG(
         "benchmark",
         "nightly",
     ],
-    description=f"A DAG to run a MaxText {RECIPE} on GKE.",
+    description=f"A DAG to run a MaxText {RECIPE_NAME} on GKE.",
     params=ui_params.PARAMETERS,
     doc_md=f"""
-    # A DAG to run a MaxText {RECIPE} on GKE.
+    # A DAG to run a MaxText {RECIPE_NAME} on GKE.
 
     ### Description
-    Specify different models and number of slices to test the MaxText {RECIPE} on different clusters.  
+    Specify different models and number of slices to test the MaxText {RECIPE_NAME} on different clusters.  
     The DAG first generates recipe command through UI parameters, then runs the workload, waits and monitors the workload logs, and finally cleans up the workload.
 
     ### Prerequisites
@@ -237,17 +303,17 @@ with DAG(
     """,
 ) as dag:
   recipe_runtime = (
-      RECIPE.replace("_", "-") + '-{{ execution_date.strftime("%H%M%S") }}'
+      RECIPE_NAME.replace("_", "-") + '-{{ execution_date.strftime("%H%M%S") }}'
   )
 
   # Define task dependencies by instantiating and linking tasks.
   dag_params = get_dag_parameters()
   derived_params = generate_derived_parameters(dag_params)
-  commands = generate_commands(dag_params, derived_params, RECIPE_NAME)
+  commands = generate_commands(dag_params, derived_params, RECIPE_INSTANCE)
 
   start_recipe = GKEStartPodOperator(
       task_id="start_recipe",
-      name=RECIPE.replace("_", "-"),
+      name=RECIPE_NAME.replace("_", "-"),
       project_id=dag_params["project"],
       cluster_name=dag_params["cluster_name"],
       location=derived_params["region"],
@@ -268,18 +334,16 @@ with DAG(
       project=dag_params["project"],
       airflow_runtime=recipe_runtime,
   ).as_teardown(setups=[commands])
-  # TODO(b/453860040): If start_recipe fails, clean_up_pod is not executed, even with teardown set. 
-  # Currently relying on the task output (command) before start_recipe, may need to update the Airflow version.
 
-  check_recipe_log = xpk.wait_for_workload_completion.override(
-      task_id="check_recipe_log",
-      poke_interval=30,
-      on_execute_callback=[set_sensor_timeout],
-  )(
+  check_recipe_log = wait_workload_complete(
       workload_id=derived_params["recipe_workload_id"],
       project_id=dag_params["project"],
       region=derived_params["region"],
       cluster_name=dag_params["cluster_name"],
+      timeout_enable=dag_params["timeout_enable"],
+      benchmark_steps=dag_params["benchmark_steps"],
+      timeout_in_min=dag_params["timeout_in_min"],
+      poke_interval=30,
   )
 
   clean_up_recipe = xpk.clean_up_workload.override(task_id="clean_up_recipe")(
