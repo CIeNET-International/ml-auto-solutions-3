@@ -218,7 +218,7 @@ class XpkTask(BaseTask):
       xpk_branch: str = xpk.MAIN_BRANCH,
       last_node: bool = False,
       max_restart: int = 0,
-      check_file_exists = False,
+      check_file_exists: bool = False,
   ) -> DAGNode:
     """Run a test job within a docker image.
 
@@ -257,7 +257,7 @@ class XpkTask(BaseTask):
           xpk_branch=xpk_branch,
           last_node=last_node,
           max_restart=max_restart,
-          check_file_exists=check_file_exists
+          check_file_exists=check_file_exists,
       )
       if not skip_post_process:
         run_model >> self.post_process(gcs_path)
@@ -275,7 +275,7 @@ class XpkTask(BaseTask):
       xpk_branch: str = xpk.MAIN_BRANCH,
       last_node: bool = False,
       max_restart: int = 0,
-      check_file_exists = False,
+      check_file_exists: bool  = False,
   ) -> DAGNode:
     """Run the TPU/GPU test in `task_test_config` using xpk.
 
@@ -373,7 +373,7 @@ class XpkTask(BaseTask):
       mtc_enabled: bool = False,
       xpk_branch: str = xpk.MAIN_BRANCH,
       max_restart: int = 0,
-      check_file_exists = False,
+      check_file_exists: bool = False,
   ) -> DAGNode:
     """Create the workload and wait for it to provision."""
     with TaskGroup(group_id="launch_workload_with_node_reach_to_step") as group:
@@ -427,8 +427,7 @@ class XpkTask(BaseTask):
 
       @task.branch
       def task_path_decider(
-          group_id: str,
-          check_file_exists: bool = False
+          group_id: str, check_file_exists: bool = False
       ) -> list[str]:
         """
         Decide whether the wait_for_file_to_exist should be
