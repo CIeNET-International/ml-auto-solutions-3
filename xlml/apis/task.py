@@ -275,7 +275,7 @@ class XpkTask(BaseTask):
       xpk_branch: str = xpk.MAIN_BRANCH,
       last_node: bool = False,
       max_restart: int = 0,
-      check_file_exists: bool  = False,
+      check_file_exists: bool = False,
   ) -> DAGNode:
     """Run the TPU/GPU test in `task_test_config` using xpk.
 
