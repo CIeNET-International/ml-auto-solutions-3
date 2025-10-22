@@ -82,6 +82,9 @@ with models.DAG(
         model_config="fuji-7B-v2-flash",
         step=200,
         checkpoint_step=50,
+        train_batch_size=128,
+        fsdp=128,
+        data=1,
         trainer_dir=test_config_util.DEFAULT_BUCKET,
         data_dir="gs://axlearn-public/tensorflow_datasets",
     ),
@@ -92,10 +95,20 @@ with models.DAG(
 
         #TODO: Need to discuss. This is really important for the axlearn CLI
         # command.
-        run_name = validation_util.get_image_name(
+        # Return: gcr.io/cienet-cmcs/axlearn-custom:axl3a9860z
+        name_image_full_path = validation_util.get_image_name(
             project_id=test_config.cluster.project,
             path_repository=image.value.split(":")[0],
-          )
+        )
+
+        # Create a run_name id for output directory.
+        run_name_id = validation_util.generate_run_name(
+            short_id=test_config.short_id,
+            checkpointing_type=checkpointing.name,
+            slice_number=slice_num,
+            accelerator=test_config.instance_type,
+            name_image=name_image_full_path,
+        )
 
         start_time = validation_util.generate_timestamp()
 
@@ -107,12 +120,12 @@ with models.DAG(
             time_out_in_min=60,
             test_name=f"{test_config.short_id}-reg",
             run_model_cmds="",
-            docker_image=run_name,
+            docker_image=name_image_full_path,
             test_owner=test_owner.CAMILO_Q,
           ).run(
             test_configs=test_config,
             axlearn_branch="main",
-            run_name=run_name,
+            run_name=run_name_id,
             trace_steps=[40, 90, 140, 190, 240]
           )
 
@@ -124,14 +137,15 @@ with models.DAG(
             project_id=test_config.cluster.project,
             location=zone_to_region(test_config.cluster.zone),
             cluster_name=test_config.cluster.name,
-            run_name=run_name,
+            run_name = run_name_id,
             pod_pattern=".*-0",
             start_time=start_time,
             end_time=end_time,
             steps_to_validate=steps_to_validate,
         )
         (
-          run_name
+          name_image_full_path
+          >> run_name_id
           >> start_time
           >> axlearn_regular_run
           >> end_time
