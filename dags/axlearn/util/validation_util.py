@@ -19,6 +19,37 @@ def generate_timestamp():
   return datetime.now(timezone.utc)
 
 @task
+def generate_run_name(
+    short_id: str,
+    checkpointing_type: str,
+    slice_number: int,
+    accelerator: str,
+    name_image: str,
+) -> str:
+  """
+  Generates a unique run name for a MaxText run based on given parameters.
+
+  The function creates a formatted string that includes a short identifier,
+  the number of slices, the accelerator type, and the current timestamp. This
+  run name is useful for uniquely identifying a specific training run,
+  especially for checkpointing and logging purposes.
+
+  Args:
+      short_id: A short identifier for the specific model or experiment.
+      checkpointing_type: The name of the checkpointing strategy (e.g., 'emc').
+      slice_number: The number of TPU slices used for the training run.
+      accelerator: The type of accelerator used (e.g., 'tpu-v4').
+
+  Returns:
+      A string formatted as '{short_id}-mtc-{slice_number}x-{accelerator}-{timestamp}'.
+  """
+
+  run_time = datetime.now().strftime("%Y-%m-%d-%H-%M")
+  run_name_id = f"{name_image.split(':')[1]}-{short_id}-{checkpointing_type}-{slice_number}x-{accelerator}-{run_time}"
+  return run_name_id
+
+
+@task
 def get_image_name(
   project_id: str,
   path_repository: str,
@@ -78,8 +109,10 @@ def validate_checkpoints_save_regular_axlearn(
     end_time: Optional[datetime] = None,
 ) -> None:
 
+  # This log pattern will be looged in a random pod of the first slice.
   log_pattern = r"^Serialization.*?step_(?P<step>\d+).*"
   complied_pattern = re.compile(log_pattern)
+  logging.info(f"Run_name: {run_name.split('-')[0]}\n")
   entries = list_log_entries(
       project_id=project_id,
       location=location,
@@ -110,6 +143,10 @@ def validate_checkpoints_save_regular_axlearn(
           f"Failed to validate. Expect steps are saved: {steps_to_validate}; "
           f"got: {steps_are_saved}"
       )
+  logging.info(
+    f"Successful Validation.\nExpected  Steps:{steps_to_validate}"
+    f"\tFound Steps:{steps_are_saved}"
+    )
 
 
 def list_log_entries(

@@ -224,6 +224,7 @@ class AxlearnTask(BaseTask):
         )
       launch_workload = self.launch_workload(
           workload_id=workload_id,
+          run_name=run_name,
           gcs_path=gcs_path,
           axlearn_branch=axlearn_branch,
           test_configs=test_configs,
@@ -244,7 +245,7 @@ class AxlearnTask(BaseTask):
       clean_up_workload = axlearn.clean_up_workload(
           workload_id=workload_id,
           project_id=self.task_gcp_config.project_name,
-          zone=self.task_gcp_config.zone,
+          region=gke.zone_to_region(self.task_gcp_config.zone),
           cluster_name=self.task_test_config.cluster_name,
       )
 
@@ -258,6 +259,7 @@ class AxlearnTask(BaseTask):
   def launch_workload(
       self,
       workload_id: str,
+      run_name: str,
       gcs_path: str,
       test_configs: test_config_util.TestConfig,
       axlearn_branch: str = "",
@@ -296,10 +298,14 @@ class AxlearnTask(BaseTask):
           steps=test_configs.step,
           checkpoint_steps=test_configs.checkpoint_step,
           run_cmds="",
+          run_name=run_name,
           module=test_configs.module,
           model_config=test_configs.model_config,
           trainer_dir=test_configs.trainer_dir,
           num_slices=self.task_test_config.num_slices,
+          fsdp=test_configs.fsdp,
+          data=test_configs.data, # For now not doing DP since found errors.
+          train_batch_size=test_configs.train_batch_size,
           trace_steps=trace_steps,
       )
 
@@ -311,7 +317,6 @@ class AxlearnTask(BaseTask):
           region=self.task_gcp_config.zone[:-2],
           cluster_name=self.task_test_config.cluster_name,
       )
-
 
       (
         setup_axlearn_dep
