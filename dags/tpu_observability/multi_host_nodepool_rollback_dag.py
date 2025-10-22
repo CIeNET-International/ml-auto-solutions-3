@@ -4,11 +4,23 @@ import datetime
 
 from airflow import models
 from airflow.models import Variable
+from airflow.utils.task_group import TaskGroup
 
 from dags.common.vm_resource import Project, Region, Zone
 from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.utils import node_pool_util as node_pool
 
+
+MACHINE_TYPE_CONFIG = {
+  "ct6e-standard-4t": {
+    "tpu_type": "v6e",
+    "tpu_topology": "4x4",
+  },
+  "ct5p-hightpu-4t": {
+    "tpu_type": "v5p",
+    "tpu_topology": "4x4",
+  },
+}
 
 with models.DAG(
     dag_id="multi-host-availability-rollback",
@@ -46,55 +58,57 @@ with models.DAG(
     inerrupt. If all of these tasks succeed than the test is successful.
     """,
 ) as dag:
-  node_pool_info = node_pool.Info(
-      project_id=Project.TPU_PROD_ENV_ONE_VM.value,
-      cluster_name=Variable.get(
-          "CLUSTER_NAME", default_var="tpu-observability-automation"
-      ),
-      node_pool_name=Variable.get(
-          "NODE_POOL_NAME", default_var="multi_host_nodepool_rollback_auto"
-      ),
-      location=Variable.get("LOCATION", default_var=Region.US_EAST5.value),
-      node_locations=Variable.get(
-          "NODE_LOCATIONS", default_var=Zone.US_EAST5_B.value
-      ),
-      num_nodes=Variable.get("NUM_NODES", default_var=4),
-      machine_type=Variable.get("MACHINE_TYPE", default_var="ct6e-standard-4t"),
-      tpu_topology=Variable.get("TPU_TOPOLOGY", default_var="4x4"),
-  )
+  for machine_type_name in MACHINE_TYPE_CONFIG:
+    node_pool_info = node_pool.Info(
+        project_id=Project.TPU_PROD_ENV_ONE_VM.value,
+        cluster_name=Variable.get(
+            "CLUSTER_NAME", default_var="tpu-observability-automation"
+        ),
+        node_pool_name=Variable.get(
+            "NODE_POOL_NAME", default_var="multi_host_nodepool_rollback_auto"
+        ),
+        location=Variable.get("LOCATION", default_var=Region.US_EAST5.value),
+        node_locations=Variable.get(
+            "NODE_LOCATIONS", default_var=Zone.US_EAST5_B.value
+        ),
+        num_nodes=Variable.get("NUM_NODES", default_var=4),
+        machine_type=machine_type_name,
+        tpu_topology=MACHINE_TYPE_CONFIG[machine_type_name].get("tpu_topology"),
+    )
 
-  create_node_pool = node_pool.create(
-      node_pool=node_pool_info, reservation="cloudtpu-20250131131310-2118578099"
-  )
+    with TaskGroup(group_id=f'multi-host-availability-rollback-{MACHINE_TYPE_CONFIG[machine_type_name].get("tpu_type")}'):
+      create_node_pool = node_pool.create(
+          node_pool=node_pool_info, reservation="cloudtpu-20250131131310-2118578099"
+      )
 
-  wait_node_pool_available = node_pool.wait_for_availability(
-      node_pool=node_pool_info, availability=True
-  )
+      wait_node_pool_available = node_pool.wait_for_availability(
+          node_pool=node_pool_info, availability=True
+      )
 
-  rollback_node_pool = node_pool.rollback(node_pool=node_pool_info)
+      rollback_node_pool = node_pool.rollback(node_pool=node_pool_info)
 
-  wait_node_pool_unavailable = node_pool.wait_for_availability(
-      node_pool=node_pool_info, availability=False
-  )
+      wait_node_pool_unavailable = node_pool.wait_for_availability(
+          node_pool=node_pool_info, availability=False
+      )
 
-  # A successful rollback means the availability will return to True.
-  # The end of the rollback marks the start the availability, so
-  # the client side should see the state change, and update the metric.
-  wait_node_pool_recovered = node_pool.wait_for_availability(
-      node_pool=node_pool_info, availability=True
-  )
+      # A successful rollback means the availability will return to True.
+      # The end of the rollback marks the start the availability, so
+      # the client side should see the state change, and update the metric.
+      wait_node_pool_recovered = node_pool.wait_for_availability(
+          node_pool=node_pool_info, availability=True
+      )
 
-  cleanup_node_pool = node_pool.delete.override(trigger_rule="all_done")(
-      node_pool=node_pool_info
-  ).as_teardown(
-      setups=create_node_pool,
-  )
+      cleanup_node_pool = node_pool.delete.override(trigger_rule="all_done")(
+          node_pool=node_pool_info
+      ).as_teardown(
+          setups=create_node_pool,
+      )
 
-  (
-      create_node_pool
-      >> wait_node_pool_available
-      >> rollback_node_pool
-      >> wait_node_pool_unavailable
-      >> wait_node_pool_recovered
-      >> cleanup_node_pool
-  )
+      (
+          create_node_pool
+          >> wait_node_pool_available
+          >> rollback_node_pool
+          >> wait_node_pool_unavailable
+          >> wait_node_pool_recovered
+          >> cleanup_node_pool
+      )
