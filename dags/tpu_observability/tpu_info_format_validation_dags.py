@@ -90,9 +90,7 @@ def verify_table_amount(tpu_info_output: list[tpu_info.Table]):
 
 @task
 def validate_chips_table(
-    tpu_info_output: list[tpu_info.Table],
-    node_pool: node_pool.Info,
-    tpu_config: TpuConfig,
+    tpu_info_output: list[tpu_info.Table], node_pool: node_pool.Info, tpu_config: TpuConfig
 ):
   """Validates the row count and content for the 'TPU Chips' table."""
   errors = []
@@ -311,8 +309,8 @@ with models.DAG(
       including the JobSet and the temporary node pools.
       """,
 ) as dag:
-  for machine in MachineConfigMap:
-    config = machine.value
+  for machine_config_enum in MachineConfigMap:
+    config = machine_config_enum.value
     cluster_info = node_pool.Info(
         project_id=models.Variable.get(
             "TFV_PROJECT_ID", default_var=Project.TPU_PROD_ENV_ONE_VM.value
@@ -362,7 +360,7 @@ with models.DAG(
 
     workload_script = Workload.JAX_TPU_BENCHMARK
 
-    with TaskGroup(group_id=f"v{config.tpu_version.value}"):
+    with TaskGroup(group_id=config.tpu_version.value):
       with TaskGroup(group_id="create_node_pool") as create_node_pool:
         create_first_node_pool = node_pool.create.override(
             task_id="node_pool_1",
@@ -383,9 +381,7 @@ with models.DAG(
       apply_time = jobset.run_workload(
           node_pool=cluster_info,
           kubeconfig=kubeconfig_path,
-          yaml_config=jobset_config.generate_yaml(
-              workload_script=workload_script
-          ),
+          yaml_config=jobset_config.generate_yaml(workload_script=workload_script),
           namespace=jobset_config.namespace,
       )
 
@@ -406,9 +402,7 @@ with models.DAG(
       )
 
       tpu_info_output = (
-          tpu_info.parse_tpu_info_output.override(
-              task_id="get_each_metric_table"
-          )
+          tpu_info.parse_tpu_info_output.override(task_id="get_each_metric_table")
           .partial()
           .expand(output=tpu_info_outputs)
       )
@@ -422,7 +416,7 @@ with models.DAG(
 
         validate_tpu_chips_metric = (
             validate_chips_table.override(task_id="validate_tpu_chips_metric")
-            .partial(node_pool=cluster_info, tpu_config=config)
+            .partial(node_pool=cluster_info)
             .expand(tpu_info_output=tpu_info_output)
         )
 
@@ -433,9 +427,7 @@ with models.DAG(
         )
 
         validate_tensorcore_metric = (
-            validate_tensorcore_table.override(
-                task_id="validate_tensorcore_metric"
-            )
+            validate_tensorcore_table.override(task_id="validate_tensorcore_metric")
             .partial()
             .expand(tpu_info_output=tpu_info_output)
         )
