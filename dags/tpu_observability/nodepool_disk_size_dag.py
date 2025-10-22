@@ -19,9 +19,7 @@ from airflow.models import Variable
 from dags.tpu_observability.utils import node_pool_util as node_pool
 
 
-# QUERY_WINDOW_DURATION_SECONDS = 600
-
-
+QUERY_WINDOW_DURATION_SECONDS = 3600  # ±1 hour
 
 
 def _to_iso(ts):
@@ -55,74 +53,28 @@ def _operation_name(project_id, location, op_id_or_name):
     )
 
 
-# @task.sensor(poke_interval=60, timeout=2700, mode="reschedule")
-# def wait_for_nodepool_metrics_event(
-#     filter_query: str,
-#     project_id: str,
-#     anchor_seconds: int | None = None,
-#     window_seconds: int = QUERY_WINDOW_DURATION_SECONDS,
-# ) -> bool:
-#     """Poll a fixed Monitoring window around the (fixed) event time."""
-#     anchor = int(anchor_seconds if anchor_seconds is not None else time.time())
-#     interval = monitoring_v3.TimeInterval({
-#         "start_time": {"seconds": anchor - window_seconds},
-#         "end_time": {"seconds": anchor + window_seconds},
-#     })
-
-#     request = monitoring_v3.ListTimeSeriesRequest(
-#         name=f"projects/{project_id}",
-#         filter=filter_query,
-#         interval=interval,
-#         view=monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.FULL,
-#     )
-#     client = monitoring_v3.MetricServiceClient()
-#     try:
-#         resp = client.list_time_series(request=request)
-
-#         print("******Poking for uptime******")
-#         print({"start_seconds": anchor - window_seconds,
-#                "end_seconds": anchor + window_seconds})
-
-#         if resp.time_series:
-#             print("Event detected")
-#             return True
-#         else:
-#             print("No time series found. Retrying...")
-#             return False
-#     except Exception as e:
-#         print(f"ERROR during metric check: {e}. Will repoke.")
-#         return False
-# Make the search window ±60 minutes
-QUERY_WINDOW_DURATION_SECONDS = 3600  # was 600
-
 @task.sensor(poke_interval=60, timeout=7200, mode="reschedule")
 def wait_for_nodepool_metrics_event(
     filter_query: str,
     project_id: str,
-    anchor_seconds: int,
+    anchor_seconds: int | None = None,
     window_seconds: int = QUERY_WINDOW_DURATION_SECONDS,
-    give_up_grace_seconds: int = 7200,  # stop ~2h after anchor+window
+    give_up_grace_seconds: int = 7200,  # 2h total grace
 ) -> bool:
-    """
-    Poll a Monitoring window around the fixed event time (anchor).
-    Uses a trailing 'end' so delayed ingestion is still included.
-    Returns True when any time series is found; otherwise False to repoke.
-    """
-    from datetime import datetime, timezone
-    import time as _time
+    """Poll Cloud Monitoring for node-pool recovery metrics."""
     from google.cloud import monitoring_v3
+    import time
 
-    client = monitoring_v3.MetricServiceClient()
-
-    start_s = int(anchor_seconds - window_seconds)
-    # Trailing end: include up-to-now so late-emitted samples are visible
-    end_s   = max(int(anchor_seconds + window_seconds), int(_time.time()))
+    anchor = int(anchor_seconds or time.time())
+    start_s = anchor - window_seconds
+    end_s = max(anchor + window_seconds, int(time.time()))
 
     interval = monitoring_v3.TimeInterval({
         "start_time": {"seconds": start_s},
-        "end_time":   {"seconds": end_s},
+        "end_time": {"seconds": end_s},
     })
 
+    client = monitoring_v3.MetricServiceClient()
     request = monitoring_v3.ListTimeSeriesRequest(
         name=f"projects/{project_id}",
         filter=filter_query,
@@ -131,44 +83,22 @@ def wait_for_nodepool_metrics_event(
     )
 
     try:
-        series = list(client.list_time_series(request=request))  # <-- consume pager
-        series_count = len(series)
-
-        print("******Poking for uptime******")
-        print({
-            "project": project_id,
-            "filter": filter_query,
-            "start_seconds": start_s,
-            "end_seconds": end_s,
-            "start_iso": datetime.fromtimestamp(start_s, tz=timezone.utc).isoformat(),
-            "end_iso":   datetime.fromtimestamp(end_s,   tz=timezone.utc).isoformat(),
-            "series_count": series_count,
-        })
-
-        if series_count > 0:
-            # Small peek at labels to confirm we matched the right resource
-            first = series[0]
-            labels = dict(getattr(first.metric, "labels", {})) if getattr(first, "metric", None) else {}
-            print(f"[poll] Found {series_count} series. First metric labels: {labels}")
-            print("Event detected")
+        series = list(client.list_time_series(request=request))
+        if series:
+            print(f"[poll] Metric detected ({len(series)} series).")
             return True
 
-        # Hard stop well after the window to avoid endless repokes
-        hard_end = int(anchor_seconds + window_seconds + give_up_grace_seconds)
-        now = int(_time.time())
-        if now > hard_end:
-            print(f"[poll] Hard stop: now={now} > hard_end={hard_end}. "
-                  "No series found for this event window.")
-            return True  # or raise AirflowSkipException
+        # Stop if well past grace window
+        if time.time() > (anchor + window_seconds + give_up_grace_seconds):
+            print("[poll] Grace period exceeded — ending sensor.")
+            return True
 
-        print("No time series found. Retrying...")
+        print("[poll] No metrics yet, repoking…")
         return False
 
     except Exception as e:
-        print(f"ERROR during metric check: {e}. Will repoke.")
+        print(f"[poll] ERROR during metric check: {e}")
         return False
-
-
 
 
 @task(task_id="check_for_negative")
@@ -346,7 +276,7 @@ with models.DAG(
         node_locations=Variable.get("NODE_LOCATIONS", default_var="europe-west4-a"), # europe-west4-a # us-east5-b
         num_nodes=Variable.get("NUM_NODES", default_var=2),
         machine_type=Variable.get("MACHINE_TYPE", default_var="ct6e-standard-4t"), 
-        tpu_topology=Variable.get("TPU_TOPOLOGY", default_var="2x4"), # 2x2
+        tpu_topology=Variable.get("TPU_TOPOLOGY", default_var="2x4"), 
     )
 
     UPTIME_FILTER_QRY = (
@@ -370,73 +300,7 @@ with models.DAG(
     )
 
     # create_nodepool = node_pool.create(node_pool=node_pool_info, reservation="cloudtpu-20250131131310-2118578099")
-    # create_nodepool = BashOperator(
-    #     task_id="create_nodepool",
-    #     bash_command=f"""
-    #     if gcloud container node-pools describe {node_pool_info.node_pool_name} \\
-    #     --cluster tpu-observability-automation --project tpu-prod-env-one-vm \\
-    #     --region us-east5 &> /dev/null; then
-    #     echo "Nodepool {node_pool_info.node_pool_name} already exists."
-    #     else
-    #     gcloud container node-pools create {node_pool_info.node_pool_name} \\
-    #     --project tpu-prod-env-one-vm \\
-    #     --cluster tpu-observability-automation \\
-    #     --location us-east5 \\
-    #     --node-locations us-east5-b \\
-    #     --num-nodes="1" \\
-    #     --machine-type "ct6e-standard-4t" \\
-    #     --tpu-topology "2x2" \\
-    #     --enable-gvnic \\
-    #     --scopes "https://www.googleapis.com/auth/cloud-platform" \\
-    #     --reservation-affinity=specific \\
-    #     --reservation=cloudtpu-20250131131310-2118578099
-    #     fi
-    #     """,
-    #     retries=3,
-    #     )
-
-    
-    create_nodepool = BashOperator(
-        task_id="create_nodepool",
-        bash_command=f"""
-        if gcloud container node-pools describe {node_pool_info.node_pool_name} \\
-        --cluster {node_pool_info.cluster_name} --project {node_pool_info.project_id} \\
-        --region {node_pool_info.location} &> /dev/null; then
-        echo "Nodepool {node_pool_info.node_pool_name} already exists."
-        else
-        gcloud container node-pools create {node_pool_info.node_pool_name} \\
-        --project {node_pool_info.project_id} \\
-        --cluster {node_pool_info.cluster_name} \\
-        --location {node_pool_info.location} \\
-        --node-locations {node_pool_info.node_locations} \\
-        --num-nodes="2" \\
-        --machine-type "ct6e-standard-4t" \\
-        --tpu-topology "2x4" \\
-        --enable-gvnic \\
-        --scopes "https://www.googleapis.com/auth/cloud-platform" 
-        fi
-        """,
-        retries=3,
-        )
-
-
-    # disk_size_change = BashOperator(
-    #     task_id="disk_size_change",
-    #     bash_command=(
-    #         f'gcloud container node-pools update {node_pool_info.node_pool_name} '
-    #         f'--project={node_pool_info.project_id} '
-    #         f'--cluster={node_pool_info.cluster_name} '
-    #         f'--region {node_pool_info.location} '
-    #         f'--disk-size=150 --quiet'
-    #     ),
-    #     retries=3,
-    # )
-
-    # wait_update = wait_nodepool_update_done(
-    #     op_name=disk_size_change.output,    # XCom from BashOperator
-    #     project_id=node_pool_info.project_id,
-    #     location=node_pool_info.location,   # use --region for regional clusters; --zone for zonal
-    # )
+    create_nodepool = node_pool.create(node_pool=node_pool_info)
 
 
     check_for_negative_task = check_for_negative(
@@ -453,12 +317,6 @@ with models.DAG(
     )
 
 
-    # (
-    #     create_nodepool >> disk_size_change >> wait_update,
-    #     wait_update >> check_for_negative_task,
-    #     [wait_update, check_for_negative_task] >> poll_nodepool >> cleanup_node_pool,
-
-    # )
 
     (
         create_nodepool
