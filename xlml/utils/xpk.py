@@ -19,7 +19,7 @@ import tempfile
 import uuid
 import sys
 import re
-from typing import Tuple
+from typing import Tuple, Union, List
 from absl import logging
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
