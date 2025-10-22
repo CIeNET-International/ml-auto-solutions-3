@@ -128,7 +128,9 @@ def generate_workload_id(run_name_workload: str) -> str:
 
   #TODO: Find a way to run workload with a better name
   #For now the name will be only the tag of the image
-  return f"{run_name_workload}"
+  real_run_name_from_image = run_name_workload.split("-")[0]
+  logging.info(f"Run_name used: {real_run_name_from_image}")
+  return f"{real_run_name_from_image}"
 
 
 @task(execution_timeout=timedelta(hours=1))
@@ -141,6 +143,7 @@ def run_workload_axlearn(
     docker_image: str,
     benchmark_id:str,
     workload_id: str,
+    run_name: str,
     steps: int,
     checkpoint_steps: int,
     run_cmds: str,
@@ -151,7 +154,7 @@ def run_workload_axlearn(
     num_slices: int = 1,
     trace_steps: list[str] = None,
 ):
-  """Run workload through axlearn tool."""
+  """Run workload through axlearn CLI command."""
 
   # Log required info for XLML PLX Dashboard
   composer.log_metadata_for_xlml_dashboard({
@@ -167,21 +170,24 @@ def run_workload_axlearn(
       "num_slices": num_slices,
   })
 
-  # Some important ENV variables need it to make axlearn CLI runs.
-  # TODO NAME variable hardcoded for now. Need to find stable name.
+  # Get  image run name and tag separatedly since we will need it for Axlearn CLI
+  # e.g iamge_run_name = axlearn-custom:xynzb3zkn
+  image_with_tag = docker_image.split("/")[-1]
+  tag = image_with_tag.split(":")[1]
+  image_run_name = image_with_tag.split(":")[0]
+
+
   export_var = [
       f"export BASTION_TIER=disabled",
       f"export PROJECT_ID={cluster_project}",
   ]
-
   trace_list = (
       ("--trace_at_steps=" + ",".join(map(str, trace_steps)))
       if len(trace_steps) > 0
       else " "
   )
 
-  # TODO Need to inject python3 ... command to sed multiple lines in orginal
-  # axlearn repo.
+  # Injection of sed commands to modify at runtime apple/axlearn repo.
   # Need to change:
   #     - Batch size: Depends on the TPU topology
   #     - Logging for debugging purposes
@@ -193,12 +199,6 @@ def run_workload_axlearn(
   #         "sed -i 's|max_step = TOTAL_TOKENS\[version\]\[model_size\] // tokens_per_batch|max_step = 100|; /max_step = 100/a save_every_n_steps=500' axlearn/experiments/text/gpt/fuji.py"
   #         )
   # This will be injected in the following Axlearn command.
-
-  # Get  image run name and tag separatedly since we will need it for Axlearn CLI
-  # e.g iamge_run_name = axlearn-custom:xynzb3zkn
-  image_with_tag = docker_image.split("/")[-1]
-  tag = image_with_tag.split(":")[1]
-  image_run_name = image_with_tag.split(":")[0]
 
   # The main Axlearn command to run.
   workload_create_cmd = (
@@ -221,7 +221,7 @@ def run_workload_axlearn(
     rf"sed -i '/max_step=max_step,/a \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ save_every_n_steps={checkpoint_steps},' axlearn/experiments/text/gpt/fuji.py; "
     f"python3 -c 'import jax; jax.devices()'; python3 -m axlearn.common.launch_trainer_main\" "
       f"--module={module} --config={model_config} "
-      f"--trainer_dir={trainer_dir}/output_{tag} "
+      f"--trainer_dir={trainer_dir}/{run_name} "
       f"--data_dir=gs://axlearn-public/tensorflow_datasets "
       f"--mesh_selector={accelerator_type} "
       f"--jax_backend=tpu "
@@ -229,7 +229,7 @@ def run_workload_axlearn(
   )
 
   #TODO Need to find a better way to activate KUBECONFIG env variable. Instead
-  # of source ....
+  # of source ~/.bashrc....
   cmds = [
       "set -xue",
       "source ~/.bashrc",
@@ -241,8 +241,6 @@ def run_workload_axlearn(
       *export_var,
       workload_create_cmd,
   ]
-
-  # Execute given commands
   hook = SubprocessHook()
   result = hook.run_command(["bash", "-c", ";".join(cmds)])
   assert (
@@ -292,11 +290,17 @@ def _construct_cmds_cli_install()->List[str]:
   ]
 
   # Insert the combined environment variable setup commands here
-  if not os.getenv("KUBECONFIG"):
-    install_python3_cmd.extend(env_var_kube)
-  if not os.getenv("PYENV_ROOT"):
-    install_python3_cmd.extend(env_var_pyenv)
+  # for kubeconfig and pyenv_root
+  default_kubeconfig = "/home/airflow/composer_kube_config"
+  current_kubeconfig = os.getenv("KUBECONFIG")
+  current_pyenvconfig = os.getenv("PYENV_ROOT")
+  print(f"DEBUG: Current Kubeconfig: '{current_kubeconfig}'\tCurrent PYENV_ROOT {current_pyenvconfig}")
 
+  # We do this so we dont duplicate ENV_VARS in ~/.bashrc file.
+  if current_kubeconfig == default_kubeconfig:
+    install_python3_cmd.extend(env_var_kube)
+  if current_pyenvconfig is None:
+    install_python3_cmd.extend(env_var_pyenv)
 
   # Continue with the rest of the python installation commands
   install_python3_cmd.extend([

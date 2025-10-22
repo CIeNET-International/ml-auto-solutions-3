@@ -224,6 +224,7 @@ class AxlearnTask(BaseTask):
         )
       launch_workload = self.launch_workload(
           workload_id=workload_id,
+          run_name=run_name,
           gcs_path=gcs_path,
           axlearn_branch=axlearn_branch,
           test_configs=test_configs,
@@ -258,6 +259,7 @@ class AxlearnTask(BaseTask):
   def launch_workload(
       self,
       workload_id: str,
+      run_name: str,
       gcs_path: str,
       test_configs: test_config_util.TestConfig,
       axlearn_branch: str = "",
@@ -296,6 +298,7 @@ class AxlearnTask(BaseTask):
           steps=test_configs.step,
           checkpoint_steps=test_configs.checkpoint_step,
           run_cmds="",
+          run_name=run_name,
           module=test_configs.module,
           model_config=test_configs.model_config,
           trainer_dir=test_configs.trainer_dir,

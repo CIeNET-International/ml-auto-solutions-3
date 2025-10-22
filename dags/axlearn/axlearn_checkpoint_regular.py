@@ -92,10 +92,18 @@ with models.DAG(
 
         #TODO: Need to discuss. This is really important for the axlearn CLI
         # command.
-        run_name = validation_util.get_image_name(
+        name_image = validation_util.get_image_name(
             project_id=test_config.cluster.project,
             path_repository=image.value.split(":")[0],
           )
+        # Create a run_name id for output directory.
+        run_name_id = validation_util.generate_run_name(
+            short_id=test_config.short_id,
+            checkpointing_type=checkpointing.name,
+            slice_number=slice_num,
+            accelerator=test_config.accelerator,
+            name_image=name_image,
+        )
 
         start_time = validation_util.generate_timestamp()
 
@@ -107,12 +115,12 @@ with models.DAG(
             time_out_in_min=60,
             test_name=f"{test_config.short_id}-reg",
             run_model_cmds="",
-            docker_image=run_name,
+            docker_image=name_image,
             test_owner=test_owner.CAMILO_Q,
           ).run(
             test_configs=test_config,
             axlearn_branch="main",
-            run_name=run_name,
+            run_name=run_name_id,
             trace_steps=[40, 90, 140, 190, 240]
           )
 
