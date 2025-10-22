@@ -90,6 +90,7 @@ class Region(enum.Enum):
   # used for GKE
   US_CENTRAL1 = "us-central1"
   ASIA_NORTHEAST1 = "asia-northeast1"
+  US_EAST5 = "us-east5"
 
 
 class Zone(enum.Enum):
@@ -158,6 +159,8 @@ class MachineVersion(enum.Enum):
   G2_STAND_32 = "g2-standard-32"  # 128GB memroy
   G2_STAND_48 = "g2-standard-48"  # 4 GPUs, 192GB memory
   G2_STAND_96 = "g2-standard-96"  # 8 GPUs, 384GB memory
+  CT6E_STAND_4T = "ct6e-standard-4t"
+  CT5P_HIGHTPU_4T = "ct5p-hightpu-4t"
 
 
 class AcceleratorType(enum.Enum):
@@ -254,13 +257,6 @@ class XpkClusters:
   )
   TPU_V5P_128_CLUSTER = XpkClusterConfig(
       name="v5p-128-bodaborg-europe-west4-b",
-      device_version=TpuVersion.V5P,
-      core_count=128,
-      project=Project.CLOUD_TPU_MULTIPOD_DEV.value,
-      zone=Zone.EUROPE_WEST4_B.value,
-  )
-  TPU_V5P_128_CLUSTER_ORBAX = XpkClusterConfig(
-      name="ml-auto-solutions-orbax",
       device_version=TpuVersion.V5P,
       core_count=128,
       project=Project.CLOUD_TPU_MULTIPOD_DEV.value,
