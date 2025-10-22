@@ -73,9 +73,13 @@ class TestConfig:
   model_config: str
   trainer_dir: str
   data_dir: str
+  train_batch_size: int
+  fsdp: int
+  data: int
 
-  def generate_step_to_validate(self ) -> list[int]:
+
+  def generate_step_to_validate(self) -> list[int]:
     total_steps = self.step
     k = self.checkpoint_step
-    last_step = self.step - 1
-    return [*range(0, total_steps, k), last_step]
+    last_step = self.step
+    return [*range(self.checkpoint_step, total_steps, k), last_step]

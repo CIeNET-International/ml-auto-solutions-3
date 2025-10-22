@@ -236,6 +236,7 @@ class AxlearnTask(BaseTask):
   def launch_workload(
       self,
       workload_id: str,
+      run_name: str,
       gcs_path: str,
       axlearn_branch: str = "",
       module: str = None,
