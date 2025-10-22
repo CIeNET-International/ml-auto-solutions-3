@@ -218,6 +218,7 @@ class XpkTask(BaseTask):
       xpk_branch: str = xpk.MAIN_BRANCH,
       last_node: bool = False,
       max_restart: int = 0,
+      check_file_exists = False,
   ) -> DAGNode:
     """Run a test job within a docker image.
 
@@ -239,6 +240,8 @@ class XpkTask(BaseTask):
         workload; otherwise, it targets the first node.
       max_restart: By default, this is 0.
         This will restart the job with flag "--max-restarts"
+      check_file_exists: By default, this is False. If set to True,
+        task branch task_path_decider will be performed.
     Returns:
       A task group with the following tasks chained: run_model and
       post_process.
@@ -254,6 +257,7 @@ class XpkTask(BaseTask):
           xpk_branch=xpk_branch,
           last_node=last_node,
           max_restart=max_restart,
+          check_file_exists=check_file_exists
       )
       if not skip_post_process:
         run_model >> self.post_process(gcs_path)
@@ -271,6 +275,7 @@ class XpkTask(BaseTask):
       xpk_branch: str = xpk.MAIN_BRANCH,
       last_node: bool = False,
       max_restart: int = 0,
+      check_file_exists = False,
   ) -> DAGNode:
     """Run the TPU/GPU test in `task_test_config` using xpk.
 
@@ -290,7 +295,8 @@ class XpkTask(BaseTask):
         workload; otherwise, it targets the first node.
       max_restart: By default, this is 0.
         This will restart the job with flag "--max-restarts"
-
+      check_file_exists: By default, this is False. If set to True,
+        task branch task_path_decider will be performed.
     Returns:
       A DAG node that executes the model test.
     """
@@ -315,6 +321,7 @@ class XpkTask(BaseTask):
               mtc_enabled,
               xpk_branch,
               max_restart,
+              check_file_exists,
           )
       )
 
@@ -366,6 +373,7 @@ class XpkTask(BaseTask):
       mtc_enabled: bool = False,
       xpk_branch: str = xpk.MAIN_BRANCH,
       max_restart: int = 0,
+      check_file_exists = False,
   ) -> DAGNode:
     """Create the workload and wait for it to provision."""
     with TaskGroup(group_id="launch_workload_with_node_reach_to_step") as group:
@@ -418,24 +426,24 @@ class XpkTask(BaseTask):
       do_nothing = EmptyOperator(task_id="do_nothing")
 
       @task.branch
-      def task_path_decider(workload_id: str, group_id: str) -> list[str]:
+      def task_path_decider(
+          group_id: str,
+          check_file_exists: bool = False
+      ) -> list[str]:
         """
         Decide whether the wait_for_file_to_exist should be
-        executed based on the workload_id
+        executed based on the the value of check_file_exists
         """
-        # Future work: Add new workload short IDs to this list if required.
-        short_id = ["max-reg-res-gcs-node"]
         task_do_nothing = f"{group_id}.do_nothing"
         task_wait_file_id = f"{group_id}.wait_for_file_to_exist"
-        for item in short_id:
-          if item in workload_id:
-            return [task_wait_file_id]
+        if check_file_exists:
+          return [task_wait_file_id]
         return [task_do_nothing]
 
       # Conditional Execution: Not all test scenarios require checking for
       # the existence of commit_message.txt (in task: wait_for_file_to_exist).
       # using the @task.branch decorator to dynamically route the workflow.
-      decider = task_path_decider(workload_id, group.group_id)
+      decider = task_path_decider(group.group_id, check_file_exists)
 
       (
           run_workload
