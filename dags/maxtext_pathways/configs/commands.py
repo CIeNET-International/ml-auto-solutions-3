@@ -38,14 +38,6 @@ INSTALL_DOCKER = [
     "while ! sudo docker info > /dev/null 2>&1; do echo 'Waiting for Docker to start...'; sleep 5; done",  # check whether Docker is started successfully
 ]
 
-
-INSTALL_GCLOUD = [
-    "curl -O https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-linux-x86_64.tar.gz",
-    "tar -xf google-cloud-cli-linux-x86_64.tar.gz",
-    "./google-cloud-sdk/install.sh",
-    "./google-cloud-sdk/bin/gcloud init",
-]
-
 INSTALL_KUBECTL_KJOB = [
     "curl -Lo ./kubectl-kjob https://github.com/kubernetes-sigs/kjob/releases/download/v0.1.0/kubectl-kjob-linux-amd64",
     "chmod +x ./kubectl-kjob",
@@ -78,5 +70,3 @@ BACK_MAXTEXT = [
     "cd /deps",  # back to maxtext folder
     "export USER=root",  # give it a USER to `pip install --upgrade pip`
 ]
-
-RUN_RECIPE = ["python3 -m benchmarks.recipes.{recipe_name}"]

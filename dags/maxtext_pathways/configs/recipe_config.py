@@ -25,7 +25,15 @@ class Recipe(enum.Enum):
   often found in the referenced MaxText repository:
   https://github.com/AI-Hypercomputer/maxtext/blob/main/benchmarks/recipes
   """
+
   PW_MCJAX_BENCHMARK_RECIPE = "pw_mcjax_benchmark_recipe"
+
+  @property
+  def run_command(self) -> str:
+    """
+    Generates the complete command string to execute this recipe as a Python module.
+    """
+    return f"python3 -m benchmarks.recipes.{self.value}"
 
 
 RECIPE_FLAG = [
