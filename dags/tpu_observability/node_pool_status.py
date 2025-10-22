@@ -78,13 +78,14 @@ with models.DAG(
 
       task_id = "create_node_pool"
       create_node_pool = node_pool.create.override(task_id=task_id)(
-          node_pool=node_pool_info, reservation="cloudtpu-20250131131310-2118578099"
+          node_pool=node_pool_info,
+          reservation="cloudtpu-20250131131310-2118578099",
       )
 
       task_id = "wait_for_provisioning"
-      wait_for_provisioning = node_pool.wait_for_status.override(task_id=task_id)(
-          node_pool=node_pool_info, status=node_pool.Status.PROVISIONING
-      )
+      wait_for_provisioning = node_pool.wait_for_status.override(
+          task_id=task_id
+      )(node_pool=node_pool_info, status=node_pool.Status.PROVISIONING)
 
       task_id = "wait_for_running"
       wait_for_running = node_pool.wait_for_status.override(task_id=task_id)(
