@@ -5,7 +5,6 @@ import datetime
 from airflow import models
 from airflow.models import Variable
 from airflow.utils.task_group import TaskGroup
-from airflow.utils.trigger_rule import TriggerRule
 
 from dags.common.vm_resource import Project, Region, Zone
 from dags.map_reproducibility.utils import constants
@@ -49,8 +48,8 @@ with models.DAG(
     inerrupt. If all of these tasks succeed than the test is successful.
     """,
 ) as dag:
-  for machine in MachineConfigMap:
-    config = machine.value
+  for machine_config_enum in MachineConfigMap:
+    config = machine_config_enum.value
     node_pool_info = node_pool.Info(
         project_id=Project.TPU_PROD_ENV_ONE_VM.value,
         cluster_name=Variable.get(
@@ -68,10 +67,9 @@ with models.DAG(
         tpu_topology=config.tpu_topology,
     )
 
-    with TaskGroup(group_id=f"v{config.tpu_version.value}"):
+    with TaskGroup(group_id=config.tpu_version.value):
       create_node_pool = node_pool.create(
-          node_pool=node_pool_info,
-          reservation="cloudtpu-20250131131310-2118578099",
+          node_pool=node_pool_info, reservation="cloudtpu-20250131131310-2118578099"
       )
 
       wait_node_pool_available = node_pool.wait_for_availability(
@@ -91,9 +89,9 @@ with models.DAG(
           node_pool=node_pool_info, availability=True
       )
 
-      cleanup_node_pool = node_pool.delete.override(
-          trigger_rule=TriggerRule.ALL_DONE
-      )(node_pool=node_pool_info).as_teardown(
+      cleanup_node_pool = node_pool.delete.override(trigger_rule="all_done")(
+          node_pool=node_pool_info
+      ).as_teardown(
           setups=create_node_pool,
       )
 
