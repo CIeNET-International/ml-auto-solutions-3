@@ -42,13 +42,8 @@ with models.DAG(
       All node-pool will be cleaned up clean it up after the tests.
     """,
 ) as dag:
-<<<<<<< HEAD
-  for machine in MachineConfigMap:
-    config = machine.value
-=======
   for machine_config_enum in MachineConfigMap:
     config = machine_config_enum.value
->>>>>>> ab149c0 (feat: Enable parallel testing for all machine types across three DAGs. Refactors gke_node_pool_status, multi_host_nodepool_rollback, and tpu_info_format_validation_dag to use a loop. Each machine type's workflow is now contained in its own TaskGroup for clear parallelism and graph organization.)
     node_pool_info = node_pool.Info(
         project_id=models.Variable.get(
             "PROJECT_ID", default_var=Project.TPU_PROD_ENV_ONE_VM.value
@@ -79,105 +74,17 @@ with models.DAG(
         "WRONG_NODE_LOCATION", default_var=Zone.ASIA_EAST1_C.value
     )
 
-<<<<<<< HEAD
-    with TaskGroup(group_id=f"v{config.tpu_version.value}"):
-      task_id = "create_node_pool"
-      create_node_pool = node_pool.create.override(task_id=task_id)(
-          node_pool=node_pool_info,
-          reservation="cloudtpu-20250131131310-2118578099",
-      )
-
-      task_id = "wait_for_provisioning"
-      wait_for_provisioning = node_pool.wait_for_status.override(
-          task_id=task_id
-      )(node_pool=node_pool_info, status=node_pool.Status.PROVISIONING)
-
-      task_id = "wait_for_running"
-      wait_for_running = node_pool.wait_for_status.override(task_id=task_id)(
-          node_pool=node_pool_info, status=node_pool.Status.RUNNING
-      )
-
-      task_id = "delete_node"
-      delete_node = node_pool.delete_one_random_node.override(task_id=task_id)(
-          node_pool=node_pool_info
-      )
-
-      task_id = "wait_for_repair"
-      wait_for_repair = node_pool.wait_for_status.override(task_id=task_id)(
-          node_pool=node_pool_info, status=node_pool.Status.RECONCILING
-      )
-
-      task_id = "wait_for_recovered"
-      wait_for_recovered = node_pool.wait_for_status.override(task_id=task_id)(
-          node_pool=node_pool_info, status=node_pool.Status.RUNNING
-      )
-
-      task_id = "delete_node_pool"
-      delete_node_pool = node_pool.delete.override(task_id=task_id)(
-          node_pool=node_pool_info
-      )
-
-      task_id = "wait_for_stopping"
-      wait_for_stopping = node_pool.wait_for_status.override(task_id=task_id)(
-          node_pool=node_pool_info, status=node_pool.Status.STOPPING
-      )
-
-      task_id = "cleanup_node_pool"
-      cleanup_node_pool = node_pool.delete.override(
-          task_id=task_id, trigger_rule=TriggerRule.ALL_DONE
-      )(node_pool=node_pool_info).as_teardown(
-          setups=create_node_pool,
-      )
-
-      # Intentionally create a node pool with problematic configurations
-      # to validate that it enters the ERROR state.
-      task_id = "create_problematic_node_pool_info"
-      create_problematic_node_pool_info = node_pool.create.override(
-          task_id=task_id
-      )(
-          node_pool=problematic_node_pool_info,
-          # The failure is intentionally ignored because we want to validate
-          # that the status of the node pool (which fails to be created) is "ERROR".
-          ignore_failure=True,
-      )
-
-      task_id = "wait_for_error"
-      wait_for_error = node_pool.wait_for_status.override(task_id=task_id)(
-          node_pool=problematic_node_pool_info, status=node_pool.Status.ERROR
-      )
-
-      task_id = "cleanup_wrong_node_pool"
-      cleanup_wrong_node_pool = node_pool.delete.override(
-          task_id=task_id, trigger_rule=TriggerRule.ALL_DONE
-      )(node_pool=problematic_node_pool_info).as_teardown(
-          setups=create_problematic_node_pool_info,
-      )
-
-      normal_flow = (
-          create_node_pool
-          >> wait_for_provisioning
-          >> wait_for_running
-          >> delete_node
-          >> wait_for_repair
-          >> wait_for_recovered
-          >> delete_node_pool
-          >> wait_for_stopping
-          >> cleanup_node_pool
-      )
-
-=======
     with TaskGroup(group_id=config.tpu_version.value):
 
       task_id = "create_node_pool"
       create_node_pool = node_pool.create.override(task_id=task_id)(
-          node_pool=node_pool_info,
-          reservation="cloudtpu-20250131131310-2118578099",
+          node_pool=node_pool_info, reservation="cloudtpu-20250131131310-2118578099"
       )
 
       task_id = "wait_for_provisioning"
-      wait_for_provisioning = node_pool.wait_for_status.override(
-          task_id=task_id
-      )(node_pool=node_pool_info, status=node_pool.Status.PROVISIONING)
+      wait_for_provisioning = node_pool.wait_for_status.override(task_id=task_id)(
+          node_pool=node_pool_info, status=node_pool.Status.PROVISIONING
+      )
 
       task_id = "wait_for_running"
       wait_for_running = node_pool.wait_for_status.override(task_id=task_id)(
@@ -252,7 +159,6 @@ with models.DAG(
           >> cleanup_node_pool
       )
 
->>>>>>> ab149c0 (feat: Enable parallel testing for all machine types across three DAGs. Refactors gke_node_pool_status, multi_host_nodepool_rollback, and tpu_info_format_validation_dag to use a loop. Each machine type's workflow is now contained in its own TaskGroup for clear parallelism and graph organization.)
       flow_for_error_state = (
           create_problematic_node_pool_info
           >> wait_for_error
