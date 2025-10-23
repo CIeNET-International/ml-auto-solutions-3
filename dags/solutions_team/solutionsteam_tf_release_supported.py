@@ -26,7 +26,7 @@ from dags.solutions_team.configs.tensorflow import common
 # Release tests only need to run once, they can be run manually as needed
 SCHEDULED_TIME = None
 VERSION = f"{tf_config.MAJOR_VERSION}.{tf_config.MINOR_VERSION}"
-default_args = {'retries': 0}
+default_args = {"retries": 0}
 
 with models.DAG(
     dag_id=f"tf_{tf_config.MAJOR_VERSION}_{tf_config.MINOR_VERSION}_supported",
@@ -135,7 +135,6 @@ with models.DAG(
     start_date=datetime.datetime(2023, 8, 16),
     catchup=False,
 ) as dag:
-
   tf_resnet_v6e_4 = tf_config.get_tf_resnet_config(
       tpu_version=TpuVersion.TRILLIUM,
       tpu_cores=4,
