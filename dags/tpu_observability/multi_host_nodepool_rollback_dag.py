@@ -91,9 +91,9 @@ with models.DAG(
           node_pool=node_pool_info, availability=True
       )
 
-      cleanup_node_pool = node_pool.delete.override(trigger_rule=TriggerRule.ALL_DONE)(
-          node_pool=node_pool_info
-      ).as_teardown(
+      cleanup_node_pool = node_pool.delete.override(
+          trigger_rule=TriggerRule.ALL_DONE
+      )(node_pool=node_pool_info).as_teardown(
           setups=create_node_pool,
       )
 
