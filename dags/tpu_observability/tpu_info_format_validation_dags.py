@@ -358,9 +358,7 @@ with models.DAG(
 
     workload_script = Workload.JAX_TPU_BENCHMARK
 
-    with TaskGroup(
-        group_id=config_data.tpu_type
-    ):
+    with TaskGroup(group_id=config_data.tpu_type):
       with TaskGroup(group_id="create_node_pool") as create_node_pool:
         create_first_node_pool = node_pool.create.override(
             task_id="node_pool_1",

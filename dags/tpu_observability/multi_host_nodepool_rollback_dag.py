@@ -67,9 +67,7 @@ with models.DAG(
         tpu_topology=config_data.tpu_topology,
     )
 
-    with TaskGroup(
-        group_id=config_data.tpu_type
-    ):
+    with TaskGroup(group_id=config_data.tpu_type):
       create_node_pool = node_pool.create(
           node_pool=node_pool_info,
           reservation="cloudtpu-20250131131310-2118578099",
@@ -92,9 +90,9 @@ with models.DAG(
           node_pool=node_pool_info, availability=True
       )
 
-      cleanup_node_pool = node_pool.delete.override(trigger_rule=TriggerRule.ALL_DONE)(
-          node_pool=node_pool_info
-      ).as_teardown(
+      cleanup_node_pool = node_pool.delete.override(
+          trigger_rule=TriggerRule.ALL_DONE
+      )(node_pool=node_pool_info).as_teardown(
           setups=create_node_pool,
       )
 

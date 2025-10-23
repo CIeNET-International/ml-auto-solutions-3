@@ -73,9 +73,7 @@ with models.DAG(
         "WRONG_NODE_LOCATION", default_var=Zone.ASIA_EAST1_C.value
     )
 
-    with TaskGroup(
-        group_id=config_data.tpu_type
-    ):
+    with TaskGroup(group_id=config_data.tpu_type):
       task_id = "create_node_pool"
       create_node_pool = node_pool.create.override(task_id=task_id)(
           node_pool=node_pool_info,

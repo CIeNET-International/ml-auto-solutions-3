@@ -6,8 +6,8 @@ from dags.common.vm_resource import MachineVersion, TpuVersion
 
 @dataclass(frozen=True)
 class TpuConfig:
-    tpu_type: str
-    tpu_topology: str
+  tpu_type: str
+  tpu_topology: str
 
 
 # Only one version of the machine is supported at the moment.
