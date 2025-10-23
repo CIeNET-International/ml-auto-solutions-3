@@ -428,13 +428,10 @@ class XpkTask(BaseTask):
       do_nothing = EmptyOperator(task_id=task_id_do_nothing)
 
       @task.branch
-      def task_path_decider(check_file_exists: bool = False
-      ) -> str:
+      def task_path_decider(check_file_exists: bool = False) -> str:
         """
         Dynamically route the workflow depending on the `check_file_exists`.
         """
-        #task_do_nothing = f"{group.group_id}.{task_id_do_nothing}"
-        #task_wait_file_id = f"{group.group_id}.{task_id_wait_file_exist}"
         if check_file_exists:
           return f"{group.group_id}.{task_id_wait_file_exist}"
         return f"{group.group_id}.{task_id_do_nothing}"
