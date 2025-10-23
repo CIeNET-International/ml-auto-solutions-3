@@ -24,7 +24,8 @@ import airflow
 from airflow.models.taskmixin import DAGNode
 from airflow.utils.task_group import TaskGroup
 from xlml.apis import gcp_config, metric_config, test_config
-from xlml.utils import gpu, metric, name_format, ssh, tpu, xpk, gke
+from xlml.utils import gpu, metric, name_format, ssh, tpu, xpk, axlearn, gke
+from dags.axlearn.util import test_config_util
 
 
 class BaseTask(abc.ABC):
@@ -143,6 +144,187 @@ def run_queued_resource_test(
     provision >> run_model >> post_process >> clean_up
 
   return test
+
+
+@dataclasses.dataclass
+class AxlearnTask(BaseTask):
+  """This is a class to set up tasks for TPU/GPU axlearn.
+
+  Attributes:
+    task_test_config: Test configs to run on this TPU/GPU.
+    task_gcp_config: Runtime TPU/GPU creation parameters.
+    task_metric_config: Metric configs to process metrics.
+    workload_provision_timeout: Time allowed for provisioning a workload.
+  """
+
+  task_test_config: Union[
+      test_config.TpuGkeTest, test_config.GpuXpkTest, test_config.CpuGkeTest
+  ]
+  task_gcp_config: gcp_config.GCPConfig
+  task_metric_config: Optional[metric_config.MetricConfig] = None
+  workload_provision_timeout: datetime.timedelta = datetime.timedelta(
+      minutes=300
+  )
+
+  def run(
+      self,
+      test_configs: test_config_util.TestConfig,
+      run_name:str,
+      *,
+      axlearn_branch: str = axlearn.MAIN_BRANCH,
+      gcs_location: Optional[airflow.XComArg] = None,
+      trace_steps: list[int] = []
+  ) -> DAGNode:
+    """Run a test job within a docker image.
+
+    Attributes:
+      gcs_location: GCS path for all artifacts of the test.
+      module: Set run module.
+      model_config: Set model config.
+
+    Returns:
+      A task group with the following tasks chained: run_model and
+      post_process.
+    """
+    with TaskGroup(group_id=self.task_test_config.benchmark_id) as group:
+      self.run_model(
+          test_configs=test_configs,
+          run_name=run_name,
+          axlearn_branch=axlearn_branch,
+          trace_steps=trace_steps,
+      )
+    return group
+
+  def run_model(
+      self,
+      test_configs: test_config_util.TestConfig,
+      run_name: str,
+      axlearn_branch: str = "",
+      gcs_location: Optional[airflow.XComArg] = None,
+      trace_steps: list[int] = []
+  ) -> DAGNode:
+    """Run the TPU/GPU test in `get_bite_tpu_config` using axlearn.
+
+    Attributes:
+      gcs_location: GCS path for all artifacts of the test.
+      use_vertex_tensorboard: Set to True to view workload data on
+        Vertex AI Tensorboard.
+
+    Returns:
+      A DAG node that executes the model test.
+    """
+    with TaskGroup(group_id="run_model") as group:
+      workload_id = axlearn.generate_workload_id(run_name_workload=run_name)
+      if gcs_location:
+        gcs_path = gcs_location
+      else:
+        gcs_path = name_format.generate_gcs_folder_location(
+            self.task_test_config.gcs_subfolder,
+            self.task_test_config.benchmark_id,
+        )
+      launch_workload = self.launch_workload(
+          workload_id=workload_id,
+          run_name=run_name,
+          gcs_path=gcs_path,
+          axlearn_branch=axlearn_branch,
+          test_configs=test_configs,
+          trace_steps=trace_steps,
+      )
+
+      # Can reuse XPK since is a more general function for workload completion.
+      wait_for_workload_completion = xpk.wait_for_workload_completion.override(
+          timeout=int(self.task_test_config.timeout.total_seconds()),
+      )(
+          workload_id=workload_id,
+          project_id=self.task_gcp_config.project_name,
+          region=gke.zone_to_region(self.task_gcp_config.zone),
+          cluster_name=self.task_test_config.cluster_name,
+      )
+
+      #TODO: Need to create one for specific for Axelarn. Not implemented yet.
+      clean_up_workload = axlearn.clean_up_workload(
+          workload_id=workload_id,
+          project_id=self.task_gcp_config.project_name,
+          region=gke.zone_to_region(self.task_gcp_config.zone),
+          cluster_name=self.task_test_config.cluster_name,
+      )
+
+      ((workload_id, gcs_path)
+       >> launch_workload
+       >> wait_for_workload_completion
+       >> clean_up_workload
+       )
+      return group, gcs_path
+
+  def launch_workload(
+      self,
+      workload_id: str,
+      run_name: str,
+      gcs_path: str,
+      test_configs: test_config_util.TestConfig,
+      axlearn_branch: str = "",
+      trace_steps: list[int] = []
+  ) -> DAGNode:
+    """Create the workload and wait for it to provision."""
+    with TaskGroup(group_id="launch_workload") as group:
+
+      #TODO: Latest apple/axlearn uses 0.6.2 Jax with python 3.10. There
+      # seems to be a dependecy error in the original axlearn repo when
+      # installing dependencies. So I went back to commit "5437705" 1 week ago.
+      # It uses Jax 0.5.3.
+      # Need to wait for them to fix it and then try with Jax 0.6.2
+      setup_axlearn_dep = axlearn.install_axlearn_cli(
+          cluster_name=self.task_test_config.cluster_name,
+          project_id=self.task_gcp_config.project_name,
+          zone=self.task_gcp_config.zone,
+          branch=axlearn_branch,
+          commit="5437705"
+      )
+      activate_axlearn = axlearn.activate_axlearn(
+          cluster_name=self.task_test_config.cluster_name,
+          project_id=self.task_gcp_config.project_name,
+          zone=self.task_gcp_config.zone,
+      )
+      run_workload = axlearn.run_workload_axlearn(
+          task_id="run_workload",
+          cluster_project=self.task_gcp_config.project_name,
+          zone=self.task_gcp_config.zone,
+          cluster_name=self.task_test_config.cluster_name,
+          docker_image=self.task_test_config.docker_image,
+          benchmark_id=self.task_test_config.benchmark_id,
+          workload_id=workload_id,
+          gcs_path=gcs_path,
+          accelerator_type=f"tpu-{self.task_test_config.accelerator.name}",
+          steps=test_configs.step,
+          checkpoint_steps=test_configs.checkpoint_step,
+          run_cmds="",
+          run_name=run_name,
+          module=test_configs.module,
+          model_config=test_configs.model_config,
+          trainer_dir=test_configs.trainer_dir,
+          num_slices=self.task_test_config.num_slices,
+          fsdp=test_configs.fsdp,
+          data=test_configs.data, # For now not doing DP since found errors.
+          train_batch_size=test_configs.train_batch_size,
+          trace_steps=trace_steps,
+      )
+
+      wait_for_workload_start = xpk.wait_for_workload_start.override(
+          timeout=self.workload_provision_timeout.total_seconds()
+      )(
+          workload_id=workload_id,
+          project_id=self.task_gcp_config.project_name,
+          region=self.task_gcp_config.zone[:-2],
+          cluster_name=self.task_test_config.cluster_name,
+      )
+
+      (
+        setup_axlearn_dep
+        >>activate_axlearn
+        >> run_workload
+        >> wait_for_workload_start
+      )
+      return group
 
 
 @dataclasses.dataclass
@@ -537,6 +719,7 @@ class XpkTask(BaseTask):
           project_id=self.task_gcp_config.project_name,
           zone=self.task_gcp_config.zone,
           cluster_name=self.task_test_config.cluster_name,
+          xpk_branch=xpk_branch,
       )
 
       (
