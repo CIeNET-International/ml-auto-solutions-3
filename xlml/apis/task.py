@@ -418,39 +418,38 @@ class XpkTask(BaseTask):
           )
       )
 
+      task_id_wait_file_exist = "wait_for_file_to_exist"
       wait_for_file_to_exist = gcs.wait_for_file_to_exist.override(
-          task_id="wait_for_file_to_exist"
+          task_id=task_id_wait_file_exist
       )(
           file_path=f"{gcs_path}/{str(expect_reach_to_step)}/commit_success.txt",
       )
-      do_nothing = EmptyOperator(task_id="do_nothing")
+      task_id_do_nothing = "do_nothing"
+      do_nothing = EmptyOperator(task_id=task_id_do_nothing)
 
       @task.branch
-      def task_path_decider(
-          group_id: str, check_file_exists: bool = False
-      ) -> list[str]:
+      def task_path_decider(check_file_exists: bool = False
+      ) -> str:
         """
-        Decide whether the wait_for_file_to_exist should be
-        executed based on the the value of check_file_exists
+        Dynamically route the workflow depending on the `check_file_exists`.
         """
-        task_do_nothing = f"{group_id}.do_nothing"
-        task_wait_file_id = f"{group_id}.wait_for_file_to_exist"
+        #task_do_nothing = f"{group.group_id}.{task_id_do_nothing}"
+        #task_wait_file_id = f"{group.group_id}.{task_id_wait_file_exist}"
         if check_file_exists:
-          return [task_wait_file_id]
-        return [task_do_nothing]
+          return f"{group.group_id}.{task_id_wait_file_exist}"
+        return f"{group.group_id}.{task_id_do_nothing}"
 
-      # Conditional Execution: Not all test scenarios require checking for
-      # the existence of commit_message.txt (in task: wait_for_file_to_exist).
-      # using the @task.branch decorator to dynamically route the workflow.
-      decider = task_path_decider(group.group_id, check_file_exists)
+      # Conditional checks: depending on the `check_file_exists` argument specified
+      # by the upper-level caller.
+      maybe_check_file_exists = task_path_decider(check_file_exists)
 
       (
           run_workload
           >> wait_for_workload_start
           >> wait_for_workload_to_reach_step
-          >> decider
+          >> maybe_check_file_exists
       )
-      decider >> [wait_for_file_to_exist, do_nothing]
+      maybe_check_file_exists >> [wait_for_file_to_exist, do_nothing]
 
       return group
 

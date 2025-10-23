@@ -18,6 +18,7 @@ import os
 import re
 from typing import List
 from absl import logging
+
 from airflow.decorators import task
 from airflow.providers.google.cloud.operators.gcs import GCSHook
 
