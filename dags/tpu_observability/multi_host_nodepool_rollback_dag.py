@@ -5,6 +5,7 @@ import datetime
 from airflow import models
 from airflow.models import Variable
 from airflow.utils.task_group import TaskGroup
+from airflow.utils.trigger_rule import TriggerRule
 
 from dags.common.vm_resource import Project, Region, Zone
 from dags.map_reproducibility.utils import constants
@@ -90,7 +91,7 @@ with models.DAG(
           node_pool=node_pool_info, availability=True
       )
 
-      cleanup_node_pool = node_pool.delete.override(trigger_rule="all_done")(
+      cleanup_node_pool = node_pool.delete.override(trigger_rule=TriggerRule.ALL_DONE)(
           node_pool=node_pool_info
       ).as_teardown(
           setups=create_node_pool,

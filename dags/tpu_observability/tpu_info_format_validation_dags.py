@@ -21,7 +21,7 @@ from dags.common.vm_resource import Project
 from dags.common.vm_resource import Region
 from dags.common.vm_resource import Zone
 from dags.map_reproducibility.utils import constants
-from dags.tpu_observability.configs.common import MachineConfigMap, TpuConfig
+from dags.tpu_observability.configs.common import MachineConfigMap
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils import tpu_info_util as tpu_info
