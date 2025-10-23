@@ -586,6 +586,110 @@ class DeviceToHostTransferLatenciesStrategy(BaseMetricStrategy):
     return tpu_info_data_values
 
 
+class CollectiveEndToEndLatencyLatenciesStrategy(BaseMetricStrategy):
+  """Strategy for verifying Collective End to End Latency from distribution data."""
+
+  def __init__(self, percentiles_to_check: list[float]):
+    """Initializes the Strategy.
+
+    Args:
+      percentiles_to_check: A list of percentiles to verify, e.g., [50, 90, 95,
+        99.9].
+    """
+    if not percentiles_to_check:
+      raise ValueError("percentiles_to_check cannot be empty.")
+    self.percentiles_to_check = sorted(percentiles_to_check)
+    super().__init__()
+
+  @property
+  def metric_name(self) -> str:
+    return "kubernetes.io/container/multislice/network/collective_end_to_end_latencies"
+
+  @property
+  def tpu_info_metric_name(self) -> str:
+    return "collective_e2e_latency"
+
+  @property
+  def dag_id_suffix(self) -> str:
+    return "collective_e2e_latency"
+
+  def parse_from_monitoring(
+      self, time_series_data: list[types.TimeSeries], **kwargs
+  ) -> list[float]:
+    """Parses and calculates the specified percentiles from Cloud Monitoring's distribution data."""
+    distributions_by_buffer: dict[str, dict[str, Any]] = {}
+    for ts in time_series_data:
+      if ts.points and ts.metric.labels.get("collective_type"):
+        buffer_size = ts.metric.labels["collective_type"]
+        dist_value = ts.points[0].value.distribution_value
+        distributions_by_buffer[buffer_size] = {
+            "count": dist_value.count,
+            "bounds": dist_value.bucket_options.explicit_buckets.bounds,
+            "bucket_counts": dist_value.bucket_counts,
+        }
+
+    percentile_values_by_buffer: dict[str, dict[float, float]] = {}
+    for buffer_size, data in distributions_by_buffer.items():
+      percentile_values_by_buffer[
+          buffer_size
+      ] = _calculate_percentiles_from_histogram(
+          percentiles=self.percentiles_to_check,
+          total_count=data["count"],
+          bounds=data["bounds"],
+          bucket_counts=data["bucket_counts"],
+      )
+
+    monitoring_values = []
+    for buffer_size in sorted(distributions_by_buffer.keys()):
+      for p in self.percentiles_to_check:
+        monitoring_values.append(percentile_values_by_buffer[buffer_size][p])
+
+    return monitoring_values
+
+  def parse_from_tpu_info(
+      self, tpu_info_metric_output: list[Any]
+  ) -> list[float]:
+    """Parses percentile values from the output table of the tpu-info tool.
+
+    Args:
+      tpu_info_metric_output: A list of tables from the tpu-info command output.
+
+    Returns:
+      A list of float values representing the parsed percentiles, ordered by
+      buffer size and then by percentile.
+    """
+    parsed_values_by_buffer: dict[str, dict[float, float]] = {}
+
+    for metric_table in tpu_info_metric_output:
+      if metric_table.name == "TPU Collective End to End Latency":
+        for i, row_dict in enumerate(metric_table.body):
+          buffer_size = row_dict.get("Buffer Size")
+          if not buffer_size:
+            continue
+
+          buffer_size_name = buffer_size + "(" + str(i) + ")"
+          parsed_values_by_buffer[buffer_size_name] = {}
+          for p in self.percentiles_to_check:
+            # Handle the special key name for P99.9
+            p_key = f"P{p}" if p != 99.9 else "P999"
+            value_str = row_dict.get(p_key, "")
+
+            match = re.search(r"([\d\.]+)", value_str)
+            if match:
+              parsed_values_by_buffer[buffer_size_name][p] = float(
+                  match.group(1)
+              )
+
+    tpu_info_data_values = []
+    for buffer_size_name in sorted(parsed_values_by_buffer.keys()):
+      for p in self.percentiles_to_check:
+        tpu_info_data_values.append(
+            parsed_values_by_buffer[buffer_size_name][p]
+        )
+
+    return tpu_info_data_values
+
+
 ALL_METRIC_STRATEGIES = [
     MemoryUsedStrategy(),
     MemoryTotalStrategy(),
@@ -594,4 +698,5 @@ ALL_METRIC_STRATEGIES = [
     BufferTransferLatencyStrategy([50, 90, 95, 99.9]),
     HostToDeviceTransferLatenciesStrategy([50, 90, 95, 99.9]),
     DeviceToHostTransferLatenciesStrategy([50, 90, 95, 99.9]),
+    CollectiveEndToEndLatencyLatenciesStrategy([50, 90, 95, 99.9]),
 ]

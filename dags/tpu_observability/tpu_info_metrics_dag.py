@@ -230,9 +230,7 @@ with models.DAG(
           "TCU_NODE_POOL_NAME", default_var="yuna-xpk-v6e-ew4-np-0"
       ),
       region=models.Variable.get("TCU_REGION", default_var="europe-west4"),
-      location=models.Variable.get(
-          "TCU_LOCATION", default_var="europe-west4-a"
-      ),
+      location=models.Variable.get("TCU_LOCATION", default_var="europe-west4"),
       node_locations=models.Variable.get(
           "TCU_NODE_LOCATIONS", default_var="europe-west4-a"
       ),
