@@ -21,22 +21,12 @@ from dags.common.vm_resource import Project
 from dags.common.vm_resource import Region
 from dags.common.vm_resource import Zone
 from dags.map_reproducibility.utils import constants
+from dags.tpu_observability.configs.common import MACHINE_CONFIG_MAP
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils import tpu_info_util as tpu_info
 from dags.tpu_observability.utils.jobset_util import JobSet
 from dags.tpu_observability.utils.jobset_util import Workload
-
-MACHINE_TYPE_CONFIG = {
-    "ct6e-standard-4t": {
-        "tpu_type": "v6e",
-        "tpu_topology": "4x4",
-    },
-    "ct5p-hightpu-4t": {
-        "tpu_type": "v5p",
-        "tpu_topology": "4x4",
-    },
-}
 
 
 @task
@@ -115,7 +105,7 @@ def validate_chips_table(
         f" {len(content.body)}"
     )
 
-  tpu_type = MACHINE_TYPE_CONFIG[node_pool.machine_type].get("tpu_type")
+  tpu_type = MACHINE_CONFIG_MAP[MachineVersion(node_pool.machine_type)].tpu_type
 
   for row_dict in content.body:
     for header, data in row_dict.items():
@@ -318,7 +308,7 @@ with models.DAG(
       including the JobSet and the temporary node pools.
       """,
 ) as dag:
-  for machine_type_name in MACHINE_TYPE_CONFIG:
+  for machine_type_name, config_data in MACHINE_CONFIG_MAP.items():
     cluster_info = node_pool.Info(
         project_id=models.Variable.get(
             "TFV_PROJECT_ID", default_var=Project.TPU_PROD_ENV_ONE_VM.value
@@ -339,8 +329,8 @@ with models.DAG(
             "TFV_NODE_LOCATIONS", default_var=Zone.US_EAST5_B.value
         ),
         num_nodes=models.Variable.get("TFV_NUM_NODES", default_var=4),
-        machine_type=machine_type_name,
-        tpu_topology=models.Variable.get("TFV_TPU_TOPOLOGY", default_var="4x4"),
+        machine_type=machine_type_name.value,
+        tpu_topology=config_data.tpu_topology,
     )
     cluster_info_2 = replace(
         cluster_info,
@@ -369,7 +359,7 @@ with models.DAG(
     workload_script = Workload.JAX_TPU_BENCHMARK
 
     with TaskGroup(
-        group_id=f"tpu_info_format_validation_dag-{MACHINE_TYPE_CONFIG[machine_type_name].get('tpu_type')}"
+        group_id=config_data.tpu_type
     ):
       with TaskGroup(group_id="create_node_pool") as create_node_pool:
         create_first_node_pool = node_pool.create.override(

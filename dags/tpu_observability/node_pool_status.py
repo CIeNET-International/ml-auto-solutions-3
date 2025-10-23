@@ -10,18 +10,8 @@ from airflow.utils.task_group import TaskGroup
 from dags.common.vm_resource import Project, Region, Zone
 from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.utils import node_pool_util as node_pool
+from dags.tpu_observability.configs.common import MACHINE_CONFIG_MAP
 
-
-MACHINE_TYPE_CONFIG = {
-    "ct6e-standard-4t": {
-        "tpu_type": "v6e",
-        "tpu_topology": "4x4",
-    },
-    "ct5p-hightpu-4t": {
-        "tpu_type": "v5p",
-        "tpu_topology": "4x4",
-    },
-}
 
 with models.DAG(
     dag_id="gke_node_pool_status",
@@ -52,7 +42,7 @@ with models.DAG(
       All node-pool will be cleaned up clean it up after the tests.
     """,
 ) as dag:
-  for machine_type_name in MACHINE_TYPE_CONFIG:
+  for machine_type_name, config_data in MACHINE_CONFIG_MAP.items():
     node_pool_info = node_pool.Info(
         project_id=models.Variable.get(
             "PROJECT_ID", default_var=Project.TPU_PROD_ENV_ONE_VM.value
@@ -70,8 +60,8 @@ with models.DAG(
             "NODE_LOCATIONS", default_var=Zone.US_EAST5_B.value
         ),
         num_nodes=models.Variable.get("NUM_NODES", default_var=4),
-        machine_type=machine_type_name,
-        tpu_topology=MACHINE_TYPE_CONFIG[machine_type_name].get("tpu_topology"),
+        machine_type=machine_type_name.value,
+        tpu_topology=config_data.tpu_topology,
     )
 
     problematic_node_pool_info = copy.deepcopy(node_pool_info)
@@ -84,7 +74,7 @@ with models.DAG(
     )
 
     with TaskGroup(
-        group_id=f'gke_node_pool_status-{MACHINE_TYPE_CONFIG[machine_type_name].get("tpu_type")}'
+        group_id=config_data.tpu_type
     ):
       task_id = "create_node_pool"
       create_node_pool = node_pool.create.override(task_id=task_id)(

@@ -5,22 +5,13 @@ import datetime
 from airflow import models
 from airflow.models import Variable
 from airflow.utils.task_group import TaskGroup
+from airflow.utils.trigger_rule import TriggerRule
 
 from dags.common.vm_resource import Project, Region, Zone
 from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.utils import node_pool_util as node_pool
+from dags.tpu_observability.configs.common import MACHINE_CONFIG_MAP
 
-
-MACHINE_TYPE_CONFIG = {
-    "ct6e-standard-4t": {
-        "tpu_type": "v6e",
-        "tpu_topology": "4x4",
-    },
-    "ct5p-hightpu-4t": {
-        "tpu_type": "v5p",
-        "tpu_topology": "4x4",
-    },
-}
 
 with models.DAG(
     dag_id="multi-host-availability-rollback",
@@ -58,7 +49,7 @@ with models.DAG(
     inerrupt. If all of these tasks succeed than the test is successful.
     """,
 ) as dag:
-  for machine_type_name in MACHINE_TYPE_CONFIG:
+  for machine_type_name, config_data in MACHINE_CONFIG_MAP.items():
     node_pool_info = node_pool.Info(
         project_id=Project.TPU_PROD_ENV_ONE_VM.value,
         cluster_name=Variable.get(
@@ -72,12 +63,12 @@ with models.DAG(
             "NODE_LOCATIONS", default_var=Zone.US_EAST5_B.value
         ),
         num_nodes=Variable.get("NUM_NODES", default_var=4),
-        machine_type=machine_type_name,
-        tpu_topology=MACHINE_TYPE_CONFIG[machine_type_name].get("tpu_topology"),
+        machine_type=machine_type_name.value,
+        tpu_topology=config_data.tpu_topology,
     )
 
     with TaskGroup(
-        group_id=f'multi-host-availability-rollback-{MACHINE_TYPE_CONFIG[machine_type_name].get("tpu_type")}'
+        group_id=config_data.tpu_type
     ):
       create_node_pool = node_pool.create(
           node_pool=node_pool_info,
@@ -101,7 +92,7 @@ with models.DAG(
           node_pool=node_pool_info, availability=True
       )
 
-      cleanup_node_pool = node_pool.delete.override(trigger_rule="all_done")(
+      cleanup_node_pool = node_pool.delete.override(trigger_rule=TriggerRule.ALL_DONE)(
           node_pool=node_pool_info
       ).as_teardown(
           setups=create_node_pool,
