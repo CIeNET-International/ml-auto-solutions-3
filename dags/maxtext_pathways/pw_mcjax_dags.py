@@ -22,6 +22,8 @@ from airflow.decorators import task
 from airflow.exceptions import AirflowException
 from airflow.hooks.subprocess import SubprocessHook
 from airflow.models.dag import DAG
+from airflow.utils.trigger_rule import TriggerRule
+
 from airflow.providers.google.cloud.operators.kubernetes_engine import GKEStartPodOperator
 from kubernetes.client import models as k8s
 
@@ -182,24 +184,7 @@ def clean_up_pod(
   ), f"kubectl clean-up failed with code {result.exit_code}"
 
 
-def set_sensor_timeout(
-    benchmark_steps: int, override_timeout_in_min: int
-) -> None:
-  """
-  Dynamically sets the Airflow task timeout based on a custom flag or calculates it using a benchmark step count.
-  """
-  if override_timeout_in_min != -1:
-    timeout_in_min = override_timeout_in_min
-  else:
-    max_step_min = 5  # Average time required for each step in lama3-1-405b.
-    timeout_in_min = benchmark_steps * max_step_min
-
-  timeout_in_sec = timeout_in_min * 60
-
-  return timeout_in_sec, timeout_in_min
-
-
-@task(task_id="check_recipe_log")
+@task
 def wait_workload_complete(
     workload_id: str,
     project_id: str,
@@ -213,27 +198,30 @@ def wait_workload_complete(
   Checks for the completion of an workload by repeatedly executing its core logic.
   The core logic uses workload logs to report the detailed status of successful or failed completion.
   """
-  # Attempt to extract the underlying callable function (the core check logic).
+  # Extract and reuse the logic in the` xpk` module to wait for a workload to be completed.
   impl = getattr(
       xpk.wait_for_workload_completion, "python_callable", None
   ) or getattr(xpk.wait_for_workload_completion, "__wrapped__", None)
 
-  # If the core function cannot be found, raise an exception.
   if impl is None:
     raise AirflowException(
         f"Cannot extract core callable from {xpk.wait_for_workload_completion}."
         "It might not be a valid task/sensor or is wrapped too deeply."
     )
 
-  # Dynamically sets the Airflow task timeout and calculate the total timeout duration in seconds.
-  timeout_in_sec, timeout_in_min = set_sensor_timeout(
-      benchmark_steps, override_timeout_in_min
-  )
+  # Dynamically sets the Airflow task timeout based on a custom flag or calculates it using a benchmark step count.
+  if override_timeout_in_min:
+    timeout_in_min = override_timeout_in_min
+  else:
+    max_step_min = 5  # Average time required for each step in lama3-1-405b.
+    timeout_in_min = benchmark_steps * max_step_min
+
+  timeout_in_sec = timeout_in_min * 60
+
   logging.info(
       f"The timeout for this task is {timeout_in_min}min({timeout_in_sec}s)."
   )
 
-  # Start the polling loop (sensor-like behavior).
   deadline = datetime.datetime.now() + datetime.timedelta(
       seconds=timeout_in_sec
   )
@@ -320,14 +308,20 @@ with DAG(
       labels={"airflow-runtime": recipe_runtime},
   )
 
-  clean_up_pod = clean_up_pod(
+  clean_up_start_recipe_pod = clean_up_pod.override(
+      trigger_rule=TriggerRule.ALL_DONE
+  )(
       cluster_name=dag_params["cluster_name"],
       region=derived_params["region"],
       project=dag_params["project"],
       airflow_runtime=recipe_runtime,
-  ).as_teardown(setups=[commands])
+  ).as_teardown(
+      setups=[commands]
+  )
 
-  check_recipe_log = wait_workload_complete(
+  check_recipe_log = wait_workload_complete.override(
+      task_id="check_recipe_log",
+  )(
       workload_id=derived_params["recipe_workload_id"],
       project_id=dag_params["project"],
       region=derived_params["region"],
@@ -337,12 +331,16 @@ with DAG(
       poke_interval_in_second=30,
   )
 
-  clean_up_recipe = xpk.clean_up_workload.override(task_id="clean_up_recipe")(
+  clean_up_recipe = xpk.clean_up_workload.override(
+      task_id="clean_up_recipe", trigger_rule=TriggerRule.ALL_DONE
+  )(
       workload_id=derived_params["recipe_workload_id"],
       project_id=dag_params["project"],
       zone=dag_params["zone"],
       cluster_name=dag_params["cluster_name"],
-  ).as_teardown(setups=[start_recipe])
+  ).as_teardown(
+      setups=[start_recipe]
+  )
 
   # Set the execution order.
   (
@@ -353,4 +351,4 @@ with DAG(
       >> check_recipe_log
       >> clean_up_recipe
   )
-  start_recipe >> clean_up_pod
+  start_recipe >> clean_up_start_recipe_pod

@@ -119,8 +119,8 @@ PARAMETERS = {
         enum=["customized_model_name"] + MODEL_NAME,
     ),
     "customized_model_name": Param(
-        "your_model_name",
-        type="string",
+        None,
+        type=["null", "string"],
         title="Customized Model Name",
         description='Select a customized model name to run. Only when "customized_model_name" is selected for "Model Name", the input value of "customized_model_name" parameter will take effect.',
     ),
@@ -157,13 +157,13 @@ PARAMETERS = {
         description="The Dataset of BigQuery Database",
     ),
     "override_timeout_in_min": Param(
-        -1,
-        type="integer",
+        None,
+        type=["null", "integer"],
         title="Override Timeout In Minutes",
         description=(
             "Timeout in minutes for the workload task. "
             "Adjust it when your meet (airflow.exceptions.AirflowException: Timed out after ...) issue. "
-            "The default value -1 means automatic calculation of timeout."
+            "The default value `None` means automatic calculation of timeout."
         ),
     ),
 }

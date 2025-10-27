@@ -33,8 +33,8 @@ INSTALL_DOCKER = [
     'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null',
     "sudo apt-get update",
     "sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin",
-    "sudo /usr/bin/dockerd & sleep 5",
-    "while ! sudo docker info > /dev/null 2>&1; do echo 'Waiting for Docker to start...'; sleep 5; done",  # check whether Docker is started successfully
+    "sudo /usr/bin/dockerd & sleep 0",  # Start the service in background.
+    "while ! sudo docker info > /dev/null 2>&1; do echo 'Waiting for Docker to start...'; sleep 5; done",  # Wait for docker to be started.
 ]
 
 INSTALL_KUBECTL_KJOB = [
