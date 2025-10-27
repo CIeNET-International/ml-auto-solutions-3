@@ -49,8 +49,8 @@ with models.DAG(
     inerrupt. If all of these tasks succeed than the test is successful.
     """,
 ) as dag:
-  for machine_config_enum in MachineConfigMap:
-    config = machine_config_enum.value
+  for machine in MachineConfigMap:
+    config = machine.value
     node_pool_info = node_pool.Info(
         project_id=Project.TPU_PROD_ENV_ONE_VM.value,
         cluster_name=Variable.get(
@@ -68,7 +68,7 @@ with models.DAG(
         tpu_topology=config.tpu_topology,
     )
 
-    with TaskGroup(group_id=config.tpu_version.value):
+    with TaskGroup(group_id=f"v{config.tpu_version.value}"):
       create_node_pool = node_pool.create(
           node_pool=node_pool_info,
           reservation="cloudtpu-20250131131310-2118578099",

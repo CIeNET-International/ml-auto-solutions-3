@@ -42,8 +42,8 @@ with models.DAG(
       All node-pool will be cleaned up clean it up after the tests.
     """,
 ) as dag:
-  for machine_config_enum in MachineConfigMap:
-    config = machine_config_enum.value
+  for machine in MachineConfigMap:
+    config = machine.value
     node_pool_info = node_pool.Info(
         project_id=models.Variable.get(
             "PROJECT_ID", default_var=Project.TPU_PROD_ENV_ONE_VM.value
@@ -74,8 +74,7 @@ with models.DAG(
         "WRONG_NODE_LOCATION", default_var=Zone.ASIA_EAST1_C.value
     )
 
-    with TaskGroup(group_id=config.tpu_version.value):
-
+    with TaskGroup(group_id=f"v{config.tpu_version.value}"):
       task_id = "create_node_pool"
       create_node_pool = node_pool.create.override(task_id=task_id)(
           node_pool=node_pool_info, reservation="cloudtpu-20250131131310-2118578099"
