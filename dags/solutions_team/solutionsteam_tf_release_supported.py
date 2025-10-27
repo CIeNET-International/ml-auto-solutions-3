@@ -125,10 +125,16 @@ with models.DAG(
   tf_resnet_v5e_4 >> tf_resnet_v5e_16
   tf_resnet_v5p_8 >> tf_resnet_v5p_32
 
-LATEST_VERSION = "2.19.0"
+LATEST_VERSION = "19"
+tf_config.MINOR_VERSION = LATEST_VERSION
+tf_config.GS_VERSION_STR = (
+    f"tf-{tf_config.MAJOR_VERSION}-{LATEST_VERSION}-{tf_config.PATCH_VERSION}"
+)
+
+VERSION = f"{tf_config.MAJOR_VERSION}.{LATEST_VERSION}"
 
 with models.DAG(
-    dag_id=f"tf_{LATEST_VERSION}_supported",
+    dag_id=f"tf_{tf_config.MAJOR_VERSION}_{LATEST_VERSION}_supported",
     default_args=default_args,
     schedule=SCHEDULED_TIME,
     tags=["solutions_team", "tf", VERSION, "supported", "xlml"],

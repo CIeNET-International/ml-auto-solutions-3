@@ -174,12 +174,12 @@ def get_tf_dlrm_config(
   )
 
   set_up_cmds = common.set_up_tensorflow_models(MODELS_BRANCH, KERAS_VERSION)
-  # ! modify
-  set_up_cmds += (
-      "pip install https://storage.googleapis.com/cloud-tpu-tpuvm-artifacts/tensorflow/tf-2.19.0/arm64_compatible/tensorflow_tpu-2.19.0-cp310-cp310-linux_x86_64.whl --force",
-  )
-  set_up_cmds += (
-      "python3 -c \"import tensorflow; print('Running using TensorFlow Version: ' + tensorflow.__version__)\"",
+  set_up_cmds += common.install_tf(
+      MAJOR_VERSION,
+      MINOR_VERSION,
+      PATCH_VERSION,
+      RELEASE_CANDIDATE,
+      LIBTPU_VERSION,
   )
 
   if is_pod:
