@@ -156,16 +156,14 @@ PARAMETERS = {
         title="BigQuery Database Dataset",
         description="The Dataset of BigQuery Database",
     ),
-    "timeout_enable": Param(
-        False,
-        type="boolean",
-        title="Timeout Enable",
-        description="Enable custom timeout settings. Only when enabled will the timeout_in_min setting take effect.",
-    ),
-    "timeout_in_min": Param(
-        60,
+    "override_timeout_in_min": Param(
+        -1,
         type="integer",
-        title="Timeout In Minutes",
-        description="Timeout in minutes for the workload task, adjust it when your meet (airflow.exceptions.AirflowSensorTimeout: Sensor has timed out).",
+        title="Override Timeout In Minutes",
+        description=(
+            "Timeout in minutes for the workload task. "
+            "Adjust it when your meet (airflow.exceptions.AirflowException: Timed out after ...) issue. "
+            "The default value -1 means automatic calculation of timeout."
+        ),
     ),
 }

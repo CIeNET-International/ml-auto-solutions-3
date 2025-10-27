@@ -102,6 +102,8 @@ def generate_commands(
   return commands
 
 
+# TODO(b/455427519): DockerImage.MAXTEXT_TPU_JAX_NIGHTLY cannot directly execute benchmark recipes.
+# TODO(b/455412930): Build a Pathways-specific image. This feature will be changed to install dependencies directly from the image.
 def generate_install_dependencies_commands(service_account: str) -> str:
   """
   Generate the shell commands to install necessary dependencies in the Pod.
@@ -124,6 +126,7 @@ def generate_install_dependencies_commands(service_account: str) -> str:
   return env_cmds
 
 
+# TODO(b/455415420): Extract workload_id from start_recipe log to avoid being out of sync with the MaxText repo.
 def generate_recipe_workload_id(params: dict) -> tuple[str, str]:
   """
   Generate a random value in advance to fix the workload_id so that the workload can be deleted later.
@@ -180,13 +183,13 @@ def clean_up_pod(
 
 
 def set_sensor_timeout(
-    timeout_enable: bool, benchmark_steps: int, timeout_in_min: int
+    benchmark_steps: int, override_timeout_in_min: int
 ) -> None:
   """
   Dynamically sets the Airflow task timeout based on a custom flag or calculates it using a benchmark step count.
   """
-  if timeout_enable:
-    timeout_in_min = timeout_in_min
+  if override_timeout_in_min != -1:
+    timeout_in_min = override_timeout_in_min
   else:
     max_step_min = 5  # Average time required for each step in lama3-1-405b.
     timeout_in_min = benchmark_steps * max_step_min
@@ -202,10 +205,9 @@ def wait_workload_complete(
     project_id: str,
     region: str,
     cluster_name: str,
-    timeout_enable: bool,
     benchmark_steps: int,
-    timeout_in_min: int = 10,
-    poke_interval: int = 60,
+    override_timeout_in_min: int = 10,
+    poke_interval_in_second: int = 60,
 ) -> bool:
   """
   Checks for the completion of an workload by repeatedly executing its core logic.
@@ -214,9 +216,7 @@ def wait_workload_complete(
   # Attempt to extract the underlying callable function (the core check logic).
   impl = getattr(
       xpk.wait_for_workload_completion, "python_callable", None
-  ) or getattr(
-      xpk.wait_for_workload_completion, "__wrapped__", None
-  )
+  ) or getattr(xpk.wait_for_workload_completion, "__wrapped__", None)
 
   # If the core function cannot be found, raise an exception.
   if impl is None:
@@ -227,7 +227,7 @@ def wait_workload_complete(
 
   # Dynamically sets the Airflow task timeout and calculate the total timeout duration in seconds.
   timeout_in_sec, timeout_in_min = set_sensor_timeout(
-      timeout_enable, benchmark_steps, timeout_in_min
+      benchmark_steps, override_timeout_in_min
   )
   logging.info(
       f"The timeout for this task is {timeout_in_min}min({timeout_in_sec}s)."
@@ -242,18 +242,10 @@ def wait_workload_complete(
     if impl(workload_id, project_id, region, cluster_name):
       return True
 
-    # Calculate the remaining time until the deadline.
-    time_to_sleep = (deadline - datetime.datetime.now()).total_seconds()
-
-    # Break the loop if the deadline has been exceeded or reached.
-    if time_to_sleep <= 0:
-      break
-
-    # Sleep for the smaller duration.
-    time.sleep(min(poke_interval, time_to_sleep))
+    time.sleep(poke_interval_in_second)
 
   raise AirflowException(
-      f"Timed out after {timeout_in_min}min({timeout_in_sec}s). Please enable `timeout_enable` and set `timeout_in_min` in UI input."
+      f"Timed out after {timeout_in_min}min({timeout_in_sec}s). Please adjust `Override Timeout In Minutes` in UI input."
   )
 
 
@@ -340,10 +332,9 @@ with DAG(
       project_id=dag_params["project"],
       region=derived_params["region"],
       cluster_name=dag_params["cluster_name"],
-      timeout_enable=dag_params["timeout_enable"],
       benchmark_steps=dag_params["benchmark_steps"],
-      timeout_in_min=dag_params["timeout_in_min"],
-      poke_interval=30,
+      override_timeout_in_min=dag_params["override_timeout_in_min"],
+      poke_interval_in_second=30,
   )
 
   clean_up_recipe = xpk.clean_up_workload.override(task_id="clean_up_recipe")(

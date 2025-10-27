@@ -21,7 +21,6 @@ INSTALL_MAKE = [
 ]
 
 INSTALL_KUBECTL = [
-    "grep -rhE ^deb /etc/apt/sources.list* | grep 'cloud-sdk'",
     "sudo apt-get install -y kubectl",
     "kubectl version --client",
 ]
