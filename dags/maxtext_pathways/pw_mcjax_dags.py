@@ -18,10 +18,10 @@ import string
 import time
 from absl import logging
 
+from airflow import models
 from airflow.decorators import task
 from airflow.exceptions import AirflowException
 from airflow.hooks.subprocess import SubprocessHook
-from airflow.models.dag import DAG
 from airflow.utils.trigger_rule import TriggerRule
 
 from airflow.providers.google.cloud.operators.kubernetes_engine import GKEStartPodOperator
@@ -79,8 +79,6 @@ def generate_commands(
   """
   Generates a command string using the initial DAG parameters and derived parameters.
   """
-  dag_params = dag_params.copy()
-
   # Initialization command.
   env_cmds = generate_install_dependencies_commands(
       service_account=dag_params["service_account"]
@@ -134,6 +132,11 @@ def generate_recipe_workload_id(params: dict) -> tuple[str, str]:
   Generate a random value in advance to fix the workload_id so that the workload can be deleted later.
   Please refer to the `generate_xpk_workload_cmd` function in the `/maxtext/benchmarks/maxtext_xpk_runner.py` file.
   """
+  # Confirm whether to use customized_model_name.
+  params = params.copy()
+  if params["selected_model_names"] == "customized_model_name":
+    params["selected_model_names"] = params["customized_model_name"]
+
   time.localtime()
   length_of_random_str = 3
   temp_post_fix = "".join(
@@ -219,7 +222,8 @@ def wait_workload_complete(
   timeout_in_sec = timeout_in_min * 60
 
   logging.info(
-      f"The timeout for this task is {timeout_in_min}min({timeout_in_sec}s)."
+      f"The timeout for this task is {timeout_in_min} minutes ({timeout_in_sec} seconds).\n"
+      f"Check if completed every {poke_interval_in_second} seconds."
   )
 
   deadline = datetime.datetime.now() + datetime.timedelta(
@@ -240,7 +244,7 @@ def wait_workload_complete(
 RECIPE_INSTANCE = recipe_cfg.Recipe.PW_MCJAX_BENCHMARK_RECIPE
 RECIPE_NAME = RECIPE_INSTANCE.value.lower()
 
-with DAG(
+with models.DAG(
     dag_id=RECIPE_NAME,
     start_date=datetime.datetime(2025, 1, 1),
     schedule_interval=None,
