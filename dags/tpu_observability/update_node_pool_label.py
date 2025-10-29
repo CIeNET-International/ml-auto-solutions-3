@@ -1,5 +1,9 @@
 """A DAG to update the label of a node pool to make node pool unavailable for a while"""
 
+<<<<<<< HEAD
+=======
+import copy
+>>>>>>> a27f99d (Create new DAG update node pool label, create two new tasks for updating label and maximize node pool unavailability time)
 import datetime
 
 from airflow import models
