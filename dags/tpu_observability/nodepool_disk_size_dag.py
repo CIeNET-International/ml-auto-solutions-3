@@ -7,6 +7,7 @@ from kubernetes import client as k8s_client, config as k8s_config
 from google.cloud.container_v1 import ClusterManagerClient
 from google.cloud import container_v1
 from google.cloud import monitoring_v3
+from airflow.models import Variable
 from airflow.operators.bash import BashOperator
 from airflow.decorators import task, dag
 from airflow.utils.trigger_rule import TriggerRule
