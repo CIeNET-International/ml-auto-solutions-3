@@ -9,7 +9,6 @@ import re
 import subprocess
 import time
 from typing import List
-import shlex
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
@@ -78,6 +77,7 @@ class Info:
 #   if ignore_failure:
 #     command += "2>&1 || true "
 
+
 #   process = subprocess.run(
 #       command, shell=True, check=True, capture_output=True, text=True
 #   )
@@ -92,21 +92,31 @@ def create(
   """Creates a GKE node pool by the given node pool information."""
 
   command_list = [
-      "gcloud", "container", "node-pools", "create", node_pool.node_pool_name,
-      "--project", node_pool.project_id,
-      "--cluster", node_pool.cluster_name,
-      "--location", node_pool.location,
-      "--node-locations", node_pool.node_locations,
-      "--num-nodes", str(node_pool.num_nodes),
-      "--machine-type", node_pool.machine_type,
-      "--tpu-topology", node_pool.tpu_topology,
+      "gcloud",
+      "container",
+      "node-pools",
+      "create",
+      node_pool.node_pool_name,
+      "--project",
+      node_pool.project_id,
+      "--cluster",
+      node_pool.cluster_name,
+      "--location",
+      node_pool.location,
+      "--node-locations",
+      node_pool.node_locations,
+      "--num-nodes",
+      str(node_pool.num_nodes),
+      "--machine-type",
+      node_pool.machine_type,
+      "--tpu-topology",
+      node_pool.tpu_topology,
   ]
 
   if reservation:
-    command_list.extend([
-        "--reservation-affinity", "specific",
-        "--reservation", reservation
-    ])
+    command_list.extend(
+        ["--reservation-affinity", "specific", "--reservation", reservation]
+    )
 
   try:
     logging.info("Running gcloud command: %s", " ".join(command_list))
@@ -115,48 +125,54 @@ def create(
         check=not ignore_failure,  # Only raise exception if not ignoring failures
         capture_output=True,
         text=True,
-        timeout=900  # Example timeout
+        timeout=900,  # Example timeout
     )
 
     logging.info("gcloud command finished with code %d", process.returncode)
     if process.stdout:
-        logging.info("STDOUT message:\n%s", process.stdout)
+      logging.info("STDOUT message:\n%s", process.stdout)
     if process.stderr:
-        logging.warning("STDERR message:\n%s", process.stderr) # stderr can occur even on success
+      logging.warning(
+          "STDERR message:\n%s", process.stderr
+      )  # stderr can occur even on success
 
     if process.returncode != 0:
-        if ignore_failure:
-            logging.warning("gcloud command failed but ignore_failure is True.")
-        else:
-            # This path should ideally not be reached if check=True, but as a safeguard:
-            raise subprocess.CalledProcessError(
-                process.returncode, command_list, process.stdout, process.stderr
-            )
+      if ignore_failure:
+        logging.warning("gcloud command failed but ignore_failure is True.")
+      else:
+        # This path should ideally not be reached if check=True, but as a safeguard:
+        raise subprocess.CalledProcessError(
+            process.returncode, command_list, process.stdout, process.stderr
+        )
 
   except subprocess.CalledProcessError as e:
     logging.error("gcloud command failed with return code %d:", e.returncode)
     logging.error("Command: %s", " ".join(e.cmd))
     if e.stdout:
-        logging.error("GCLOUD STDOUT:\n%s", e.stdout)
+      logging.error("GCLOUD STDOUT:\n%s", e.stdout)
     if e.stderr:
-        logging.error("GCLOUD STDERR:\n%s", e.stderr)  # *** This will show the gcloud error ***
+      logging.error(
+          "GCLOUD STDERR:\n%s", e.stderr
+      )  # *** This will show the gcloud error ***
 
     if not ignore_failure:
-        raise  # Re-raise the exception to fail the Airflow task
+      raise  # Re-raise the exception to fail the Airflow task
     else:
-        logging.warning("gcloud command failed but ignore_failure is True, suppressing error.")
+      logging.warning(
+          "gcloud command failed but ignore_failure is True, suppressing error."
+      )
 
   except subprocess.TimeoutExpired as e:
     logging.error("gcloud command timed out after %s seconds:", e.timeout)
     logging.error("Command: %s", " ".join(e.cmd))
     if e.stdout:
-        logging.error("GCLOUD STDOUT (on timeout):\n%s", e.stdout)
+      logging.error("GCLOUD STDOUT (on timeout):\n%s", e.stdout)
     if e.stderr:
-        logging.error("GCLOUD STDERR (on timeout):\n%s", e.stderr)
+      logging.error("GCLOUD STDERR (on timeout):\n%s", e.stderr)
     if not ignore_failure:
-        raise
+      raise
     else:
-        logging.warning("gcloud command timed out but ignore_failure is True.")
+      logging.warning("gcloud command timed out but ignore_failure is True.")
 
 
 @task
@@ -491,6 +507,7 @@ def wait_for_availability(
   )
   return availability == state
 
+
 @task
 def update_labels(node_pool: Info, node_labels: dict) -> None:
   """Updates the labels of a GKE node pool using gcloud command.
@@ -509,8 +526,9 @@ def update_labels(node_pool: Info, node_labels: dict) -> None:
       f"--project={node_pool.project_id} "
       f"--cluster={node_pool.cluster_name} "
       f"--location={node_pool.location} "
-      f"--labels={','.join(labels)} " if labels else ""
-      "--quiet"
+      f"--labels={','.join(labels)} "
+      if labels
+      else "" "--quiet"
   )
 
   logging.info("Executing command: %s", label_command)
