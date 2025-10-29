@@ -68,10 +68,12 @@ def wait_for_nodepool_metrics_event(
   start_s = anchor - window_seconds
   end_s = max(anchor + window_seconds, int(time.time()))
 
-  interval = monitoring_v3.TimeInterval({
-      "start_time": {"seconds": start_s},
-      "end_time": {"seconds": end_s},
-  })
+  interval = monitoring_v3.TimeInterval(
+      {
+          "start_time": {"seconds": start_s},
+          "end_time": {"seconds": end_s},
+      }
+  )
 
   client = monitoring_v3.MetricServiceClient()
   request = monitoring_v3.ListTimeSeriesRequest(
@@ -99,39 +101,20 @@ def wait_for_nodepool_metrics_event(
     return False
 
 
-@task(task_id="check_for_negative")
-def check_for_negative(cluster: str, region: str, project: str) -> None:
-  desc = subprocess.run(
-      [
-          "gcloud",
-          "container",
-          "clusters",
-          "describe",
-          cluster,
-          "--region",
-          region,
-          "--project",
-          project,
-          "--format",
-          "value(locationType)",
-      ],
-      capture_output=True,
-      text=True,
-      check=False,
-  )
-  if desc.returncode != 0:
-    print("FAILED: gcloud container clusters describe")
-    print("--- STDOUT ---")
-    print(desc.stdout)
-    print("--- STDERR ---")
-    print(desc.stderr)
-    raise RuntimeError("Cluster describe failed")
+def _ensure_kubeconfig(
+    cluster: str, region: str, project: str, kubeconfig: str = "/tmp/kubeconfig"
+) -> str | None:
+  """
+  Ensures kubeconfig is present for the target cluster by calling:
+    gcloud container clusters get-credentials ...
+  Returns kubeconfig path on success; returns None on transient failure so caller can repoke.
+  """
 
-  kubeconfig = "/tmp/kubeconfig"
+  env = os.environ.copy()
+  env["KUBECONFIG"] = kubeconfig
+
   try:
-    env = os.environ.copy()
-    env["KUBECONFIG"] = kubeconfig
-    subprocess.run(
+    proc = subprocess.run(
         [
             "gcloud",
             "container",
@@ -142,27 +125,47 @@ def check_for_negative(cluster: str, region: str, project: str) -> None:
             region,
             "--project",
             project,
-            "--verbosity",
-            "debug",
         ],
         env=env,
         capture_output=True,
         text=True,
         check=True,
     )
+    # Optional: uncomment if you want verbose debugging
+    # print("[kubeconfig] get-credentials OK")
+    # print(proc.stdout)
+    return kubeconfig
   except subprocess.CalledProcessError as e:
-    print("FAILED: gcloud container clusters get-credentials")
+    print("[kubeconfig] FAILED: gcloud container clusters get-credentials")
     print("--- STDOUT ---")
     print(e.stdout)
     print("--- STDERR ---")
     print(e.stderr)
-    raise
+    # Don’t raise — let the sensor repoke
+    return None
 
+
+@task(task_id="check_for_negative")
+def check_for_negative(
+    cluster: str,
+    region: str,
+    project: str,
+    *,
+    target_nodepool: str,
+) -> None:
+  kubeconfig = _ensure_kubeconfig(cluster, region, project)
   k8s_config.load_kube_config(config_file=kubeconfig)
   v1 = k8s_client.CoreV1Api()
 
+  selector = f"cloud.google.com/gke-nodepool={target_nodepool}"
+  nodes = v1.list_node(label_selector=selector).items
+
+  if not nodes:
+    print(f"[ready] No nodes found for node pool '{target_nodepool}'.")
+    return
+
   all_ready = True
-  for node in v1.list_node().items:  # V1NodeList
+  for node in nodes:
     name = node.metadata.name
     ready = next(
         (c for c in (node.status.conditions or []) if c.type == "Ready"), None
@@ -209,35 +212,31 @@ def wait_for_update_to_complete(op_full: str, **ctx) -> bool:
 @task
 def note_down_duration(update_result: dict, **ctx) -> int:
   """
-  Uses update_result['start_ts'] and XCom 'op_end' to compute duration.
-  Logs the 150s rule and returns anchor_seconds (midpoint) for metric polling.
+  Uses update_result['start_ts'] and XCom 'op_end' (from wait_for_update_to_complete)
+  to compute the GKE operation duration and return an anchor_seconds midpoint
+  for metric polling.
   """
+
   start_str = update_result["start_ts"]
   end_str = ctx["ti"].xcom_pull(
-      task_ids="wait_for_update_to_complete", key="op_end"
-  )
+      task_ids="wait_for_update_to_complete", key="op_end")
 
-  def _parse(ts):
-    return (
-        datetime.fromisoformat(ts.replace("Z", "+00:00"))
-        if ts
-        else datetime.now(timezone.utc)
-    )
+  def _parse_iso(ts: str | None) -> datetime:
+    if ts:
+      return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    return datetime.now(timezone.utc)
 
-  t0 = _parse(start_str)
-  t1 = _parse(end_str)
+  t0 = _parse_iso(start_str)
+  t1 = _parse_iso(end_str)
+
   seconds = max(0, int((t1 - t0).total_seconds()))
   print(
-      f"[duration] start={t0.isoformat()} end={t1.isoformat()} duration={seconds}s"
-  )
-  if seconds < 150:
-    print("Restart shorter than 150 seconds. This may cause a false negative")
-  else:
-    print("Restart longer than 150 seconds. False negative should not occur")
+      f"[duration] start={t0.isoformat()} end={t1.isoformat()} duration={seconds}s")
 
-  anchor = int((t0.timestamp() + t1.timestamp()) / 2)
-  print(f"[anchor] anchor_seconds={anchor}")
-  return anchor
+  # Compute anchor midpoint for metric polling
+  anchor_seconds = int((t0.timestamp() + t1.timestamp()) / 2)
+  print(f"[anchor] anchor_seconds={anchor_seconds}")
+  return anchor_seconds
 
 
 @task
@@ -292,17 +291,16 @@ with models.DAG(
   node_pool_info = node_pool.Info(
       project_id="cienet-cmcs",
       cluster_name=Variable.get(
-          "CLUSTER_NAME", default_var="athielee-auto-test-4"
-      ),
+          "CLUSTER_NAME", default_var="athielee-auto-test-4"),
       node_pool_name=Variable.get(
           "NODE_POOL_NAME", default_var="athie-nodepool-auto"
       ),
       location=Variable.get("LOCATION", default_var="europe-west4"),
       node_locations=Variable.get(
-          "NODE_LOCATIONS", default_var="europe-west4-a"
-      ),
+          "NODE_LOCATIONS", default_var="europe-west4-a"),
       num_nodes=Variable.get("NUM_NODES", default_var=2),
-      machine_type=Variable.get("MACHINE_TYPE", default_var="ct6e-standard-4t"),
+      machine_type=Variable.get(
+          "MACHINE_TYPE", default_var="ct6e-standard-4t"),
       tpu_topology=Variable.get("TPU_TOPOLOGY", default_var="2x4"),
   )
 
@@ -329,6 +327,7 @@ with models.DAG(
       cluster=node_pool_info.cluster_name,
       region=node_pool_info.location,
       project=node_pool_info.project_id,
+      target_nodepool=node_pool_info.node_pool_name,
   )
 
   cleanup_node_pool = node_pool.delete.override(trigger_rule="all_done")(
