@@ -315,7 +315,7 @@ with models.DAG(
 
   # TODO(b/452777428): Remove this once the "apache-airflow-providers-google" in prod
   # composer is upgraded to "16.0.0".
-  # Explicitly clean up the pod since the `on_finish_action` of 
+  # Explicitly clean up the pod since the `on_finish_action` of
   # `GKEStartPodOperator` is not functioning.
   clean_up_start_recipe_pod = clean_up_pod.override(
       trigger_rule=TriggerRule.ALL_DONE
