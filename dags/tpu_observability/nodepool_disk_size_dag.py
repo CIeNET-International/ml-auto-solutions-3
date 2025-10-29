@@ -13,14 +13,9 @@ from airflow.utils.trigger_rule import TriggerRule
 from airflow.sensors.time_delta import TimeDeltaSensor
 from airflow import models
 from airflow.models import Variable
-
-# from dags.common.vm_resource import Project, Region, Zone
-# from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.utils import node_pool_util as node_pool
 
-
-QUERY_WINDOW_DURATION_SECONDS = 3600  # ±1 hour
-
+QUERY_WINDOW_DURATION_SECONDS = 3600  
 
 def _to_iso(ts):
     if ts is None:
@@ -46,7 +41,6 @@ def _nodepool_name(info):
     )
 
 def _operation_name(project_id, location, op_id_or_name):
-    # always return full resource name
     return (
         op_id_or_name if str(op_id_or_name).startswith("projects/")
         else f"projects/{project_id}/locations/{location}/operations/{op_id_or_name}"
@@ -88,7 +82,6 @@ def wait_for_nodepool_metrics_event(
             print(f"[poll] Metric detected ({len(series)} series).")
             return True
 
-        # Stop if well past grace window
         if time.time() > (anchor + window_seconds + give_up_grace_seconds):
             print("[poll] Grace period exceeded — ending sensor.")
             return True
@@ -120,7 +113,6 @@ def check_for_negative(cluster: str, region: str, project: str) -> None:
         print(desc.stderr)
         raise RuntimeError("Cluster describe failed")
     
-    # 1) fetch kubeconfig with gcloud
     kubeconfig = "/tmp/kubeconfig"
     try:
         env = os.environ.copy()
@@ -133,9 +125,9 @@ def check_for_negative(cluster: str, region: str, project: str) -> None:
                 "--verbosity", "debug",
             ],
             env=env,
-            capture_output=True,  # <— so e.stdout/e.stderr are populated
+            capture_output=True,  
             text=True,
-            check=True,           # <— raises on non-zero
+            check=True,           
         )
     except subprocess.CalledProcessError as e:
         print("FAILED: gcloud container clusters get-credentials")
@@ -145,7 +137,6 @@ def check_for_negative(cluster: str, region: str, project: str) -> None:
         print(e.stderr)
         raise
 
-    # 2) use Kubernetes Python client to read node readiness
     k8s_config.load_kube_config(config_file=kubeconfig)
     v1 = k8s_client.CoreV1Api()
 
@@ -175,7 +166,6 @@ def wait_for_update_to_complete(op_full: str, **ctx) -> bool:
     op = client.get_operation(name=op_full)
     status = getattr(op.status, "name", str(op.status))
 
-    # Log current status each poke (no deduping)
     print(f"[wait] status={status}")
 
     if status == "DONE":
@@ -186,7 +176,6 @@ def wait_for_update_to_complete(op_full: str, **ctx) -> bool:
             raise RuntimeError(f"GKE operation finished with error: {op.error}")
         return True
 
-    # Not done yet → ask Airflow to repoke later
     print("[wait] …repoking")
     return False
 
@@ -215,7 +204,6 @@ def note_down_duration(update_result: dict, **ctx) -> int:
     print(f"[anchor] anchor_seconds={anchor}")
     return anchor
 
-
 @task
 def update_nodepool_disksize(info: node_pool.Info, new_size_gb: int) -> dict:
     """
@@ -235,12 +223,10 @@ def update_nodepool_disksize(info: node_pool.Info, new_size_gb: int) -> dict:
     print(f"[update] start_ts={start_str}")
     return {"op_full": op_full, "start_ts": start_str}
 
-
-
 with models.DAG(
     dag_id="nodepool_disk_size_ttr",
     start_date=datetime(2025, 6, 26),
-    schedule="00 02 * * *",  # constants.Schedule.WEEKDAY_PST_6PM_EXCEPT_THURSDAY
+    schedule="00 02 * * *",  
     catchup=False,
     tags=[
         "cloud-ml-auto-solutions",
@@ -252,7 +238,6 @@ with models.DAG(
         "Tests GKE node-pool recovery by resizing disks, waiting ≥150s, "
         "checking node readiness, and polling Cloud Monitoring for recovery events. "
         "Cleans up the node pool afterward."
-
     ),
     doc_md="""
     # Node-Pool Availability Test (Disk Resize)
@@ -269,11 +254,11 @@ with models.DAG(
 ) as dag:
 
     node_pool_info = node_pool.Info(
-        project_id="cienet-cmcs", # cienet-cmcs # tpu-prod-env-one-vm
-        cluster_name=Variable.get("CLUSTER_NAME", default_var="athielee-auto-test-4"), # athielee-auto-test-4 # tpu-observability-automation
+        project_id="cienet-cmcs", 
+        cluster_name=Variable.get("CLUSTER_NAME", default_var="athielee-auto-test-4"), 
         node_pool_name=Variable.get("NODE_POOL_NAME", default_var="athie-nodepool-auto"),
-        location=Variable.get("LOCATION", default_var="europe-west4"), # europe-west4 # us-east5
-        node_locations=Variable.get("NODE_LOCATIONS", default_var="europe-west4-a"), # europe-west4-a # us-east5-b
+        location=Variable.get("LOCATION", default_var="europe-west4"), 
+        node_locations=Variable.get("NODE_LOCATIONS", default_var="europe-west4-a"), 
         num_nodes=Variable.get("NUM_NODES", default_var=2),
         machine_type=Variable.get("MACHINE_TYPE", default_var="ct6e-standard-4t"), 
         tpu_topology=Variable.get("TPU_TOPOLOGY", default_var="2x4"), 
@@ -284,13 +269,10 @@ with models.DAG(
         f'AND resource.labels.cluster_name="{node_pool_info.cluster_name}"'
     )
 
-    # Kick off API update (returns op_full + start_ts)
     update_result = update_nodepool_disksize(node_pool_info, new_size_gb=150)
 
-    # Wait for that exact operation to finish
     wait_done = wait_for_update_to_complete(update_result["op_full"])
 
-    # Compute duration + anchor after update completes
     anchor = note_down_duration(update_result)
 
     poll_nodepool = wait_for_nodepool_metrics_event(
@@ -299,9 +281,7 @@ with models.DAG(
         anchor_seconds=anchor,
     )
 
-    # create_nodepool = node_pool.create(node_pool=node_pool_info, reservation="cloudtpu-20250131131310-2118578099")
     create_nodepool = node_pool.create(node_pool=node_pool_info)
-
 
     check_for_negative_task = check_for_negative(
         cluster=node_pool_info.cluster_name,
@@ -309,14 +289,11 @@ with models.DAG(
         project=node_pool_info.project_id,
     )
 
-
     cleanup_node_pool = node_pool.delete.override(trigger_rule="all_done")(
         node_pool=node_pool_info
     ).as_teardown(
         setups=create_nodepool,
     )
-
-
 
     (
         create_nodepool
