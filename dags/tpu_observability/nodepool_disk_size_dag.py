@@ -46,7 +46,8 @@ def _nodepool_name(info):
 
 def _operation_name(project_id, location, op_id_or_name):
   return (
-      op_id_or_name if str(op_id_or_name).startswith("projects/")
+      op_id_or_name
+      if str(op_id_or_name).startswith("projects/")
       else f"projects/{project_id}/locations/{location}/operations/{op_id_or_name}"
   )
 
@@ -102,12 +103,21 @@ def wait_for_nodepool_metrics_event(
 def check_for_negative(cluster: str, region: str, project: str) -> None:
   desc = subprocess.run(
       [
-          "gcloud", "container", "clusters", "describe", cluster,
-          "--region", region,
-          "--project", project,
-          "--format", "value(locationType)",
+          "gcloud",
+          "container",
+          "clusters",
+          "describe",
+          cluster,
+          "--region",
+          region,
+          "--project",
+          project,
+          "--format",
+          "value(locationType)",
       ],
-      capture_output=True, text=True, check=False
+      capture_output=True,
+      text=True,
+      check=False
   )
   if desc.returncode != 0:
     print("FAILED: gcloud container clusters describe")
@@ -123,10 +133,17 @@ def check_for_negative(cluster: str, region: str, project: str) -> None:
     env["KUBECONFIG"] = kubeconfig
     subprocess.run(
         [
-            "gcloud", "container", "clusters", "get-credentials", cluster,
-            "--region", region,
-            "--project", project,
-            "--verbosity", "debug",
+            "gcloud",
+            "container",
+            "clusters",
+            "get-credentials",
+            cluster,
+            "--region",
+            region,
+            "--project",
+            project,
+            "--verbosity",
+            "debug",
         ],
         env=env,
         capture_output=True,
@@ -147,8 +164,9 @@ def check_for_negative(cluster: str, region: str, project: str) -> None:
   all_ready = True
   for node in v1.list_node().items:  # V1NodeList
     name = node.metadata.name
-    ready = next((c for c in (node.status.conditions or [])
-                 if c.type == "Ready"), None)
+    ready = next(
+        (c for c in (node.status.conditions or []) if c.type == "Ready"), None
+    )
     status = ready.status if ready else "Unknown"
     if status == "True":
       print(f"Node {name} is Ready")
@@ -178,7 +196,8 @@ def wait_for_update_to_complete(op_full: str, **ctx) -> bool:
     end_str = _iso_or_now(getattr(op, "end_time", None))
     ctx["ti"].xcom_push(key="op_end", value=end_str)
     print(
-        f"[wait] DONE start={_to_iso(getattr(op, 'start_time', None))} end={end_str}")
+        f"[wait] DONE start={_to_iso(getattr(op, 'start_time', None))} end={end_str}"
+    )
     if op.error and (op.error.message or op.error.details):
       raise RuntimeError(f"GKE operation finished with error: {op.error}")
     return True
@@ -195,16 +214,22 @@ def note_down_duration(update_result: dict, **ctx) -> int:
   """
   start_str = update_result["start_ts"]
   end_str = ctx["ti"].xcom_pull(
-      task_ids="wait_for_update_to_complete", key="op_end")
+      task_ids="wait_for_update_to_complete", key="op_end"
+  )
 
   def _parse(ts):
-    return datetime.fromisoformat(ts.replace("Z", "+00:00")) if ts else datetime.now(timezone.utc)
+    return (
+        datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        if ts
+        else datetime.now(timezone.utc)
+    )
 
   t0 = _parse(start_str)
   t1 = _parse(end_str)
   seconds = max(0, int((t1 - t0).total_seconds()))
   print(
-      f"[duration] start={t0.isoformat()} end={t1.isoformat()} duration={seconds}s")
+      f"[duration] start={t0.isoformat()} end={t1.isoformat()} duration={seconds}s"
+  )
   if seconds < 150:
     print("Restart shorter than 150 seconds. This may cause a false negative")
   else:
@@ -268,16 +293,26 @@ with models.DAG(
   node_pool_info = node_pool.Info(
       project_id="cienet-cmcs",
       cluster_name=Variable.get(
-          "CLUSTER_NAME", default_var="athielee-auto-test-4"),
+          "CLUSTER_NAME", default_var="athielee-auto-test-4"
+      ),
       node_pool_name=Variable.get(
-          "NODE_POOL_NAME", default_var="athie-nodepool-auto"),
-      location=Variable.get("LOCATION", default_var="europe-west4"),
+          "NODE_POOL_NAME", default_var="athie-nodepool-auto"
+      ),
+      location=Variable.get(
+          "LOCATION", default_var="europe-west4"
+      ),
       node_locations=Variable.get(
-          "NODE_LOCATIONS", default_var="europe-west4-a"),
-      num_nodes=Variable.get("NUM_NODES", default_var=2),
+          "NODE_LOCATIONS", default_var="europe-west4-a"
+      ),
+      num_nodes=Variable.get(
+          "NUM_NODES", default_var=2
+      ),
       machine_type=Variable.get(
-          "MACHINE_TYPE", default_var="ct6e-standard-4t"),
-      tpu_topology=Variable.get("TPU_TOPOLOGY", default_var="2x4"),
+          "MACHINE_TYPE", default_var="ct6e-standard-4t"
+      ),
+      tpu_topology=Variable.get(
+          "TPU_TOPOLOGY", default_var="2x4"
+      ),
   )
 
   UPTIME_FILTER_QRY = (
