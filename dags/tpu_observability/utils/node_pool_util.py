@@ -1,6 +1,7 @@
 """Utility functions for managing GKE node pools."""
 
 import dataclasses
+import datetime
 import enum
 import json
 import logging
@@ -12,6 +13,7 @@ from typing import List
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
+from google.cloud import logging
 from google.cloud import monitoring_v3
 from google.cloud.monitoring_v3 import types
 
@@ -415,3 +417,163 @@ def wait_for_availability(
       timeout,
   )
   return availability == state
+
+
+@task
+def get_node_pool_update_duration(node_pool: Info) -> float:
+  """Queries the latest status of the specified GKE node pool.
+
+  This function retrieves the status by querying the metric
+  "kubernetes.io/node_pool/status" via the Google Cloud Monitoring API.
+
+  Args:
+      node_pool: An instance of the Info class that encapsulates
+        the configuration and metadata of a GKE node pool.
+
+  Returns:
+      A float enum representing the update duration of the node pool in seconds.
+  """
+  logging_api_client = logging.Client()
+
+  log_filter_args = [
+      f'resource.labels.project_id="{node_pool.project_id}"',
+      f'resource.labels.cluster_name="{node_pool.cluster_name}"',
+      f'resource.labels.nodepool_name="{node_pool.node_pool_name}"',
+      'protoPayload.methodName="google.container.v1.ClusterManager.UpdateNodePool"',
+  ]
+
+  log_filter = " AND ".join(log_filter_args)
+  log_entries = logging_api_client.list_entries(
+      filter_=log_filter,
+      order_by=logging.DESCENDING,
+      max_results=2,
+  )
+
+  entries_list = list(log_entries)
+  if len(entries_list) != 2:
+    return None
+
+  last_entry = entries_list[0]
+  first_entry = entries_list[1]
+
+  op_start_id = (
+      first_entry.operation.get("id") if first_entry.operation else None
+  )
+  op_end_id = last_entry.operation.get("id") if last_entry.operation else None
+
+  if not op_start_id or op_start_id != op_end_id:
+    return None
+
+  start_ts = first_entry.timestamp.replace(tzinfo=datetime.timezone.utc)
+  end_ts = last_entry.timestamp.replace(tzinfo=datetime.timezone.utc)
+
+  duration = end_ts - start_ts
+
+  return duration.toal_seconds()
+
+
+def _query_ttr_metric(node_pool: Info) -> datetime:
+  """Queries the TTR records of the specified GKE node pool.
+
+  This function verifies if there are recovery events occurred by querying
+  the metric "kubernetes.io/node_pool/accelerator/times_to_recover" via
+  the Google Cloud Monitoring API.
+
+  Args:
+      node_pool: An instance of the Info class that encapsulates
+        the configuration and metadata of a GKE node pool.
+
+  Returns:
+      A boolean indicating whether TTR records were found in the specified GKE node pool.
+  """
+  monitoring_client = monitoring_v3.MetricServiceClient()
+  project_name = f"projects/{node_pool.project_id}"
+  now = int(time.time())
+  request = monitoring_v3.ListTimeSeriesRequest(
+      name=project_name,
+      filter=(
+          'metric.type="kubernetes.io/node_pool/accelerator/times_to_recover" '
+          f'resource.labels.project_id = "{node_pool.project_id}" '
+          f'resource.labels.cluster_name = "{node_pool.cluster_name}" '
+          f'resource.labels.node_pool_name = "{node_pool.node_pool_name}"'
+      ),
+      interval=types.TimeInterval({
+          "end_time": {"seconds": now},
+          # Metrics are sampled every 60s and stored in the GCP backend,
+          # but it may take up to 2 minutes for the data to become
+          # available on the client side.
+          # Therefore, a longer time interval is necessary.
+          # A 5-minute window is an arbitrary but sufficient choice to
+          # ensure we can retrieve the latest metric data.
+          "start_time": {"seconds": now - 300},
+      }),
+      view="FULL",
+  )
+
+  time_series_data = monitoring_client.list_time_series(request)
+  try:
+    _ = next(time_series_data)
+    return True
+  except StopIteration:
+    return False
+
+
+@task.sensor(poke_interval=60, timeout=3600, mode="reschedule")
+def wait_for_ttr(
+    node_pool: Info,
+    **context,
+) -> bool:
+  """Waits for the node pool times to recover records occurred.
+
+  This is a task waits for the node pool has TTR records occurred
+  by querying the status metric and comparing it with the expected status.
+  defaults task poke interval to 60 seconds and timeout to 3600 seconds.
+
+  Args:
+      node_pool: An instance of the Info class that encapsulates
+        the configuration and metadata of a GKE node pool.
+      context: The Airflow context dictionary, which includes task metadata.
+  Returns:
+      A boolean indicating whether the node pool has TTR records occurred.
+  """
+  timeout = context["task"].timeout
+  logging.info(
+      "Waiting for finding TTR records in node pool '%s' within %s"
+      " seconds...",
+      node_pool.node_pool_name,
+      timeout,
+  )
+
+  ttr_data_found = _query_ttr_metric(node_pool)
+  if ttr_data_found:
+    logging.info("TTR metric data found! Proceeding to validation.")
+    return True
+  else:
+    logging.info("TTR metric data not yet found. Waiting...")
+    return False
+
+
+@task
+def change_node_pool_label(node_pool: Info) -> None:
+  """Change the label of the specified GKE node pool.
+
+  This function changes the label of the given node pool.
+
+  Args:
+      node_pool: An instance of the Info class that encapsulates
+        the configuration and metadata of a GKE node pool.
+  """
+
+  command = (
+      f"gcloud container node-pools update {node_pool.node_pool_name} "
+      f"--cluster={node_pool.cluster_name} "
+      "--labels=test_key=test_value "
+      f"--region={node_pool.location} "
+      "--quiet"
+  )
+
+  process = subprocess.run(
+      command, shell=True, check=True, capture_output=True, text=True
+  )
+  logging.info("STDOUT message: %s", process.stdout)
+  logging.info("STDERR message: %s", process.stderr)
