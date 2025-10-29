@@ -1,9 +1,5 @@
 """A DAG to update the label of a node pool to make node pool unavailable for a while"""
 
-<<<<<<< HEAD
-=======
-import copy
->>>>>>> a27f99d (Create new DAG update node pool label, create two new tasks for updating label and maximize node pool unavailability time)
 import datetime
 
 from airflow import models
@@ -45,8 +41,8 @@ with models.DAG(
       from the update), and finally cleans up by deleting the node pool.
     """,
 ) as dag:
-  for machine_config_enum in MachineConfigMap:
-    config = machine_config_enum.value
+  for machine in MachineConfigMap:
+    config = machine.value
     node_pool_info = node_pool.Info(
         project_id=models.Variable.get(
             "PROJECT_ID", default_var=Project.TPU_PROD_ENV_ONE_VM.value
@@ -68,7 +64,7 @@ with models.DAG(
         tpu_topology=config.tpu_topology,
     )
 
-    with TaskGroup(group_id=config.tpu_version.value):
+    with TaskGroup(group_id=f"v{config.tpu_version.value}"):
       create_node_pool = node_pool.create.override(task_id="create_node_pool")(
           node_pool=node_pool_info,
           reservation="cloudtpu-20250131131310-2118578099",

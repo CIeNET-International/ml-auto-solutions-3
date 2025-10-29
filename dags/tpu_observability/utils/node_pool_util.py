@@ -495,14 +495,9 @@ def wait_for_availability(
 def update_labels(node_pool: Info, node_labels: dict) -> None:
   """Updates the labels of a GKE node pool using gcloud command.
 
-  This function translates a Python dictionary into the necessary gcloud
-  flags (--update-labels and --remove-labels).
-
   Args:
       node_pool: An instance of the Info class.
       node_labels: A dictionary of labels to update or remove.
-                   Use {key: "value"} to set/update.
-                   Use {key: None} to remove the label.
   """
   labels = []
 
