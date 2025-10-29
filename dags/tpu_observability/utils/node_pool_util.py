@@ -9,6 +9,7 @@ import re
 import subprocess
 import time
 from typing import List
+import shlex
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
@@ -52,6 +53,36 @@ class Info:
   tpu_topology: str = None
 
 
+# @task
+# def create(
+#     node_pool: Info,
+#     reservation: str = None,
+#     ignore_failure: bool = False,
+# ) -> None:
+#   """Creates a GKE node pool by the given node pool information."""
+
+#   command = (
+#       f"gcloud container node-pools create {node_pool.node_pool_name} "
+#       f"--project={node_pool.project_id} "
+#       f"--cluster={node_pool.cluster_name} "
+#       f"--location={node_pool.location} "
+#       f"--node-locations={node_pool.node_locations} "
+#       f"--num-nodes={node_pool.num_nodes} "
+#       f"--machine-type={node_pool.machine_type} "
+#       f"--tpu-topology={node_pool.tpu_topology} "
+#   )
+
+#   if reservation:
+#     command += f" --reservation-affinity=specific --reservation={reservation}"
+
+#   if ignore_failure:
+#     command += "2>&1 || true "
+
+#   process = subprocess.run(
+#       command, shell=True, check=True, capture_output=True, text=True
+#   )
+#   logging.info("STDOUT message: %s", process.stdout)
+#   logging.info("STDERR message: %s", process.stderr)
 @task
 def create(
     node_pool: Info,
@@ -60,28 +91,72 @@ def create(
 ) -> None:
   """Creates a GKE node pool by the given node pool information."""
 
-  command = (
-      f"gcloud container node-pools create {node_pool.node_pool_name} "
-      f"--project={node_pool.project_id} "
-      f"--cluster={node_pool.cluster_name} "
-      f"--location={node_pool.location} "
-      f"--node-locations={node_pool.node_locations} "
-      f"--num-nodes={node_pool.num_nodes} "
-      f"--machine-type={node_pool.machine_type} "
-      f"--tpu-topology={node_pool.tpu_topology} "
-  )
+  command_list = [
+      "gcloud", "container", "node-pools", "create", node_pool.node_pool_name,
+      "--project", node_pool.project_id,
+      "--cluster", node_pool.cluster_name,
+      "--location", node_pool.location,
+      "--node-locations", node_pool.node_locations,
+      "--num-nodes", str(node_pool.num_nodes),
+      "--machine-type", node_pool.machine_type,
+      "--tpu-topology", node_pool.tpu_topology,
+  ]
 
   if reservation:
-    command += f" --reservation-affinity=specific --reservation={reservation}"
+    command_list.extend([
+        "--reservation-affinity", "specific",
+        "--reservation", reservation
+    ])
 
-  if ignore_failure:
-    command += "2>&1 || true "
+  try:
+    logging.info("Running gcloud command: %s", " ".join(command_list))
+    process = subprocess.run(
+        command_list,
+        check=not ignore_failure,  # Only raise exception if not ignoring failures
+        capture_output=True,
+        text=True,
+        timeout=900  # Example timeout
+    )
 
-  process = subprocess.run(
-      command, shell=True, check=True, capture_output=True, text=True
-  )
-  logging.info("STDOUT message: %s", process.stdout)
-  logging.info("STDERR message: %s", process.stderr)
+    logging.info("gcloud command finished with code %d", process.returncode)
+    if process.stdout:
+        logging.info("STDOUT message:\n%s", process.stdout)
+    if process.stderr:
+        logging.warning("STDERR message:\n%s", process.stderr) # stderr can occur even on success
+
+    if process.returncode != 0:
+        if ignore_failure:
+            logging.warning("gcloud command failed but ignore_failure is True.")
+        else:
+            # This path should ideally not be reached if check=True, but as a safeguard:
+            raise subprocess.CalledProcessError(
+                process.returncode, command_list, process.stdout, process.stderr
+            )
+
+  except subprocess.CalledProcessError as e:
+    logging.error("gcloud command failed with return code %d:", e.returncode)
+    logging.error("Command: %s", " ".join(e.cmd))
+    if e.stdout:
+        logging.error("GCLOUD STDOUT:\n%s", e.stdout)
+    if e.stderr:
+        logging.error("GCLOUD STDERR:\n%s", e.stderr)  # *** This will show the gcloud error ***
+
+    if not ignore_failure:
+        raise  # Re-raise the exception to fail the Airflow task
+    else:
+        logging.warning("gcloud command failed but ignore_failure is True, suppressing error.")
+
+  except subprocess.TimeoutExpired as e:
+    logging.error("gcloud command timed out after %s seconds:", e.timeout)
+    logging.error("Command: %s", " ".join(e.cmd))
+    if e.stdout:
+        logging.error("GCLOUD STDOUT (on timeout):\n%s", e.stdout)
+    if e.stderr:
+        logging.error("GCLOUD STDERR (on timeout):\n%s", e.stderr)
+    if not ignore_failure:
+        raise
+    else:
+        logging.warning("gcloud command timed out but ignore_failure is True.")
 
 
 @task
@@ -415,3 +490,91 @@ def wait_for_availability(
       timeout,
   )
   return availability == state
+
+@task
+def update_labels(node_pool: Info, node_labels: dict) -> None:
+  """Updates the labels of a GKE node pool using gcloud command.
+
+  This function translates a Python dictionary into the necessary gcloud
+  flags (--update-labels and --remove-labels).
+
+  Args:
+      node_pool: An instance of the Info class.
+      node_labels: A dictionary of labels to update or remove.
+                   Use {key: "value"} to set/update.
+                   Use {key: None} to remove the label.
+  """
+  labels = []
+
+  for key, val in node_labels.items():
+    labels.append(f"{key}={val}")
+
+  label_command = (
+      f"gcloud container node-pools update {node_pool.node_pool_name} "
+      f"--project={node_pool.project_id} "
+      f"--cluster={node_pool.cluster_name} "
+      f"--location={node_pool.location} "
+      f"--labels={','.join(labels)} " if labels else ""
+      "--quiet"
+  )
+
+  logging.info("Executing command: %s", label_command)
+
+  process = subprocess.run(
+      label_command, shell=True, check=True, capture_output=True, text=True
+  )
+  logging.info("STDOUT message: %s", process.stdout)
+  logging.info("STDERR message: %s", process.stderr)
+
+@task
+def set_max_unavailable(node_pool: 'Info', max_unavailable: int) -> None:
+  """
+  Updates the GKE node pool versioning configuration to control
+  unavailability during updates.
+  """
+  # For logging purposes, you can create the space-separated string:
+  command_list = [
+      "gcloud",
+      "container",
+      "node-pools",
+      "update",
+      node_pool.node_pool_name,
+      f"--project={node_pool.project_id}",
+      f"--cluster={node_pool.cluster_name}",
+      f"--location={node_pool.location}",
+      f"--max-unavailable-upgrade={max_unavailable}",
+      "--max-surge-upgrade=0",
+      "--quiet",
+  ]
+
+  # For logging purposes, create the space-separated string:
+  command_str = " ".join(shlex.quote(arg) for arg in command_list)
+  logging.info("Executing command to set upgrade settings: %s", command_str)
+
+  try:
+      process = subprocess.run(
+          command_list,  # *** This MUST be command_list ***
+          check=True,
+          capture_output=True,
+          text=True,
+          shell=False,  # Default, but good to be explicit
+      )
+      logging.info("Command successful.")
+      if process.stdout:
+          logging.info("STDOUT:\n%s", process.stdout)
+      if process.stderr:
+          logging.info("STDERR:\n%s", process.stderr)
+
+  except subprocess.CalledProcessError as e:
+      logging.error("Command failed with exit code %s:", e.returncode)
+      # e.cmd is the list if shell=False
+      logging.error("Failed command: %s", " ".join(shlex.quote(arg) for arg in e.cmd))
+      if e.stdout:
+          logging.error("STDOUT:\n%s", e.stdout)
+      if e.stderr:
+          logging.error("STDERR:\n%s", e.stderr)
+      raise RuntimeError(f"gcloud command failed: {e}") from e
+  except FileNotFoundError as e:
+      logging.error("Command not found: %s", command_list[0])
+      logging.error("Failed command: %s", command_str)
+      raise RuntimeError(f"gcloud command not found: {e}") from e
