@@ -69,8 +69,8 @@ def wait_for_nodepool_metrics_event(
   end_s = max(anchor + window_seconds, int(time.time()))
 
   interval = monitoring_v3.TimeInterval({
-          "start_time": {"seconds": start_s},
-          "end_time": {"seconds": end_s},
+      "start_time": {"seconds": start_s},
+      "end_time": {"seconds": end_s},
   })
 
   client = monitoring_v3.MetricServiceClient()
