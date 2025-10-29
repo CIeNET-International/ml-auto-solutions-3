@@ -304,7 +304,8 @@ with models.DAG(
       namespace="default",
       hostnetwork=True,
       image=DockerImage.MAXTEXT_TPU_JAX_NIGHTLY.value,
-      # TODO(b/452777428): Unable to delete the pod, may need to upgrade Airflow providers to "apache-airflow-providers-google==16.0.0".
+      # TODO(b/452777428): Apply this once the "apache-airflow-providers-google" in
+      # prod composer is upgraded to "16.0.0".
       # on_finish_action=OnFinishAction.DELETE_POD.value,
       get_logs=True,
       cmds=["/bin/bash", "-cxue", commands],
@@ -312,6 +313,10 @@ with models.DAG(
       labels={"airflow-runtime": recipe_runtime},
   )
 
+  # TODO(b/452777428): Remove this once the "apache-airflow-providers-google" in prod
+  # composer is upgraded to "16.0.0".
+  # Explicitly clean up the pod since the `on_finish_action` of 
+  # `GKEStartPodOperator` is not functioning.
   clean_up_start_recipe_pod = clean_up_pod.override(
       trigger_rule=TriggerRule.ALL_DONE
   )(
@@ -319,8 +324,6 @@ with models.DAG(
       region=derived_params["region"],
       project=dag_params["project"],
       airflow_runtime=recipe_runtime,
-  ).as_teardown(
-      setups=[commands]
   )
 
   check_recipe_log = wait_workload_complete.override(
@@ -342,11 +345,10 @@ with models.DAG(
       project_id=dag_params["project"],
       zone=dag_params["zone"],
       cluster_name=dag_params["cluster_name"],
-  ).as_teardown(
-      setups=[start_recipe]
   )
 
-  # Set the execution order.
+  # TODO: Add an EmptyOperator to detect the overall state.
+
   (
       dag_params
       >> derived_params
