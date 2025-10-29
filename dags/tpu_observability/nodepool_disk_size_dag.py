@@ -7,12 +7,11 @@ from kubernetes import client as k8s_client, config as k8s_config
 from google.cloud.container_v1 import ClusterManagerClient
 from google.cloud import container_v1
 from google.cloud import monitoring_v3
-from airflow.providers.standard.operators.bash import BashOperator
+from airflow.operators.bash import BashOperator
 from airflow.decorators import task, dag
 from airflow.utils.trigger_rule import TriggerRule
 from airflow.sensors.time_delta import TimeDeltaSensor
 from airflow import models
-from airflow.models import Variable
 from dags.tpu_observability.utils import node_pool_util as node_pool
 
 QUERY_WINDOW_DURATION_SECONDS = 3600
