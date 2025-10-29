@@ -289,7 +289,6 @@ with models.DAG(
 
     """,
 ) as dag:
-
   node_pool_info = node_pool.Info(
       project_id="cienet-cmcs",
       cluster_name=Variable.get(
