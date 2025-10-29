@@ -68,12 +68,10 @@ def wait_for_nodepool_metrics_event(
   start_s = anchor - window_seconds
   end_s = max(anchor + window_seconds, int(time.time()))
 
-  interval = monitoring_v3.TimeInterval(
-      {
+  interval = monitoring_v3.TimeInterval({
           "start_time": {"seconds": start_s},
           "end_time": {"seconds": end_s},
-      }
-  )
+  })
 
   client = monitoring_v3.MetricServiceClient()
   request = monitoring_v3.ListTimeSeriesRequest(
@@ -216,7 +214,8 @@ def note_down_duration(update_result: dict, **ctx) -> int:
   """
   start_str = update_result["start_ts"]
   end_str = ctx["ti"].xcom_pull(
-      task_ids="wait_for_update_to_complete", key="op_end")
+      task_ids="wait_for_update_to_complete", key="op_end"
+  )
 
   def _parse(ts):
     return (
@@ -229,7 +228,8 @@ def note_down_duration(update_result: dict, **ctx) -> int:
   t1 = _parse(end_str)
   seconds = max(0, int((t1 - t0).total_seconds()))
   print(
-      f"[duration] start={t0.isoformat()} end={t1.isoformat()} duration={seconds}s")
+      f"[duration] start={t0.isoformat()} end={t1.isoformat()} duration={seconds}s"
+  )
   if seconds < 150:
     print("Restart shorter than 150 seconds. This may cause a false negative")
   else:
@@ -293,16 +293,17 @@ with models.DAG(
   node_pool_info = node_pool.Info(
       project_id="cienet-cmcs",
       cluster_name=Variable.get(
-          "CLUSTER_NAME", default_var="athielee-auto-test-4"),
+          "CLUSTER_NAME", default_var="athielee-auto-test-4"
+      ),
       node_pool_name=Variable.get(
           "NODE_POOL_NAME", default_var="athie-nodepool-auto"
       ),
       location=Variable.get("LOCATION", default_var="europe-west4"),
       node_locations=Variable.get(
-          "NODE_LOCATIONS", default_var="europe-west4-a"),
+          "NODE_LOCATIONS", default_var="europe-west4-a"
+      ),
       num_nodes=Variable.get("NUM_NODES", default_var=2),
-      machine_type=Variable.get(
-          "MACHINE_TYPE", default_var="ct6e-standard-4t"),
+      machine_type=Variable.get("MACHINE_TYPE", default_var="ct6e-standard-4t"),
       tpu_topology=Variable.get("TPU_TOPOLOGY", default_var="2x4"),
   )
 
