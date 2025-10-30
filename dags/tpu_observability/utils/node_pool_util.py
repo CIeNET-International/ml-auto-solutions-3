@@ -79,12 +79,12 @@ def create(
   if ignore_failure:
     command += "2>&1 || true "
 
-
   process = subprocess.run(
       command, shell=True, check=True, capture_output=True, text=True
   )
   logging.info("STDOUT message: %s", process.stdout)
   logging.info("STDERR message: %s", process.stderr)
+
 
 @task
 def delete(node_pool: Info) -> None:
@@ -444,12 +444,14 @@ def update_labels(node_pool: Info, node_labels: dict) -> None:
         f"--cluster={node_pool.cluster_name} "
         f"--location={node_pool.location} "
         f"--labels={','.join(labels)} "
-        "--quiet"
+        "--quiet",
     )
     hook = SubprocessHook()
     result = hook.run_command(
         ["bash", "-c", ";".join(command)],
     )
 
-    logging.info("Node Pool labels updated successfully. Command STDOUT: %s", result.stdout)
-
+    logging.info(
+        "Node Pool labels updated successfully. Command STDOUT: %s",
+        result.stdout,
+    )
