@@ -12,8 +12,6 @@ from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.configs.common import MachineConfigMap
 
 
-LABELS_TO_UPDATE = {"env": "prod"}
-
 with models.DAG(
     dag_id="gke_node_pool_label_update",
     start_date=datetime.datetime(2025, 8, 1),
@@ -63,6 +61,8 @@ with models.DAG(
         machine_type=config.machine_version.value,
         tpu_topology=config.tpu_topology,
     )
+
+    LABELS_TO_UPDATE = {"env": "prod"}
 
     with TaskGroup(group_id=f"v{config.tpu_version.value}"):
       create_node_pool = node_pool.create.override(task_id="create_node_pool")(

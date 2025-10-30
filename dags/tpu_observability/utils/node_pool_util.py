@@ -9,9 +9,11 @@ import re
 import subprocess
 import time
 from typing import List
+import tempfile
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
+from airflow.hooks.subprocess import SubprocessHook
 from google.cloud import monitoring_v3
 from google.cloud.monitoring_v3 import types
 
@@ -52,37 +54,6 @@ class Info:
   tpu_topology: str = None
 
 
-# @task
-# def create(
-#     node_pool: Info,
-#     reservation: str = None,
-#     ignore_failure: bool = False,
-# ) -> None:
-#   """Creates a GKE node pool by the given node pool information."""
-
-#   command = (
-#       f"gcloud container node-pools create {node_pool.node_pool_name} "
-#       f"--project={node_pool.project_id} "
-#       f"--cluster={node_pool.cluster_name} "
-#       f"--location={node_pool.location} "
-#       f"--node-locations={node_pool.node_locations} "
-#       f"--num-nodes={node_pool.num_nodes} "
-#       f"--machine-type={node_pool.machine_type} "
-#       f"--tpu-topology={node_pool.tpu_topology} "
-#   )
-
-#   if reservation:
-#     command += f" --reservation-affinity=specific --reservation={reservation}"
-
-#   if ignore_failure:
-#     command += "2>&1 || true "
-
-
-#   process = subprocess.run(
-#       command, shell=True, check=True, capture_output=True, text=True
-#   )
-#   logging.info("STDOUT message: %s", process.stdout)
-#   logging.info("STDERR message: %s", process.stderr)
 @task
 def create(
     node_pool: Info,
@@ -91,89 +62,29 @@ def create(
 ) -> None:
   """Creates a GKE node pool by the given node pool information."""
 
-  command_list = [
-      "gcloud",
-      "container",
-      "node-pools",
-      "create",
-      node_pool.node_pool_name,
-      "--project",
-      node_pool.project_id,
-      "--cluster",
-      node_pool.cluster_name,
-      "--location",
-      node_pool.location,
-      "--node-locations",
-      node_pool.node_locations,
-      "--num-nodes",
-      str(node_pool.num_nodes),
-      "--machine-type",
-      node_pool.machine_type,
-      "--tpu-topology",
-      node_pool.tpu_topology,
-  ]
+  command = (
+      f"gcloud container node-pools create {node_pool.node_pool_name} "
+      f"--project={node_pool.project_id} "
+      f"--cluster={node_pool.cluster_name} "
+      f"--location={node_pool.location} "
+      f"--node-locations={node_pool.node_locations} "
+      f"--num-nodes={node_pool.num_nodes} "
+      f"--machine-type={node_pool.machine_type} "
+      f"--tpu-topology={node_pool.tpu_topology} "
+  )
 
   if reservation:
-    command_list.extend(
-        ["--reservation-affinity", "specific", "--reservation", reservation]
-    )
+    command += f" --reservation-affinity=specific --reservation={reservation}"
 
-  try:
-    logging.info("Running gcloud command: %s", " ".join(command_list))
-    process = subprocess.run(
-        command_list,
-        check=not ignore_failure,  # Only raise exception if not ignoring failures
-        capture_output=True,
-        text=True,
-        timeout=900,  # Example timeout
-    )
+  if ignore_failure:
+    command += "2>&1 || true "
 
-    logging.info("gcloud command finished with code %d", process.returncode)
-    if process.stdout:
-      logging.info("STDOUT message:\n%s", process.stdout)
-    if process.stderr:
-      logging.warning(
-          "STDERR message:\n%s", process.stderr
-      )  # stderr can occur even on success
 
-    if process.returncode != 0:
-      if ignore_failure:
-        logging.warning("gcloud command failed but ignore_failure is True.")
-      else:
-        # This path should ideally not be reached if check=True, but as a safeguard:
-        raise subprocess.CalledProcessError(
-            process.returncode, command_list, process.stdout, process.stderr
-        )
-
-  except subprocess.CalledProcessError as e:
-    logging.error("gcloud command failed with return code %d:", e.returncode)
-    logging.error("Command: %s", " ".join(e.cmd))
-    if e.stdout:
-      logging.error("GCLOUD STDOUT:\n%s", e.stdout)
-    if e.stderr:
-      logging.error(
-          "GCLOUD STDERR:\n%s", e.stderr
-      )  # *** This will show the gcloud error ***
-
-    if not ignore_failure:
-      raise  # Re-raise the exception to fail the Airflow task
-    else:
-      logging.warning(
-          "gcloud command failed but ignore_failure is True, suppressing error."
-      )
-
-  except subprocess.TimeoutExpired as e:
-    logging.error("gcloud command timed out after %s seconds:", e.timeout)
-    logging.error("Command: %s", " ".join(e.cmd))
-    if e.stdout:
-      logging.error("GCLOUD STDOUT (on timeout):\n%s", e.stdout)
-    if e.stderr:
-      logging.error("GCLOUD STDERR (on timeout):\n%s", e.stderr)
-    if not ignore_failure:
-      raise
-    else:
-      logging.warning("gcloud command timed out but ignore_failure is True.")
-
+  process = subprocess.run(
+      command, shell=True, check=True, capture_output=True, text=True
+  )
+  logging.info("STDOUT message: %s", process.stdout)
+  logging.info("STDERR message: %s", process.stderr)
 
 @task
 def delete(node_pool: Info) -> None:
@@ -516,25 +427,29 @@ def update_labels(node_pool: Info, node_labels: dict) -> None:
       node_pool: An instance of the Info class.
       node_labels: A dictionary of labels to update or remove.
   """
+  if not node_labels:
+    logging.info("Node labels dictionary is empty. Nothing to update.")
+    return
+
   labels = []
 
   for key, val in node_labels.items():
     labels.append(f"{key}={val}")
 
-  label_command = (
-      f"gcloud container node-pools update {node_pool.node_pool_name} "
-      f"--project={node_pool.project_id} "
-      f"--cluster={node_pool.cluster_name} "
-      f"--location={node_pool.location} "
-      f"--labels={','.join(labels)} "
-      if labels
-      else "" "--quiet"
-  )
+  with tempfile.TemporaryDirectory() as tmpdir:
+    command = (
+        f"cd {tmpdir}",
+        f"gcloud container node-pools update {node_pool.node_pool_name} "
+        f"--project={node_pool.project_id} "
+        f"--cluster={node_pool.cluster_name} "
+        f"--location={node_pool.location} "
+        f"--labels={','.join(labels)} "
+        "--quiet"
+    )
+    hook = SubprocessHook()
+    result = hook.run_command(
+        ["bash", "-c", ";".join(command)],
+    )
 
-  logging.info("Executing command: %s", label_command)
+    logging.info("Node Pool labels updated successfully. Command STDOUT: %s", result.stdout)
 
-  process = subprocess.run(
-      label_command, shell=True, check=True, capture_output=True, text=True
-  )
-  logging.info("STDOUT message: %s", process.stdout)
-  logging.info("STDERR message: %s", process.stderr)
