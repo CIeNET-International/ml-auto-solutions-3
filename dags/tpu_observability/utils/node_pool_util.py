@@ -9,7 +9,6 @@ import re
 import subprocess
 import time
 from typing import List
-import tempfile
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
