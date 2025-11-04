@@ -190,7 +190,7 @@ class JobSet:
     return _TEMPLATE.substitute(params)
 
 
-def _get_credentials_command(node_pool: node_pool.Info) -> str:
+def get_credentials_command(node_pool: node_pool.Info) -> str:
   """Returns the command to authenticate `gcloud` with the specified GKE cluster.
 
   Args:
@@ -255,7 +255,7 @@ def run_workload(
     env["KUBECONFIG"] = kube_dir
 
     cmd = " && ".join([
-        _get_credentials_command(node_pool),
+        get_credentials_command(node_pool),
         _k8s_apply_jobset_command(kube_dir, yaml_config, namespace),
     ])
 
@@ -299,7 +299,7 @@ def end_workload(node_pool: node_pool.Info, jobset_name: str, namespace: str):
     env["KUBECONFIG"] = kube_dir
 
     cmd = " && ".join([
-        _get_credentials_command(node_pool),
+        get_credentials_command(node_pool),
         _k8s_delete_jobset_command(kube_dir, jobset_name, namespace),
     ])
 
@@ -340,7 +340,7 @@ def get_active_pods(node_pool: node_pool.Info, namespace: str) -> list[str]:
     env["KUBECONFIG"] = kube_dir
 
     cmd = " && ".join([
-        _get_credentials_command(node_pool),
+        get_credentials_command(node_pool),
         _k8s_get_pod_name_command(kube_dir, namespace),
     ])
 
