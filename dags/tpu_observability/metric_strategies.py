@@ -51,8 +51,8 @@ def _calculate_percentiles_from_histogram(
 
 
 class BaseMetricStrategy(ABC):
-  """
-  Abstract Base Class (Interface) for a metric verification strategy.
+  """Abstract Base Class (Interface) for a metric verification strategy.
+
   It defines the contract that all concrete metric strategies must follow.
   """
 
@@ -76,8 +76,7 @@ class BaseMetricStrategy(ABC):
 
   @property
   def tolerance_percent(self) -> float:
-    """
-    The relative tolerance (in percent) to use for this metric's verification.
+    """The relative tolerance (in percent) to use for this metric's verification.
     Subclasses should override this value to set a custom tolerance.
     """
     return 2.0
