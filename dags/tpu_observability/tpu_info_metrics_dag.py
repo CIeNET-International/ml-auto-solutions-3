@@ -7,26 +7,26 @@ import logging
 import os
 import re
 import subprocess
+import tempfile
 
 from airflow import models
 from airflow.decorators import task
 from airflow.exceptions import AirflowException
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
-from google.cloud.monitoring_v3 import types
+from google.cloud.monitoring_v3 import types as monitoring_types
 
 from dags.common.vm_resource import MachineVersion
 from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils import tpu_info_util as tpu_info
-from dags.tpu_observability.utils.jobset_util import JobSet
-from dags.tpu_observability.utils.jobset_util import Workload
-from dags.tpu_observability.utils.monitoring import query_time_series
+from dags.tpu_observability.utils.gcp_util import query_time_series
 from dags.tpu_observability.utils.node_pool_util import Info
 from dags.tpu_observability.utils.time_util import TimeUtil
 from dags.tpu_observability.metric_strategies import BaseMetricStrategy
 from dags.tpu_observability.metric_strategies import ALL_METRIC_STRATEGIES
+from dags.tpu_observability.configs.common import MachineConfigMap
 
 
 def compare_metric_values(
@@ -89,26 +89,40 @@ def compare_metric_values(
 
 @task
 def get_tpu_info_metric_from_pod(
-    kubeconfig: str, pod_name: str, namespace: str, metric_name: str
+    node_pool: node_pool.Info, pod_name: str, namespace: str, metric_name: str
 ) -> str:
   """Executes the 'tpu-info' command in the specified pod and returns its output."""
-  env = os.environ.copy()
-  env["KUBECONFIG"] = kubeconfig
+  with tempfile.TemporaryDirectory() as tmpdir:
+    kube_dir = tmpdir + "/kubeconfig"
+    env = os.environ.copy()
+    env["KUBECONFIG"] = kube_dir
 
-  result = subprocess.run(
-      (
-          f"kubectl --kubeconfig={kubeconfig} "
-          f"exec {pod_name} -n {namespace} "
-          f"-- tpu-info --metric {metric_name}"
-      ),
-      shell=True,
-      env=env,
-      check=True,
-      capture_output=True,
-      text=True,
-  )
-  logging.info("STDOUT: %s", result.stdout)
-  return result.stdout
+    cmd = " && ".join([
+        jobset._get_credentials_command(node_pool),
+        (
+            f"kubectl --kubeconfig={kube_dir} "
+            f"exec {pod_name} -n {namespace} "
+            f"-- tpu-info --metric {metric_name}"
+        ),
+    ])
+
+    result = subprocess.run(
+        cmd,
+        shell=True,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    logging.info("Command Execute:\n %s", cmd)
+
+    if result.returncode != 0:
+      raise AirflowException(
+          f"Command failed with exit code {result.returncode}.\n ,STDERR"
+          f" message: {result.stderr}"
+      )
+    logging.info("STDOUT message: %s", result.stdout)
+    return result.stdout
 
 
 @task
@@ -137,7 +151,7 @@ def run_metric_verification(
       filter_str=" AND ".join(filter_string),
       start_time=start_time,
       end_time=end_time,
-      view=types.ListTimeSeriesRequest.TimeSeriesView.FULL,
+      view=monitoring_types.ListTimeSeriesRequest.TimeSeriesView.FULL,
   )
 
   monitoring_values = metric_strategy.parse_from_monitoring(time_series_data)
@@ -219,6 +233,9 @@ with models.DAG(
     tags=["gke", "tpu-observability", "tpu-info", "unified"],
     description="Verifies multiple TPU metrics in a single DAG using TaskGroups.",
 ) as dag:
+  for machine in MachineConfigMap:
+    config = machine.value
+
   cluster_info = node_pool.Info(
       project_id=models.Variable.get(
           "TCU_PROJECT_ID", default_var="cienet-cmcs"
@@ -235,14 +252,11 @@ with models.DAG(
           "TCU_NODE_LOCATIONS", default_var="europe-west4-a"
       ),
       num_nodes=models.Variable.get("TCU_NUM_NODES", default_var=4),
-      machine_type=models.Variable.get(
-          "TCU_MACHINE_TYPE", default_var=MachineVersion.CT6E_STAND_4T.value
-      ),
-      tpu_topology=models.Variable.get("TCU_TPU_TOPOLOGY", default_var="4x4"),
+      machine_type=config.machine_version.value,
+      tpu_topology=config.tpu_topology,
   )
 
-  kubeconfig_path = "/tmp/kubeconfig"
-  jobset_config = JobSet(
+  jobset_config = jobset.JobSet(
       jobset_name=f"tpu-info-v6e-workload",
       namespace="default",
       max_restarts=5,
@@ -258,88 +272,89 @@ with models.DAG(
       tpu_cores_per_pod=4,
   )
 
-  workload_script = Workload.JAX_TPU_BENCHMARK
-  apply_time = jobset.run_workload(
-      node_pool=cluster_info,
-      kubeconfig=kubeconfig_path,
-      yaml_config=jobset_config.generate_yaml(workload_script=workload_script),
-      namespace=jobset_config.namespace,
-  )
+  workload_script = jobset.Workload.JAX_TPU_BENCHMARK
 
-  active_pods = jobset.get_active_pods.override(task_id="get_active_pod")(
-      node_pool=cluster_info,
-      kubeconfig=kubeconfig_path,
-      namespace=jobset_config.namespace,
-  )
+  with TaskGroup(group_id=f"v{config.tpu_version.value}"):
+    apply_time = jobset.run_workload(
+        node_pool=cluster_info,
+        yaml_config=jobset_config.generate_yaml(
+            workload_script=workload_script
+        ),
+        namespace=jobset_config.namespace,
+    )
 
-  wait_for_job_start = jobset.wait_for_jobset_started.override(
-      task_id="wait_for_job_start"
-  )(cluster_info, pod_name_list=active_pods, job_apply_time=apply_time)
+    active_pods = jobset.get_active_pods.override(task_id="get_active_pod")(
+        node_pool=cluster_info,
+        namespace=jobset_config.namespace,
+    )
 
-  verification_results = {}
-  all_verification_groups = []
+    wait_for_job_start = jobset.wait_for_jobset_started.override(
+        task_id="wait_for_job_start"
+    )(cluster_info, pod_name_list=active_pods, job_apply_time=apply_time)
 
-  for strategy in ALL_METRIC_STRATEGIES:
-    group_id = f"verify_{strategy.dag_id_suffix}"
+    verification_results = {}
+    all_verification_groups = []
 
-    with TaskGroup(group_id=group_id) as verification_group:
-      tpu_info_metric_outputs = (
-          get_tpu_info_metric_from_pod.override(
-              task_id="get_tpu_info_metric_table"
-          )
-          .partial(
-              kubeconfig=kubeconfig_path,
-              namespace=jobset_config.namespace,
-              metric_name=strategy.tpu_info_metric_name,
-          )
-          .expand(pod_name=active_pods)
-      )
+    for strategy in ALL_METRIC_STRATEGIES:
+      group_id = f"verify_{strategy.dag_id_suffix}"
 
-      tpu_info_metric_output = (
-          tpu_info.parse_tpu_info_output.override(
-              task_id="get_each_metric_table"
-          )
-          .partial()
-          .expand(output=tpu_info_metric_outputs)
-      )
+      with TaskGroup(group_id=group_id) as verification_group:
+        tpu_info_metric_outputs = (
+            get_tpu_info_metric_from_pod.override(
+                task_id="get_tpu_info_metric_table"
+            )
+            .partial(
+                node_pool=cluster_info,
+                namespace=jobset_config.namespace,
+                metric_name=strategy.tpu_info_metric_name,
+            )
+            .expand(pod_name=active_pods)
+        )
 
-      verify_metric = (
-          run_metric_verification.override(task_id="run_verification")
-          .partial(
-              node_pool=cluster_info,
-              job_apply_time=apply_time,
-              metric_strategy=strategy,
-          )
-          .expand(comparison_data=active_pods.zip(tpu_info_metric_output))
-      )
+        tpu_info_metric_output = (
+            tpu_info.parse_tpu_info_output.override(
+                task_id="get_each_metric_table"
+            )
+            .partial()
+            .expand(output=tpu_info_metric_outputs)
+        )
 
-    all_verification_groups.append(verification_group)
+        verify_metric = (
+            run_metric_verification.override(task_id="run_verification")
+            .partial(
+                node_pool=cluster_info,
+                job_apply_time=apply_time,
+                metric_strategy=strategy,
+            )
+            .expand(comparison_data=active_pods.zip(tpu_info_metric_output))
+        )
 
-    verification_results[strategy.dag_id_suffix] = verify_metric
+      all_verification_groups.append(verification_group)
 
-  summary = summarize_results.override(
-      task_id="summarize_results", trigger_rule=TriggerRule.ALL_DONE
-  )(
-      verification_results_dict=verification_results,
-      active_pods=active_pods,
-  )
+      verification_results[strategy.dag_id_suffix] = verify_metric
 
-  clean_up_workload = jobset.end_workload.override(
-      task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
-  )(
-      node_pool=cluster_info,
-      kubeconfig=kubeconfig_path,
-      jobset_name=jobset_config.jobset_name,
-      namespace=jobset_config.namespace,
-  ).as_teardown(
-      setups=apply_time
-  )
+    summary = summarize_results.override(
+        task_id="summarize_results", trigger_rule=TriggerRule.ALL_DONE
+    )(
+        verification_results_dict=verification_results,
+        active_pods=active_pods,
+    )
 
-  (
-      apply_time
-      >> active_pods
-      >> wait_for_job_start
-      >> all_verification_groups
-      >> summary
-      >> clean_up_workload
-  )
+    clean_up_workload = jobset.end_workload.override(
+        task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
+    )(
+        node_pool=cluster_info,
+        jobset_name=jobset_config.jobset_name,
+        namespace=jobset_config.namespace,
+    ).as_teardown(
+        setups=apply_time
+    )
+
+    (
+        apply_time
+        >> active_pods
+        >> wait_for_job_start
+        >> all_verification_groups
+        >> summary
+        >> clean_up_workload
+    )
