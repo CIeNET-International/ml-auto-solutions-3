@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 import re
 from typing import Any
 
-from google.cloud.monitoring_v3 import types
+from google.cloud.monitoring_v3 import types as monitoring_types
 from airflow.exceptions import AirflowException
 
 
@@ -74,9 +74,17 @@ class BaseMetricStrategy(ABC):
     """The suffix used to generate the DAG ID, which should be unique."""
     pass
 
+  @property
+  def tolerance_percent(self) -> float:
+    """
+    The relative tolerance (in percent) to use for this metric's verification.
+    Subclasses should override this value to set a custom tolerance.
+    """
+    return 2.0
+
   @abstractmethod
   def parse_from_monitoring(
-      self, time_series_data: list[types.TimeSeries], **kwargs
+      self, time_series_data: list[monitoring_types.TimeSeries], **kwargs
   ) -> list[float]:
     """Parses the desired value from a list of TimeSeries objects."""
     pass
@@ -85,14 +93,6 @@ class BaseMetricStrategy(ABC):
   def parse_from_tpu_info(self, tpu_info_metric_output: str) -> list[float]:
     """Parses the desired value from the raw tpu-info command output."""
     pass
-
-  @property
-  def tolerance_percent(self) -> float:
-    """
-    The relative tolerance (in percent) to use for this metric's verification.
-    Subclasses should override this value to set a custom tolerance.
-    """
-    return 2.0
 
 
 class MemoryUsedStrategy(BaseMetricStrategy):
@@ -110,8 +110,12 @@ class MemoryUsedStrategy(BaseMetricStrategy):
   def dag_id_suffix(self) -> str:
     return "memory_used"
 
+  @property
+  def tolerance_percent(self) -> float:
+    return 1.0
+
   def parse_from_monitoring(
-      self, time_series_data: list[types.TimeSeries], **kwargs
+      self, time_series_data: list[monitoring_types.TimeSeries], **kwargs
   ) -> list[float]:
     metric_values = {}
     for ts in time_series_data:
@@ -141,10 +145,6 @@ class MemoryUsedStrategy(BaseMetricStrategy):
             tpu_info_data_values.append(float(match.group(1)))
     return tpu_info_data_values
 
-  @property
-  def tolerance_percent(self) -> float:
-    return 1.0
-
 
 class MemoryTotalStrategy(BaseMetricStrategy):
   """Strategy for verifying Total HBM Memory."""
@@ -161,8 +161,12 @@ class MemoryTotalStrategy(BaseMetricStrategy):
   def dag_id_suffix(self) -> str:
     return "memory_total"
 
+  @property
+  def tolerance_percent(self) -> float:
+    return 0.0
+
   def parse_from_monitoring(
-      self, time_series_data: list[types.TimeSeries], **kwargs
+      self, time_series_data: list[monitoring_types.TimeSeries], **kwargs
   ) -> list[float]:
     metric_values = {}
     for ts in time_series_data:
@@ -192,10 +196,6 @@ class MemoryTotalStrategy(BaseMetricStrategy):
             tpu_info_data_values.append(float(match.group(2)))
     return tpu_info_data_values
 
-  @property
-  def tolerance_percent(self) -> float:
-    return 0.0
-
 
 class DutyCycleStrategy(BaseMetricStrategy):
   """Strategy for verifying Duty Cycle."""
@@ -212,8 +212,12 @@ class DutyCycleStrategy(BaseMetricStrategy):
   def dag_id_suffix(self) -> str:
     return "duty_cycle"
 
+  @property
+  def tolerance_percent(self) -> float:
+    return 1.0
+
   def parse_from_monitoring(
-      self, time_series_data: list[types.TimeSeries], **kwargs
+      self, time_series_data: list[monitoring_types.TimeSeries], **kwargs
   ) -> list[float]:
     metric_values = {}
     for ts in time_series_data:
@@ -239,10 +243,6 @@ class DutyCycleStrategy(BaseMetricStrategy):
             tpu_info_data_values.append(float(match.group(1)))
     return tpu_info_data_values
 
-  @property
-  def tolerance_percent(self) -> float:
-    return 1.0
-
 
 class TensorcoreUtilizationStrategy(BaseMetricStrategy):
   """Strategy for verifying TensorCore Utilization."""
@@ -259,8 +259,12 @@ class TensorcoreUtilizationStrategy(BaseMetricStrategy):
   def dag_id_suffix(self) -> str:
     return "tensorcore_utilization"
 
+  @property
+  def tolerance_percent(self) -> float:
+    return 15.0
+
   def parse_from_monitoring(
-      self, time_series_data: list[types.TimeSeries], **kwargs
+      self, time_series_data: list[monitoring_types.TimeSeries], **kwargs
   ) -> list[float]:
     metric_values = {}
     for ts in time_series_data:
@@ -283,10 +287,6 @@ class TensorcoreUtilizationStrategy(BaseMetricStrategy):
           tcu_value = row_dict["TensorCore Utilization"].replace("%", "")
           tpu_info_data_values.append(float(tcu_value))
     return tpu_info_data_values
-
-  @property
-  def tolerance_percent(self) -> float:
-    return 10.0
 
 
 class BufferTransferLatencyStrategy(BaseMetricStrategy):
@@ -316,8 +316,12 @@ class BufferTransferLatencyStrategy(BaseMetricStrategy):
   def dag_id_suffix(self) -> str:
     return "buffer_transfer_latency"
 
+  @property
+  def tolerance_percent(self) -> float:
+    return 2.0
+
   def parse_from_monitoring(
-      self, time_series_data: list[types.TimeSeries], **kwargs
+      self, time_series_data: list[monitoring_types.TimeSeries], **kwargs
   ) -> list[float]:
     """Parses and calculates the specified percentiles from Cloud Monitoring's distribution data."""
     distributions_by_buffer: dict[str, dict[str, Any]] = {}
@@ -415,8 +419,12 @@ class HostToDeviceTransferLatenciesStrategy(BaseMetricStrategy):
   def dag_id_suffix(self) -> str:
     return "host_to_device_transfer_latency"
 
+  @property
+  def tolerance_percent(self) -> float:
+    return 2.0
+
   def parse_from_monitoring(
-      self, time_series_data: list[types.TimeSeries], **kwargs
+      self, time_series_data: list[monitoring_types.TimeSeries], **kwargs
   ) -> list[float]:
     """Parses and calculates the specified percentiles from Cloud Monitoring's distribution data."""
     distributions_by_buffer: dict[str, dict[str, Any]] = {}
@@ -514,8 +522,12 @@ class DeviceToHostTransferLatenciesStrategy(BaseMetricStrategy):
   def dag_id_suffix(self) -> str:
     return "device_to_host_transfer_latency"
 
+  @property
+  def tolerance_percent(self) -> float:
+    return 2.0
+
   def parse_from_monitoring(
-      self, time_series_data: list[types.TimeSeries], **kwargs
+      self, time_series_data: list[monitoring_types.TimeSeries], **kwargs
   ) -> list[float]:
     """Parses and calculates the specified percentiles from Cloud Monitoring's distribution data."""
     distributions_by_buffer: dict[str, dict[str, Any]] = {}
@@ -614,24 +626,24 @@ class CollectiveEndToEndLatencyLatenciesStrategy(BaseMetricStrategy):
     return "collective_e2e_latency"
 
   def parse_from_monitoring(
-      self, time_series_data: list[types.TimeSeries], **kwargs
+      self, time_series_data: list[monitoring_types.TimeSeries], **kwargs
   ) -> list[float]:
     """Parses and calculates the specified percentiles from Cloud Monitoring's distribution data."""
     distributions_by_buffer: dict[str, dict[str, Any]] = {}
     for ts in time_series_data:
       if ts.points and ts.metric.labels.get("collective_type"):
-        buffer_size = ts.metric.labels["collective_type"]
+        collective_type = ts.metric.labels["collective_type"]
         dist_value = ts.points[0].value.distribution_value
-        distributions_by_buffer[buffer_size] = {
+        distributions_by_buffer[collective_type] = {
             "count": dist_value.count,
             "bounds": dist_value.bucket_options.explicit_buckets.bounds,
             "bucket_counts": dist_value.bucket_counts,
         }
 
     percentile_values_by_buffer: dict[str, dict[float, float]] = {}
-    for buffer_size, data in distributions_by_buffer.items():
+    for collective_type, data in distributions_by_buffer.items():
       percentile_values_by_buffer[
-          buffer_size
+          collective_type
       ] = _calculate_percentiles_from_histogram(
           percentiles=self.percentiles_to_check,
           total_count=data["count"],
@@ -640,9 +652,11 @@ class CollectiveEndToEndLatencyLatenciesStrategy(BaseMetricStrategy):
       )
 
     monitoring_values = []
-    for buffer_size in sorted(distributions_by_buffer.keys()):
+    for collective_type in sorted(distributions_by_buffer.keys()):
       for p in self.percentiles_to_check:
-        monitoring_values.append(percentile_values_by_buffer[buffer_size][p])
+        monitoring_values.append(
+            percentile_values_by_buffer[collective_type][p]
+        )
 
     return monitoring_values
 
@@ -663,6 +677,12 @@ class CollectiveEndToEndLatencyLatenciesStrategy(BaseMetricStrategy):
     for metric_table in tpu_info_metric_output:
       if metric_table.name == "TPU Collective End to End Latency":
         for i, row_dict in enumerate(metric_table.body):
+          # The 'Collective Type' column (e.g., ALL_GATHER / ALL_REDUCE) is missing from the tpu-info output table.
+          # This prevents us from explicitly filtering and distinguishing the two different operations.
+          #
+          # As a temporary solution, we are fetching the values based on the 'Buffer Size' label (e.g., '16MB+').
+          # TODO: This logic must be updated to filter on 'Collective Type' as soon as
+          # the tpu-info column is added to the table to ensure correctness.
           buffer_size = row_dict.get("Buffer Size")
           if not buffer_size:
             continue
