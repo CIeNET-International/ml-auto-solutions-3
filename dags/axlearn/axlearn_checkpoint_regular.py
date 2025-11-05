@@ -75,52 +75,43 @@ with models.DAG(
         cluster=XpkClusters.TPU_V5P_128_CLUSTER_TEST,
         run_name="gke_tpu_single",
         slices=[2],
-        instance_type="tpu-v5p-128",
-        mesh_type="tpu-v5p-128",
-        short_id="axl-sav",
+        instance_type="tpu-v5p-64",
+        mesh_type="tpu-v5p-64",
+        short_id=f"axlearn-{checkpointing.name}-sav",
         module="text.gpt.c4_trainer",
         model_config="fuji-7B-v2-flash",
         step=200,
         checkpoint_step=50,
-        train_batch_size=128,
-        fsdp=128,
+        train_batch_size=64,
+        fsdp=64,
         data=1,
         trainer_dir=test_config_util.DEFAULT_BUCKET,
         data_dir="gs://axlearn-public/tensorflow_datasets",
     ),
   ]
-  for mode, image in test_config_util.DOCKER_IMAGES:
+  for mode, image_full_path in test_config_util.DOCKER_IMAGES:
     for test_config in test_configs:
       for slice_num in test_config.slices:
-
-        #TODO: Need to discuss. This is really important for the axlearn CLI
-        # command.
-        # Return: gcr.io/cienet-cmcs/axlearn-custom:axl3a9860z
-        name_image_full_path = validation_util.get_image_name(
-            project_id=test_config.cluster.project,
-            path_repository=image.value.split(":")[0],
-        )
 
         # Create a run_name id for output directory.
         run_name_id = validation_util.generate_run_name(
             short_id=test_config.short_id,
-            checkpointing_type=checkpointing.name,
             slice_number=slice_num,
             accelerator=test_config.instance_type,
-            name_image=name_image_full_path,
+            name_image=image_full_path.value,
         )
 
         start_time = validation_util.generate_timestamp()
 
         # AXLearn head against JAX 0.5.3
         # Runs Fuji training on v5p-128 in the provided GCP Project
+        # TODO: Delete run_model_cmds
         axlearn_regular_run = config.get_axlearn_tpu_config(
             cluster=test_config.cluster,
             num_slices=slice_num,
             time_out_in_min=60,
             test_name=f"{test_config.short_id}-reg",
-            run_model_cmds="",
-            docker_image=name_image_full_path,
+            docker_image=image_full_path.value,
             test_owner=test_owner.CAMILO_Q,
           ).run(
             test_configs=test_config,
@@ -143,9 +134,9 @@ with models.DAG(
             end_time=end_time,
             steps_to_validate=steps_to_validate,
         )
+
         (
-          name_image_full_path
-          >> run_name_id
+           run_name_id
           >> start_time
           >> axlearn_regular_run
           >> end_time

@@ -230,7 +230,31 @@ class AxlearnTask(BaseTask):
           model_config,
       )
 
-      ((workload_id, gcs_path) >> launch_workload)
+      # Can reuse XPK since is a more general function for workload completion.
+      wait_for_workload_completion = xpk.wait_for_workload_completion.override(
+          timeout=int(self.task_test_config.timeout.total_seconds()),
+      )(
+          workload_id=workload_id,
+          project_id=self.task_gcp_config.project_name,
+          region=gke.zone_to_region(self.task_gcp_config.zone),
+          cluster_name=self.task_test_config.cluster_name,
+      )
+
+      #TODO: Need to create one for specific for Axelarn. Not implemented yet.
+      clean_up_workload = xpk.clean_up_workload(
+          workload_id=workload_id,
+          project_id=self.task_gcp_config.project_name,
+          zone=self.task_gcp_config.zone,
+          cluster_name=self.task_test_config.cluster_name,
+          xpk_branch = xpk.MAIN_BRANCH,
+
+      )
+
+      ((workload_id, gcs_path)
+       >> launch_workload
+       >> wait_for_workload_completion
+       >> clean_up_workload
+       )
       return group, gcs_path
 
   def launch_workload(
@@ -244,12 +268,24 @@ class AxlearnTask(BaseTask):
   ) -> DAGNode:
     """Create the workload and wait for it to provision."""
     with TaskGroup(group_id="launch_workload") as group:
-      setup_axlearn_dep = axlearn.set_up_axlearn_dpd(branch="main")
-      activate_axlearn = axlearn.activate_axlearn(
+
+      #TODO: Latest apple/axlearn uses 0.6.2 Jax with python 3.10. There
+      # seems to be a dependecy error in the original axlearn repo when
+      # installing dependencies. So I went back to commit "5437705" 1 week ago.
+      # It uses Jax 0.5.3.
+      # Need to wait for them to fix it and then try with Jax 0.6.2
+      setup_axlearn_dep = axlearn.install_axlearn_cli(
           cluster_name=self.task_test_config.cluster_name,
           project_id=self.task_gcp_config.project_name,
           zone=self.task_gcp_config.zone,
+          branch=axlearn_branch,
+          commit="5437705"
       )
+      # activate_axlearn = axlearn.activate_axlearn(
+      #     cluster_name=self.task_test_config.cluster_name,
+      #     project_id=self.task_gcp_config.project_name,
+      #     zone=self.task_gcp_config.zone,
+      # )
       run_workload = axlearn.run_workload_axlearn(
           task_id="run_workload",
           cluster_project=self.task_gcp_config.project_name,
@@ -278,9 +314,9 @@ class AxlearnTask(BaseTask):
           cluster_name=self.task_test_config.cluster_name,
       )
 
+        # >>activate_axlearn
       (
         setup_axlearn_dep
-        >> activate_axlearn
         >> run_workload
         >> wait_for_workload_start
       )

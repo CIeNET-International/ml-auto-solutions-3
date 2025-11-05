@@ -21,7 +21,6 @@ def generate_timestamp():
 @task
 def generate_run_name(
     short_id: str,
-    checkpointing_type: str,
     slice_number: int,
     accelerator: str,
     name_image: str,
@@ -45,7 +44,7 @@ def generate_run_name(
   """
 
   run_time = datetime.now().strftime("%Y-%m-%d-%H-%M")
-  run_name_id = f"{name_image.split(':')[1]}-{short_id}-{checkpointing_type}-{slice_number}x-{accelerator}-{run_time}"
+  run_name_id = f"{name_image.split(':')[1]}-{short_id}-{slice_number}x-{accelerator}-{run_time}"
   return run_name_id
 
 
