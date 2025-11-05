@@ -18,7 +18,7 @@ from dags.multipod.configs.common import SetupMode
 
 DEFAULT_BUCKET = gcs_bucket.AXLEARN_AUTOMATION_BUCKET
 
-# Only one version of the Docker image is supported at the moment.
+# Only one version of Axlearn is used at the moment with Jax 0.5.3.
 # Other versions (e.g., "stable") may be introduced later.
 DOCKER_IMAGES = [(
     SetupMode.NIGHTLY,

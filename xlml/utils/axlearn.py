@@ -14,8 +14,7 @@
 """Utilities to run workloads with AXLearn."""
 
 from datetime import timedelta
-import re
-import uuid
+import tempfile
 import os
 from typing import List
 from absl import logging
@@ -24,6 +23,7 @@ from airflow.decorators import task
 from airflow.hooks.subprocess import SubprocessHook
 from airflow.exceptions import AirflowFailException
 from xlml.utils import composer, gke
+from xlml.utils import xpk
 
 
 MAIN_BRANCH = "main"
@@ -80,14 +80,20 @@ def install_axlearn_cli(
   checkout_commit = (
     f"git checkout {commit}"
   )
-  axlearn_config_cmd = f'cat << \'CONFIG_EOF\' > ~/axlearn/.axlearn/axlearn.default.config\n    [gcp]\n_active = "{project_id}:{zone}"\n\n[gcp."{project_id}:{zone}"]\nproject = "{project_id}"\nregion = "{zone[:-2]}"\nzone = "{zone}"\ngke_cluster = "{cluster_name}"\ncluster = "{cluster_name}"\nlabels = "tpu-v5p"\ndocker_repo = "gcr.io/{project_id}"\ndefault_dockerfile = "Dockerfile"\nservice_account_email = "ml-auto-solutions-dev@cloud-tpu-multipod-dev.iam.gserviceaccount.com"\npermanent_bucket = "axlearn-ml-solutions-bucket"\nprivate_bucket = "axlearn-ml-solutions-bucket"\nttl_bucket = "axlearn-ml-solutions-bucket"\nCONFIG_EOF\n'
+  axlearn_config_cmd = f'cat << \'CONFIG_EOF\' > ~/axlearn/.axlearn/axlearn.default.config\n    [gcp]\n_active = "{project_id}:{zone}"\n\n[gcp."{project_id}:{zone}"]\nproject = "{project_id}"\nregion = "{zone[:-2]}"\nzone = "{zone}"\ngke_cluster = "{cluster_name}"\ncluster = "{cluster_name}"\nlabels = "tpu-v5p"\ndocker_repo = "gcr.io/{project_id}"\ndefault_dockerfile = "Dockerfile"\nservice_account_email = "ml-auto-solutions-dev@cloud-tpu-multipod-dev.iam.gserviceaccount.com"\npermanent_bucket = "axlearn-bucket-multipod"\nprivate_bucket = "axlearn-bucket-multipod"\nttl_bucket = "axlearn-bucket-multipod"\nCONFIG_EOF\n'
   create_axlearn_conf = [axlearn_config_cmd.rstrip("\n")]
-  install_python3_cmd = _construct_cmds_cli_install()
+  env_cmds = _export_env_variables()
   cmds = [
       "set -xue",
       "rm -rf $HOME/axlearn",
+      "rm -rf ~/.pyenv",
+      "rm -rf ~/my_venv",
       clone_branch,
-      *install_python3_cmd,
+      "curl https://pyenv.run | bash",
+      *env_cmds,
+      f"pyenv install 3.10.12 && pyenv global 3.10.12",
+      "python -m venv ~/my_venv",
+      f"source ~/my_venv/bin/activate",
       "python --version",
       f"cd ~/axlearn/ ",
       checkout_commit,
@@ -95,6 +101,8 @@ def install_axlearn_cli(
       "pip list",
       "pyenv rehash",
       "which axlearn",
+      f"gcloud container clusters get-credentials {cluster_name} \
+        --region {zone[:-2]} --project {project_id}",
   ]
   cmds.append(*create_axlearn_conf)
 
@@ -117,17 +125,15 @@ def activate_axlearn(
   # TODO: Need to refactor. Since these commands are really hard to configure
   # and takes a long time to to try them in airflow need time to adjust them.
   # Probably we can delete some of them. Or created them on a higher module.
+  env_cmds = _export_env_variables()
   cmds = [
       "set -xue",
-      "source ~/.bashrc",
-      "source ~/.profile",
       "cd ~/axlearn",
+      *env_cmds,
+      "echo $KUBECONFIG",
       "source ~/my_venv/bin/activate",
       "python --version",
       "which axlearn",
-      "echo $KUBECONFIG",
-      f"gcloud container clusters get-credentials {cluster_name} \
-        --region {zone[:-2]} --project {project_id}",
   ]
 
   hook = SubprocessHook()
@@ -148,7 +154,7 @@ def generate_workload_id(run_name_workload: str) -> str:
   return f"{real_run_name__running}"
 
 
-@task(execution_timeout=timedelta(hours=1))
+@task(execution_timeout=timedelta(minutes=20))
 def run_workload_axlearn(
     task_id:str,
     gcs_path: str,
@@ -189,11 +195,13 @@ def run_workload_axlearn(
   })
 
   # Get  image run name and tag separatedly since we will need it for Axlearn CLI
-  # e.g iamge_run_name = axlearn-custom:xynzb3zkn
+  # Here tag always gonna be latest.
   image_with_tag = docker_image.split("/")[-1]
   tag = image_with_tag.split(":")[1]
   image_run_name = image_with_tag.split(":")[0]
 
+  # Create output folder for grouping common tests
+  outpu_dir_name = "-".join(run_name.split("-")[:4])
 
   export_var = [
       f"export BASTION_TIER=disabled",
@@ -224,7 +232,7 @@ def run_workload_axlearn(
       f"--runner_name gke_tpu_single "
       f"--name={tag} "
       f"--instance_type={accelerator_type} "
-      f"--max_tries=20 "
+      f"--max_tries=10 "
       f"--num_replicas={num_slices} "
       f"--bundler_spec=allow_dirty=True "
       f"--bundler_type=artifactregistry "
@@ -239,7 +247,7 @@ def run_workload_axlearn(
     rf"sed -i '/max_step=max_step,/a \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ save_every_n_steps={checkpoint_steps},' axlearn/experiments/text/gpt/fuji.py; "
     f"python3 -c 'import jax; jax.devices()'; python3 -m axlearn.common.launch_trainer_main\" "
       f"--module={module} --config={model_config} "
-      f"--trainer_dir={trainer_dir}/{run_name} "
+      f"--trainer_dir={trainer_dir}/{outpu_dir_name}/{run_name} "
       f"--data_dir=gs://axlearn-public/tensorflow_datasets "
       f"--mesh_selector={accelerator_type} "
       f"--jax_backend=tpu "
@@ -248,13 +256,13 @@ def run_workload_axlearn(
 
   #TODO Need to find a better way to activate KUBECONFIG env variable. Instead
   # of source ~/.bashrc....
+  env_cmds = _export_env_variables()
   cmds = [
       "set -xue",
-      "source ~/.bashrc",
-      "source ~/.profile",
+      *env_cmds,
+      "echo $KUBECONFIG",
       "source ~/my_venv/bin/activate",
       "cd ~/axlearn",
-      "echo $KUBECONFIG",
       "axlearn gcp config activate",
       *export_var,
       workload_create_cmd,
@@ -266,114 +274,12 @@ def run_workload_axlearn(
   ), f"Error when running Axlearn workload check logs to confirm values are correct {result.exit_code}"
 
 
-@task(trigger_rule="all_done")
-def clean_up_workload(
-    workload_id: str,
-    project_id: str,
-    region: str,
-    cluster_name: str,
-) -> bool:
-  """Delete jobset."""
-  core_api = _get_core_api_client(project_id, region, cluster_name)
-  pods = _list_workload_pods(core_api, workload_id)
-
-  if any(pod.status.phase in ["Pending", "Running"] for pod in pods.items):
-    logging.info("At least one pod has yet to complete.")
-    return False
-
-  try:
-    for pod in pods.items:
-      if pod.status.phase == "Failed":
-        # Don't keep retrying if the pod has failed
-        raise AirflowFailException(f"Bad pod phase: {pod.status.phase}")
-      elif pod.status.phase in ["Unknown"]:
-        raise RuntimeError(f"Bad pod phase: {pod.status.phase}")
-
-  finally:
-    #TODO: Need to complete logic to first kill process in Airflow pod and
-    # second delete jobset. In this order otherwise does not work.
-    logging.info("All pods are complete ")
-  logging.info("All pod(s) phase are succeeded.")
-  return True
-
-
-
-def _construct_cmds_cli_install()->List[str]:
-  """
-    Constructs a list of shell commands necessary to install and configure
-    pyenv, Python 3.10.12, create a virtual environment, and optionally set
-    the KUBECONFIG environment variable.
-
-    The KUBECONFIG and PYENV_ROOT environment variable exports are only
-    appended to the user's profile files (~/.bashrc and ~/.profile) if they
-    are not already set in the current execution environment.
-
-    Returns:
-        List[str]: A list of sequential shell commands ready for execution.
-  """
+def _export_env_variables() ->List[str]:
   KUBECONFIG_FILE = "/tmp/kubeconfig_gke"
   env_var_pyenv = [
-      f"echo 'export PYENV_ROOT=\"$HOME/.pyenv\"' >> ~/.bashrc ",
-      f"echo 'export PYENV_ROOT=\"$HOME/.pyenv\"' >> ~/.profile ",
-      f"echo '[[ -d $PYENV_ROOT/bin ]] && export PATH=\"$PYENV_ROOT/bin:$PATH\"' >> ~/.bashrc ",
-      f"echo '[[ -d $PYENV_ROOT/bin ]] && export PATH=\"$PYENV_ROOT/bin:$PATH\"' >> ~/.profile",
+      f"export PYENV_ROOT=\"$HOME/.pyenv\"",
+      f"export PATH=\"$PYENV_ROOT/bin:$PATH\"",
+      f"export KUBECONFIG=\"{KUBECONFIG_FILE}\"",
+      "eval \"$(pyenv init -)\"",
   ]
-  env_var_kube = [
-      f"echo 'export KUBECONFIG=\"{KUBECONFIG_FILE}\"' >> ~/.profile ",
-      f"echo 'export KUBECONFIG=\"{KUBECONFIG_FILE}\"' >> ~/.bashrc",
-  ]
-  install_python3_cmd = [
-    "rm -rf ~/.pyenv",
-    "rm -rf ~/my_venv",
-    "curl https://pyenv.run | bash",
-  ]
-
-  #TODO: This is not working correctly.
-  # Insert the combined environment variable setup commands here
-  # for kubeconfig and pyenv_root
-  default_kubeconfig = "/home/airflow/composer_kube_config"
-  current_kubeconfig = os.getenv("KUBECONFIG")
-  current_pyenvconfig = os.getenv("PYENV_ROOT")
-  print(f"DEBUG: Current Kubeconfig: '{current_kubeconfig}'\tCurrent PYENV_ROOT {current_pyenvconfig}")
-
-  # We do this so we dont duplicate ENV_VARS in ~/.bashrc file.
-  if current_kubeconfig == default_kubeconfig:
-    install_python3_cmd.extend(env_var_kube)
-  if current_pyenvconfig is None:
-    install_python3_cmd.extend(env_var_pyenv)
-
-  # Continue with the rest of the python installation commands
-  install_python3_cmd.extend([
-      f"echo 'eval \"$(pyenv init -)\"' >> ~/.bashrc ",
-      f"echo 'eval \"$(pyenv init -)\"' >> ~/.profile",
-      f"source ~/.bashrc ",
-      f"source ~/.profile",
-      f"pyenv install 3.10.12 && pyenv global 3.10.12",
-      "python -m venv ~/my_venv",
-      f"source ~/my_venv/bin/activate",
-  ])
-  return install_python3_cmd
-
-
-def _get_core_api_client(
-    project_id: str, region: str, cluster_name: str
-) -> k8s_client.CoreV1Api:
-  """Create a core API client for the given cluster."""
-  client = gke.get_authenticated_client(project_id, region, cluster_name)
-
-  # Initilize the client
-  core_api = k8s_client.CoreV1Api(client)
-  logging.info("Successful initilize k8s client from cluster response.")
-  return core_api
-
-
-def _list_workload_pods(
-    core_api: k8s_client.CoreV1Api, workload_id: str
-) -> k8s_client.V1PodList:
-  """List all pods for the given workload."""
-  logging.info(f"Getting pods for workload_id: {workload_id}")
-  pods = core_api.list_namespaced_pod(
-      label_selector=f"jobset.sigs.k8s.io/jobset-name={workload_id}",
-      namespace="default",
-  )
-  return pods
+  return env_var_pyenv
