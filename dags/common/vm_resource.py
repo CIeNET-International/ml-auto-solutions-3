@@ -263,10 +263,10 @@ class XpkClusters:
       zone=Zone.EUROPE_WEST4_B.value,
   )
   TPU_V5P_128_CLUSTER_TEST = XpkClusterConfig(
-      name="ml-auto-solutions-orbax",
+      name="depp-orbax-ml-auto-solutions",
       device_version=TpuVersion.V5P,
-      core_count=128,
-      project="cienet-cmcs",
+      core_count=64,
+      project="cloud-tpu-multipod-dev",
       zone=Zone.EUROPE_WEST4_B.value,
   )
   TPU_V5E_256_CLUSTER = XpkClusterConfig(
@@ -340,7 +340,7 @@ class DockerImage(enum.Enum):
       f"xla:nightly_3.10_tpuvm_{datetime.datetime.today().strftime('%Y%m%d')}"
   )
   AXLEARN_CUSTOM = (
-      "gcr.io/cienet-cmcs/axlearn-custom:latest"
+      "gcr.io/cloud-tpu-multipod-dev/axlearn-custom:latest"
   )
   AXLEARN_TPU_JAX_STABLE_STACK = (
       "us-docker.pkg.dev/tpu-prod-env-multipod/bite/tpu/axlearn:"
