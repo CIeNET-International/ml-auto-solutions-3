@@ -1,557 +1,425 @@
-"""Utilities for managing JobSets in GKE clusters for TPU observability."""
+"""Utility functions for managing GKE node pools."""
 
-import base64
 import dataclasses
-import datetime
-import logging
-import os
-import random
-import subprocess
-from typing import Final
+import enum
 import json
-import string
-import tempfile
-import textwrap
+import logging
+import random
+import re
+import subprocess
 import time
+from typing import List
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
-from airflow.exceptions import AirflowException
-from airflow.hooks.subprocess import SubprocessHook
-from google.cloud.monitoring_v3 import types
-from kubernetes import client
-from google.auth.transport.requests import Request
-from google.auth import default
 from google.cloud import monitoring_v3
-import google.auth
-import google.auth.transport.requests
-from google.cloud import container_v1
-import kubernetes
+from google.cloud.monitoring_v3 import types
+from airflow.hooks.subprocess import SubprocessHook
 
-from dags.tpu_observability.utils import node_pool_util as node_pool
-from dags.tpu_observability.utils.gcp_util import query_time_series
-from dags.tpu_observability.utils.time_util import TimeUtil
-from dags.tpu_observability.utils.node_pool_util import Info
+class Status(enum.Enum):
+  """Enum for GKE node pool status."""
 
+  RUNNING = enum.auto()
+  PROVISIONING = enum.auto()
+  STOPPING = enum.auto()
+  RECONCILING = enum.auto()
+  ERROR = enum.auto()
+  UNKNOWN = enum.auto()
 
-class Workload:
-  """A library of predefined workload scripts for JobSet.
-
-  Each workload is a JSON-escaped string, ready to be used as a shell argument.
-  """
-
-  JAX_TPU_BENCHMARK = json.dumps(
-      textwrap.dedent(
-          """
-          python -c '
-          import jax
-          import jax.numpy as jnp
-          import time
-          import os
-          from jax.sharding import Mesh, NamedSharding
-          from jax.experimental.pjit import pjit
-
-          os.environ.setdefault("JAX_USE_PJIT", "true")
-          jax.distributed.initialize()
-
-          global_devices = jax.devices()
-          print(f"[Host {jax.process_index()}] Got {len(global_devices)} global devices")
-          mesh = Mesh(global_devices, ("x",))
-
-          print(f"[Host {jax.process_index()}] Allocating data...")
-          size = 32832
-          x_global = jnp.ones((size, size), dtype=jnp.float32)
-          y_global = jnp.ones((size, size), dtype=jnp.float32)
-
-          print(f"[Host {jax.process_index()}] Sharding data...")
-          sharding = NamedSharding(mesh, jax.sharding.PartitionSpec("x", None))
-          x = jax.device_put(x_global, sharding)
-          y = jax.device_put(y_global, sharding)
-          print(f"[Host {jax.process_index()}] Data on device")
-
-          # ========= Define heavy workload =========
-          @pjit
-          def matmul_ultra_heavy(x, y):
-              tmp1 = jnp.dot(x, y)
-              tmp2 = jnp.dot(tmp1, y.T)
-              tmp3 = jnp.dot(tmp2, x.T)
-              tmp4 = jnp.dot(tmp3, x)
-              tmp5 = jnp.dot(tmp4, y)
-              return tmp5
-
-          print(f"[Host {jax.process_index()}] Warming up...")
-          matmul_ultra_heavy(x, y).block_until_ready()
-
-          # ========= Benchmark =========
-          print(f"[Host {jax.process_index()}] Starting benchmark...")
-
-          start = time.time()
-          for i in range(1_000_000): # Remember to control loop time to control experiment time
-              result = matmul_ultra_heavy(x, y)
-          result.block_until_ready()
-          end = time.time()
-
-          if jax.process_index() == 0:
-              print(f"Total time: {end - start:.2f} seconds (on full v6e-16)")
-          ' &&
-          echo "Workload finished, sleeping now..." &&
-          sleep 10000
-          """
-      ),
-      ensure_ascii=False,
-  )
-
-
-_TEMPLATE = string.Template(
-    textwrap.dedent(
-        """
-        apiVersion: jobset.x-k8s.io/v1alpha2
-        kind: JobSet
-        metadata:
-          name: $jobset_name
-          annotations:
-            alpha.jobset.sigs.k8s.io/exclusive-topology: cloud.google.com/gke-nodepool
-          namespace: $namespace
-        spec:
-          failurePolicy:
-            maxRestarts: $max_restarts
-          replicatedJobs:
-          - name: $replicated_job_name
-            replicas: $replicas
-            template:
-              spec:
-                backoffLimit: $backoff_limit
-                completions: $completions
-                parallelism: $parallelism
-                template:
-                  spec:
-                    nodeSelector:
-                      cloud.google.com/gke-tpu-accelerator: $tpu_accelerator_type
-                      cloud.google.com/gke-tpu-topology: $tpu_topology
-                    containers:
-                    - name: $container_name
-                      image: $image
-                      command: $command
-                      args:
-                        - $args
-                      stdin: true
-                      tty: true
-                      resources:
-                        requests:
-                          google.com/tpu: $tpu_cores_per_pod
-                        limits:
-                          google.com/tpu: $tpu_cores_per_pod
-        """
-    )
-)
+  @staticmethod
+  def from_str(s: str) -> "Status":
+    """Converts a string to a Status enum member."""
+    status = Status.__members__.get(s)
+    if status is None:
+      logging.warning("Unknown status: %s", s)
+      return Status.UNKNOWN
+    return status
 
 
 @dataclasses.dataclass
-class JobSet:
-  """Generates YAML configurations for Kubernetes JobSets.
+class Info:
+  """Encapsulates information related to a GKE node pool and represents a specific node pool."""
 
-  This class helps in creating JobSet YAMLs by providing a template and allowing
-  customization of various parameters like jobset name, replicas, TPU
-  configuration, and the workload script to be executed.
-
-  Attributes:
-    jobset_name: The name of the JobSet.
-    namespace: The Kubernetes namespace for the JobSet.
-    max_restarts: The maximum number of restarts for the JobSet.
-    replicated_job_name: The name for the replicated Job within the JobSet.
-    replicas: The number of replicas for the replicated Job.
-    backoff_limit: The number of failed pods to tolerate before marking the
-      Job as failed.
-    completions: The number of pods that must complete successfully.
-    parallelism: The number of pods to run in parallel.
-    tpu_accelerator_type: The type of TPU accelerator (e.g.,
-      "tpu-v6e-slice").
-    tpu_topology: The TPU topology (e.g., "4x4").
-    container_name: The name of the container in the pod.
-    image: The container image to use.
-    tpu_cores_per_pod: The number of TPU cores requested per pod.
-  """
-
-  jobset_name: str
-  namespace: str
-  max_restarts: int
-  replicated_job_name: str
-  replicas: int
-  backoff_limit: int
-  completions: int
-  parallelism: int
-  tpu_accelerator_type: str
-  tpu_topology: str
-  container_name: str
-  image: str
-  tpu_cores_per_pod: int
-
-  def generate_yaml(self, workload_script: Workload) -> str:
-    """Generates the final JobSet YAML content.
-
-    Args:
-        workload_script: A pre-formatted, JSON-escaped string from the Workload
-          class.
-
-    Returns:
-        A string containing the complete JobSet YAML.
-    """
-    params = dataclasses.asdict(self)
-    params["command"] = ["bash", "-c"]
-    params["args"] = workload_script
-
-    return _TEMPLATE.substitute(params)
-
-
-def _get_credentials_command(node_pool: node_pool.Info) -> str:
-  """Returns the command to authenticate `gcloud` with the specified GKE cluster.
-
-  Args:
-    node_pool: Configuration object with cluster details.
-
-  Returns:
-    A string containing the command to authenticate `gcloud` with the specified
-    GKE cluster.
-  """
-  for attr_name in ["cluster_name", "region", "project_id"]:
-    if not getattr(node_pool, attr_name):
-      raise ValueError(f"{attr_name} must be set in the Info object.")
-
-  return " ".join([
-      "gcloud container clusters",
-      f"get-credentials {node_pool.cluster_name}",
-      f"--region={node_pool.region}",
-      f"--project={node_pool.project_id}",
-  ])
-
-
-def _k8s_apply_jobset_command(
-    kubeconfig: str, yaml_content: str, namespace: str
-) -> str:
-  return " ".join([
-      f"kubectl --kubeconfig={kubeconfig} apply",
-      f"-f - -n {namespace} <<EOF\n",
-      f"{yaml_content}\nEOF",
-  ])
-
-
-def _k8s_delete_jobset_command(
-    kubeconfig: str, jobset_name: str, namespace: str
-) -> str:
-  return " ".join([
-      f"kubectl --kubeconfig={kubeconfig} delete jobsets {jobset_name}",
-      f"-n {namespace} --timeout=60s --ignore-not-found=true",
-  ])
-
-
-def _k8s_get_pod_name_command(kubeconfig: str, namespace: str) -> str:
-  return " ".join([
-      f"kubectl --kubeconfig={kubeconfig} get pods",
-      f"-n {namespace} -o jsonpath={{.items[*].metadata.name}}",
-  ])
-
-
-# def get_replica_num(replica_type: str, job_name: str) -> int:
-def get_replica_num(
-    replica_type: str,
-    job_name: str,
-    project_name: str,
-    region: str,
-    cluster_name: str,
-) -> int:
-  """Get the number of a certain type of replicas from a running jobset.
-
-  This uses the Kubernetes API to connect to a desired cluster and returns
-  the number of replicas in a certain status.
-
-  Args:
-    replica_type(str): The type of replica being searched for.
-    job_name(str): The name of the job replica which is run from the jobset.
-  Returns:
-    The number of replicas of the specific type in the jobset.
-  """
-
-  container_client = container_v1.ClusterManagerClient()
-  cluster_path = (
-      f"projects/{project_name}/locations/{region}/clusters/{cluster_name}"
-  )
-  response = container_client.get_cluster(name=cluster_path)
-  creds, _ = google.auth.default()
-  auth_req = google.auth.transport.requests.Request()
-  creds.refresh(auth_req)
-  configuration = client.Configuration()
-  configuration.host = f"https://{response.endpoint}"
-  configuration.verify_ssl = True
-
-  ca_cert_content = base64.b64decode(
-      response.master_auth.cluster_ca_certificate
-  )
-  with tempfile.NamedTemporaryFile(delete=False) as ca_cert:
-    ca_cert.write(ca_cert_content)
-    configuration.ssl_ca_cert = ca_cert.name
-  configuration.api_key_prefix["authorization"] = "Bearer"
-  configuration.api_key["authorization"] = creds.token
-  client.Configuration.set_default(configuration)
-
-  api = client.CustomObjectsApi()
-  jobsets = api.list_namespaced_custom_object(
-      group="jobset.x-k8s.io",
-      version="v1alpha2",
-      namespace="default",
-      plural="jobsets",
-  )
-
-  try:
-    name = jobsets["items"][0]["status"]["replicatedJobsStatus"][0]["name"]
-    replica = jobsets["items"][0]["status"]["replicatedJobsStatus"][0][
-        replica_type
-    ]
-    logging.info("Found %s replicas", replica)
-  except (KeyError, IndexError, TypeError) as e:
-    logging.error("Error in getting jobset satus: %s", e)
-    return 0
-
-  if name != job_name:
-    raise AirflowFailException(f"Jobset found does not match jobset name given")
-
-  return replica
+  project_id: str = None
+  cluster_name: str = None
+  node_pool_name: str = None
+  region: str = None
+  zone: str = None
+  location: str = None
+  node_locations: str = None
+  machine_type: str = None
+  num_nodes: int = None
+  tpu_topology: str = None
 
 
 @task
-def run_workload(
-    node_pool: node_pool.Info, yaml_config: str, namespace: str
-) -> TimeUtil:
-  """Applies the specified YAML file to the GKE cluster.
+def create(
+    node_pool: Info,
+    reservation: str = None,
+    ignore_failure: bool = False,
+) -> None:
+  """Creates a GKE node pool by the given node pool information."""
+
+  command = (
+      f"gcloud container node-pools create {node_pool.node_pool_name} "
+      f"--project={node_pool.project_id} "
+      f"--cluster={node_pool.cluster_name} "
+      f"--location={node_pool.location} "
+      f"--node-locations={node_pool.node_locations} "
+      f"--num-nodes={node_pool.num_nodes} "
+      f"--machine-type={node_pool.machine_type} "
+      f"--tpu-topology={node_pool.tpu_topology} "
+  )
+
+  if reservation:
+    command += f" --reservation-affinity=specific --reservation={reservation}"
+
+  if ignore_failure:
+    command += "2>&1 || true "
+
+  hook = SubprocessHook()
+
+  result = hook.run_command([
+      "bash",
+      "-c",
+      command,
+  ])
+
+  logging.info("Task output: %s", result)
+
+
+@task
+def delete(node_pool: Info) -> None:
+  """Deletes the GKE node pool using gcloud command."""
+
+  hook = SubprocessHook()
+
+  result = hook.run_command([
+      "bash",
+      "-c",
+      f"gcloud container node-pools delete {node_pool.node_pool_name} "
+      f"--project={node_pool.project_id} "
+      f"--cluster={node_pool.cluster_name} "
+      f"--location={node_pool.location} "
+      "--quiet",
+  ])
+
+  logging.info("Task output: %s", result)
+
+
+def list_nodes(node_pool: Info) -> List[str]:
+  """Lists all node names in the specified GKE node pool.
+
+  It queries GKE and Compute APIs and parses instance group URLs
+  to extract VM instance names.
 
   Args:
-    node_pool: Configuration object with cluster details.
-    yaml_config: The JobSet object containing YAML configuration.
-    namespace: The Kubernetes namespace to apply the JobSet.
+      node_pool: An instance of the Info class that encapsulates the
+        configuration and metadata of a GKE node pool.
+  Returns:
+      A list of node names within the specified GKE node pool.
+  Raises:
+      RuntimeError: If no instance groups or zone are found for the node pool.
   """
-  with tempfile.TemporaryDirectory() as tmpdir:
-    kube_dir = tmpdir + "/kubeconfig"
-    env = os.environ.copy()
-    env["KUBECONFIG"] = kube_dir
+  instance_group_urls_key = "instanceGroupUrls"
 
-    hook = SubprocessHook()
+  # THIS NEEDS TO CHANGE
+  hook = SubprocessHook()
 
-    result = hook.run_command(
-        [
-            "bash",
-            "-c",
-            " && ".join([
-                _get_credentials_command(node_pool),
-                _k8s_apply_jobset_command(kube_dir, yaml_config, namespace),
-            ]),
-        ],
-        env=env,
+  process = hook.run_command([
+      "bash",
+      "-c",
+      f"gcloud container node-pools describe {node_pool.node_pool_name} "
+      f"--project={node_pool.project_id} "
+      f"--cluster={node_pool.cluster_name} "
+      f"--location={node_pool.location} "
+      f"--format='json({instance_group_urls_key})'",
+  ])
+
+  logging.info("Task output: %s", process)
+  # THIS NEEDS TO CHANGE
+
+  instance_group_urls_val = json.loads(process.stdout).get(
+      instance_group_urls_key, []
+  )
+  if not instance_group_urls_val:
+    raise AirflowFailException(
+        f"No instance groups found for node pool {node_pool.node_pool_name}."
     )
 
-    logging.info("Task output: %s", result)
+  node_names = []
 
-    current_time_utc = datetime.datetime.now(datetime.timezone.utc)
-    return current_time_utc
+  for url in instance_group_urls_val:
+    # Extract the {instance_group_name} segments from an URL:
+    # https://www.googleapis.com/compute/v1/projects/tpu-prod-env-one-vm/zones/asia-northeast1-b/instanceGroups/gke-yuna-xpk-v6e-2-yuna-xpk-v6e-2-np--b3a745c7-grp
+    # in which, `gke-yuna-xpk-v6e-2-yuna-xpk-v6e-2-np--b3a745c7-grp`
+    # is the of the instance group
+    match = re.search(r"instanceGroupManagers/([\w-]+)", url)
+    if not match:
+      logging.warning("Could not parse instance group URL: %s", url)
+      continue
 
-
-@task
-def end_workload(node_pool: node_pool.Info, jobset_name: str, namespace: str):
-  """Deletes all JobSets from the GKE cluster to clean up resources.
-
-  This task executes a bash script to:
-  1. Authenticate `gcloud` with the specified GKE cluster.
-  2. Delete all JobSets in the `default` namespace using `kubectl`.
-
-  Args:
-    node_pool: Configuration object with cluster details.
-    jobset_name: The name of the JobSet to delete.
-    namespace: The Kubernetes namespace to delete the JobSet from.
-  """
-  with tempfile.TemporaryDirectory() as tmpdir:
-    kube_dir = tmpdir + "/kubeconfig"
-    env = os.environ.copy()
-    env["KUBECONFIG"] = kube_dir
-
-    hook = SubprocessHook()
-
-    result = hook.run_command(
-        [
-            "bash",
-            "-c",
-            " && ".join([
-                _get_credentials_command(node_pool),
-                _k8s_delete_jobset_command(
-                    kube_dir, jobset_name, namespace
-                ),
-            ]),
-        ],
-        env=env,
-    )
-    logging.info("Task output: %s", result)
-
-
-@task
-def get_active_pods(node_pool: node_pool.Info, namespace: str) -> list[str]:
-  """Deletes all JobSets from the GKE cluster to clean up resources.
-
-  This task executes a bash script to:
-  1. Authenticate `gcloud` with the specified GKE cluster.
-  2. Delete all JobSets in the `default` namespace using `kubectl`.
-
-  Args:
-    node_pool: Configuration object with cluster details.
-    namespace: The YamlConfig object containing namespace information.
-
-  Returns:
-    A list of pod names.
-  """
-  with tempfile.TemporaryDirectory() as tmpdir:
-    kube_dir = tmpdir + "/kubeconfig"
-    env = os.environ.copy()
-    env["KUBECONFIG"] = kube_dir
-
-    cmd = " && ".join([
-        _get_credentials_command(node_pool),
-        _k8s_get_pod_name_command(kube_dir, namespace),
-    ])
+    instance_group_name = match.group(1)
 
     # CONVERT TO SUBPROCESS HOOK
     process = subprocess.run(
-        cmd,
+        (
+            "gcloud compute instance-groups list-instances"
+            f" {instance_group_name} "
+            f"--project={node_pool.project_id} "
+            f"--zone={node_pool.node_locations} "
+            "--format='json(instance)'"
+        ),
         shell=True,
         check=True,
-        env=env,
         capture_output=True,
         text=True,
     )
-    logging.info("Command Execute:\n %s", cmd)
+    instances = json.loads(process.stdout)
 
-    if not process or not process.stdout.strip():
-      logging.warning("Received empty pod list from bash task.")
-      raise AirflowFailException("Received empty pod list from bash task.")
+    for instance_item in instances:
+      instance_url = instance_item["instance"]
+      # Extract the {node_name} segments from an URL like this:
+      # https://www.googleapis.com/compute/v1/projects/<project>/zones/<zone>/instances/<node_name>
+      # in which, `gke-tpu-b3a745c7-08bk` is the name of the node
+      node_name = re.search(r"gke[\w-]+", instance_url).group()
+      if node_name:
+        node_names.append(node_name)
+      else:
+        logging.warning(
+            "Could not extract node name from URL: %s", instance_url
+        )
+  return node_names
 
-    pod_list = process.stdout.strip().split()
-    return pod_list
 
+@task
+def delete_one_random_node(node_pool: Info) -> None:
+  """Delete one random node from the specified GKE node pool.
 
-@task.sensor(poke_interval=30, timeout=900, mode="reschedule")
-def wait_for_jobset_started(
-    node_pool: node_pool.Info,
-    pod_name_list: str,
-    job_apply_time: datetime.datetime,
-) -> bool:
-  """Waits for the jobset to start by polling Cloud Logging for positive tensorcore utilization metrics.
-
-  This task polls Cloud Logging for a specific log pattern that appears
-  shortly after the TPU job begins execution within the specified container.
-  It times out if no such log is found within a defined period.
+  This function first lists all nodes under the given node pool,
+  then randomly selects one node and deletes it.
 
   Args:
-    node_pool: An Info dataclass instance containing project and cluster
-      details.
-    pod_name_list: A list of pod names.
-    job_apply_time: The datetime object of the time the job was applied.
+      node_pool: An instance of the Info class that encapsulates
+        the configuration and metadata of a GKE node pool.
+
+  Raises:
+      ValueError: If no nodes are found in the specified node pool.
   """
 
-  end_time_datatime = job_apply_time + datetime.timedelta(minutes=10)
-  start_time = TimeUtil.from_datetime(job_apply_time)
-  end_time = TimeUtil.from_datetime(end_time_datatime)
+  nodes_list = list_nodes(node_pool)
+  if not nodes_list:
+    raise AirflowFailException(
+        f"No nodes found in node pool '{node_pool.node_pool_name}'. "
+        "Cannot proceed with node deletion."
+    )
 
-  if not pod_name_list:
-    raise AirflowFailException("pod_name_list is empty, sensor cannot proceed.")
-
-  pod_name = random.choice(pod_name_list)
-  metric_name = "kubernetes.io/container/accelerator/tensorcore_utilization"
-  filter_string = [
-      f'metric.type = "{metric_name}"',
-      f'resource.labels.cluster_name = "{node_pool.cluster_name}"',
-      f'resource.labels.pod_name = "{pod_name}"',
-  ]
-  time_series_data = query_time_series(
-      project_id=node_pool.project_id,
-      filter_str=" AND ".join(filter_string),
-      start_time=start_time,
-      end_time=end_time,
-      view=types.ListTimeSeriesRequest.TimeSeriesView.FULL,
+  node_to_delete = random.choice(nodes_list)
+  logging.info(
+      "Randomly selected node for deletion: %s",
+      node_to_delete,
   )
 
-  # The value of this metric means percentage of tensorcore utilization,
-  # any positive values can represent that the jobset has started.
-  threshold_value: Final[float] = 0.0
+  hook = SubprocessHook()
 
-  # The minimum number of consecutive initial data points that must all exceed
-  # 'threshold_value' to confirm that the jobset has successfully started and
-  # is active.
-  threshold_records_count: Final[int] = 3
+  process = hook.run_command([
+      "bash",
+      "-c",
+      f"gcloud compute instances delete {node_to_delete} "
+      f"--project={node_pool.project_id} "
+      f"--zone={node_pool.node_locations} "
+      "--quiet",
+  ])
 
-  if (
-      not time_series_data
-      or len(time_series_data[0].points) < threshold_records_count
-  ):
-    return False
-  last_n_data_points = [
-      round(point.value.double_value, 2)
-      for point in time_series_data[0].points[0:threshold_records_count]
-  ]
-
-  return all(p > threshold_value for p in last_n_data_points)
+  logging.info("Task output: %s", process)
 
 
-@task.sensor(poke_interval=60, timeout=3600, mode="reschedule")
-def wait_for_jobset_ttr(info: Info) -> bool:
-  """Polls the jobset time_between_interruptions metric.
+def _query_status_metric(node_pool: Info) -> Status:
+  """Queries the latest status of the specified GKE node pool.
 
-  A sensor task which polls the jobset time_between_interruptions metric
-  every 60 seconds for 60 minutes.
+  This function retrieves the status by querying the metric
+  "kubernetes.io/node_pool/status" via the Google Cloud Monitoring API.
 
   Args:
-    info(Info): An instance of the Info class that encapsulates
-    the configuration and metadata of a GKE node pool and workload.
+      node_pool: An instance of the Info class that encapsulates
+                   the configuration and metadata of a GKE node pool.
+
+  Returns:
+      A `Status` enum representing the latest status of the node pool.
+  """
+  monitoring_client = monitoring_v3.MetricServiceClient()
+  project_name = f"projects/{node_pool.project_id}"
+  now = int(time.time())
+  request = monitoring_v3.ListTimeSeriesRequest(
+      name=project_name,
+      filter=(
+          'metric.type="kubernetes.io/node_pool/status" '
+          f'resource.labels.project_id = "{node_pool.project_id}" '
+          f'resource.labels.cluster_name = "{node_pool.cluster_name}" '
+          f'resource.labels.node_pool_name = "{node_pool.node_pool_name}"'
+      ),
+      interval=types.TimeInterval({
+          "end_time": {"seconds": now},
+          # Metrics are sampled every 60s and stored in the GCP backend,
+          # but it may take up to 2 minutes for the data to become
+          # available on the client side.
+          # Therefore, a longer time interval is necessary.
+          # A 5-minute window is an arbitrary but sufficient choice to
+          # ensure we can retrieve the latest metric data.
+          "start_time": {"seconds": now - 300},
+      }),
+      view="FULL",
+  )
+
+  # A single query to the Monitoring API can return multiple TimeSeries objects,
+  # especially if the 'status' label changed within the time window (e.g., from
+  # 'PROVISIONING' to 'RUNNING').
+  #
+  # To robustly find the absolute latest status, this block first aggregates all
+  # data points from all series into a single flat list ('records'). It then
+  # finds the record with the maximum timestamp from this list to ensure the
+  # true latest status is identified.
+  time_series_data = monitoring_client.list_time_series(request)
+  records = []
+  for series in time_series_data:
+    np_status = series.metric.labels.get("status", "unknown").upper()
+    for point in series.points:
+      end_ts_dt = point.interval.end_time
+      records.append((end_ts_dt, np_status))
+  if not records:
+    return Status.UNKNOWN
+
+  _, latest_status = max(records, key=lambda r: r[0])
+
+  return Status.from_str(latest_status)
+
+
+@task.sensor(poke_interval=60, timeout=600, mode="reschedule")
+def wait_for_status(
+    node_pool: Info,
+    status: Status,
+    **context,
+) -> bool:
+  """Waits for the node pool to enter the target status.
+
+  This is a task waits for the node pool to enter the target status by querying
+  the status metric and comparing it with the expected status.
+  defaults task poke interval to 60 seconds and timeout to 600 seconds.
+
+  Args:
+      node_pool: An instance of the Info class that encapsulates
+        the configuration and metadata of a GKE node pool.
+      status: The target status to wait for, represented as a `Status` enum.
+      context: The Airflow context dictionary, which includes task metadata.
+  Returns:
+      A boolean indicating whether the node pool has reached the target status.
+  """
+  timeout = context["task"].timeout
+  logging.info(
+      "Waiting for node pool '%s' status to become '%s' within %s"
+      " seconds...",
+      node_pool.node_pool_name,
+      status.name,
+      timeout,
+  )
+
+  latest_status = _query_status_metric(node_pool)
+  return latest_status == status
+
+
+@task
+def rollback(node_pool: Info) -> None:
+  """Performs a rollback on given GKE node pool using the gcloud command.
+
+  Args:
+      node_pool: An instance of the Info class that encapsulates the
+        configuration and metadata of a GKE node pool.
+  """
+  hook = SubprocessHook()
+
+  process = hook.run_command([
+      "bash",
+      "-c",
+      f"gcloud container node-pools rollback {node_pool.node_pool_name} "
+      f"--project={node_pool.project_id} "
+      f"--cluster={node_pool.cluster_name} "
+      f"--region={node_pool.location} "
+      f"--quiet",
+  ])
+
+  logging.info("Task output: %s", process)
+
+
+@task.sensor(poke_interval=30, timeout=1200, mode="reschedule")
+def wait_for_availability(
+    node_pool: Info,
+    availability: bool,
+    **context,
+) -> bool:
+  """Check current multi-host nodepool availability.
+
+  This is a sensor task which retrieves the current list of the
+  multi_host availability outputs for the last 600s, aggregated
+  to 60s intervals. The results are then sorted, and the most recent
+  result is checked to determine if it matches the desired result,
+  either True or False.
+  The default task runs every 30s for 1200s.
+
+  Args:
+      node_pool: An instance of the Info class that encapsulates
+        the configuration and metadata of a GKE node pool.
+      availability(bool): True if the function is checking for the
+        nodepool to become available, False if the function is checking for
+        it to become unavailble.
+      context: The Airflow context dictionary, which includes task metadata.
+
   """
   now = int(time.time())
   api_client = monitoring_v3.MetricServiceClient()
   request = monitoring_v3.ListTimeSeriesRequest(
-      name=f"projects/{info.project_id}",
+      name=f"projects/{node_pool.project_id}",
       filter=(
-          'metric.type="kubernetes.io/jobset/times_to_recover" '
-          f'resource.labels.cluster_name="{info.cluster_name}" '
+          'metric.type="kubernetes.io/node_pool/multi_host/available" '
+          f'resource.labels.project_id = "{node_pool.project_id}" '
+          f'resource.labels.cluster_name="{node_pool.cluster_name}" '
+          f'resource.labels.node_pool_name="{node_pool.node_pool_name}"'
       ),
-      interval=monitoring_v3.TimeInterval(
-          {
-              # This particular metric takes a long time to update
-              # to GCP, typically around 20-30 minutes.
-              # This means that the sensor must be long running and
-              # have a long search period to detect it.
-              "end_time": {"seconds": now},
-              "start_time": {"seconds": now - 3600},
-          }
-      ),
+      interval=monitoring_v3.TimeInterval({
+          "end_time": {"seconds": now},
+          # Metrics are sampled every 60s and stored in the GCP backend,
+          # but it may take up to 2 minute for the metric data to become
+          # available on the client side.
+          # Therefore, a longer time interval is necessary.
+          # A 10-minute window is an arbitrary but sufficient choice to
+          # ensure we can retrieve the latest metric data.
+          "start_time": {"seconds": now - 600},
+      }),
       view=monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.FULL,
   )
   page_result = api_client.list_time_series(request=request)
 
-  # We just need to know that the event happened at all
-  if page_result.time_series:
-    logging.info("Event detected at %s", now)
-    return True
-  logging.info("No time series found at %s. Continuing...", now)
-  return False
+  # We only want the most recent point, so we record all points in all
+  # time series in a dictionary with their corresponding bool values to
+  # ensure no overlapping time series can interfere.
+  records = []
+  for time_series in page_result:
+    for point in time_series.points:
+      end_ts_dt = point.interval.end_time
+      pb = monitoring_v3.TypedValue.pb
+      if pb(point.value).WhichOneof("value") == "bool_value":
+        records.append((end_ts_dt, point.value.bool_value))
 
+  if not records:
+    logging.info("No records returned")
+    return False
 
-@task.sensor(poke_interval=30, timeout=600, mode="reschedule")
-def wait_for_jobset_status(replica_type: str, job_name: str, info: Info):
-  """A sensor which checks if are any jobset replicas in a status type.
+  _, state = max(records, key=lambda x: x[0])
 
-  Args:
-    replica_type(str): The type of status being checked for.
-    job_name(str): The name of the job replica which is run from the jobset.
-    info(Info): The Info object containing the cluster information needed for
-    the kubernetes API to connect to it.
-  """
-  ready_replicas = get_replica_num(
-      replica_type=replica_type,
-      job_name=job_name,
-      project_name=info.project_id,
-      region=info.region,
-      cluster_name=info.cluster_name,
+  timeout = context["task"].timeout
+  logging.info(
+      "Waiting for node pool '%s' to become '%s' within %s seconds...",
+      node_pool.node_pool_name,
+      availability,
+      timeout,
   )
-  return ready_replicas > 0
+  return availability == state
