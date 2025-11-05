@@ -27,7 +27,6 @@ def get_axlearn_tpu_config(
     test_name: str,
     docker_image: str,
     test_owner: str,
-    run_model_cmds: Iterable[str],
     time_out_in_min: int,
     cluster: XpkClusterConfig = XpkClusters.TPU_V5P_128_CLUSTER,
     dataset_name: metric_config.DatasetOption = metric_config.DatasetOption.XLML_DATASET,

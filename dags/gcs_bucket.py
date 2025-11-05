@@ -27,4 +27,4 @@ BASE_OUTPUT_DIR = "gs://ml-auto-solutions/output"
 # Multi-tier checkpointing need special permission for GCS Bucket
 # For further question reach out to  Multi-tier Checkpointing Owners.
 MTC_AUTOMATION_BUCKET = "gs://mtc-automation-bucket"
-AXLEARN_AUTOMATION_BUCKET = "gs://axlearn-ml-solutions-bucket"
+AXLEARN_AUTOMATION_BUCKET = "gs://axlearn-bucket-multipod"
