@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import subprocess
+import tempfile
 
 from airflow import models
 from airflow.decorators import task
@@ -31,7 +32,7 @@ from dags.tpu_observability.configs.common import MachineConfigMap, TpuConfig
 
 
 @task
-def get_tpu_info_from_pod(kubeconfig: str, pod_name: str) -> str:
+def get_tpu_info_from_pod(node_pool: node_pool.Info, pod_name: str) -> str:
   """Executes the 'tpu-info' command within a specified pod and returns its output.
 
   This task uses kubectl to run the 'tpu-info' command inside the given pod
@@ -45,26 +46,37 @@ def get_tpu_info_from_pod(kubeconfig: str, pod_name: str) -> str:
   Returns:
     The standard output from the 'tpu-info' command.
   """
-  env = os.environ.copy()
-  env["KUBECONFIG"] = kubeconfig
+  with tempfile.TemporaryDirectory() as tmpdir:
+    kube_dir = tmpdir + "/kubeconfig"
+    env = os.environ.copy()
+    env["KUBECONFIG"] = kube_dir
 
-  result = subprocess.run(
-      (
-          f"kubectl --kubeconfig={kubeconfig} "
-          f"exec {pod_name} -n default "
-          f"-- tpu-info"
-      ),
-      shell=True,
-      env=env,
-      # Since tpu-info feature still has some issues, so the command will
-      # inevitably throw an error. To avoid marking the task as failed,
-      # I set check to False so that the task status does not show as failed.
-      check=True,
-      capture_output=True,
-      text=True,
-  )
-  logging.info("STDOUT: %s", result.stdout)
-  return result.stdout
+    cmd = " && ".join([
+        jobset.get_credentials_command(node_pool),
+        (
+            f"kubectl --kubeconfig={kube_dir} "
+            f"exec {pod_name} -n default "
+            f"-- tpu-info"
+        ),
+    ])
+    logging.info("Command Execute:\n %s", cmd)
+
+    result = subprocess.run(
+        cmd,
+        shell=True,
+        env=env,
+        # Since tpu-info feature still has some issues, so the command will
+        # inevitably throw an error. To avoid marking the task as failed,
+        # I set check to False so that the task status does not show as failed.
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+      logging.info("Command failed with exit code %s.", result.returncode)
+      logging.info("STDERR message: %s", result.stderr)
+    logging.info("STDOUT message: %s", result.stdout)
+    return result.stdout
 
 
 @task
@@ -91,7 +103,6 @@ def verify_table_amount(tpu_info_output: list[tpu_info.Table]):
 @task
 def validate_chips_table(
     tpu_info_output: list[tpu_info.Table],
-    node_pool: node_pool.Info,
     tpu_config: TpuConfig,
 ):
   """Validates the row count and content for the 'TPU Chips' table."""
@@ -343,7 +354,6 @@ with models.DAG(
         ),
     )
 
-    kubeconfig_path = "/tmp/kubeconfig"
     jobset_config = JobSet(
         jobset_name="tpu-info-v6e-workload",
         namespace="default",
@@ -382,7 +392,6 @@ with models.DAG(
 
       apply_time = jobset.run_workload(
           node_pool=cluster_info,
-          kubeconfig=kubeconfig_path,
           yaml_config=jobset_config.generate_yaml(
               workload_script=workload_script
           ),
@@ -391,7 +400,6 @@ with models.DAG(
 
       active_pods = jobset.get_active_pods.override(task_id="get_active_pod")(
           node_pool=cluster_info,
-          kubeconfig=kubeconfig_path,
           namespace=jobset_config.namespace,
       )
 
@@ -401,7 +409,7 @@ with models.DAG(
 
       tpu_info_outputs = (
           get_tpu_info_from_pod.override(task_id="get_tpu_info")
-          .partial(kubeconfig=kubeconfig_path)
+          .partial(node_pool=cluster_info)
           .expand(pod_name=active_pods)
       )
 
@@ -422,7 +430,7 @@ with models.DAG(
 
         validate_tpu_chips_metric = (
             validate_chips_table.override(task_id="validate_tpu_chips_metric")
-            .partial(node_pool=cluster_info, tpu_config=config)
+            .partial(tpu_config=config)
             .expand(tpu_info_output=tpu_info_output)
         )
 
@@ -450,7 +458,6 @@ with models.DAG(
           task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
       )(
           node_pool=cluster_info,
-          kubeconfig=kubeconfig_path,
           jobset_name=jobset_config.jobset_name,
           namespace=jobset_config.namespace,
       ).as_teardown(

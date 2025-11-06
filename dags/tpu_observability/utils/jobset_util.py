@@ -9,6 +9,7 @@ import subprocess
 from typing import Final
 import json
 import string
+import tempfile
 import textwrap
 
 from airflow.decorators import task
@@ -189,7 +190,7 @@ class JobSet:
     return _TEMPLATE.substitute(params)
 
 
-def _get_credentials_command(node_pool: node_pool.Info) -> str:
+def get_credentials_command(node_pool: node_pool.Info) -> str:
   """Returns the command to authenticate `gcloud` with the specified GKE cluster.
 
   Args:
@@ -239,49 +240,48 @@ def _k8s_get_pod_name_command(kubeconfig: str, namespace: str) -> str:
 
 @task
 def run_workload(
-    node_pool: node_pool.Info, kubeconfig: str, yaml_config: str, namespace: str
+    node_pool: node_pool.Info, yaml_config: str, namespace: str
 ) -> TimeUtil:
   """Applies the specified YAML file to the GKE cluster.
 
   Args:
     node_pool: Configuration object with cluster details.
-    kubeconfig: The path to the kubeconfig file.
     yaml_config: The JobSet object containing YAML configuration.
     namespace: The Kubernetes namespace to apply the JobSet.
   """
-  env = os.environ.copy()
-  env["KUBECONFIG"] = kubeconfig
+  with tempfile.TemporaryDirectory() as tmpdir:
+    kube_dir = tmpdir + "/kubeconfig"
+    env = os.environ.copy()
+    env["KUBECONFIG"] = kube_dir
 
-  cmd = " && ".join([
-      _get_credentials_command(node_pool),
-      _k8s_apply_jobset_command(kubeconfig, yaml_config, namespace),
-  ])
+    cmd = " && ".join([
+        get_credentials_command(node_pool),
+        _k8s_apply_jobset_command(kube_dir, yaml_config, namespace),
+    ])
 
-  result = subprocess.run(
-      cmd,
-      shell=True,
-      check=False,
-      env=env,
-      capture_output=True,
-      text=True,
-  )
-  logging.info("Command Execute:\n %s", cmd)
-
-  if result.returncode != 0:
-    raise AirflowFailException(
-        f"Command failed with exit code {result.returncode}.\n ,STDERR"
-        f" message: {result.stderr}"
+    result = subprocess.run(
+        cmd,
+        shell=True,
+        check=False,
+        env=env,
+        capture_output=True,
+        text=True,
     )
-  logging.info("STDOUT message: %s", result.stdout)
+    logging.info("Command Execute:\n %s", cmd)
 
-  current_time_utc = datetime.datetime.now(datetime.timezone.utc)
-  return current_time_utc
+    if result.returncode != 0:
+      raise AirflowFailException(
+          f"Command failed with exit code {result.returncode}.\n ,STDERR"
+          f" message: {result.stderr}"
+      )
+    logging.info("STDOUT message: %s", result.stdout)
+
+    current_time_utc = datetime.datetime.now(datetime.timezone.utc)
+    return current_time_utc
 
 
 @task
-def end_workload(
-    node_pool: node_pool.Info, kubeconfig: str, jobset_name: str, namespace: str
-):
+def end_workload(node_pool: node_pool.Info, jobset_name: str, namespace: str):
   """Deletes all JobSets from the GKE cluster to clean up resources.
 
   This task executes a bash script to:
@@ -290,38 +290,37 @@ def end_workload(
 
   Args:
     node_pool: Configuration object with cluster details.
-    kubeconfig: The path to the kubeconfig file.
     jobset_name: The name of the JobSet to delete.
     namespace: The Kubernetes namespace to delete the JobSet from.
   """
-  env = os.environ.copy()
-  env["KUBECONFIG"] = kubeconfig
+  with tempfile.TemporaryDirectory() as tmpdir:
+    kube_dir = tmpdir + "/kubeconfig"
+    env = os.environ.copy()
+    env["KUBECONFIG"] = kube_dir
 
-  cmd = " && ".join([
-      _get_credentials_command(node_pool),
-      _k8s_delete_jobset_command(kubeconfig, jobset_name, namespace),
-  ])
+    cmd = " && ".join([
+        get_credentials_command(node_pool),
+        _k8s_delete_jobset_command(kube_dir, jobset_name, namespace),
+    ])
 
-  result = subprocess.run(
-      cmd,
-      shell=True,
-      check=False,
-      env=env,
-      capture_output=True,
-      text=True,
-  )
-  logging.info("Command Execute:\n %s", cmd)
+    result = subprocess.run(
+        cmd,
+        shell=True,
+        check=False,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    logging.info("Command Execute:\n %s", cmd)
 
-  if result.returncode != 0:
-    logging.info("Command failed with exit code %s.", result.returncode)
-    logging.info("STDERR message: %s", result.stderr)
-  logging.info("STDOUT message: %s", result.stdout)
+    if result.returncode != 0:
+      logging.info("Command failed with exit code %s.", result.returncode)
+      logging.info("STDERR message: %s", result.stderr)
+    logging.info("STDOUT message: %s", result.stdout)
 
 
 @task
-def get_active_pods(
-    node_pool: node_pool.Info, kubeconfig: str, namespace: str
-) -> list[str]:
+def get_active_pods(node_pool: node_pool.Info, namespace: str) -> list[str]:
   """Deletes all JobSets from the GKE cluster to clean up resources.
 
   This task executes a bash script to:
@@ -330,36 +329,37 @@ def get_active_pods(
 
   Args:
     node_pool: Configuration object with cluster details.
-    kubeconfig: The path to the kubeconfig file.
     namespace: The YamlConfig object containing namespace information.
 
   Returns:
     A list of pod names.
   """
-  env = os.environ.copy()
-  env["KUBECONFIG"] = kubeconfig
+  with tempfile.TemporaryDirectory() as tmpdir:
+    kube_dir = tmpdir + "/kubeconfig"
+    env = os.environ.copy()
+    env["KUBECONFIG"] = kube_dir
 
-  cmd = " && ".join([
-      _get_credentials_command(node_pool),
-      _k8s_get_pod_name_command(kubeconfig, namespace),
-  ])
+    cmd = " && ".join([
+        get_credentials_command(node_pool),
+        _k8s_get_pod_name_command(kube_dir, namespace),
+    ])
 
-  process = subprocess.run(
-      cmd,
-      shell=True,
-      check=True,
-      env=env,
-      capture_output=True,
-      text=True,
-  )
-  logging.info("Command Execute:\n %s", cmd)
+    process = subprocess.run(
+        cmd,
+        shell=True,
+        check=True,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    logging.info("Command Execute:\n %s", cmd)
 
-  if not process or not process.stdout.strip():
-    logging.warning("Received empty pod list from bash task.")
-    raise AirflowFailException("Received empty pod list from bash task.")
+    if not process or not process.stdout.strip():
+      logging.warning("Received empty pod list from bash task.")
+      raise AirflowFailException("Received empty pod list from bash task.")
 
-  pod_list = process.stdout.strip().split()
-  return pod_list
+    pod_list = process.stdout.strip().split()
+    return pod_list
 
 
 @task.sensor(poke_interval=30, timeout=900, mode="reschedule")
