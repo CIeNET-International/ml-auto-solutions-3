@@ -430,7 +430,7 @@ with models.DAG(
 
         validate_tpu_chips_metric = (
             validate_chips_table.override(task_id="validate_tpu_chips_metric")
-            .partial(node_pool=cluster_info, tpu_config=config)
+            .partial(tpu_config=config)
             .expand(tpu_info_output=tpu_info_output)
         )
 
