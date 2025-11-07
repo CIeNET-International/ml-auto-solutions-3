@@ -356,11 +356,11 @@ def rollback(node_pool: Info) -> None:
         configuration and metadata of a GKE node pool.
   """
   command = (
-      f"gcloud container node-pools delete {node_pool.node_pool_name} "
+      f"gcloud container node-pools rollback {node_pool.node_pool_name} "
       f"--project={node_pool.project_id} "
       f"--cluster={node_pool.cluster_name} "
-      f"--location={node_pool.location} "
-      "--quiet"
+      f"--region={node_pool.location} "
+      f"--quiet"
   )
 
   process = subprocess.run(
