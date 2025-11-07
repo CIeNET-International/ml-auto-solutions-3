@@ -35,6 +35,8 @@ with models.DAG(
         "emergency_checkpointing",
         "nightly",
         "orbax",
+        "TPU",
+        "v5p-128",
     ],
     description="DAG that verifies the orbax multi-tier checkpointing saving functionality with replicator to GCS bucket",
     doc_md="""
