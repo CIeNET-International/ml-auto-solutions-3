@@ -14,7 +14,7 @@ from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from google.cloud import monitoring_v3
 from google.cloud.monitoring_v3 import types
-from airflow.hooks.subprocess import SubprocessHook
+
 
 class Status(enum.Enum):
   """Enum for GKE node pool status."""
@@ -77,34 +77,39 @@ def create(
   if ignore_failure:
     command += "2>&1 || true "
 
-  hook = SubprocessHook()
+  process = subprocess.run(
+      command, shell=True, check=True, capture_output=True, text=True
+  )
 
-  result = hook.run_command([
-      "bash",
-      "-c",
-      command,
-  ])
-
-  logging.info("Task output: %s", result)
-
+  if process.returncode != 0:
+    raise AirflowFailException(
+        f"Command failed with exit code {process.returncode}.\n ,STDERR"
+        f" message: {process.stderr}"
+    )
+  logging.info("STDOUT message: %s", process.stdout)
 
 @task
 def delete(node_pool: Info) -> None:
   """Deletes the GKE node pool using gcloud command."""
 
-  hook = SubprocessHook()
-
-  result = hook.run_command([
-      "bash",
-      "-c",
+  command = (
       f"gcloud container node-pools delete {node_pool.node_pool_name} "
       f"--project={node_pool.project_id} "
       f"--cluster={node_pool.cluster_name} "
       f"--location={node_pool.location} "
-      "--quiet",
-  ])
+      "--quiet"
+  )
 
-  logging.info("Task output: %s", result)
+  process = subprocess.run(
+      command, shell=True, check=True, capture_output=True, text=True
+  )
+
+  if process.returncode != 0:
+    raise AirflowFailException(
+        f"Command failed with exit code {process.returncode}.\n ,STDERR"
+        f" message: {process.stderr}"
+    )
+  logging.info("STDOUT message: %s", process.stdout)
 
 
 def list_nodes(node_pool: Info) -> List[str]:
@@ -122,22 +127,24 @@ def list_nodes(node_pool: Info) -> List[str]:
       RuntimeError: If no instance groups or zone are found for the node pool.
   """
   instance_group_urls_key = "instanceGroupUrls"
-
-  # THIS NEEDS TO CHANGE
-  hook = SubprocessHook()
-
-  process = hook.run_command([
-      "bash",
-      "-c",
-      f"gcloud container node-pools describe {node_pool.node_pool_name} "
+  command = (
+      f"gcloud container node-pools delete {node_pool.node_pool_name} "
       f"--project={node_pool.project_id} "
       f"--cluster={node_pool.cluster_name} "
       f"--location={node_pool.location} "
-      f"--format='json({instance_group_urls_key})'",
-  ])
+      "--quiet"
+  )
 
-  logging.info("Task output: %s", process)
-  # THIS NEEDS TO CHANGE
+  process = subprocess.run(
+      command, shell=True, check=True, capture_output=True, text=True
+  )
+
+  if process.returncode != 0:
+    raise AirflowFailException(
+        f"Command failed with exit code {process.returncode}.\n ,STDERR"
+        f" message: {process.stderr}"
+    )
+  logging.info("STDOUT message: %s", process.stdout)
 
   instance_group_urls_val = json.loads(process.stdout).get(
       instance_group_urls_key, []
@@ -161,7 +168,6 @@ def list_nodes(node_pool: Info) -> List[str]:
 
     instance_group_name = match.group(1)
 
-    # CONVERT TO SUBPROCESS HOOK
     process = subprocess.run(
         (
             "gcloud compute instance-groups list-instances"
@@ -175,6 +181,14 @@ def list_nodes(node_pool: Info) -> List[str]:
         capture_output=True,
         text=True,
     )
+
+    if process.returncode != 0:
+      raise AirflowFailException(
+          f"Command failed with exit code {process.returncode}.\n ,STDERR"
+          f" message: {process.stderr}"
+      )
+    logging.info("STDOUT message: %s", process.stdout)
+
     instances = json.loads(process.stdout)
 
     for instance_item in instances:
@@ -220,18 +234,24 @@ def delete_one_random_node(node_pool: Info) -> None:
       node_to_delete,
   )
 
-  hook = SubprocessHook()
-
-  process = hook.run_command([
-      "bash",
-      "-c",
-      f"gcloud compute instances delete {node_to_delete} "
+  command = (
+      f"gcloud container node-pools delete {node_pool.node_pool_name} "
       f"--project={node_pool.project_id} "
-      f"--zone={node_pool.node_locations} "
-      "--quiet",
-  ])
+      f"--cluster={node_pool.cluster_name} "
+      f"--location={node_pool.location} "
+      "--quiet"
+  )
 
-  logging.info("Task output: %s", process)
+  process = subprocess.run(
+      command, shell=True, check=True, capture_output=True, text=True
+  )
+
+  if process.returncode != 0:
+    raise AirflowFailException(
+        f"Command failed with exit code {process.returncode}.\n ,STDERR"
+        f" message: {process.stderr}"
+    )
+  logging.info("STDOUT message: %s", process.stdout)
 
 
 def _query_status_metric(node_pool: Info) -> Status:
@@ -335,19 +355,24 @@ def rollback(node_pool: Info) -> None:
       node_pool: An instance of the Info class that encapsulates the
         configuration and metadata of a GKE node pool.
   """
-  hook = SubprocessHook()
-
-  process = hook.run_command([
-      "bash",
-      "-c",
-      f"gcloud container node-pools rollback {node_pool.node_pool_name} "
+  command = (
+      f"gcloud container node-pools delete {node_pool.node_pool_name} "
       f"--project={node_pool.project_id} "
       f"--cluster={node_pool.cluster_name} "
-      f"--region={node_pool.location} "
-      f"--quiet",
-  ])
+      f"--location={node_pool.location} "
+      "--quiet"
+  )
 
-  logging.info("Task output: %s", process)
+  process = subprocess.run(
+      command, shell=True, check=True, capture_output=True, text=True
+  )
+
+  if process.returncode != 0:
+    raise AirflowFailException(
+        f"Command failed with exit code {process.returncode}.\n ,STDERR"
+        f" message: {process.stderr}"
+    )
+  logging.info("STDOUT message: %s", process.stdout)
 
 
 @task.sensor(poke_interval=30, timeout=1200, mode="reschedule")

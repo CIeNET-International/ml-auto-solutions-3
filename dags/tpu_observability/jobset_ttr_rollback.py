@@ -97,7 +97,7 @@ with models.DAG(
   wait_for_jobset_ready = jobset.wait_for_jobset_status(
       replica_type="ready",
       job_name=jobset_config.replicated_job_name,
-      info=cluster_info
+      info=cluster_info,
   )
 
   rollback_node_pool = node_pool.rollback(node_pool=cluster_info)
@@ -113,7 +113,6 @@ with models.DAG(
   ).as_teardown(
       setups=start_workload
   )
-
 
   cleanup_node_pool = node_pool.delete.override(
       task_id="cleanup_node_pool", trigger_rule=TriggerRule.ALL_DONE

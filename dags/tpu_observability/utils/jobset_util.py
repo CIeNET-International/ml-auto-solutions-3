@@ -3,30 +3,25 @@
 import base64
 import dataclasses
 import datetime
+import json
 import logging
 import os
 import random
+import string
 import subprocess
 from typing import Final
-import json
-import string
 import tempfile
 import textwrap
 import time
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
-from airflow.exceptions import AirflowException
-from airflow.hooks.subprocess import SubprocessHook
 from google.cloud.monitoring_v3 import types
 from kubernetes import client
-from google.auth.transport.requests import Request
-from google.auth import default
 from google.cloud import monitoring_v3
 import google.auth
 import google.auth.transport.requests
 from google.cloud import container_v1
-import kubernetes
 
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils.gcp_util import query_time_series
@@ -251,7 +246,6 @@ def _k8s_get_pod_name_command(kubeconfig: str, namespace: str) -> str:
   ])
 
 
-# def get_replica_num(replica_type: str, job_name: str) -> int:
 def get_replica_num(
     replica_type: str,
     job_name: str,
@@ -333,21 +327,27 @@ def run_workload(
     env = os.environ.copy()
     env["KUBECONFIG"] = kube_dir
 
-    hook = SubprocessHook()
+    cmd = " && ".join([
+        _get_credentials_command(node_pool),
+        _k8s_apply_jobset_command(kube_dir, yaml_config, namespace),
+    ])
 
-    result = hook.run_command(
-        [
-            "bash",
-            "-c",
-            " && ".join([
-                _get_credentials_command(node_pool),
-                _k8s_apply_jobset_command(kube_dir, yaml_config, namespace),
-            ]),
-        ],
+    result = subprocess.run(
+        cmd,
+        shell=True,
+        check=False,
         env=env,
+        capture_output=True,
+        text=True,
     )
+    logging.info("Command Execute:\n %s", cmd)
 
-    logging.info("Task output: %s", result)
+    if result.returncode != 0:
+      raise AirflowFailException(
+          f"Command failed with exit code {result.returncode}.\n ,STDERR"
+          f" message: {result.stderr}"
+      )
+    logging.info("STDOUT message: %s", result.stdout)
 
     current_time_utc = datetime.datetime.now(datetime.timezone.utc)
     return current_time_utc
@@ -371,22 +371,27 @@ def end_workload(node_pool: node_pool.Info, jobset_name: str, namespace: str):
     env = os.environ.copy()
     env["KUBECONFIG"] = kube_dir
 
-    hook = SubprocessHook()
+    cmd = " && ".join([
+        _get_credentials_command(node_pool),
+        _k8s_delete_jobset_command(kube_dir, jobset_name, namespace),
+    ])
 
-    result = hook.run_command(
-        [
-            "bash",
-            "-c",
-            " && ".join([
-                _get_credentials_command(node_pool),
-                _k8s_delete_jobset_command(
-                    kube_dir, jobset_name, namespace
-                ),
-            ]),
-        ],
+    result = subprocess.run(
+        cmd,
+        shell=True,
+        check=False,
         env=env,
+        capture_output=True,
+        text=True,
     )
-    logging.info("Task output: %s", result)
+    logging.info("Command Execute:\n %s", cmd)
+
+    if result.returncode != 0:
+      raise AirflowFailException(
+          f"Command failed with exit code {result.returncode}.\n ,STDERR"
+          f" message: {result.stderr}"
+      )
+    logging.info("STDOUT message: %s", result.stdout)
 
 
 @task
@@ -414,7 +419,6 @@ def get_active_pods(node_pool: node_pool.Info, namespace: str) -> list[str]:
         _k8s_get_pod_name_command(kube_dir, namespace),
     ])
 
-    # CONVERT TO SUBPROCESS HOOK
     process = subprocess.run(
         cmd,
         shell=True,
@@ -428,6 +432,8 @@ def get_active_pods(node_pool: node_pool.Info, namespace: str) -> list[str]:
     if not process or not process.stdout.strip():
       logging.warning("Received empty pod list from bash task.")
       raise AirflowFailException("Received empty pod list from bash task.")
+
+    logging.info("STDOUT message: %s", process.stdout)
 
     pod_list = process.stdout.strip().split()
     return pod_list
@@ -515,16 +521,14 @@ def wait_for_jobset_ttr(info: Info) -> bool:
           'metric.type="kubernetes.io/jobset/times_to_recover" '
           f'resource.labels.cluster_name="{info.cluster_name}" '
       ),
-      interval=monitoring_v3.TimeInterval(
-          {
-              # This particular metric takes a long time to update
-              # to GCP, typically around 20-30 minutes.
-              # This means that the sensor must be long running and
-              # have a long search period to detect it.
-              "end_time": {"seconds": now},
-              "start_time": {"seconds": now - 3600},
-          }
-      ),
+      interval=monitoring_v3.TimeInterval({
+          # This particular metric takes a long time to update
+          # to GCP, typically around 20-30 minutes.
+          # This means that the sensor must be long running and
+          # have a long search period to detect it.
+          "end_time": {"seconds": now},
+          "start_time": {"seconds": now - 3600},
+      }),
       view=monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.FULL,
   )
   page_result = api_client.list_time_series(request=request)
