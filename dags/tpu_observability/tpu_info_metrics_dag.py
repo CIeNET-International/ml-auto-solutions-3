@@ -98,7 +98,7 @@ def get_tpu_info_metric_from_pod(
     env["KUBECONFIG"] = kube_dir
 
     cmd = " && ".join([
-        jobset.get_credentials_command(node_pool),
+        jobset.Command.get_credentials_command(node_pool),
         (
             f"kubectl --kubeconfig={kube_dir} "
             f"exec {pod_name} -n {namespace} "
