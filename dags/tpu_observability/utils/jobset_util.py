@@ -1,23 +1,29 @@
 """Utilities for managing JobSets in GKE clusters for TPU observability."""
 
-import datetime
 import dataclasses
+import datetime
+import json
 import logging
 import os
 import random
-import subprocess
-from typing import Final
-import json
 import string
+import subprocess
+import tempfile
 import textwrap
+import time
+from typing import Final
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from google.cloud.monitoring_v3 import types
+import google.auth.transport.requests
+import kubernetes
 
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils.gcp_util import query_time_series
 from dags.tpu_observability.utils.time_util import TimeUtil
+from dags.tpu_observability.utils.node_pool_util import Info
+from xlml.utils import gke
 
 
 class Workload:
@@ -45,14 +51,22 @@ class Workload:
           mesh = Mesh(global_devices, ("x",))
 
           print(f"[Host {jax.process_index()}] Allocating data...")
-          size = 32832
-          x_global = jnp.ones((size, size), dtype=jnp.float32)
-          y_global = jnp.ones((size, size), dtype=jnp.float32)
-
-          print(f"[Host {jax.process_index()}] Sharding data...")
+          print(f"[Host {jax.process_index()}] Defining sharding...")
+          size = 32768
+          global_shape = (size, size)
           sharding = NamedSharding(mesh, jax.sharding.PartitionSpec("x", None))
-          x = jax.device_put(x_global, sharding)
-          y = jax.device_put(y_global, sharding)
+
+          print(f"[Host {jax.process_index()}] Creating sharded data directly on devices...")
+
+          def ones_callback(index):
+            resolved_indices = [s.indices(global_shape[i]) for i, s in enumerate(index)]
+            local_shape = tuple(stop - start for start, stop, step in resolved_indices)
+
+            return jnp.ones(local_shape, dtype=jnp.float32)
+
+          x = jax.make_array_from_callback(global_shape, sharding, ones_callback)
+          y = jax.make_array_from_callback(global_shape, sharding, ones_callback)
+
           print(f"[Host {jax.process_index()}] Data on device")
 
           # ========= Define heavy workload =========
@@ -79,8 +93,8 @@ class Workload:
 
           if jax.process_index() == 0:
               print(f"Total time: {end - start:.2f} seconds (on full v6e-16)")
-          ' &&
-          echo "Workload finished, sleeping now..." &&
+          '
+          echo "sleep..."
           sleep 10000
           """
       ),
@@ -237,51 +251,101 @@ def _k8s_get_pod_name_command(kubeconfig: str, namespace: str) -> str:
   ])
 
 
+def get_replica_num(
+    replica_type: str,
+    job_name: str,
+    node_pool: node_pool.Info
+) -> int:
+  """Get the number of a certain type of replicas from a running jobset.
+
+  This uses the Kubernetes API to connect to a desired cluster and returns
+  the number of replicas in a certain status.
+
+  Args:
+    replica_type: The type of replica being searched for.
+    job_name: The name of the job replica which is run from the jobset.
+    node_pool: The Info object containing the cluster information needed for
+    the kubernetes API to connect to it.
+  Returns:
+    The number of replicas of the specific type in the jobset.
+  """
+
+  api_client = gke.get_authenticated_client(
+      node_pool.project_id, node_pool.region, node_pool.cluster_name
+  )
+
+  api = kubernetes.client.CustomObjectsApi(api_client)
+
+  jobsets = api.list_namespaced_custom_object(
+      group="jobset.x-k8s.io",
+      version="v1alpha2",
+      namespace="default",
+      plural="jobsets",
+  )
+
+  try:
+    name = jobsets["items"][0]["status"]["replicatedJobsStatus"][0]["name"]
+    replica = jobsets["items"][0]["status"]["replicatedJobsStatus"][0][
+        replica_type
+    ]
+    logging.info("Found %s replicas", replica)
+
+  except (KeyError, IndexError, TypeError) as e:
+    logging.error("Error in getting jobset satus: %s", e)
+    return 0
+
+  if name != job_name:
+    raise AirflowFailException(
+        f"Jobset found '{name}' does not match jobset name given '{job_name}'"
+    )
+
+  return replica
+
+
 @task
 def run_workload(
-    node_pool: node_pool.Info, kubeconfig: str, yaml_config: str, namespace: str
+    node_pool: node_pool.Info, yaml_config: str, namespace: str
 ) -> TimeUtil:
   """Applies the specified YAML file to the GKE cluster.
 
   Args:
     node_pool: Configuration object with cluster details.
-    kubeconfig: The path to the kubeconfig file.
     yaml_config: The JobSet object containing YAML configuration.
     namespace: The Kubernetes namespace to apply the JobSet.
   """
-  env = os.environ.copy()
-  env["KUBECONFIG"] = kubeconfig
+  with tempfile.TemporaryDirectory() as tmpdir:
+    kube_dir = tmpdir + "/kubeconfig"
+    env = os.environ.copy()
+    env["KUBECONFIG"] = kube_dir
 
-  cmd = " && ".join([
-      _get_credentials_command(node_pool),
-      _k8s_apply_jobset_command(kubeconfig, yaml_config, namespace),
-  ])
+    cmd = " && ".join([
+        _get_credentials_command(node_pool),
+        _k8s_apply_jobset_command(kube_dir, yaml_config, namespace),
+    ])
 
-  result = subprocess.run(
-      cmd,
-      shell=True,
-      check=False,
-      env=env,
-      capture_output=True,
-      text=True,
-  )
-  logging.info("Command Execute:\n %s", cmd)
-
-  if result.returncode != 0:
-    raise AirflowFailException(
-        f"Command failed with exit code {result.returncode}.\n ,STDERR"
-        f" message: {result.stderr}"
+    result = subprocess.run(
+        cmd,
+        shell=True,
+        check=False,
+        env=env,
+        capture_output=True,
+        text=True,
     )
-  logging.info("STDOUT message: %s", result.stdout)
+    logging.info("Command Execute:\n %s", cmd)
 
-  current_time_utc = datetime.datetime.now(datetime.timezone.utc)
-  return current_time_utc
+    if result.returncode != 0:
+      raise AirflowFailException(
+          f"Command failed with exit code {result.returncode}.\n ,STDERR"
+          f" message: {result.stderr}"
+      )
+    logging.info("STDOUT message: %s", result.stdout)
+
+    current_time_utc = datetime.datetime.now(datetime.timezone.utc)
+    return current_time_utc
 
 
 @task
-def end_workload(
-    node_pool: node_pool.Info, kubeconfig: str, jobset_name: str, namespace: str
-):
+def end_workload(node_pool: node_pool.Info, jobset_name: str, namespace: str):
   """Deletes all JobSets from the GKE cluster to clean up resources.
 
   This task executes a bash script to:
@@ -290,38 +354,39 @@ def end_workload(
 
   Args:
     node_pool: Configuration object with cluster details.
-    kubeconfig: The path to the kubeconfig file.
     jobset_name: The name of the JobSet to delete.
     namespace: The Kubernetes namespace to delete the JobSet from.
   """
-  env = os.environ.copy()
-  env["KUBECONFIG"] = kubeconfig
+  with tempfile.TemporaryDirectory() as tmpdir:
+    kube_dir = tmpdir + "/kubeconfig"
+    env = os.environ.copy()
+    env["KUBECONFIG"] = kube_dir
 
-  cmd = " && ".join([
-      _get_credentials_command(node_pool),
-      _k8s_delete_jobset_command(kubeconfig, jobset_name, namespace),
-  ])
+    cmd = " && ".join([
+        _get_credentials_command(node_pool),
+        _k8s_delete_jobset_command(kube_dir, jobset_name, namespace),
+    ])
 
-  result = subprocess.run(
-      cmd,
-      shell=True,
-      check=False,
-      env=env,
-      capture_output=True,
-      text=True,
-  )
-  logging.info("Command Execute:\n %s", cmd)
+    result = subprocess.run(
+        cmd,
+        shell=True,
+        check=False,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    logging.info("Command Execute:\n %s", cmd)
 
-  if result.returncode != 0:
-    logging.info("Command failed with exit code %s.", result.returncode)
-    logging.info("STDERR message: %s", result.stderr)
-  logging.info("STDOUT message: %s", result.stdout)
+    if result.returncode != 0:
+      raise AirflowFailException(
+          f"Command failed with exit code {result.returncode}.\n ,STDERR"
+          f" message: {result.stderr}"
+      )
+    logging.info("STDOUT message: %s", result.stdout)
 
 
 @task
-def get_active_pods(
-    node_pool: node_pool.Info, kubeconfig: str, namespace: str
-) -> list[str]:
+def get_active_pods(node_pool: node_pool.Info, namespace: str) -> list[str]:
   """Deletes all JobSets from the GKE cluster to clean up resources.
 
   This task executes a bash script to:
@@ -330,36 +395,39 @@ def get_active_pods(
 
   Args:
     node_pool: Configuration object with cluster details.
-    kubeconfig: The path to the kubeconfig file.
     namespace: The YamlConfig object containing namespace information.
 
   Returns:
     A list of pod names.
   """
-  env = os.environ.copy()
-  env["KUBECONFIG"] = kubeconfig
+  with tempfile.TemporaryDirectory() as tmpdir:
+    kube_dir = tmpdir + "/kubeconfig"
+    env = os.environ.copy()
+    env["KUBECONFIG"] = kube_dir
 
-  cmd = " && ".join([
-      _get_credentials_command(node_pool),
-      _k8s_get_pod_name_command(kubeconfig, namespace),
-  ])
+    cmd = " && ".join([
+        _get_credentials_command(node_pool),
+        _k8s_get_pod_name_command(kube_dir, namespace),
+    ])
 
-  process = subprocess.run(
-      cmd,
-      shell=True,
-      check=True,
-      env=env,
-      capture_output=True,
-      text=True,
-  )
-  logging.info("Command Execute:\n %s", cmd)
+    process = subprocess.run(
+        cmd,
+        shell=True,
+        check=True,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    logging.info("Command Execute:\n %s", cmd)
 
-  if not process or not process.stdout.strip():
-    logging.warning("Received empty pod list from bash task.")
-    raise AirflowFailException("Received empty pod list from bash task.")
+    if not process or not process.stdout.strip():
+      logging.warning("Received empty pod list from bash task.")
+      raise AirflowFailException("Received empty pod list from bash task.")
 
-  pod_list = process.stdout.strip().split()
-  return pod_list
+    logging.info("STDOUT message: %s", process.stdout)
+
+    pod_list = process.stdout.strip().split()
+    return pod_list
 
 
 @task.sensor(poke_interval=30, timeout=900, mode="reschedule")
@@ -423,3 +491,53 @@ def wait_for_jobset_started(
   ]
 
   return all(p > threshold_value for p in last_n_data_points)
+
+
+@task.sensor(poke_interval=60, timeout=3600, mode="reschedule")
+def wait_for_jobset_ttr(info: Info) -> bool:
+  """Polls the jobset time_between_interruptions metric.
+
+  A sensor task which polls the jobset time_between_interruptions metric
+  every 60 seconds for 60 minutes.
+
+  Args:
+    info(Info): An instance of the Info class that encapsulates
+    the configuration and metadata of a GKE node pool and workload.
+  """
+  now = int(time.time())
+
+  time_series = query_time_series(
+      info.project_id,
+      (
+          'metric.type="kubernetes.io/jobset/times_to_recover" '
+          f'resource.labels.cluster_name="{info.cluster_name}" '
+      ),
+      TimeUtil.from_unix_seconds(int(time.time() - 3600)),
+      TimeUtil.from_unix_seconds(int(time.time())),
+  )
+
+  # We just need to know that the event happened at all
+  if len(time_series) > 0:
+    logging.info("Event detected at %s", now)
+    return True
+  logging.info("No time series found at %s. Continuing...", now)
+  return False
+
+
+@task.sensor(poke_interval=30, timeout=600, mode="reschedule")
+def wait_for_jobset_status(replica_type: str, job_name: str, info: Info):
+  """A sensor which checks if are any jobset replicas in a status type.
+
+  Args:
+    replica_type(str): The type of status being checked for.
+    job_name(str): The name of the job replica which is run from the jobset.
+    info(Info): The Info object containing the cluster information needed for
+    the kubernetes API to connect to it.
+  """
+  logging.info("Checking for number of replicas of type: %s", replica_type)
+  ready_replicas = get_replica_num(
+      replica_type=replica_type,
+      job_name=job_name,
+      node_pool=info,
+  )
+  return ready_replicas > 0
