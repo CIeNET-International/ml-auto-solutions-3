@@ -190,52 +190,61 @@ class JobSet:
     return _TEMPLATE.substitute(params)
 
 
-def get_credentials_command(node_pool: node_pool.Info) -> str:
-  """Returns the command to authenticate `gcloud` with the specified GKE cluster.
+class Command:
+  """A collection of static methods to generate Kubernetes and gcloud commands.
 
-  Args:
-    node_pool: Configuration object with cluster details.
-
-  Returns:
-    A string containing the command to authenticate `gcloud` with the specified
-    GKE cluster.
+  This class provides methods to construct shell commands for interacting with
+  GKE clusters, including authentication, applying/deleting JobSets, and
+  getting pod information.
   """
-  for attr_name in ["cluster_name", "region", "project_id"]:
-    if not getattr(node_pool, attr_name):
-      raise ValueError(f"{attr_name} must be set in the Info object.")
 
-  return " ".join([
-      "gcloud container clusters",
-      f"get-credentials {node_pool.cluster_name}",
-      f"--region={node_pool.region}",
-      f"--project={node_pool.project_id}",
-  ])
+  @staticmethod
+  def get_credentials_command(node_pool: node_pool.Info) -> str:
+    """Returns the command to authenticate `gcloud` with the specified GKE cluster.
 
+    Args:
+      node_pool: Configuration object with cluster details.
 
-def _k8s_apply_jobset_command(
-    kubeconfig: str, yaml_content: str, namespace: str
-) -> str:
-  return " ".join([
-      f"kubectl --kubeconfig={kubeconfig} apply",
-      f"-f - -n {namespace} <<EOF\n",
-      f"{yaml_content}\nEOF",
-  ])
+    Returns:
+      A string containing the command to authenticate `gcloud` with the
+      specified GKE cluster.
+    """
+    for attr_name in ["cluster_name", "region", "project_id"]:
+      if not getattr(node_pool, attr_name):
+        raise ValueError(f"{attr_name} must be set in the Info object.")
 
+    return " ".join([
+        "gcloud container clusters",
+        f"get-credentials {node_pool.cluster_name}",
+        f"--region={node_pool.region}",
+        f"--project={node_pool.project_id}",
+    ])
 
-def _k8s_delete_jobset_command(
-    kubeconfig: str, jobset_name: str, namespace: str
-) -> str:
-  return " ".join([
-      f"kubectl --kubeconfig={kubeconfig} delete jobsets {jobset_name}",
-      f"-n {namespace} --timeout=60s --ignore-not-found=true",
-  ])
+  @staticmethod
+  def k8s_apply_jobset_command(
+      kubeconfig: str, yaml_content: str, namespace: str
+  ) -> str:
+    return " ".join([
+        f"kubectl --kubeconfig={kubeconfig} apply",
+        f"-f - -n {namespace} <<EOF\n",
+        f"{yaml_content}\nEOF",
+    ])
 
+  @staticmethod
+  def k8s_delete_jobset_command(
+      kubeconfig: str, jobset_name: str, namespace: str
+  ) -> str:
+    return " ".join([
+        f"kubectl --kubeconfig={kubeconfig} delete jobsets {jobset_name}",
+        f"-n {namespace} --timeout=60s --ignore-not-found=true",
+    ])
 
-def _k8s_get_pod_name_command(kubeconfig: str, namespace: str) -> str:
-  return " ".join([
-      f"kubectl --kubeconfig={kubeconfig} get pods",
-      f"-n {namespace} -o jsonpath={{.items[*].metadata.name}}",
-  ])
+  @staticmethod
+  def k8s_get_pod_name_command(kubeconfig: str, namespace: str) -> str:
+    return " ".join([
+        f"kubectl --kubeconfig={kubeconfig} get pods",
+        f"-n {namespace} -o jsonpath={{.items[*].metadata.name}}",
+    ])
 
 
 @task
@@ -255,8 +264,8 @@ def run_workload(
     env["KUBECONFIG"] = kube_dir
 
     cmd = " && ".join([
-        get_credentials_command(node_pool),
-        _k8s_apply_jobset_command(kube_dir, yaml_config, namespace),
+        Command.get_credentials_command(node_pool),
+        Command.k8s_apply_jobset_command(kube_dir, yaml_config, namespace),
     ])
 
     result = subprocess.run(
@@ -299,8 +308,8 @@ def end_workload(node_pool: node_pool.Info, jobset_name: str, namespace: str):
     env["KUBECONFIG"] = kube_dir
 
     cmd = " && ".join([
-        get_credentials_command(node_pool),
-        _k8s_delete_jobset_command(kube_dir, jobset_name, namespace),
+        Command.get_credentials_command(node_pool),
+        Command.k8s_delete_jobset_command(kube_dir, jobset_name, namespace),
     ])
 
     result = subprocess.run(
@@ -340,8 +349,8 @@ def get_active_pods(node_pool: node_pool.Info, namespace: str) -> list[str]:
     env["KUBECONFIG"] = kube_dir
 
     cmd = " && ".join([
-        get_credentials_command(node_pool),
-        _k8s_get_pod_name_command(kube_dir, namespace),
+        Command.get_credentials_command(node_pool),
+        Command.k8s_get_pod_name_command(kube_dir, namespace),
     ])
 
     process = subprocess.run(
