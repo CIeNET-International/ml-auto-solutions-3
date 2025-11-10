@@ -1,6 +1,5 @@
 """Utilities for managing JobSets in GKE clusters for TPU observability."""
 
-import base64
 import dataclasses
 import datetime
 import json
@@ -17,15 +16,14 @@ from typing import Final
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from google.cloud.monitoring_v3 import types
-import google.auth
 import google.auth.transport.requests
-from google.cloud import container_v1
-from kubernetes import client
+import kubernetes
 
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils.gcp_util import query_time_series
 from dags.tpu_observability.utils.time_util import TimeUtil
 from dags.tpu_observability.utils.node_pool_util import Info
+from xlml.utils import gke
 
 
 class Workload:
@@ -256,9 +254,7 @@ def _k8s_get_pod_name_command(kubeconfig: str, namespace: str) -> str:
 def get_replica_num(
     replica_type: str,
     job_name: str,
-    project_name: str,
-    region: str,
-    cluster_name: str,
+    node_pool: node_pool.Info
 ) -> int:
   """Get the number of a certain type of replicas from a running jobset.
 
@@ -266,35 +262,19 @@ def get_replica_num(
   the number of replicas in a certain status.
 
   Args:
-    replica_type(str): The type of replica being searched for.
-    job_name(str): The name of the job replica which is run from the jobset.
+    replica_type: The type of replica being searched for.
+    job_name: The name of the job replica which is run from the jobset.
+    node_pool: The Info object containing the cluster information needed for
+    the kubernetes API to connect to it.
   Returns:
     The number of replicas of the specific type in the jobset.
   """
 
-  container_client = container_v1.ClusterManagerClient()
-  cluster_path = (
-      f"projects/{project_name}/locations/{region}/clusters/{cluster_name}"
+  api_client = gke.get_authenticated_client(
+      node_pool.project_id, node_pool.region, node_pool.cluster_name
   )
-  response = container_client.get_cluster(name=cluster_path)
-  creds, _ = google.auth.default()
-  auth_req = google.auth.transport.requests.Request()
-  creds.refresh(auth_req)
-  configuration = client.Configuration()
-  configuration.host = f"https://{response.endpoint}"
-  configuration.verify_ssl = True
 
-  ca_cert_content = base64.b64decode(
-      response.master_auth.cluster_ca_certificate
-  )
-  with tempfile.NamedTemporaryFile(delete=False) as ca_cert:
-    ca_cert.write(ca_cert_content)
-    configuration.ssl_ca_cert = ca_cert.name
-  configuration.api_key_prefix["authorization"] = "Bearer"
-  configuration.api_key["authorization"] = creds.token
-  client.Configuration.set_default(configuration)
-
-  api = client.CustomObjectsApi()
+  api = kubernetes.client.CustomObjectsApi(api_client)
 
   jobsets = api.list_namespaced_custom_object(
       group="jobset.x-k8s.io",
@@ -558,8 +538,6 @@ def wait_for_jobset_status(replica_type: str, job_name: str, info: Info):
   ready_replicas = get_replica_num(
       replica_type=replica_type,
       job_name=job_name,
-      project_name=info.project_id,
-      region=info.region,
-      cluster_name=info.cluster_name,
+      node_pool=info,
   )
   return ready_replicas > 0

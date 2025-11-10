@@ -88,6 +88,7 @@ def create(
     )
   logging.info("STDOUT message: %s", process.stdout)
 
+
 @task
 def delete(node_pool: Info) -> None:
   """Deletes the GKE node pool using gcloud command."""
