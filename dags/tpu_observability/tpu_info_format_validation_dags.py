@@ -25,6 +25,7 @@ from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.configs.common import MachineConfigMap, TpuConfig
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
+from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.tpu_observability.utils import tpu_info_util as tpu_info
 from dags.tpu_observability.utils.jobset_util import JobSet
 from dags.tpu_observability.utils.jobset_util import Workload
@@ -46,37 +47,26 @@ def get_tpu_info_from_pod(node_pool: node_pool.Info, pod_name: str) -> str:
   Returns:
     The standard output from the 'tpu-info' command.
   """
-  with tempfile.TemporaryDirectory() as tmpdir:
-    kube_dir = tmpdir + "/kubeconfig"
+  with tempfile.NamedTemporaryFile() as temp_config_file:
+    # kube_dir = tmpdir + "/kubeconfig"
     env = os.environ.copy()
-    env["KUBECONFIG"] = kube_dir
+    env["KUBECONFIG"] = temp_config_file.name
 
     cmd = " && ".join([
         jobset.Command.get_credentials_command(node_pool),
         (
-            f"kubectl --kubeconfig={kube_dir} "
-            f"exec {pod_name} -n default "
-            f"-- tpu-info"
+            f"kubectl exec {pod_name} -n default -- tpu-info"
         ),
     ])
-    logging.info("Command Execute:\n %s", cmd)
 
-    result = subprocess.run(
+    result = subprocess.run_exec(
         cmd,
-        shell=True,
         env=env,
-        # Since tpu-info feature still has some issues, so the command will
-        # inevitably throw an error. To avoid marking the task as failed,
-        # I set check to False so that the task status does not show as failed.
-        check=False,
-        capture_output=True,
-        text=True,
+        log_command=True,
+        log_output=True,
     )
-    if result.returncode != 0:
-      logging.info("Command failed with exit code %s.", result.returncode)
-      logging.info("STDERR message: %s", result.stderr)
-    logging.info("STDOUT message: %s", result.stdout)
-    return result.stdout
+
+    return result
 
 
 @task
@@ -326,7 +316,7 @@ with models.DAG(
     config = machine.value
     cluster_info = node_pool.Info(
         project_id=models.Variable.get(
-            "TFV_PROJECT_ID", default_var=Project.TPU_PROD_ENV_ONE_VM.value
+            "TFV_PROJECT_ID", default_var="cienet-cmcs"
         ),
         cluster_name=models.Variable.get(
             "TFV_CLUSTER_NAME", default_var="tpu-observability-automation"
@@ -335,13 +325,13 @@ with models.DAG(
             "TFV_NODE_POOL_NAME", default_var="tpu-info-fromat-test-v6e"
         ),
         region=models.Variable.get(
-            "TFV_REGION", default_var=Region.US_EAST5.value
+            "TFV_REGION", default_var=Region.US_CENTRAL1.value
         ),
         location=models.Variable.get(
-            "TFV_LOCATION", default_var=Region.US_EAST5.value
+            "TFV_LOCATION", default_var=Region.US_CENTRAL1.value
         ),
         node_locations=models.Variable.get(
-            "TFV_NODE_LOCATIONS", default_var=Zone.US_EAST5_B.value
+            "TFV_NODE_LOCATIONS", default_var=Zone.US_CENTRAL1_B.value
         ),
         num_nodes=models.Variable.get("TFV_NUM_NODES", default_var=4),
         machine_type=config.machine_version.value,
@@ -366,7 +356,7 @@ with models.DAG(
         tpu_accelerator_type="tpu-v6e-slice",
         tpu_topology="4x4",
         container_name="jax-tpu-worker",
-        image="us-docker.pkg.dev/tpu-prod-env-one-vm/yuna-docker-repo/tpu-info:v0.5.1",
+        image="asia-northeast1-docker.pkg.dev/cienet-cmcs/yuna-docker/tpu-info:v0.5.1",
         tpu_cores_per_pod=4,
     )
 
@@ -379,7 +369,7 @@ with models.DAG(
             retries=2,
         )(
             node_pool=cluster_info,
-            reservation="cloudtpu-20250131131310-2118578099",
+            reservation="cloudtpu-20251107233000-1246578561",
         )
 
         create_second_node_pool = node_pool.create.override(
@@ -387,7 +377,7 @@ with models.DAG(
             retries=2,
         )(
             node_pool=cluster_info_2,
-            reservation="cloudtpu-20250131131310-2118578099",
+            reservation="cloudtpu-20251107233000-1246578561",
         )
 
       apply_time = jobset.run_workload(
