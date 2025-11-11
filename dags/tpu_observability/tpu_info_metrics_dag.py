@@ -6,7 +6,6 @@ import datetime
 import logging
 import os
 import re
-import subprocess
 import tempfile
 
 from airflow import models
@@ -20,6 +19,7 @@ from dags.common.vm_resource import MachineVersion
 from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
+from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.tpu_observability.utils import tpu_info_util as tpu_info
 from dags.tpu_observability.utils.gcp_util import query_time_series
 from dags.tpu_observability.utils.node_pool_util import Info
@@ -39,8 +39,9 @@ def compare_metric_values(
   """Compares two lists of metric values and checks if they are within a tolerance range."""
   if len(cmd_values) != len(monitoring_values):
     raise AirflowException(
-        f"For pod {pod_name} ({metric_display_name}), data count mismatch. TPU-Info has"
-        f" {len(cmd_values)} values, Monitoring has {len(monitoring_values)}."
+        f"For pod {pod_name} ({metric_display_name}), data count mismatch. "
+        f"TPU-Info has {len(cmd_values)} values, Monitoring has "
+        f"{len(monitoring_values)}."
     )
 
   logging.info(
@@ -106,22 +107,13 @@ def get_tpu_info_metric_from_pod(
         ),
     ])
 
-    result = subprocess.run(
+    result = subprocess.run_exec(
         cmd,
-        shell=True,
         env=env,
-        check=False,
-        capture_output=True,
-        text=True,
+        log_command=True,
+        log_output=True,
     )
-    logging.info("Command Execute:\n %s", cmd)
 
-    if result.returncode != 0:
-      raise AirflowException(
-          f"Command failed with exit code {result.returncode}.\n ,STDERR"
-          f" message: {result.stderr}"
-      )
-    logging.info("STDOUT message: %s", result.stdout)
     return result.stdout
 
 
