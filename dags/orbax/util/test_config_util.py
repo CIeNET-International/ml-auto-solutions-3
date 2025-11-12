@@ -21,15 +21,13 @@ DEFAULT_RAM_DISK = "/local"
 
 # Only one version of the Docker image is supported at the moment.
 # Other versions (e.g., "stable") may be introduced later.
-DOCKER_IMAGES = [(
-    SetupMode.NIGHTLY,
-    DockerImage.MAXTEXT_TPU_JAX_ORBAX_HEAD,
-)]
+DOCKER_IMAGES = [
+    (
+        SetupMode.NIGHTLY,
+        DockerImage.MAXTEXT_TPU_JAX_ORBAX_HEAD,
+    )
+]
 
-DOCKER_IMAGES_GRPO = [(
-    SetupMode.NIGHTLY,
-    DockerImage.MAXTEXT_GRPO_NIGHTLY,
-)]
 
 # Valid models and sizes for current Maxtext Repository.
 MODELS = {
