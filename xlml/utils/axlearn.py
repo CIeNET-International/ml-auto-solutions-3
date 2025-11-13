@@ -42,106 +42,6 @@ LOGGING_URL_FORMAT = (
     + "mods=allow_workbench_image_override&project={project}"
 )
 
-@task
-def install_axlearn_cli(
-    cluster_name: str,
-    project_id: str,
-    zone: str,
-    branch: str = MAIN_BRANCH,
-    commit: str = "df7ed09"
-  ):
-  """
-  Installs the Axlearn CLI and its dependencies into the execution environment
-  and configures it to communicate with a specific Google Cloud TPU/GKE cluster.
-
-  This task performs a sequence of low-level shell operations including:
-  1. Cloning the Axlearn repository from the specified branch.
-  2. Generating the mandatory `axlearn.default.config` file with all GCP
-    and cluster-specific details (project ID, zone, GKE cluster name,
-    and service accounts). This configures the CLI's target environment.
-  3. Installing Python 3.10.12 via `pyenv` and setting up a dedicated
-    virtual environment (`~/my_venv`) to isolate dependencies.
-  4. Installing the Axlearn framework and its core/TPU dependencies in
-    editable mode (`pip install -e '.[core,tpu]'`).
-  5. Setting critical environment variables (`KUBECONFIG`, `PYENV_ROOT`)
-    to ensure the installed CLI and tools function correctly within the
-    distributed environment.
-
-  Args:
-      cluster_name: The name of the GKE cluster (e.g., 'tpu-v5p-cluster')
-                    that Axlearn will target for job submission.
-      project_id: The Google Cloud Project ID where the resources reside.
-      zone: The GCP zone (e.g., 'us-central1-a') where the cluster is located.
-      branch: The Git branch of the Axlearn repository to clone (default: MAIN_BRANCH).
-  """
-  clone_branch = (
-      f"git clone --branch {branch} https://github.com/apple/axlearn.git $HOME/axlearn"
-  )
-  checkout_commit = (
-    f"git checkout {commit}"
-  )
-  axlearn_config_cmd = f'cat << \'CONFIG_EOF\' > ~/axlearn/.axlearn/axlearn.default.config\n    [gcp]\n_active = "{project_id}:{zone}"\n\n[gcp."{project_id}:{zone}"]\nproject = "{project_id}"\nregion = "{zone[:-2]}"\nzone = "{zone}"\ngke_cluster = "{cluster_name}"\ncluster = "{cluster_name}"\nlabels = "tpu-v5p"\ndocker_repo = "gcr.io/{project_id}"\ndefault_dockerfile = "Dockerfile"\nservice_account_email = "ml-auto-solutions-dev@cloud-tpu-multipod-dev.iam.gserviceaccount.com"\npermanent_bucket = "axlearn-bucket-multipod"\nprivate_bucket = "axlearn-bucket-multipod"\nttl_bucket = "axlearn-bucket-multipod"\nCONFIG_EOF\n'
-  create_axlearn_conf = [axlearn_config_cmd.rstrip("\n")]
-  env_cmds = _export_env_variables()
-  cmds = [
-      "set -xue",
-      "rm -rf $HOME/axlearn",
-      "rm -rf ~/.pyenv",
-      "rm -rf ~/my_venv",
-      clone_branch,
-      "curl https://pyenv.run | bash",
-      *env_cmds,
-      f"pyenv install 3.10.12 && pyenv global 3.10.12",
-      "python -m venv ~/my_venv",
-      f"source ~/my_venv/bin/activate",
-      "python --version",
-      f"cd ~/axlearn/ ",
-      checkout_commit,
-      f"pip  install -e '.[core,tpu]'",
-      "pip list",
-      "pyenv rehash",
-      "which axlearn",
-      f"gcloud container clusters get-credentials {cluster_name} \
-        --region {zone[:-2]} --project {project_id}",
-  ]
-  cmds.append(*create_axlearn_conf)
-
-  hook = SubprocessHook()
-  result = hook.run_command(["bash", "-c", ";".join(cmds)])
-
-  assert (
-      result.exit_code == 0
-  ), f"Set up axlearn dependencies command failed with code {result.exit_code}"
-
-
-@task
-def activate_axlearn(
-    cluster_name: str,
-    project_id: str,
-    zone: str,
-):
-  """Activate axlearn."""
-
-  # TODO: Need to refactor. Since these commands are really hard to configure
-  # and takes a long time to to try them in airflow need time to adjust them.
-  # Probably we can delete some of them. Or created them on a higher module.
-  env_cmds = _export_env_variables()
-  cmds = [
-      "set -xue",
-      "cd ~/axlearn",
-      *env_cmds,
-      "echo $KUBECONFIG",
-      "source ~/my_venv/bin/activate",
-      "python --version",
-      "which axlearn",
-  ]
-
-  hook = SubprocessHook()
-  result = hook.run_command(["bash", "-c", ";".join(cmds)])
-  assert (
-      result.exit_code == 0
-  ), f"Set up axlearn dependencies command failed with code {result.exit_code}"
-
 
 @task
 def generate_workload_id(run_name_workload: str) -> str:
@@ -153,9 +53,7 @@ def generate_workload_id(run_name_workload: str) -> str:
   logging.info(f"Run_name used: {real_run_name__running}")
   return f"{real_run_name__running}"
 
-
-@task(execution_timeout=timedelta(minutes=20))
-def run_workload_axlearn(
+def build_axlearn_cmd(
     task_id:str,
     gcs_path: str,
     cluster_project: str,
@@ -200,11 +98,12 @@ def run_workload_axlearn(
   tag = image_with_tag.split(":")[1]
   image_run_name = image_with_tag.split(":")[0]
 
-  # Create output folder for grouping common tests
+
+  # Create a run_name id for output directory.
   outpu_dir_name = "-".join(run_name.split("-")[:4])
 
   export_var = [
-      f"export BASTION_TIER=disabled",
+      f"&& export BASTION_TIER=disabled",
       f"export PROJECT_ID={cluster_project}",
   ]
   trace_list = (
@@ -232,7 +131,7 @@ def run_workload_axlearn(
       f"--runner_name gke_tpu_single "
       f"--name={tag} "
       f"--instance_type={accelerator_type} "
-      f"--max_tries=10 "
+      f"--max_tries=3 "
       f"--num_replicas={num_slices} "
       f"--bundler_spec=allow_dirty=True "
       f"--bundler_type=artifactregistry "
@@ -254,32 +153,56 @@ def run_workload_axlearn(
       f"--initialization_timeout=1200 {trace_list} "
   )
 
-  #TODO Need to find a better way to activate KUBECONFIG env variable. Instead
-  # of source ~/.bashrc....
-  env_cmds = _export_env_variables()
   cmds = [
-      "set -xue",
-      *env_cmds,
-      "echo $KUBECONFIG",
-      "source ~/my_venv/bin/activate",
-      "cd ~/axlearn",
-      "axlearn gcp config activate",
       *export_var,
       workload_create_cmd,
   ]
-  hook = SubprocessHook()
-  result = hook.run_command(["bash", "-c", ";".join(cmds)])
-  assert (
-      result.exit_code == 0
-  ), f"Error when running Axlearn workload check logs to confirm values are correct {result.exit_code}"
+  final_command_string = ' && '.join(cmds)
+  return final_command_string
 
 
-def _export_env_variables() ->List[str]:
-  KUBECONFIG_FILE = "/tmp/kubeconfig_gke"
-  env_var_pyenv = [
-      f"export PYENV_ROOT=\"$HOME/.pyenv\"",
-      f"export PATH=\"$PYENV_ROOT/bin:$PATH\"",
-      f"export KUBECONFIG=\"{KUBECONFIG_FILE}\"",
-      "eval \"$(pyenv init -)\"",
+def create_axlearn_config_cmd(
+    cluster_name: str,
+    project_id: str,
+    zone: str,
+)-> List[str]:
+  cmds = ""
+  cmds += "mkdir -p .axlearn/"
+  # config_axlearn = f'cat << \'CONFIG_EOF\' > ~/.axlearn/axlearn.default.config\n    [gcp]\n_active = "{project_id}:{zone}"\n\n[gcp."{project_id}:{zone}"]\nproject = "{project_id}"\nregion = "{zone[:-2]}"\nzone = "{zone}"\ngke_cluster = "{cluster_name}"\ncluster = "{cluster_name}"\nlabels = "tpu-v5p"\ndocker_repo = "gcr.io/{project_id}"\ndefault_dockerfile = "Dockerfile"\nservice_account_email = "ml-auto-solutions-dev@cloud-tpu-multipod-dev.iam.gserviceaccount.com"\npermanent_bucket = "axlearn-bucket-multipod"\nprivate_bucket = "axlearn-bucket-multipod"\nttl_bucket = "axlearn-bucket-multipod"\nCONFIG_EOF\n'
+  config_content = f"""[gcp]
+_active = "{project_id}:{zone}"
+
+[gcp."{project_id}:{zone}"]
+project = "{project_id}"
+region = "{zone[:-2]}"
+zone = "{zone}"
+gke_cluster = "{cluster_name}"
+cluster = "{cluster_name}"
+labels = "tpu-v5p"
+docker_repo = "gcr.io/{project_id}"
+default_dockerfile = "Dockerfile"
+service_account_email = "ml-auto-solutions-dev@cloud-tpu-multipod-dev.iam.gserviceaccount.com"
+permanent_bucket = "axlearn-bucket-multipod"
+private_bucket = "axlearn-bucket-multipod"
+ttl_bucket = "axlearn-bucket-multipod"
+"""
+  escaped_config = config_content.replace('"', r'\"').replace('\n', r'\n')
+  cmds += f" && printf \"{escaped_config}\" > ~/.axlearn/axlearn.default.config"
+  return cmds
+
+def setup_cmds(
+    cluster_name: str,
+    project_id: str,
+    zone: str,
+):
+  cmds =[
+  '&& export PYTHONPATH=$PYTHONPATH:/root',
+  'axlearn gcp config activate',
+  'which axlearn',
+  'apt-get install -y kubectl google-cloud-sdk-gke-gcloud-auth-plugin',
+  f'gcloud container clusters get-credentials {cluster_name} \
+        --region {zone[:-2]} --project {project_id}'
   ]
-  return env_var_pyenv
+  final_command_string = ' && '.join(cmds)
+  return final_command_string
+
