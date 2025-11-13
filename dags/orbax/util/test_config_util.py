@@ -3,11 +3,12 @@
 import posixpath
 from typing import Optional
 from dataclasses import dataclass
-
-from airflow.exceptions import AirflowFailException
+from abc import ABC, abstractmethod
 from absl import logging
 import math
 import re
+
+from airflow.exceptions import AirflowFailException
 
 from dags import gcs_bucket
 from xlml.utils.gke import zone_to_region
@@ -17,6 +18,8 @@ from dags.multipod.configs.common import SetupMode
 
 
 DEFAULT_BUCKET = gcs_bucket.MTC_AUTOMATION_BUCKET
+DEFAULT_BUCKET_AXLEARN = gcs_bucket.AXLEARN_AUTOMATION_BUCKET
+
 DEFAULT_RAM_DISK = "/local"
 
 # Only one version of the Docker image is supported at the moment.
@@ -24,6 +27,13 @@ DEFAULT_RAM_DISK = "/local"
 DOCKER_IMAGES = [(
     SetupMode.NIGHTLY,
     DockerImage.MAXTEXT_TPU_JAX_ORBAX_HEAD,
+)]
+
+# Only one version of AXLearn is used at the moment with Jax 0.5.3.
+# Other versions (e.g., "stable") may be introduced later.
+DOCKER_IMAGES_AXLEARN = [(
+    SetupMode.NIGHTLY,
+    DockerImage.AXLEARN_CUSTOM,
 )]
 
 # Valid models and sizes for current Maxtext Repository.
@@ -65,7 +75,17 @@ class Checkpointing:
   enable_emergency_checkpoint: bool = True
 
 
-class TestConfig:
+class TestConfigAbstract(ABC):
+    """Abstract Base Class for all test configuration utilities."""
+
+    # Define an abstract method that all subclasses must implement
+    @abstractmethod
+    def generate_step_to_validate(self) -> list[int]:
+        """Calculates and returns a list of step numbers to be validated."""
+        pass
+
+
+class TestConfig(TestConfigAbstract):
   """Holds the general configuration for a checkpointing test."""
 
   cluster: XpkClusters
@@ -237,3 +257,91 @@ class TestConfig:
   def _align_to_page_size(self, size: int, page_size: int = 4096) -> int:
     """Rounds a size up to the nearest multiple of the page size."""
     return int(math.ceil(size / page_size) * page_size)
+
+"""Test Configuration Class utility for orbax testcases"""
+
+
+class TestConfigAXLearn(TestConfigAbstract):
+    """Holds the general configuration for an AXLearn checkpointing test.
+
+    This class provides the necessary parameters and utility functions
+    for configuring a training run specifically designed for AXLearn tests,
+    including cluster details, model configuration, and checkpoint steps.
+    """
+
+    cluster: XpkClusters
+    run_name: str
+    slices: list[int]
+    instance_type: str
+    mesh_type: str
+    module: str
+    short_id: str
+    step: int
+    checkpoint_step: int
+    model_config: str
+    trainer_dir: str
+    data_dir: str
+    train_batch_size: int
+    fsdp: int
+    data: int
+
+    def __init__(
+        self,
+        cluster: XpkClusters,
+        run_name: str,
+        slices: list[int],
+        instance_type: str,
+        mesh_type: str,
+        module: str,
+        short_id: str,
+        step: int,
+        checkpoint_step: int,
+        model_config: str,
+        trainer_dir: str,
+        data_dir: str,
+        train_batch_size: int,
+        fsdp: int,
+        data: int,
+    ):
+        """Initializes the AXLearn test configurations.
+
+        Args:
+            cluster: The specified cluster (XpkClusters object) to be used for the test.
+            run_name: The unique identifier for the current training run.
+            slices: The list of slices (number of nodes) to be used.
+            instance_type: The type of machine instance (e.g., 'tpu-v5litepod-8').
+            mesh_type: The type of computational mesh used for distributed training.
+            module: The specific AXLearn module being tested.
+            short_id: A short identifier for the test run.
+            step: The total number of training steps the job will run.
+            checkpoint_step: The step interval at which checkpoints are saved.
+            model_config: The configuration file or string for the model.
+            trainer_dir: The base directory for trainer output.
+            data_dir: The directory containing the training data.
+            train_batch_size: The batch size used for training.
+            fsdp: A flag or value indicating the FSDP (Fully Sharded Data Parallel) configuration.
+            data: A flag or value indicating data parallelism configuration.
+        """
+
+        self.cluster = cluster
+        self.run_name = run_name
+        self.slices = slices
+        self.instance_type = instance_type
+        self.mesh_type = mesh_type
+        self.module = module
+        self.short_id = short_id
+        self.step = step
+        self.checkpoint_step = checkpoint_step
+        self.model_config = model_config
+        self.trainer_dir = trainer_dir
+        self.data_dir = data_dir
+        self.train_batch_size = train_batch_size
+        self.fsdp = fsdp
+        self.data = data
+
+    def generate_step_to_validate(self) -> list[int]:
+        """Calculates and returns a list of step numbers to be validated."""
+        total_steps = self.step
+        k = self.checkpoint_step
+        last_step = self.step
+        return [*range(self.checkpoint_step, total_steps, k), last_step]
