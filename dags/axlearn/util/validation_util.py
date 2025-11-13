@@ -18,7 +18,6 @@ from airflow.hooks.subprocess import SubprocessHook
 def generate_timestamp():
   return datetime.now(timezone.utc)
 
-@task
 def generate_run_name(
     short_id: str,
     slice_number: int,
@@ -46,55 +45,6 @@ def generate_run_name(
   run_time = datetime.now().strftime("%Y-%m-%d-%H-%M")
   run_name_id = f"{name_image.split(':')[1]}-{short_id}-{slice_number}x-{accelerator}-{run_time}"
   return run_name_id
-
-
-@task
-def get_image_name(
-  project_id: str,
-  path_repository: str,
-)-> str | None :
-  """
-    Retrieves repository details by calling the gcloud CLI command
-    and parsing the output as JSON.
-
-    Args:
-        project_id: Your Google Cloud Project ID.
-        repository_id: The ID of the repository.
-         e.g gcr.io/cienet-cmcs/axlearn-custom
-    Returns:
-        A string with the name of the latest daily image.
-  """
-  list_tags_cmds = (
-        f"gcloud container images list-tags {path_repository} "
-        f"--project={project_id} "
-        f"--format=json | tr -d '\\n\\r'"
-  )
-  cmds = [
-    "set -ue",
-    list_tags_cmds,
-  ]
-  hook = SubprocessHook()
-  result = hook.run_command(
-    ["bash", "-c", ";".join(cmds)]
-  )
-  assert (
-      result.exit_code == 0
-  ), f"XPK command failed with code {result.exit_code}"
-
-  try:
-    repo_details: List[Dict] = json.loads(result.output)
-  except json.JSONDecodeError:
-    raise ValueError("Failed to parse JSON output from gcloud command.")
-
-  image_name = ""
-  for image_info in repo_details:
-    tags_list = image_info.get("tags", [])
-    if len(tags_list) >= 2:
-      tags_list.remove("latest")
-      image_name = f"{path_repository}:{tags_list[0]}"
-      return image_name
-  raise AirflowFailException('Image not found or is not latest image')
-
 
 @task
 def validate_checkpoints_save_regular_axlearn(

@@ -23,10 +23,19 @@ from typing import Optional, Tuple, Union
 import airflow
 from airflow.models.taskmixin import DAGNode
 from airflow.utils.task_group import TaskGroup
+<<<<<<< HEAD
 from airflow.decorators import task
 from airflow.operators.empty import EmptyOperator
 from xlml.apis import gcp_config, metric_config, test_config, gcs
 from xlml.utils import gpu, metric, name_format, ssh, tpu, xpk, gke
+=======
+from xlml.apis import gcp_config, metric_config, test_config
+from xlml.utils import gpu, metric, name_format, ssh, tpu, xpk, axlearn, gke
+from dags.axlearn.util import test_config_util
+from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator
+from dags.axlearn.util import test_config_util, validation_util
+import logging
+>>>>>>> 0df03083 (ref: Refactoring using KubernetesOperator. Axlearn Native Checkpointer Regular Orbax)
 
 
 class BaseTask(abc.ABC):
@@ -275,18 +284,13 @@ class AxlearnTask(BaseTask):
     """Create the workload and wait for it to provision."""
     with TaskGroup(group_id="launch_workload") as group:
 
-      #TODO: Latest apple/axlearn uses 0.6.2 Jax with python 3.10. There
-      # seems to be a dependecy error in the original axlearn repo when
-      # installing dependencies. So I went back to commit "5437705" 1 week ago.
-      # It uses Jax 0.5.3.
-      # Need to wait for them to fix it and then try with Jax 0.6.2
-      setup_axlearn_dep = axlearn.install_axlearn_cli(
-          cluster_name=self.task_test_config.cluster_name,
-          project_id=self.task_gcp_config.project_name,
-          zone=self.task_gcp_config.zone,
-          branch=axlearn_branch,
-          commit="5437705"
+      # Inject Axlearn Configuration file pointing to the given cluster.
+      cmds = axlearn.create_axlearn_config_cmd(
+        cluster_name=self.task_test_config.cluster_name,
+        project_id=self.task_gcp_config.project_name,
+        zone=self.task_gcp_config.zone,
       )
+<<<<<<< HEAD
       # activate_axlearn = axlearn.activate_axlearn(
       #     cluster_name=self.task_test_config.cluster_name,
       #     project_id=self.task_gcp_config.project_name,
@@ -309,6 +313,51 @@ class AxlearnTask(BaseTask):
           num_replicas=self.task_test_config.num_slices,
           axlearn_branch=axlearn_branch,
           trace_steps=[40, 90, 140, 190, 240],
+=======
+
+      # # Setup Axlearn Cmds before running axlearn cli
+      cmds += axlearn.setup_cmds(
+        cluster_name=self.task_test_config.cluster_name,
+        project_id=self.task_gcp_config.project_name,
+        zone=self.task_gcp_config.zone,
+      )
+
+      # Setup Axlearn Cmds before running axlearn cli
+      cmds += axlearn.build_axlearn_cmd(
+        task_id="run_workload",
+        cluster_project=self.task_gcp_config.project_name,
+        zone=self.task_gcp_config.zone,
+        cluster_name=self.task_test_config.cluster_name,
+        docker_image=self.task_test_config.docker_image,
+        benchmark_id=self.task_test_config.benchmark_id,
+        workload_id=workload_id,
+        gcs_path=gcs_path,
+        accelerator_type=f"tpu-{self.task_test_config.accelerator.name}",
+        steps=test_configs.step,
+        checkpoint_steps=test_configs.checkpoint_step,
+        run_cmds="",
+        run_name=run_name,
+        module=test_configs.module,
+        model_config=test_configs.model_config,
+        trainer_dir=test_configs.trainer_dir,
+        num_slices=self.task_test_config.num_slices,
+        fsdp=test_configs.fsdp,
+        data=test_configs.data, # For now not doing DP since found errors.
+        train_batch_size=test_configs.train_batch_size,
+        trace_steps=trace_steps,
+      )
+
+      # Pod where Axlearn CLI will run
+      run_container_task = KubernetesPodOperator(
+            task_id='run_axlearn-cli',
+            name='cli-axlearn-pod',
+            namespace='composer-user-workloads',  # The Kubernetes namespace to run in
+            image='gcr.io/cloud-tpu-multipod-dev/axlearn-custom:latest',  # The Docker image for the task
+            cmds=['bash', '-cx'],
+            arguments=[cmds],
+            config_file="/home/airflow/composer_kube_config",
+            kubernetes_conn_id="kubernetes_default"
+>>>>>>> 0df03083 (ref: Refactoring using KubernetesOperator. Axlearn Native Checkpointer Regular Orbax)
       )
 
       wait_for_workload_start = xpk.wait_for_workload_start.override(
@@ -320,10 +369,8 @@ class AxlearnTask(BaseTask):
           cluster_name=self.task_test_config.cluster_name,
       )
 
-        # >>activate_axlearn
       (
-        setup_axlearn_dep
-        >> run_workload
+        run_container_task
         >> wait_for_workload_start
       )
       return group
