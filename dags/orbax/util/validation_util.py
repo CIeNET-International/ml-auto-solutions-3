@@ -4,11 +4,14 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 from absl import logging
 import re
+import json
+from typing import List, Dict
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from google.cloud import logging as logging_api
 from xlml.apis import gcs
+from airflow.hooks.subprocess import SubprocessHook
 
 
 @task
@@ -697,3 +700,104 @@ def validate_replicator_gcs_backup_log(
   logging.info("Replicator backup validation successful!")
 
   return backed_up_steps
+
+
+@task
+def validate_checkpoints_save_regular_axlearn(
+    project_id: str,
+    run_name: str,
+    location: str,
+    cluster_name: str,
+    steps_to_validate: list,
+    pod_pattern: Optional[str] = ".*",
+    start_time: Optional[datetime] = None,
+    end_time: Optional[datetime] = None,
+) -> None:
+
+  # This log pattern will be looged in a random pod of the first slice.
+  log_pattern = r"^Serialization.*?step_(?P<step>\d+).*"
+  complied_pattern = re.compile(log_pattern)
+  logging.info(f"Run_name: {run_name.split('-')[0]}\n")
+  entries = list_log_entries(
+      project_id=project_id,
+      location=location,
+      cluster_name=cluster_name,
+      pod_pattern=pod_pattern,
+      text_filter=f'jsonPayload.message=~"{log_pattern}"',
+      start_time=start_time,
+      end_time=end_time,
+  )
+  steps_are_saved: set[int] = set()  # Use a set for faster lookup.
+  for entry in entries:
+    if not isinstance(entry, logging_api.StructEntry):
+      raise AirflowFailException(
+          "Log entry must be contain a jsonPayload attribute."
+      )
+    message = entry.payload.get("message")
+    if not message:
+      raise AirflowFailException(f"Failed to parse entry {entry}")
+
+    m = complied_pattern.search(message)
+    if m:
+      steps_are_saved.add(int(m.group(1)))
+
+  for step in steps_to_validate:
+    if step not in steps_are_saved:
+      logging.info(f"Found entries: {entries}")
+      raise AirflowFailException(
+          f"Failed to validate. Expect steps are saved: {steps_to_validate}; "
+          f"got: {steps_are_saved}"
+      )
+  logging.info(
+      f"Successful Validation.\nExpected  Steps:{steps_to_validate}"
+      f"\tFound Steps:{steps_are_saved}"
+  )
+
+@task
+def get_image_name(
+  project_id: str,
+  path_repository: str,
+)-> str | None :
+  """
+    Retrieves repository details by calling the gcloud CLI command
+    and parsing the output as JSON.
+
+    Args:
+        project_id: Your Google Cloud Project ID.
+        repository_id: The ID of the repository.
+         e.g gcr.io/cienet-cmcs/axlearn-custom
+    Returns:
+        A string with the name of the latest daily image.
+  """
+  list_tags_cmds = (
+        f"gcloud container images list-tags {path_repository} "
+        f"--project={project_id} "
+        f"--format=json | tr -d '\\n\\r'"
+  )
+  cmds = [
+    "set -ue",
+    list_tags_cmds,
+  ]
+  hook = SubprocessHook()
+  result = hook.run_command(
+    ["bash", "-c", ";".join(cmds)]
+  )
+  assert (
+      result.exit_code == 0
+  ), f"XPK command failed with code {result.exit_code}"
+
+  try:
+    repo_details: List[Dict] = json.loads(result.output)
+  except json.JSONDecodeError:
+    raise ValueError("Failed to parse JSON output from gcloud command.")
+
+  image_name = ""
+  for image_info in repo_details:
+    tags_list = image_info.get("tags", [])
+    logging.info(f"TAG_LIST: {tags_list}")
+    if len(tags_list) >= 2:
+      tags_list.remove("latest")
+      image_name = f"{path_repository}:{tags_list[0]}"
+      logging.info(f"========= Running with image : {image_name} ========= ")
+      return f"{path_repository}:latest"
+  raise AirflowFailException('Image not found or is not latest image')
