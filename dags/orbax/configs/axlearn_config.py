@@ -1,4 +1,4 @@
-# Copyright 2024 Google LLC
+# Copyright 2025 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,16 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Utilities to construct configs for solutionsteam_jax_bite DAG."""
+"""Utilities to construct configs for AXLearn framework DAG."""
 
 
 import datetime
-from typing import Optional, Iterable
-from dags.common import test_owner
+
 from xlml.apis import gcp_config, metric_config, task, test_config
 from xlml.apis.xpk_cluster_config import XpkClusterConfig
-from dags.common.vm_resource import TpuVersion, Project, XpkClusters
-from airflow.models.taskmixin import DAGNode
+from dags.common.vm_resource import XpkClusters
 
 def get_axlearn_tpu_config(
     test_name: str,
@@ -31,8 +29,8 @@ def get_axlearn_tpu_config(
     cluster: XpkClusterConfig = XpkClusters.TPU_V5P_128_CLUSTER,
     dataset_name: metric_config.DatasetOption = metric_config.DatasetOption.XLML_DATASET,
     num_slices: int = 1,
-) -> task.AxlearnTask:
-  """Setup the axlearn tpu env config."""
+) -> task.AXLearnTask:
+  """Setup the AXLearn tpu env config."""
 
   job_gcp_config = gcp_config.GCPConfig(
       project_name=cluster.project,
@@ -54,7 +52,7 @@ def get_axlearn_tpu_config(
       docker_image=docker_image,
   )
 
-  return task.AxlearnTask(
+  return task.AXLearnTask(
       task_test_config=job_test_config,
       task_gcp_config=job_gcp_config,
   )
