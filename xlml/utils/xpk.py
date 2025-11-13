@@ -330,7 +330,7 @@ def clean_up_workload(
     cluster_name: str,
     xpk_branch: str = MAIN_BRANCH,
 ) -> bool:
-  """Delete jobset."""
+  """Delete workload."""
   with tempfile.TemporaryDirectory() as tmpdir:
     workload_delete_cmd = (
         f"python {tmpdir}/xpk/xpk.py workload delete"
