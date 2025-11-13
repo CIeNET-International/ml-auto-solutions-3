@@ -16,11 +16,9 @@
 
 
 import datetime
-from typing import Optional, Iterable
-from dags.common import test_owner
 from xlml.apis import gcp_config, metric_config, task, test_config
 from xlml.apis.xpk_cluster_config import XpkClusterConfig
-from dags.common.vm_resource import TpuVersion, Project, XpkClusters
+from dags.common.vm_resource import XpkClusters
 from airflow.models.taskmixin import DAGNode
 
 def get_axlearn_tpu_config(

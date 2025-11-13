@@ -18,33 +18,6 @@ from airflow.hooks.subprocess import SubprocessHook
 def generate_timestamp():
   return datetime.now(timezone.utc)
 
-def generate_run_name(
-    short_id: str,
-    slice_number: int,
-    accelerator: str,
-    name_image: str,
-) -> str:
-  """
-  Generates a unique run name for a MaxText run based on given parameters.
-
-  The function creates a formatted string that includes a short identifier,
-  the number of slices, the accelerator type, and the current timestamp. This
-  run name is useful for uniquely identifying a specific training run,
-  especially for checkpointing and logging purposes.
-
-  Args:
-      short_id: A short identifier for the specific model or experiment.
-      checkpointing_type: The name of the checkpointing strategy (e.g., 'emc').
-      slice_number: The number of TPU slices used for the training run.
-      accelerator: The type of accelerator used (e.g., 'tpu-v4').
-
-  Returns:
-      A string formatted as '{short_id}-mtc-{slice_number}x-{accelerator}-{timestamp}'.
-  """
-
-  run_time = datetime.now().strftime("%Y-%m-%d-%H-%M")
-  run_name_id = f"{name_image.split(':')[1]}-{short_id}-{slice_number}x-{accelerator}-{run_time}"
-  return run_name_id
 
 @task
 def validate_checkpoints_save_regular_axlearn(

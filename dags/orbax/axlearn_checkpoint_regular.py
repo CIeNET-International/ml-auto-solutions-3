@@ -16,15 +16,16 @@
 
 import datetime
 from os  import path
+
 from airflow import models
+
 from dags import composer_env
 from dags.common import test_owner
-from dags.common.vm_resource import TpuVersion, Zone, RuntimeVersion, XpkClusters
-from dags.axlearn.configs import axlearn_config as config
+from dags.common.vm_resource import XpkClusters
+from dags.orbax.configs import axlearn_config as config
 from dags.axlearn.util import test_config_util, validation_util
-from airflow.utils.task_group import TaskGroup
-from datetime import timedelta
 from xlml.utils.gke import zone_to_region
+import xlml.utils.axlearn as axlearn
 
 
 SCHEDULE = "0 21 * * *" if composer_env.is_prod_env() else None
@@ -44,13 +45,13 @@ with models.DAG(
         "jax0.5.3"
         "python3.10"
     ],
-    description="DAG that verifies the axlearn regular (Native) checkpointing saving functionality",
+    description="DAG that verifies the AXLearn regular (Native) checkpointing saving functionality",
     doc_md="""
-      # Axlearn Regular Checkpoint Validation DAG.
+      # AXLearn Regular Checkpoint Validation DAG.
 
       ### Description
       This DAG (Directed Acyclic Graph) automates the process of validating
-      checkpoint saving when using **Axlearn Native Checkpointer ** features.
+      checkpoint saving when using **AXLearn Native Checkpointer ** features.
       It will check that the checkpoints are being stored in the GCS bucket.
       Also the steps flag controls how many steps the job will run.
 
@@ -58,9 +59,9 @@ with models.DAG(
       To run this test, you need an existing cluster.
 
       ### Procedures
-      1.  **Install dependencies for Axlearn:** Setup axlearn CLI and all
-      axlearn neccessary dependecies.
-      2.  **Run Axelarn Jobsets:** The DAG runs a Axlearn jobset.
+      1.  **Install neccessary dependecies for AXLearn:** Setup AXLearn CLI and all
+      AXLearn neccessary dependecies.
+      2.  **Run Axelarn JobSets:** The DAG runs a AXLearn JobSet.
       3.  The DAG validates that **Axelarn checkpoints** are being saved correctly
       in the `GCS bucket` by checking bucket and pod logs.
     """,
@@ -94,7 +95,7 @@ with models.DAG(
       for slice_num in test_config.slices:
 
         # Create a run_name id for output directory.
-        run_name_id = validation_util.generate_run_name(
+        run_name_id = axlearn.generate_run_name(
             short_id=test_config.short_id,
             slice_number=slice_num,
             accelerator=test_config.instance_type,
