@@ -136,11 +136,9 @@ with models.DAG(
         )
 
         (
-           run_name_id
-          >> start_time
+          start_time
           >> axlearn_regular_run
           >> end_time
-          >> validate_steps
         )
 
 
