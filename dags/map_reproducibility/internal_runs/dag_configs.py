@@ -150,7 +150,6 @@ DAG_CONFIGS_ULTRA = {
         "backfill_group_release": 4,
         "nightly_schedule": "30 7 * * 2,3,4,6",
         "release_schedule": "0 8 * * 2,3,4,6",
-
     },
     "recipes/a3ultra/a3ultra_llama3.1-405b_256gpus_bf16_maxtext.yaml": {
         "timeout_minutes": 40,
