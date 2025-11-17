@@ -42,20 +42,18 @@ with models.DAG(
   for machine in MachineConfigMap:
     config = machine.value
     node_pool_info = node_pool.Info(
-        project_id=models.Variable.get(
-            "PROJECT_ID", default_var=Project.TPU_PROD_ENV_ONE_VM.value
-        ),
+        project_id="cienet-cmcs",
         cluster_name=models.Variable.get(
             "CLUSTER_NAME", default_var="tpu-observability-automation"
         ),
         node_pool_name=models.Variable.get(
-            "NODE_POOL_NAME", default_var="node-pool-status-v6e-autotest"
+            "NODE_POOL_NAME", default_var="update-node-pool-label-v6e-autotest"
         ),
         location=models.Variable.get(
-            "LOCATION", default_var=Region.US_EAST5.value
+            "LOCATION", default_var=Region.US_CENTRAL1.value
         ),
         node_locations=models.Variable.get(
-            "NODE_LOCATIONS", default_var=Zone.US_EAST5_B.value
+            "NODE_LOCATIONS", default_var=Zone.US_CENTRAL1_B.value
         ),
         num_nodes=models.Variable.get("NUM_NODES", default_var=4),
         machine_type=config.machine_version.value,
@@ -67,7 +65,7 @@ with models.DAG(
     with TaskGroup(group_id=f"v{config.tpu_version.value}"):
       create_node_pool = node_pool.create.override(task_id="create_node_pool")(
           node_pool=node_pool_info,
-          reservation="cloudtpu-20250131131310-2118578099",
+          reservation="cloudtpu-20251107233000-1246578561",
       )
 
       wait_for_availability = node_pool.wait_for_availability.override(
