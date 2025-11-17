@@ -47,7 +47,6 @@ with models.DAG(
         "xlml",
         "regressiontests",
         "a4",
-        "GPU",
     ],
     start_date=datetime.datetime(2025, 3, 1),
     catchup=False,

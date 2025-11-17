@@ -25,7 +25,6 @@ DAG_TAGS = [
     "reproducibility",
     "experimental",
     "cleanup",
-    "CPU",
 ]
 
 dag_default_args = {

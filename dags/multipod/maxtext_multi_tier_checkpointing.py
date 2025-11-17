@@ -33,8 +33,6 @@ with models.DAG(
         "maxtext",
         "muti_tier_checkpointing",
         "nightly",
-        "TPU",
-        "v5p-8",
     ],
     start_date=datetime.datetime(2025, 2, 27),
     catchup=False,

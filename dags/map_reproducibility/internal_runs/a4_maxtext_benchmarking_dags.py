@@ -44,7 +44,6 @@ DAG_TAGS = [
     "regressiontests",
     "a4",
     "maxtext",
-    "GPU",
 ]
 
 

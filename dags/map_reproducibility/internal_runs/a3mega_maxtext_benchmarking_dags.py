@@ -44,8 +44,6 @@ DAG_TAGS = [
     "regressiontests",
     "a3mega",
     "maxtext",
-    "GPU",
-    "nvidia-h100-80gb",
 ]
 
 # Create DAGs for each configuration

@@ -41,8 +41,6 @@ DAG_TAGS = [
     "internal",
     "regressiontests",
     "a3ultra",
-    "GPU",
-    "nvidia-h200-80gb",
 ]
 
 

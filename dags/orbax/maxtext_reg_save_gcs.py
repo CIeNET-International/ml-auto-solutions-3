@@ -32,8 +32,6 @@ with models.DAG(
         "regular_checkpointing",
         "nightly",
         "orbax",
-        "TPU",
-        "v5p-128",
     ],
     description="DAG that verifies MaxText regular checkpointing functionality to GCS bucket",
     doc_md="""

@@ -30,8 +30,6 @@ with models.DAG(
         "emergency_checkpointing",
         "nightly",
         "orbax",
-        "TPU",
-        "v5p-128",
     ],
     description="DAG to verify MaxText's emergency restore from local checkpoints after a node interruption.",
     doc_md="""
