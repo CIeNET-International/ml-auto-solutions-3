@@ -27,6 +27,7 @@ from airflow.decorators import task, task_group
 from airflow.utils.task_group import TaskGroup
 from airflow.operators.python import get_current_context
 from airflow.models import Variable
+from airflow.exceptions import AirflowFailException
 from xlml.apis import gcp_config, test_config
 from xlml.utils import ssh, startup_script, composer
 import fabric
@@ -404,20 +405,56 @@ def ssh_tpu(
       gateway='corp-ssh-helper %h %p' if use_external_ips else None,
   )
 
-  context = get_current_context()
-  if context['task_instance'].try_number > 1:
-    # kill TPU process by pid (if any) to avoid `TPU in use` error in retry
-    tmp_file = '/tmp/kill_process.sh'
-    accelerator_type = nodes[0].accelerator_type
-    script = kill_process_by_pid()
-    kill_process_cmds = (
-        f'set -xue; sudo echo "{script}" > {tmp_file}',
-        f'bash {tmp_file} {accelerator_type}',
-    )
-    ssh_group.run(';'.join(kill_process_cmds))
+  try:
+    context = get_current_context()
+    if context['task_instance'].try_number > 1:
+      # kill TPU process by pid (if any) to avoid `TPU in use` error in retry
+      tmp_file = '/tmp/kill_process.sh'
+      accelerator_type = nodes[0].accelerator_type
+      script = kill_process_by_pid()
+      kill_process_cmds = (
+          f'set -xue; sudo echo "{script}" > {tmp_file}',
+          f'bash {tmp_file} {accelerator_type}',
+      )
+      ssh_group.run(';'.join(kill_process_cmds))
+    # run provided commands
+    ssh_group.run(cmds, env=env)
 
-  # run provided commands
-  ssh_group.run(cmds, env=env)
+  except fabric.group.GroupException as e:
+    auth_failure_detected = False
+    other_errors = {}
+
+    for connection, result in e.result.items():
+      if isinstance(result, paramiko.ssh_exception.AuthenticationException):
+        auth_failure_detected = True
+        logging.error(
+            f'SSH Authentication Failed on {connection.host}: {result}'
+        )
+      elif isinstance(result, Exception):
+        logging.error(f'Command failed on {connection.host}: {result}')
+        other_errors[connection.host] = result
+      else:
+        logging.warning(f'Unexpected result on {connection.host}: {result}')
+
+    if auth_failure_detected:
+      # If any host had an authentication failure, fail the task permanently.
+      raise AirflowFailException(
+          'SSH Authentication failed on one or more hosts. Check logs for details.'
+      ) from e
+    else:
+      logging.error(f'Command execution failed on one or more hosts: {e}')
+      raise e from e
+
+  except paramiko.ssh_exception.AuthenticationException as e:
+    error_msg = f'SSH Authentication Failed: {e}'
+    logging.error(error_msg)
+    raise AirflowFailException(error_msg) from e
+  except Exception as e:
+    error_msg = f'An unexpected error occurred during SSH operation: {e}'
+    logging.error(error_msg)
+    raise AirflowFailException(error_msg) from e
+  finally:
+    ssh_group.close()
 
 
 @task
