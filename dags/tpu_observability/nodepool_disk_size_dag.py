@@ -1,17 +1,12 @@
 import time
 from datetime import datetime, timezone
-import os
-import subprocess
+import logging
 
-from kubernetes import client as k8s_client, config as k8s_config
 from google.cloud.container_v1 import ClusterManagerClient
 from google.cloud import container_v1
-from google.cloud import monitoring_v3
 from airflow.models import Variable
-from airflow.operators.bash import BashOperator
 from airflow.decorators import task, dag
 from airflow.utils.trigger_rule import TriggerRule
-from airflow.sensors.time_delta import TimeDeltaSensor
 from airflow import models
 
 from dags.tpu_observability.utils import node_pool_util as node_pool
@@ -19,6 +14,7 @@ from dags.tpu_observability.utils.time_util import TimeUtil
 from dags.tpu_observability.utils.gcp_util import query_time_series, query_log_entries
 
 QUERY_WINDOW_DURATION_SECONDS = 3600
+logger = logging.getLogger(__name__)
 
 
 def _nodepool_name(info):
@@ -35,8 +31,9 @@ def _operation_name(project_id, location, op_id_or_name):
       else f"projects/{project_id}/locations/{location}/operations/{op_id_or_name}"
   )
 
+# latest version: remove the try/except and the logging style
 
-# metrics print out version without anchor_timestamp but with TimeUtil wrapped: wait_for_metrics_event()
+
 @task.sensor(poke_interval=60, timeout=7200, mode="reschedule")
 def wait_for_nodepool_metrics_event(
     project_id: str,
@@ -49,95 +46,84 @@ def wait_for_nodepool_metrics_event(
   The sensor finishes (returns True) once at least one matching time series is found.
   It uses the shared query_time_series utility and TimeUtil for time handling.
   """
-  try:
-    start_tu = TimeUtil.from_unix_seconds(start_time)
-    end_tu = TimeUtil.from_unix_seconds(end_time)
-  except Exception as e:
-    print(f"[metrics] invalid time input: {e}")
-    # this is a hard configuration error → fail the task
-    raise
 
-  try:
-    series = query_time_series(
-        project_id=project_id,
-        filter_str=filter_query,
-        start_time=start_tu,
-        end_time=end_tu,
-        # use defaults: view=FULL, page_size=500, no aggregation
-        log_enable=False,
-    )
-  except Exception as e:
-    print(f"[metrics] ERROR querying time series: {e}")
-    # treat as transient; sensor will repoke
-    return False
+  start_tu = TimeUtil.from_unix_seconds(start_time)
+  end_tu = TimeUtil.from_unix_seconds(end_time)
+
+  series = query_time_series(
+      project_id=project_id,
+      filter_str=filter_query,
+      start_time=start_tu,
+      end_time=end_tu,
+      log_enable=False,
+  )
 
   if not series:
-    print(
-        "[metrics] No matching time series yet; repoking… "
-        f"window={start_tu.to_iso_string()} → {end_tu.to_iso_string()}"
+    logger.info(
+        "[metrics] No matching time series; repoking "
+        "window=%s → %s",
+        start_tu.to_iso_string(),
+        end_tu.to_iso_string(),
     )
     return False
 
-  # --- Output some information for validation ---
   first = series[0]
-  print(f"[metrics] Metric detected. series_count={len(series)}")
-  print(f"[metrics] metric.type={first.metric.type}")
-  print(f"[metrics] resource.labels={dict(first.resource.labels)}")
-
+  logger.info(
+      "[metrics] Metric detected. series_count=%d, metric.type=%s, resource.labels=%s",
+      len(series),
+      first.metric.type,
+      dict(first.resource.labels),
+  )
   if first.points:
     p = first.points[0]
-    print(
-        f"[metrics] first point: value={p.value} "
-        f"@ {p.interval.end_time}"
+    logger.info(
+        "[metrics] first point: value=%s @ %s",
+        p.value,
+        p.interval.end_time,
     )
 
   return True
 
 
-# metrics print out version without anchor_timestamp: wait_for_logs_event()
+# latest! version3: remove printout and try/except bubble
 @task.sensor(poke_interval=60, timeout=7200, mode="reschedule")
 def wait_for_nodepool_logs_event(
     project_id: str,
-    filter_query: str,
+    base_filter: str,
+    op_id: str,
     start_time,
     end_time,
 ) -> bool:
-  """Poll Cloud Logging for node-pool related log entries in [start_time, end_time].
+  """Poll Cloud Logging for node-pool related log entries in [start_time, end_time]."""
 
-  Finishes once at least one matching log entry is found.
-  """
-  try:
-    start_tu = TimeUtil.from_unix_seconds(start_time)
-    end_tu = TimeUtil.from_unix_seconds(end_time)
-  except Exception as e:
-    print(f"[logs] invalid time input: {e}")
-    raise
+  start_tu = TimeUtil.from_unix_seconds(start_time)
+  end_tu = TimeUtil.from_unix_seconds(end_time)
 
-  try:
-    entries = query_log_entries(
-        project_id=project_id,
-        filter_str=filter_query,
-        start_time=start_tu,
-        end_time=end_tu,
-        log_enable=False,
-    )
-  except Exception as e:
-    print(f"[logs] ERROR querying log entries: {e}")
-    # transient → repoke
-    return False
+  # Combine base filter with operation.id constraint
+  full_filter = f'{base_filter} AND operation.id="{op_id}"'
+
+  entries = query_log_entries(
+      project_id=project_id,
+      filter_str=full_filter,
+      start_time=start_tu,
+      end_time=end_tu,
+      log_enable=False,
+  )
 
   if not entries:
-    print(
-        "[logs] No matching log entries yet; repoking… "
-        f"window={start_tu.to_iso_string()} → {end_tu.to_iso_string()}"
+    logger.info(
+        "[logs] No matching log entries; repoking window=%s → %s",
+        start_tu.to_iso_string(),
+        end_tu.to_iso_string(),
     )
     return False
 
-  # --- Output some information about the first log entry ---
   first = entries[0]
-  print(
-      f"[logs] Log event detected. count={len(entries)}, "
-      f"timestamp={first.timestamp}, log_name={first.log_name}"
+  logger.info(
+      "[logs] Log event detected. count=%d, timestamp=%s, log_name=%s",
+      len(entries),
+      first.timestamp,
+      first.log_name,
   )
 
   payload = getattr(first, "text_payload", None) or getattr(
@@ -147,12 +133,12 @@ def wait_for_nodepool_logs_event(
     snippet = str(payload)
     if len(snippet) > 200:
       snippet = snippet[:200] + "…"
-    print(f"[logs] first entry payload snippet: {snippet}")
+    logger.info("[logs] first entry payload snippet: %s", snippet)
 
   return True
 
 
-# ver3: wait_for_update_to_complete() output timestamp
+# latest! ver4: remove printout and try/except
 @task.sensor(poke_interval=10, timeout=3600, mode="reschedule")
 def wait_for_update_to_complete(op_full: str) -> dict:
   """
@@ -160,6 +146,7 @@ def wait_for_update_to_complete(op_full: str) -> dict:
 
   Returns:
     {
+      "op_id": str,
       "start_sec": int,
       "end_sec": int,
       "duration_s": int,
@@ -169,50 +156,52 @@ def wait_for_update_to_complete(op_full: str) -> dict:
   cm = ClusterManagerClient()
   op = cm.get_operation(name=op_full)
   status = getattr(op.status, "name", str(op.status))
-  print(f"[wait] op={op_full} status={status}")
+  logger.info("[wait] op=%s status=%s", op_full, status)
 
-  if status == "DONE":
-    # If DONE, surface any error right away
-    if op.error and (op.error.message or op.error.details):
-      raise RuntimeError(f"GKE operation finished with error: {op.error}")
-
-    # --- Extract start & end times ---
-    if getattr(op, "start_time", None):
-      start_dt = op.start_time.ToDatetime()
-      start_tu = TimeUtil.from_datetime(start_dt)
-      start_sec = start_tu.to_unix_seconds()
-      start_iso = start_tu.to_iso_string()
-    else:
-      raise RuntimeError("Operation is DONE but op.start_time is missing")
-
-    if getattr(op, "end_time", None):
-      end_dt = op.end_time.ToDatetime()
-      end_tu = TimeUtil.from_datetime(end_dt)
-      end_sec = end_tu.to_unix_seconds()
-      end_iso = end_tu.to_iso_string()
-    else:
-      # Rare case — but safer to anchor end_time = start_time
-      end_sec = start_sec
-      end_iso = start_iso
-  else:
-     # not DONE yet → repoke
-    print(f"[wait] status={status} …repoking")
+  if status != "DONE":
+    # not DONE yet → repoke
     return False
 
-  # --- Duration & anchor ---
+  # If DONE, surface any error right away
+  if op.error and (op.error.message or op.error.details):
+    raise RuntimeError(f"GKE operation finished with error: {op.error}")
+
+  if getattr(op, "start_time", None):
+    start_dt = op.start_time.ToDatetime()
+    start_tu = TimeUtil.from_datetime(start_dt)
+    start_sec = start_tu.to_unix_seconds()
+    start_iso = start_tu.to_iso_string()
+  else:
+    raise RuntimeError("Operation is DONE but op.start_time is missing")
+
+  if getattr(op, "end_time", None):
+    end_dt = op.end_time.ToDatetime()
+    end_tu = TimeUtil.from_datetime(end_dt)
+    end_sec = end_tu.to_unix_seconds()
+    end_iso = end_tu.to_iso_string()
+  else:
+    end_sec = start_sec
+    end_iso = start_iso
+
   duration_s = max(0, end_sec - start_sec)
   anchor_seconds = (start_sec + end_sec) // 2
 
-  # --- Logging only ---
-  print(f"[wait] DONE start={start_iso} end={end_iso} duration={duration_s}s")
+  logger.info(
+      "[wait] DONE start=%s end=%s duration=%ss",
+      start_iso,
+      end_iso,
+      duration_s,
+  )
 
-  # 150s informational note (kept here, so no separate task needed)
   if duration_s < 150:
-    print("Restart shorter than 150 seconds. This may cause a false negative")
+    logger.info(
+        "Restart shorter than 150 seconds. This may cause a false negative"
+    )
   else:
-    print("Restart longer than 150 seconds. False negative should not occur")
+    logger.info(
+        "Restart longer than 150 seconds. False negative should not occur"
+    )
 
-  # --- Return raw timestamps ---
   return {
       "op_id": op_full.split("operation-")[1],
       "start_sec": start_sec,
@@ -222,6 +211,7 @@ def wait_for_update_to_complete(op_full: str) -> dict:
   }
 
 
+# latest! ver1: remove try/except and change the printout into using logging
 @task
 def update_nodepool_disksize(info: node_pool.Info, new_size_gb: int) -> dict:
   """
@@ -234,6 +224,7 @@ def update_nodepool_disksize(info: node_pool.Info, new_size_gb: int) -> dict:
 
   op = cm.update_node_pool(request=req)
   op_full = _operation_name(info.project_id, info.location, op.name)
+
   if getattr(op, "start_time", None):
     start_tu = TimeUtil.from_timestamp_pb2(op.start_time)
   else:
@@ -241,29 +232,28 @@ def update_nodepool_disksize(info: node_pool.Info, new_size_gb: int) -> dict:
 
   start_iso = start_tu.to_iso_string()
 
-  print(f"[update] op_id={op.name}")
-  print(f"[update] op_full={op_full}")
-  print(f"[update] start_ts={start_iso}")
+  logger.info("[update] op_id=%s", op.name)
+  logger.info("[update] op_full=%s", op_full)
+  logger.info("[update] start_ts=%s", start_iso)
+
   return {"op_full": op_full, "start_ts": start_iso}
 
 
+# latest! version 1: using logger
 @task
 def summarize_test(metrics_ok: bool, logs_ok: bool) -> None:
-  """
-  Final verdict task.
-  This runs only if both sensors have succeeded.
-  """
-  print(f"[summary] metrics_ok={metrics_ok}, logs_ok={logs_ok}")
+  """Final verdict task."""
+  logger.info("[summary] metrics_ok=%s, logs_ok=%s", metrics_ok, logs_ok)
   if not metrics_ok or not logs_ok:
-    # This *shouldn't* happen if sensors are wired correctly,
-    # but we keep it as a guardrail.
     raise RuntimeError(
         f"Expected both metrics and logs sensors to succeed, got: "
         f"metrics_ok={metrics_ok}, logs_ok={logs_ok}"
     )
 
-  print("[summary] Disk-resize node-pool test PASSED: "
-        "GKE operation finished, metric emitted, and log event detected.")
+  logger.info(
+      "[summary] Disk-resize node-pool test PASSED: "
+      "GKE operation finished, metric emitted, and log event detected."
+  )
 
 
 with models.DAG(
@@ -331,16 +321,16 @@ with models.DAG(
       end_time=op_meta["end_sec"],
   )
 
-  LOG_FILTER_QRY = (
+  LOG_FILTER_BASE = (
       'resource.type="k8s_cluster" '
-      f'AND resource.labels.cluster_name="{node_pool_info.cluster_name}"'
+      f'AND resource.labels.cluster_name="{node_pool_info.cluster_name}" '
       f'AND resource.labels.location="{node_pool_info.location}"'
-      f'AND operation.id="{op_meta.op_id}"'
   )
 
   poll_logs = wait_for_nodepool_logs_event(
       project_id=node_pool_info.project_id,
-      filter_query=LOG_FILTER_QRY,   # your log filter
+      base_filter=LOG_FILTER_BASE,
+      op_id=op_meta["op_id"],
       start_time=op_meta["start_sec"],
       end_time=op_meta["end_sec"],
   )
