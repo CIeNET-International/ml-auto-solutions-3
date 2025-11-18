@@ -33,6 +33,7 @@ from dags.tpu_observability.configs.common import MachineConfigMap
 
 SCHEDULE = "0 10 * * *" if composer_env.is_prod_env() else None
 
+
 def compare_metric_values(
     cmd_values: list[float],
     monitoring_values: list[float],
@@ -254,13 +255,13 @@ with models.DAG(
       num_nodes=models.Variable.get("TFV_NUM_NODES", default_var=4),
       machine_type=config.machine_version.value,
       tpu_topology=config.tpu_topology,
-    )
+  )
   cluster_info_2 = replace(
       cluster_info,
       node_pool_name=models.Variable.get(
           "TFV_NODE_POOL_NAME", default_var="tpu-info-format-test-v6e-2"
       ),
-    )
+  )
 
   jobset_config = jobset.JobSet(
       jobset_name=f"tpu-info-v6e-workload",
