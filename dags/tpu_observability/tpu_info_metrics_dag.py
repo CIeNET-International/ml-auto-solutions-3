@@ -2,6 +2,7 @@
 This script uses a factory pattern to dynamically generate an Airflow DAG
 for each metric verification strategy.
 """
+from dataclasses import replace
 import datetime
 import logging
 import os
@@ -15,7 +16,9 @@ from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 from google.cloud.monitoring_v3 import types as monitoring_types
 
+from dags import composer_env
 from dags.common.vm_resource import MachineVersion
+from dags.common.vm_resource import Project, Region, Zone
 from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
@@ -28,6 +31,7 @@ from dags.tpu_observability.metric_strategies import BaseMetricStrategy
 from dags.tpu_observability.metric_strategies import ALL_METRIC_STRATEGIES
 from dags.tpu_observability.configs.common import MachineConfigMap
 
+SCHEDULE = "0 10 * * *" if composer_env.is_prod_env() else None
 
 def compare_metric_values(
     cmd_values: list[float],
@@ -114,7 +118,7 @@ def get_tpu_info_metric_from_pod(
         log_output=True,
     )
 
-    return result.stdout
+    return result
 
 
 @task
@@ -220,7 +224,7 @@ with models.DAG(
     dag_id="tpu_info_metrics_verification",
     start_date=datetime.datetime(2025, 8, 15),
     default_args={"retries": 0},
-    schedule=constants.Schedule.WEEKDAY_PST_6_30PM_EXCEPT_THURSDAY,
+    schedule=SCHEDULE,
     catchup=False,
     tags=["gke", "tpu-observability", "tpu-info", "unified"],
     description="Verifies multiple TPU metrics in a single DAG using TaskGroups.",
@@ -230,23 +234,33 @@ with models.DAG(
 
   cluster_info = node_pool.Info(
       project_id=models.Variable.get(
-          "TCU_PROJECT_ID", default_var="cienet-cmcs"
+          "TFV_PROJECT_ID", default_var="cienet-cmcs"
       ),
       cluster_name=models.Variable.get(
-          "TCU_CLUSTER_NAME", default_var="yuna-xpk-v6e-ew4"
+          "TFV_CLUSTER_NAME", default_var="tpu-observability-automation"
       ),
       node_pool_name=models.Variable.get(
-          "TCU_NODE_POOL_NAME", default_var="yuna-xpk-v6e-ew4-np-0"
+          "TFV_NODE_POOL_NAME", default_var="tpu-info-fromat-test-v6e-1"
       ),
-      region=models.Variable.get("TCU_REGION", default_var="europe-west4"),
-      location=models.Variable.get("TCU_LOCATION", default_var="europe-west4"),
+      region=models.Variable.get(
+          "TFV_REGION", default_var=Region.US_CENTRAL1.value
+      ),
+      location=models.Variable.get(
+          "TFV_LOCATION", default_var=Region.US_CENTRAL1.value
+      ),
       node_locations=models.Variable.get(
-          "TCU_NODE_LOCATIONS", default_var="europe-west4-a"
+          "TFV_NODE_LOCATIONS", default_var=Zone.US_CENTRAL1_B.value
       ),
-      num_nodes=models.Variable.get("TCU_NUM_NODES", default_var=4),
+      num_nodes=models.Variable.get("TFV_NUM_NODES", default_var=4),
       machine_type=config.machine_version.value,
       tpu_topology=config.tpu_topology,
-  )
+    )
+  cluster_info_2 = replace(
+      cluster_info,
+      node_pool_name=models.Variable.get(
+          "TFV_NODE_POOL_NAME", default_var="tpu-info-format-test-v6e-2"
+      ),
+    )
 
   jobset_config = jobset.JobSet(
       jobset_name=f"tpu-info-v6e-workload",
@@ -267,6 +281,22 @@ with models.DAG(
   workload_script = jobset.Workload.JAX_TPU_BENCHMARK
 
   with TaskGroup(group_id=f"v{config.tpu_version.value}"):
+    with TaskGroup(group_id="create_node_pool") as create_node_pool:
+      create_first_node_pool = node_pool.create.override(
+          task_id="node_pool_1",
+          retries=2,
+      )(
+          node_pool=cluster_info,
+          reservation="cloudtpu-20251107233000-1246578561",
+      )
+
+      create_second_node_pool = node_pool.create.override(
+          task_id="node_pool_2",
+          retries=2,
+      )(
+          node_pool=cluster_info_2,
+          reservation="cloudtpu-20251107233000-1246578561",
+      )
     apply_time = jobset.run_workload(
         node_pool=cluster_info,
         yaml_config=jobset_config.generate_yaml(
@@ -342,11 +372,33 @@ with models.DAG(
         setups=apply_time
     )
 
+    with TaskGroup(group_id="cleanup_node_pool") as cleanup_node_pool:
+      cleanup_first_node_pool = node_pool.delete.override(
+          task_id="cleanup_node_pool_1",
+          trigger_rule=TriggerRule.ALL_DONE,
+          retries=2,
+      )(node_pool=cluster_info).as_teardown(
+          setups=create_node_pool,
+      )
+
+      cleanup_second_node_pool = node_pool.delete.override(
+          task_id="cleanup_node_pool_2",
+          trigger_rule=TriggerRule.ALL_DONE,
+          retries=2,
+      )(node_pool=cluster_info_2).as_teardown(
+          setups=create_node_pool,
+      )
+
+    [create_first_node_pool, create_second_node_pool]
+    (cleanup_first_node_pool >> cleanup_second_node_pool)
+
     (
-        apply_time
+        create_node_pool
+        >> apply_time
         >> active_pods
         >> wait_for_job_start
         >> all_verification_groups
         >> summary
         >> clean_up_workload
+        >> cleanup_node_pool
     )
