@@ -7,6 +7,7 @@ from airflow.models import Variable
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
+from dags.map_reproducibility.utils import constants
 from dags.common.vm_resource import Project, Region, Zone
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.configs.common import MachineConfigMap
@@ -15,7 +16,7 @@ from dags.tpu_observability.configs.common import MachineConfigMap
 with models.DAG(
     dag_id="multi-host-availability-rollback",
     start_date=datetime.datetime(2025, 8, 10),
-    schedule="@daily",
+    schedule=constants.Schedule.DAILY_PST_6_30PM,
     catchup=False,
     tags=[
         "cloud-ml-auto-solutions",

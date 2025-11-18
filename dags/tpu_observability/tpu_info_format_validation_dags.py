@@ -21,6 +21,7 @@ from dags.common.vm_resource import Project
 from dags.common.vm_resource import Region
 from dags.common.vm_resource import Zone
 from dags.tpu_observability.configs.common import MachineConfigMap, TpuConfig
+from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils import tpu_info_util as tpu_info
@@ -273,7 +274,7 @@ with models.DAG(
     dag_id="tpu_info_format_validation_dag",
     start_date=datetime.datetime(2025, 8, 15),
     default_args={"retries": 0},
-    schedule="@daily",
+    schedule=constants.Schedule.DAILY_PST_7PM,
     catchup=False,
     tags=["gke", "tpu-observability", "tpu-info"],
     description=(
