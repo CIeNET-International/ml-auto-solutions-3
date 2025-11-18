@@ -258,14 +258,13 @@ def run_workload(
     yaml_config: The JobSet object containing YAML configuration.
     namespace: The Kubernetes namespace to apply the JobSet.
   """
-  with tempfile.TemporaryDirectory() as tmpdir:
-    kube_dir = tmpdir + "/kubeconfig"
+  with tempfile.NamedTemporaryFile() as temp_config_file:
     env = os.environ.copy()
-    env["KUBECONFIG"] = kube_dir
+    env["KUBECONFIG"] = temp_config_file.name
 
     cmd = " && ".join([
         Command.get_credentials_command(node_pool),
-        Command.k8s_apply_jobset_command(kube_dir, yaml_config, namespace),
+        Command.k8s_apply_jobset_command(temp_config_file.name, yaml_config, namespace),
     ])
 
     result = subprocess.run(
@@ -302,14 +301,13 @@ def end_workload(node_pool: node_pool.Info, jobset_name: str, namespace: str):
     jobset_name: The name of the JobSet to delete.
     namespace: The Kubernetes namespace to delete the JobSet from.
   """
-  with tempfile.TemporaryDirectory() as tmpdir:
-    kube_dir = tmpdir + "/kubeconfig"
+  with tempfile.NamedTemporaryFile() as temp_config_file:
     env = os.environ.copy()
-    env["KUBECONFIG"] = kube_dir
+    env["KUBECONFIG"] = temp_config_file.name
 
     cmd = " && ".join([
         Command.get_credentials_command(node_pool),
-        Command.k8s_delete_jobset_command(kube_dir, jobset_name, namespace),
+        Command.k8s_delete_jobset_command(temp_config_file.name, jobset_name, namespace),
     ])
 
     result = subprocess.run(
@@ -343,14 +341,13 @@ def get_active_pods(node_pool: node_pool.Info, namespace: str) -> list[str]:
   Returns:
     A list of pod names.
   """
-  with tempfile.TemporaryDirectory() as tmpdir:
-    kube_dir = tmpdir + "/kubeconfig"
+  with tempfile.NamedTemporaryFile() as temp_config_file:
     env = os.environ.copy()
-    env["KUBECONFIG"] = kube_dir
+    env["KUBECONFIG"] = temp_config_file.name
 
     cmd = " && ".join([
         Command.get_credentials_command(node_pool),
-        Command.k8s_get_pod_name_command(kube_dir, namespace),
+        Command.k8s_get_pod_name_command(temp_config_file.name, namespace),
     ])
 
     process = subprocess.run(
