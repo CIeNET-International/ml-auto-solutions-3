@@ -89,8 +89,18 @@ class BaseMetricStrategy(ABC):
     pass
 
   @abstractmethod
-  def parse_from_tpu_info(self, tpu_info_metric_output: str) -> list[float]:
-    """Parses the desired value from the raw tpu-info command output."""
+  def parse_from_tpu_info(
+      self, tpu_info_metric_output: list[Any]
+  ) -> list[float]:
+    """Parses percentile values from the output table of the tpu-info tool.
+
+    Args:
+      tpu_info_metric_output: A list of tables from the tpu-info command output.
+
+    Returns:
+      A list of float values representing the parsed percentiles, ordered by
+      buffer size and then by percentile.
+    """
     pass
 
 
@@ -131,7 +141,9 @@ class MemoryUsedStrategy(BaseMetricStrategy):
         )
     ]
 
-  def parse_from_tpu_info(self, tpu_info_metric_output: str) -> list[float]:
+  def parse_from_tpu_info(
+      self, tpu_info_metric_output: list[Any]
+  ) -> list[float]:
     tpu_info_data_values = []
     for metric_table in tpu_info_metric_output:
       if metric_table.name == "TPU HBM Usage":
@@ -182,7 +194,9 @@ class MemoryTotalStrategy(BaseMetricStrategy):
         )
     ]
 
-  def parse_from_tpu_info(self, tpu_info_metric_output: str) -> list[float]:
+  def parse_from_tpu_info(
+      self, tpu_info_metric_output: list[Any]
+  ) -> list[float]:
     tpu_info_data_values = []
     for metric_table in tpu_info_metric_output:
       if metric_table.name == "TPU HBM Usage":
@@ -231,7 +245,9 @@ class DutyCycleStrategy(BaseMetricStrategy):
         )
     ]
 
-  def parse_from_tpu_info(self, tpu_info_metric_output: str) -> list[float]:
+  def parse_from_tpu_info(
+      self, tpu_info_metric_output: list[Any]
+  ) -> list[float]:
     tpu_info_data_values = []
     for metric_table in tpu_info_metric_output:
       if metric_table.name == "TPU Duty Cycle":
@@ -278,7 +294,9 @@ class TensorcoreUtilizationStrategy(BaseMetricStrategy):
         )
     ]
 
-  def parse_from_tpu_info(self, tpu_info_metric_output: str) -> list[float]:
+  def parse_from_tpu_info(
+      self, tpu_info_metric_output: list[Any]
+  ) -> list[float]:
     tpu_info_data_values = []
     for metric_table in tpu_info_metric_output:
       if metric_table.name == "TensorCore Utilization":
@@ -561,15 +579,6 @@ class DeviceToHostTransferLatenciesStrategy(BaseMetricStrategy):
   def parse_from_tpu_info(
       self, tpu_info_metric_output: list[Any]
   ) -> list[float]:
-    """Parses percentile values from the output table of the tpu-info tool.
-
-    Args:
-      tpu_info_metric_output: A list of tables from the tpu-info command output.
-
-    Returns:
-      A list of float values representing the parsed percentiles, ordered by
-      buffer size and then by percentile.
-    """
     parsed_values_by_buffer: dict[str, dict[float, float]] = {}
 
     for metric_table in tpu_info_metric_output:
@@ -662,15 +671,6 @@ class CollectiveEndToEndLatencyLatenciesStrategy(BaseMetricStrategy):
   def parse_from_tpu_info(
       self, tpu_info_metric_output: list[Any]
   ) -> list[float]:
-    """Parses percentile values from the output table of the tpu-info tool.
-
-    Args:
-      tpu_info_metric_output: A list of tables from the tpu-info command output.
-
-    Returns:
-      A list of float values representing the parsed percentiles, ordered by
-      buffer size and then by percentile.
-    """
     parsed_values_by_buffer: dict[str, dict[float, float]] = {}
 
     for metric_table in tpu_info_metric_output:
