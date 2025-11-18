@@ -264,7 +264,9 @@ def run_workload(
 
     cmd = " && ".join([
         Command.get_credentials_command(node_pool),
-        Command.k8s_apply_jobset_command(temp_config_file.name, yaml_config, namespace),
+        Command.k8s_apply_jobset_command(
+            temp_config_file.name, yaml_config, namespace
+        ),
     ])
 
     result = subprocess.run(
@@ -307,7 +309,9 @@ def end_workload(node_pool: node_pool.Info, jobset_name: str, namespace: str):
 
     cmd = " && ".join([
         Command.get_credentials_command(node_pool),
-        Command.k8s_delete_jobset_command(temp_config_file.name, jobset_name, namespace),
+        Command.k8s_delete_jobset_command(
+            temp_config_file.name, jobset_name, namespace
+        ),
     ])
 
     result = subprocess.run(

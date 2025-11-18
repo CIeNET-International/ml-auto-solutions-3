@@ -54,9 +54,7 @@ def get_tpu_info_from_pod(node_pool: node_pool.Info, pod_name: str) -> str:
 
     cmd = " && ".join([
         jobset.Command.get_credentials_command(node_pool),
-        (
-            f"kubectl exec {pod_name} -n default -- tpu-info"
-        ),
+        (f"kubectl exec {pod_name} -n default -- tpu-info"),
     ])
 
     result = subprocess.run_exec(
