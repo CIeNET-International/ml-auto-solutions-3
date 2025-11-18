@@ -26,7 +26,7 @@ DAG_CONFIGS_MEGA = {
         "timeout_minutes": 15,
         "backfill_group_nightly": 1,
         "backfill_group_release": 1,
-        "nightly_schedule": Schedule.WEEKDAY_PDT_12AM_EXCEPT_THURSDAY,
+        "nightly_schedule": "30 17 * * 2,3,4,6",
         "release_schedule": "0 9 * * 2,3,4,6",
     },
     "recipes/a3mega/a3mega_llama3.1-8b_16gpus_bf16_maxtext.yaml": {
@@ -54,7 +54,7 @@ DAG_CONFIGS_MEGA = {
         "timeout_minutes": 15,
         "backfill_group_nightly": 1,
         "backfill_group_release": 1,
-        "nightly_schedule": Schedule.WEEKDAY_PDT_12AM_EXCEPT_THURSDAY,
+        "nightly_schedule": "30 18 * * 2,3,4,6",
         "release_schedule": "15 9 * * 2,3,4,6",
     },
     "recipes/a3mega/a3mega_llama3.1-70b_256gpus_bf16_maxtext.yaml": {
