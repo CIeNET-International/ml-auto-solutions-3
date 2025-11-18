@@ -1,5 +1,6 @@
 """Utilities for managing JobSets in GKE clusters for TPU observability."""
 
+import base64
 import dataclasses
 import datetime
 import json
@@ -10,7 +11,6 @@ import string
 import subprocess
 import tempfile
 import textwrap
-import time
 from typing import Final
 
 from airflow.decorators import task
@@ -35,6 +35,7 @@ class Workload:
   JAX_TPU_BENCHMARK = json.dumps(
       textwrap.dedent(
           """
+          pip install jax[k8s] libtpu
           python -c '
           import jax
           import jax.numpy as jnp
@@ -252,9 +253,7 @@ def _k8s_get_pod_name_command(kubeconfig: str, namespace: str) -> str:
 
 
 def get_replica_num(
-    replica_type: str,
-    job_name: str,
-    node_pool: node_pool.Info
+    replica_type: str, job_name: str, node_pool: node_pool.Info
 ) -> int:
   """Get the number of a certain type of replicas from a running jobset.
 
@@ -269,7 +268,6 @@ def get_replica_num(
   Returns:
     The number of replicas of the specific type in the jobset.
   """
-
   api_client = gke.get_authenticated_client(
       node_pool.project_id, node_pool.region, node_pool.cluster_name
   )
@@ -285,9 +283,7 @@ def get_replica_num(
 
   try:
     name = jobsets["items"][0]["status"]["replicatedJobsStatus"][0]["name"]
-    replica = jobsets["items"][0]["status"]["replicatedJobsStatus"][0][
-        replica_type
-    ]
+    replica = jobsets["items"][0]["status"]["replicatedJobsStatus"][0][replica_type]
     logging.info("Found %s replicas", replica)
 
   except (KeyError, IndexError, TypeError) as e:
@@ -300,6 +296,52 @@ def get_replica_num(
     )
 
   return replica
+
+
+def get_running_pods(
+    node_pool: node_pool.Info, namespace="default"
+) -> list:
+  """Get a list of pods which are in the "running" state.
+
+  Args:
+    node_pool: The Info object containing the cluster information needed for
+    the kubernetes API to connect to it.
+    namespace: The kubernetes namespace which is being searched for running
+    pods.
+  Returns:
+    A list of all the pods in the "running" state.
+  """
+  with tempfile.TemporaryDirectory() as tmpdir:
+    kube_dir = tmpdir + "/kubeconfig"
+    env = os.environ.copy()
+    env["KUBECONFIG"] = kube_dir
+
+    cmd = " && ".join([
+        _get_credentials_command(node_pool),
+        (f"kubectl get pods -n {namespace} -o json"),
+    ])
+
+    result = subprocess.run(
+        cmd,
+        shell=True,
+        check=False,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    logging.info("Command Execute:\n %s", cmd)
+
+    data = json.loads(result.stdout)
+
+    running_pods = [
+        item["metadata"]["name"]
+        for item in data.get("items", [])
+        if item.get("status", {}).get("phase") == "Running"
+    ]
+
+    logging.info("Running pods: %s", running_pods)
+
+  return running_pods
 
 
 @task
@@ -504,7 +546,14 @@ def wait_for_jobset_ttr(info: Info) -> bool:
     info(Info): An instance of the Info class that encapsulates
     the configuration and metadata of a GKE node pool and workload.
   """
-  now = int(time.time())
+  now = datetime.datetime.now()
+  end_time = TimeUtil.from_datetime(now)
+  start_time = TimeUtil.from_datetime(now - datetime.timedelta(minutes=60))
+
+  logging.info("Now %s", now)
+  logging.info("End time %s", end_time)
+  logging.info("Start time %s", start_time)
+
 
   time_series = query_time_series(
       info.project_id,
@@ -512,8 +561,8 @@ def wait_for_jobset_ttr(info: Info) -> bool:
           'metric.type="kubernetes.io/jobset/times_to_recover" '
           f'resource.labels.cluster_name="{info.cluster_name}" '
       ),
-      TimeUtil.from_unix_seconds(int(time.time() - 3600)),
-      TimeUtil.from_unix_seconds(int(time.time())),
+      start_time=start_time,
+      end_time=end_time,
   )
 
   # We just need to know that the event happened at all
@@ -525,7 +574,9 @@ def wait_for_jobset_ttr(info: Info) -> bool:
 
 
 @task.sensor(poke_interval=30, timeout=600, mode="reschedule")
-def wait_for_jobset_status(replica_type: str, job_name: str, info: Info):
+def wait_for_jobset_status_occurrence(
+    replica_type: str, job_name: str, info: Info
+):
   """A sensor which checks if are any jobset replicas in a status type.
 
   Args:
@@ -541,3 +592,9 @@ def wait_for_jobset_status(replica_type: str, job_name: str, info: Info):
       node_pool=info,
   )
   return ready_replicas > 0
+
+
+@task.sensor(poke_interval=30, timeout=600, mode="reschedule")
+def wait_for_all_pods_running(num_pods: int, node_pool: node_pool.Info):
+  num_running = len(get_running_pods(node_pool=node_pool, namespace="default"))
+  return num_running == num_pods
