@@ -14,7 +14,6 @@ from dags.tpu_observability.utils.time_util import TimeUtil
 from dags.tpu_observability.utils.gcp_util import query_time_series, query_log_entries
 
 QUERY_WINDOW_DURATION_SECONDS = 3600
-logger = logging.getLogger(__name__)
 
 
 def _nodepool_name(info):
@@ -59,7 +58,7 @@ def wait_for_nodepool_metrics_event(
   )
 
   if not series:
-    logger.info(
+    logging.info(
         "[metrics] No matching time series; repoking "
         "window=%s → %s",
         start_tu.to_iso_string(),
@@ -68,7 +67,7 @@ def wait_for_nodepool_metrics_event(
     return False
 
   first = series[0]
-  logger.info(
+  logging.info(
       "[metrics] Metric detected. series_count=%d, metric.type=%s, resource.labels=%s",
       len(series),
       first.metric.type,
@@ -76,7 +75,7 @@ def wait_for_nodepool_metrics_event(
   )
   if first.points:
     p = first.points[0]
-    logger.info(
+    logging.info(
         "[metrics] first point: value=%s @ %s",
         p.value,
         p.interval.end_time,
@@ -111,7 +110,7 @@ def wait_for_nodepool_logs_event(
   )
 
   if not entries:
-    logger.info(
+    logging.info(
         "[logs] No matching log entries; repoking window=%s → %s",
         start_tu.to_iso_string(),
         end_tu.to_iso_string(),
@@ -119,7 +118,7 @@ def wait_for_nodepool_logs_event(
     return False
 
   first = entries[0]
-  logger.info(
+  logging.info(
       "[logs] Log event detected. count=%d, timestamp=%s, log_name=%s",
       len(entries),
       first.timestamp,
@@ -133,77 +132,92 @@ def wait_for_nodepool_logs_event(
     snippet = str(payload)
     if len(snippet) > 200:
       snippet = snippet[:200] + "…"
-    logger.info("[logs] first entry payload snippet: %s", snippet)
+    logging.info("[logs] first entry payload snippet: %s", snippet)
 
   return True
 
 
-# latest! ver4: remove printout and try/except
+# latest! version5: turn the task.sensor into just task
 @task.sensor(poke_interval=10, timeout=3600, mode="reschedule")
-def wait_for_update_to_complete(op_full: str) -> dict:
+def wait_for_update_to_complete(op_full: str) -> bool:
   """
   Sensor that waits for a GKE node-pool update operation to reach DONE.
-
-  Returns:
-    {
-      "op_id": str,
-      "start_sec": int,
-      "end_sec": int,
-      "duration_s": int,
-      "anchor_seconds": int
-    }
+  Returns True when DONE (or raises on error), False to repoke.
   """
   cm = ClusterManagerClient()
   op = cm.get_operation(name=op_full)
   status = getattr(op.status, "name", str(op.status))
-  logger.info("[wait] op=%s status=%s", op_full, status)
+  logging.info("[wait] op=%s status=%s", op_full, status)
 
   if status != "DONE":
     # not DONE yet → repoke
     return False
 
-  # If DONE, surface any error right away
+  # DONE → surface any error
   if op.error and (op.error.message or op.error.details):
     raise RuntimeError(f"GKE operation finished with error: {op.error}")
 
+  logging.info("[wait] operation DONE")
+  return True
+
+# latest! add on getting meta data
+
+
+@task
+def get_update_operation_meta(op_full: str) -> dict:
+  """
+  Fetch GKE operation metadata (start/end/duration/op_id) once the operation is DONE.
+  Returns:
+    {
+      "op_id": str,         # e.g. "operation-1763540237994-..."
+      "start_sec": int,
+      "end_sec": int,
+      "duration_s": int,
+      "anchor_seconds": int,
+    }
+  """
+  cm = ClusterManagerClient()
+  op = cm.get_operation(name=op_full)
+
+  # Use op.name as operation.id (matches Cloud Logging)
+  op_id = op.name
+
   if getattr(op, "start_time", None):
-    start_dt = op.start_time.ToDatetime()
-    start_tu = TimeUtil.from_datetime(start_dt)
-    start_sec = start_tu.to_unix_seconds()
-    start_iso = start_tu.to_iso_string()
+    # op.start_time is RFC3339 string (from your logs)
+    start_tu = TimeUtil.from_iso_string(str(op.start_time))
   else:
     raise RuntimeError("Operation is DONE but op.start_time is missing")
 
   if getattr(op, "end_time", None):
-    end_dt = op.end_time.ToDatetime()
-    end_tu = TimeUtil.from_datetime(end_dt)
-    end_sec = end_tu.to_unix_seconds()
-    end_iso = end_tu.to_iso_string()
+    end_tu = TimeUtil.from_iso_string(str(op.end_time))
   else:
-    end_sec = start_sec
-    end_iso = start_iso
+    # fallback: end = start
+    end_tu = start_tu
 
+  start_sec = start_tu.to_unix_seconds()
+  end_sec = end_tu.to_unix_seconds()
   duration_s = max(0, end_sec - start_sec)
   anchor_seconds = (start_sec + end_sec) // 2
 
-  logger.info(
-      "[wait] DONE start=%s end=%s duration=%ss",
-      start_iso,
-      end_iso,
+  logging.info(
+      "[op_meta] op_id=%s start=%s end=%s duration=%ss",
+      op_id,
+      start_tu.to_iso_string(),
+      end_tu.to_iso_string(),
       duration_s,
   )
 
   if duration_s < 150:
-    logger.info(
+    logging.info(
         "Restart shorter than 150 seconds. This may cause a false negative"
     )
   else:
-    logger.info(
+    logging.info(
         "Restart longer than 150 seconds. False negative should not occur"
     )
 
   return {
-      "op_id": op_full.split("operation-")[1],
+      "op_id": op_id,
       "start_sec": start_sec,
       "end_sec": end_sec,
       "duration_s": duration_s,
@@ -226,31 +240,32 @@ def update_nodepool_disksize(info: node_pool.Info, new_size_gb: int) -> dict:
   op_full = _operation_name(info.project_id, info.location, op.name)
 
   if getattr(op, "start_time", None):
-    start_tu = TimeUtil.from_timestamp_pb2(op.start_time)
+    # start_time is an RFC3339 string
+    start_tu = TimeUtil.from_iso_string(op.start_time)
   else:
     start_tu = TimeUtil.from_unix_seconds(int(time.time()))
 
   start_iso = start_tu.to_iso_string()
 
-  logger.info("[update] op_id=%s", op.name)
-  logger.info("[update] op_full=%s", op_full)
-  logger.info("[update] start_ts=%s", start_iso)
+  logging.info("[update] op_id=%s", op.name)
+  logging.info("[update] op_full=%s", op_full)
+  logging.info("[update] start_ts=%s", start_iso)
 
   return {"op_full": op_full, "start_ts": start_iso}
 
 
-# latest! version 1: using logger
+# latest! version 1: using logging
 @task
 def summarize_test(metrics_ok: bool, logs_ok: bool) -> None:
   """Final verdict task."""
-  logger.info("[summary] metrics_ok=%s, logs_ok=%s", metrics_ok, logs_ok)
+  logging.info("[summary] metrics_ok=%s, logs_ok=%s", metrics_ok, logs_ok)
   if not metrics_ok or not logs_ok:
     raise RuntimeError(
         f"Expected both metrics and logs sensors to succeed, got: "
         f"metrics_ok={metrics_ok}, logs_ok={logs_ok}"
     )
 
-  logger.info(
+  logging.info(
       "[summary] Disk-resize node-pool test PASSED: "
       "GKE operation finished, metric emitted, and log event detected."
   )
@@ -312,7 +327,9 @@ with models.DAG(
 
   update_result = update_nodepool_disksize(node_pool_info, new_size_gb=150)
 
-  op_meta = wait_for_update_to_complete(update_result["op_full"])
+  wait_done = wait_for_update_to_complete(update_result["op_full"])
+
+  op_meta = get_update_operation_meta(update_result["op_full"])
 
   poll_metrics = wait_for_nodepool_metrics_event(
       project_id=node_pool_info.project_id,
@@ -347,7 +364,8 @@ with models.DAG(
 (
     create_nodepool
     >> update_result
-    >> op_meta
+    >> wait_done         # sensor: just waits until DONE
+    >> op_meta           # task: fetches timestamps & op_id
     >> [poll_metrics, poll_logs]
     >> summary
     >> cleanup_node_pool
