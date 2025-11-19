@@ -10,7 +10,7 @@ from airflow.operators.empty import EmptyOperator
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
-from dags.common.vm_resource import Project, Region, Zone
+from dags.common.vm_resource import Region, Zone
 from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.configs.common import MachineConfigMap
 from dags.tpu_observability.utils import node_pool_util as node_pool
@@ -32,14 +32,12 @@ def check_duration_and_determine_branch(**kwargs) -> str:
   """
   ti = kwargs["ti"]
   duration_seconds = ti.xcom_pull(
-    task_ids=f"v{config.tpu_version.value}.get_node_pool_update_duration",
-    key="return_value"
+      task_ids=f"v{config.tpu_version.value}.get_node_pool_update_duration",
+      key="return_value",
   )
 
   if duration_seconds is None:
-    error_msg = (
-        "No update duration found."
-    )
+    error_msg = "No update duration found."
     raise AirflowFailException(error_msg)
 
   if duration_seconds >= _THRESHOLD_SECONDS:
@@ -57,13 +55,19 @@ def check_duration_and_determine_branch(**kwargs) -> str:
 
 
 with models.DAG(
-    dag_id="change_node_pool_label",
+    dag_id="update_node_pool_label_ttr",
     start_date=datetime.datetime(2025, 9, 30),
     schedule=constants.Schedule.WEEKDAY_PST_6PM_EXCEPT_THURSDAY,
     catchup=False,
-    tags=["gke", "tpu-observability", "change-node-pool-label"],
+    tags=[
+        "gke",
+        "tpu-observability",
+        "update-node-pool-label-ttr",
+        "TPU",
+        "v6e-16",
+    ],
     description=(
-        "This DAG tests the GKE nodel pool's status by changing its label and "
+        "This DAG tests the GKE nodel pool's status by updating its label and "
         "confirming the state transitions are correct."
     ),
     doc_md="""
@@ -87,14 +91,13 @@ with models.DAG(
   for machine in MachineConfigMap:
     config = machine.value
     node_pool_info = node_pool.Info(
-        project_id=models.Variable.get(
-            "PROJECT_ID", default_var="cienet-cmcs"
-        ),
+        project_id=models.Variable.get("PROJECT_ID", default_var="cienet-cmcs"),
         cluster_name=models.Variable.get(
             "CLUSTER_NAME", default_var="tpu-observability-automation"
         ),
         node_pool_name=models.Variable.get(
-            "NODE_POOL_NAME", default_var="change-node-pool-label-v6e-autotest"
+            "NODE_POOL_NAME",
+            default_var="update-node-pool-label-ttr-v6e-autotest",
         ),
         location=models.Variable.get(
             "LOCATION", default_var=Region.US_CENTRAL1.value
@@ -107,27 +110,29 @@ with models.DAG(
         tpu_topology=config.tpu_topology,
     )
 
+    LABELS_TO_UPDATE = {"test_key": "test_val"}
+
     with TaskGroup(group_id=f"v{config.tpu_version.value}"):
       task_id = "create_node_pool"
       create_node_pool = node_pool.create.override(task_id=task_id)(
           node_pool=node_pool_info,
-          reservation="cloudtpu-20251107233000-1246578561"
+          reservation="cloudtpu-20251107233000-1246578561",
       )
 
       task_id = "wait_for_provisioning"
-      wait_for_provisioning = node_pool.wait_for_status.override(task_id=task_id)(
-          node_pool=node_pool_info, status=node_pool.Status.PROVISIONING
-      )
+      wait_for_provisioning = node_pool.wait_for_status.override(
+          task_id=task_id
+      )(node_pool=node_pool_info, status=node_pool.Status.PROVISIONING)
 
       task_id = "wait_for_running"
-      wait_for_running = node_pool.wait_for_status.override(
-          task_id=task_id
-      )(node_pool=node_pool_info, status=node_pool.Status.RUNNING)
+      wait_for_running = node_pool.wait_for_status.override(task_id=task_id)(
+          node_pool=node_pool_info, status=node_pool.Status.RUNNING
+      )
 
-      task_id = "change_node_pool_label"
-      change_node_pool_label = node_pool.change_node_pool_label.override(
+      task_id = "update_node_pool_label"
+      update_node_pool_label = node_pool.update_labels.override(
           task_id=task_id
-      )(node_pool=node_pool_info)
+      )(node_pool=node_pool_info, node_labels=LABELS_TO_UPDATE)
 
       task_id = "wait_for_recovered"
       wait_for_recovered = node_pool.wait_for_status.override(task_id=task_id)(
@@ -135,9 +140,11 @@ with models.DAG(
       )
 
       task_id = "get_node_pool_update_duration"
-      get_node_pool_update_duration = node_pool.get_node_pool_update_duration.override(
-          task_id=task_id
-      )(node_pool=node_pool_info)
+      get_node_pool_update_duration = (
+          node_pool.get_node_pool_update_duration.override(task_id=task_id)(
+              node_pool=node_pool_info
+          )
+      )
 
       task_id = "determine_next_branch"
       determine_next_branch = BranchPythonOperator(
@@ -163,12 +170,14 @@ with models.DAG(
           setups=create_node_pool,
       )
 
-      create_node_pool \
-      >> wait_for_provisioning \
-      >> wait_for_running \
-      >> change_node_pool_label \
-      >> wait_for_recovered \
-      >> get_node_pool_update_duration \
-      >> determine_next_branch \
-      >> [wait_for_ttr, skip_ttr_check] \
-      >> cleanup_node_pool
+      (
+          create_node_pool
+          >> wait_for_provisioning
+          >> wait_for_running
+          >> update_node_pool_label
+          >> wait_for_recovered
+          >> get_node_pool_update_duration
+          >> determine_next_branch
+          >> [wait_for_ttr, skip_ttr_check]
+          >> cleanup_node_pool
+      )
