@@ -17,6 +17,7 @@ from datetime import datetime
 from typing import List
 from absl import logging
 import textwrap
+from kubernetes import client as k8s_client
 
 from airflow.decorators import task
 
@@ -238,3 +239,4 @@ def generate_run_name(
   run_time = datetime.now().strftime("%Y-%m-%d-%H-%M")
   run_name_id = f"{name_image.split(':')[1]}-{short_id}-{slice_number}x-{accelerator}-{run_time}"
   return run_name_id
+

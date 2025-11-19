@@ -27,8 +27,8 @@ from xlml.utils.gke import zone_to_region
 import xlml.utils.axlearn as axlearn
 
 
-SCHEDULE = "0 21 * * *" if composer_env.is_prod_env() else None
-DAG_TEST_NAME = "axlearn_reg_save"
+SCHEDULE = "0 24 * * *" if composer_env.is_prod_env() else None
+DAG_TEST_NAME = "axlearn_reg_restore"
 
 
 with models.DAG(
@@ -74,23 +74,26 @@ with models.DAG(
   )
   test_configs = [
       test_config_util.TestConfigAXLearn(
-          cluster=XpkClusters.TPU_V5P_128_CLUSTER,
+          cluster=XpkClusters.TPU_V5P_128_CLUSTER_TEST,
           run_name="gke_tpu_single",
           slices=[2],
-          instance_type="tpu-v5p-128",
-          mesh_type="tpu-v5p-128",
-          short_id=f"axlearn-{checkpointing.name}-sav",
+          instance_type="tpu-v5p-64",
+          mesh_type="tpu-v5p-64",
+          short_id=f"axlearn-{checkpointing.name}-rest",
           module="text.gpt.c4_trainer",
           model_config="fuji-7B-v2-flash",
-          step=200,
+          step=500,
           checkpoint_step=50,
-          train_batch_size=128,
-          fsdp=128,
+          train_batch_size=64,
+          fsdp=64,
           data=1,
           trainer_dir=test_config_util.DEFAULT_BUCKET_AXLEARN,
           data_dir="gs://axlearn-public/tensorflow_datasets",
       ),
   ]
+
+  step_to_interrupt = 100
+
   for mode, image_full_path in test_config_util.DOCKER_IMAGES_AXLEARN:
     for test_config in test_configs:
       for slice_num in test_config.slices:
@@ -114,7 +117,8 @@ with models.DAG(
             test_name=f"{test_config.short_id}-reg",
             docker_image=image_full_path.value,
             test_owner=test_owner.CAMILO_Q,
-        ).run(
+        ).run_axlearn_with_node_interruption(
+            expect_reach_to_step=step_to_interrupt,
             test_configs=test_config,
             axlearn_branch="main",
             run_name=run_name_id,
