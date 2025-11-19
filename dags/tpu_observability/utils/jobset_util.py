@@ -282,9 +282,10 @@ def get_replica_num(
   )
 
   try:
-    name = jobsets["items"][0]["status"]["replicatedJobsStatus"][0]["name"]
-    replica = jobsets["items"][0]["status"]["replicatedJobsStatus"][0][replica_type]
-    logging.info("Found %s replicas", replica)
+    replica_job_status = jobsets["items"][0]["status"]["replicatedJobsStatus"]
+    name = replica_job_status[0]["name"]
+    replicas = replica_job_status[0][replica_type]
+    logging.info("Found %s replicas", replicas)
 
   except (KeyError, IndexError, TypeError) as e:
     logging.error("Error in getting jobset satus: %s", e)
@@ -295,12 +296,10 @@ def get_replica_num(
         f"Jobset found '{name}' does not match jobset name given '{job_name}'"
     )
 
-  return replica
+  return replicas
 
 
-def get_running_pods(
-    node_pool: node_pool.Info, namespace="default"
-) -> list:
+def get_running_pods(node_pool: node_pool.Info, namespace="default") -> list:
   """Get a list of pods which are in the "running" state.
 
   Args:
@@ -540,7 +539,11 @@ def wait_for_jobset_ttr(info: Info) -> bool:
   """Polls the jobset time_between_interruptions metric.
 
   A sensor task which polls the jobset time_between_interruptions metric
-  every 60 seconds for 60 minutes.
+  every 60 seconds for 60 minutes. 60 minutes is used here since this
+  metric does have a long latency before appearing in monitoring, typically
+  between 30-45 minutes. While it may be possible for this latency to be
+  longer than 60 minutes, it would be exceedingly rare, and it would be
+  impractical for the test to run longer.
 
   Args:
     info(Info): An instance of the Info class that encapsulates
@@ -553,7 +556,6 @@ def wait_for_jobset_ttr(info: Info) -> bool:
   logging.info("Now %s", now)
   logging.info("End time %s", end_time)
   logging.info("Start time %s", start_time)
-
 
   time_series = query_time_series(
       info.project_id,
