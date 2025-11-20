@@ -8,6 +8,8 @@ from airflow.models import Variable
 from airflow.decorators import task, dag
 from airflow.utils.trigger_rule import TriggerRule
 from airflow import models
+from airflow.utils.task_group import TaskGroup
+
 
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils.time_util import TimeUtil
@@ -30,7 +32,7 @@ def _operation_name(project_id, location, op_id_or_name):
       else f"projects/{project_id}/locations/{location}/operations/{op_id_or_name}"
   )
 
-# latest version: remove the try/except and the logging style
+# latest version! : widening the query window
 
 
 @task.sensor(poke_interval=60, timeout=7200, mode="reschedule")
@@ -40,15 +42,14 @@ def wait_for_nodepool_metrics_event(
     start_time,
     end_time,
 ) -> bool:
-  """Poll Cloud Monitoring for node-pool recovery metrics in [start_time, end_time].
+  """Poll Cloud Monitoring for node-pool recovery metrics in [start_time, end_time]."""
 
-  The sensor finishes (returns True) once at least one matching time series is found.
-  It uses the shared query_time_series utility and TimeUtil for time handling.
-  """
-
+  # widen the window a bit
   start_tu = TimeUtil.from_unix_seconds(start_time)
-  end_tu = TimeUtil.from_unix_seconds(end_time)
+  end_tu = TimeUtil.from_unix_seconds(
+      end_time) + QUERY_WINDOW_DURATION_SECONDS  # +1h after op end
 
+  # Let query_time_series raise if API errors → Airflow will handle
   series = query_time_series(
       project_id=project_id,
       filter_str=filter_query,
@@ -98,7 +99,7 @@ def wait_for_nodepool_logs_event(
   start_tu = TimeUtil.from_unix_seconds(start_time)
   end_tu = TimeUtil.from_unix_seconds(end_time)
 
-  # Combine base filter with operation.id constraint
+  # Combine base filter with operation.id constraint --> will need to revise the filter!
   full_filter = f'{base_filter} AND operation.id="{op_id}"'
 
   entries = query_log_entries(
@@ -318,55 +319,57 @@ with models.DAG(
       tpu_topology=Variable.get("TPU_TOPOLOGY", default_var="2x4"),
   )
 
-  UPTIME_FILTER_QRY = (
-      'metric.type="kubernetes.io/node_pool/accelerator/times_to_recover" '
-      f'AND resource.labels.cluster_name="{node_pool_info.cluster_name}"'
-  )
+  with TaskGroup(group_id="v6e") as v6e_group:
+    UPTIME_FILTER_QRY = (
+        'metric.type="kubernetes.io/node_pool/accelerator/times_to_recover" '
+        f'AND resource.labels.cluster_name="{node_pool_info.cluster_name}"'
+    )
 
-  create_nodepool = node_pool.create(node_pool=node_pool_info)
+    create_nodepool = node_pool.create(node_pool=node_pool_info)
 
-  update_result = update_nodepool_disksize(node_pool_info, new_size_gb=150)
+    update_result = update_nodepool_disksize(node_pool_info, new_size_gb=150)
 
-  wait_done = wait_for_update_to_complete(update_result["op_full"])
+    wait_done = wait_for_update_to_complete(update_result["op_full"])
 
-  op_meta = get_update_operation_meta(update_result["op_full"])
+    op_meta = get_update_operation_meta(update_result["op_full"])
 
-  poll_metrics = wait_for_nodepool_metrics_event(
-      project_id=node_pool_info.project_id,
-      filter_query=UPTIME_FILTER_QRY,
-      start_time=op_meta["start_sec"],
-      end_time=op_meta["end_sec"],
-  )
+    poll_metrics = wait_for_nodepool_metrics_event(
+        project_id=node_pool_info.project_id,
+        filter_query=UPTIME_FILTER_QRY,
+        start_time=op_meta["start_sec"],
+        end_time=op_meta["end_sec"],
+    )
 
-  LOG_FILTER_BASE = (
-      'resource.type="k8s_cluster" '
-      f'AND resource.labels.cluster_name="{node_pool_info.cluster_name}" '
-      f'AND resource.labels.location="{node_pool_info.location}"'
-  )
+    LOG_FILTER_BASE = (
+        'resource.type="k8s_cluster" '
+        f'AND resource.labels.cluster_name="{node_pool_info.cluster_name}" '
+        f'AND resource.labels.location="{node_pool_info.location}"'
+    )
 
-  poll_logs = wait_for_nodepool_logs_event(
-      project_id=node_pool_info.project_id,
-      base_filter=LOG_FILTER_BASE,
-      op_id=op_meta["op_id"],
-      start_time=op_meta["start_sec"],
-      end_time=op_meta["end_sec"],
-  )
+    poll_logs = wait_for_nodepool_logs_event(
+        project_id=node_pool_info.project_id,
+        base_filter=LOG_FILTER_BASE,
+        op_id=op_meta["op_id"],
+        start_time=op_meta["start_sec"],
+        end_time=op_meta["end_sec"],
+    )
 
-  summary = summarize_test(poll_metrics, poll_logs)
+    summary = summarize_test(poll_metrics, poll_logs)
 
-  cleanup_node_pool = node_pool.delete.override(trigger_rule="all_done")(
-      node_pool=node_pool_info
-  ).as_teardown(
-      setups=create_nodepool,
-  )
+    cleanup_node_pool = node_pool.delete.override(trigger_rule="all_done")(
+        node_pool=node_pool_info
+    ).as_teardown(
+        setups=create_nodepool,
+    )
 
+    (
+        create_nodepool
+        >> update_result
+        >> wait_done         # sensor: just waits until DONE
+        >> op_meta           # task: fetches timestamps & op_id
+        >> [poll_metrics, poll_logs]
+        >> summary
+        >> cleanup_node_pool
+    )
 
-(
-    create_nodepool
-    >> update_result
-    >> wait_done         # sensor: just waits until DONE
-    >> op_meta           # task: fetches timestamps & op_id
-    >> [poll_metrics, poll_logs]
-    >> summary
-    >> cleanup_node_pool
-)
+  v6e_group
