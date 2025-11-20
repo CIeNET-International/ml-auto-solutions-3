@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 import re
 from typing import Any
 
+from google.cloud import monitoring_v3
 from google.cloud.monitoring_v3 import types as monitoring_types
 from airflow.exceptions import AirflowException
 
@@ -77,6 +78,7 @@ class BaseMetricStrategy(ABC):
   @property
   def tolerance_percent(self) -> float:
     """The relative tolerance (in percent) to use for this metric's verification.
+
     Subclasses should override this value to set a custom tolerance.
     """
     return 2.0
@@ -104,7 +106,166 @@ class BaseMetricStrategy(ABC):
     pass
 
 
-class MemoryUsedStrategy(BaseMetricStrategy):
+class _BaseSimplePointStrategy(BaseMetricStrategy):
+  """Template class: Handles the common logic for parsing a single.
+
+  Point (int64/double) value from Monitoring.
+  """
+
+  @property
+  @abstractmethod
+  def _monitoring_value_type_key(self) -> str:
+    """The name of the attribute to extract from point.value.
+
+    Example: 'int64_value' or 'double_value'
+    """
+    pass
+
+  def _process_value(self, raw_value: Any) -> float:
+    """(Optional) Processes the extracted raw value.
+
+    Default behavior: Simply converts it to float.
+
+    Args:
+      raw_value: The raw value extracted from the monitoring data.
+
+    Returns:
+      The processed value as a float.
+    """
+    return float(raw_value)
+
+  def parse_from_monitoring(
+      self, time_series_data: list[monitoring_types.TimeSeries]
+  ) -> list[float]:
+    """Generic parsing logic."""
+    metric_values = {}
+    key_to_extract = self._monitoring_value_type_key
+
+    for ts in time_series_data:
+      if not ts.points:
+        continue
+
+      accelerator_id = ts.metric.labels["accelerator_id"]
+      point = ts.points[0]
+
+      if (
+          monitoring_v3.TypedValue.pb(point.value).WhichOneof("value")
+          == key_to_extract
+      ):
+        raw_value = getattr(point.value, key_to_extract)
+        processed_value = self._process_value(raw_value)
+        metric_values[accelerator_id] = round(processed_value, 2)
+      else:
+        raise AirflowException(
+            "Could not retrieve valid monitoring data for metric"
+            f" {self.metric_name}."
+        )
+
+    return [
+        metric_values[key]
+        for key in sorted(
+            metric_values.keys(), key=lambda x: int(x.split("-")[-1])
+        )
+    ]
+
+
+class _BaseDistributionStrategy(BaseMetricStrategy):
+  """Template class: Handles the common logic for parsing Distribution (histogram) data from Monitoring and calculating percentiles."""
+
+  def __init__(self, percentiles_to_check: list[float]):
+    """Generic initializer."""
+    if not percentiles_to_check:
+      raise ValueError("percentiles_to_check cannot be empty.")
+    self.percentiles_to_check = sorted(percentiles_to_check)
+    super().__init__()
+
+  @property
+  @abstractmethod
+  def _monitoring_group_by_label(self) -> str:
+    """The metric label used to group data in Monitoring, e.g., 'buffer_size'."""
+    pass
+
+  @property
+  @abstractmethod
+  def _tpu_info_table_name(self) -> str:
+    """The name of the table to parse from the tpu-info output."""
+    pass
+
+  @property
+  @abstractmethod
+  def _tpu_info_group_by_key(self) -> str:
+    """The column name in the tpu-info table used for grouping, e.g., 'Buffer Size'."""
+    pass
+
+  def parse_from_monitoring(
+      self, time_series_data: list[monitoring_types.TimeSeries]
+  ) -> list[float]:
+    """Generic Monitoring distribution parsing logic."""
+    distributions_by_group: dict[str, dict[str, Any]] = {}
+    group_label = self._monitoring_group_by_label
+
+    for ts in time_series_data:
+      if ts.points and ts.metric.labels.get(group_label):
+        group_key = ts.metric.labels[group_label]
+        dist_value = ts.points[0].value.distribution_value
+        distributions_by_group[group_key] = {
+            "count": dist_value.count,
+            "bounds": dist_value.bucket_options.explicit_buckets.bounds,
+            "bucket_counts": dist_value.bucket_counts,
+        }
+
+    percentile_values_by_group: dict[str, dict[float, float]] = {}
+    for group_key, data in distributions_by_group.items():
+      percentile_values_by_group[
+          group_key
+      ] = _calculate_percentiles_from_histogram(
+          percentiles=self.percentiles_to_check,
+          total_count=data["count"],
+          bounds=data["bounds"],
+          bucket_counts=data["bucket_counts"],
+      )
+
+    monitoring_values = []
+    for group_key in sorted(distributions_by_group.keys()):
+      for p in self.percentiles_to_check:
+        monitoring_values.append(percentile_values_by_group[group_key][p])
+
+    return monitoring_values
+
+  def parse_from_tpu_info(
+      self, tpu_info_metric_output: list[Any]
+  ) -> list[float]:
+    """Generic tpu-info percentile parsing logic."""
+    parsed_values_by_group: dict[str, dict[float, float]] = {}
+    table_name = self._tpu_info_table_name
+    group_key = self._tpu_info_group_by_key
+
+    for metric_table in tpu_info_metric_output:
+      if metric_table.name == table_name:
+        for row_dict in metric_table.body:
+          group_value = row_dict.get(group_key)
+          if not group_value:
+            continue
+
+          parsed_values_by_group[group_value] = {}
+          for p in self.percentiles_to_check:
+            # Handle the special key name for P99.9
+            p_key = f"P{p}" if p != 99.9 else "P999"
+            value_str = row_dict.get(p_key, "")
+
+            match = re.search(r"([\d\.]+)", value_str)
+            if match:
+              parsed_values_by_group[group_value][p] = float(match.group(1))
+
+    tpu_info_data_values = []
+    for group_value in sorted(parsed_values_by_group.keys()):
+      for p in self.percentiles_to_check:
+        tpu_info_data_values.append(parsed_values_by_group[group_value][p])
+
+    return tpu_info_data_values
+
+
+class MemoryUsedStrategy(_BaseSimplePointStrategy):
   """Strategy for verifying Used HBM Memory."""
 
   @property
@@ -123,23 +284,12 @@ class MemoryUsedStrategy(BaseMetricStrategy):
   def tolerance_percent(self) -> float:
     return 1.0
 
-  def parse_from_monitoring(
-      self, time_series_data: list[monitoring_types.TimeSeries], **kwargs
-  ) -> list[float]:
-    metric_values = {}
-    for ts in time_series_data:
-      if ts.points:
-        accelerator_id = ts.metric.labels["accelerator_id"]
-        point = ts.points[0]
-        bytes_value = point.value.int64_value
-        gib_value = bytes_value / (1024**3)
-        metric_values[accelerator_id] = round(gib_value, 2)
-    return [
-        metric_values[key]
-        for key in sorted(
-            metric_values.keys(), key=lambda x: int(x.split("-")[-1])
-        )
-    ]
+  @property
+  def _monitoring_value_type_key(self) -> str:
+    return "int64_value"
+
+  def _process_value(self, raw_value: Any) -> float:
+    return raw_value / (1024**3)
 
   def parse_from_tpu_info(
       self, tpu_info_metric_output: list[Any]
@@ -149,6 +299,9 @@ class MemoryUsedStrategy(BaseMetricStrategy):
       if metric_table.name == "TPU HBM Usage":
         for row_dict in metric_table.body:
           hbm_value = row_dict["HBM Usage (GiB)"]
+          # Regex to parse the HBM usage string format: "USED.XX GiB / TOTAL.XX GiB".
+          # Group 1 captures the USED memory value.
+          # Group 2 captures the TOTAL memory value.
           match = re.search(
               r"(\d+\.\d+)\s*GiB\s*\/\s*(\d+\.\d+)\s*GiB", hbm_value
           )
@@ -157,7 +310,7 @@ class MemoryUsedStrategy(BaseMetricStrategy):
     return tpu_info_data_values
 
 
-class MemoryTotalStrategy(BaseMetricStrategy):
+class MemoryTotalStrategy(_BaseSimplePointStrategy):
   """Strategy for verifying Total HBM Memory."""
 
   @property
@@ -176,23 +329,12 @@ class MemoryTotalStrategy(BaseMetricStrategy):
   def tolerance_percent(self) -> float:
     return 0.0
 
-  def parse_from_monitoring(
-      self, time_series_data: list[monitoring_types.TimeSeries], **kwargs
-  ) -> list[float]:
-    metric_values = {}
-    for ts in time_series_data:
-      if ts.points:
-        accelerator_id = ts.metric.labels["accelerator_id"]
-        point = ts.points[0]
-        bytes_value = point.value.int64_value
-        gib_value = bytes_value / (1024**3)
-        metric_values[accelerator_id] = round(gib_value, 2)
-    return [
-        metric_values[key]
-        for key in sorted(
-            metric_values.keys(), key=lambda x: int(x.split("-")[-1])
-        )
-    ]
+  @property
+  def _monitoring_value_type_key(self) -> str:
+    return "int64_value"
+
+  def _process_value(self, raw_value: Any) -> float:
+    return raw_value / (1024**3)
 
   def parse_from_tpu_info(
       self, tpu_info_metric_output: list[Any]
@@ -202,6 +344,9 @@ class MemoryTotalStrategy(BaseMetricStrategy):
       if metric_table.name == "TPU HBM Usage":
         for row_dict in metric_table.body:
           hbm_value = row_dict["HBM Usage (GiB)"]
+          # Regex to parse the HBM usage string format: "USED.XX GiB / TOTAL.XX GiB".
+          # Group 1 captures the USED memory value.
+          # Group 2 captures the TOTAL memory value.
           match = re.search(
               r"(\d+\.\d+)\s*GiB\s*\/\s*(\d+\.\d+)\s*GiB", hbm_value
           )
@@ -210,7 +355,7 @@ class MemoryTotalStrategy(BaseMetricStrategy):
     return tpu_info_data_values
 
 
-class DutyCycleStrategy(BaseMetricStrategy):
+class DutyCycleStrategy(_BaseSimplePointStrategy):
   """Strategy for verifying Duty Cycle."""
 
   @property
@@ -229,21 +374,9 @@ class DutyCycleStrategy(BaseMetricStrategy):
   def tolerance_percent(self) -> float:
     return 1.0
 
-  def parse_from_monitoring(
-      self, time_series_data: list[monitoring_types.TimeSeries], **kwargs
-  ) -> list[float]:
-    metric_values = {}
-    for ts in time_series_data:
-      if ts.points:
-        accelerator_id = ts.metric.labels["accelerator_id"]
-        point = ts.points[0]
-        metric_values[accelerator_id] = round(point.value.int64_value, 2)
-    return [
-        metric_values[key]
-        for key in sorted(
-            metric_values.keys(), key=lambda x: int(x.split("-")[-1])
-        )
-    ]
+  @property
+  def _monitoring_value_type_key(self) -> str:
+    return "int64_value"
 
   def parse_from_tpu_info(
       self, tpu_info_metric_output: list[Any]
@@ -259,7 +392,7 @@ class DutyCycleStrategy(BaseMetricStrategy):
     return tpu_info_data_values
 
 
-class TensorcoreUtilizationStrategy(BaseMetricStrategy):
+class TensorcoreUtilizationStrategy(_BaseSimplePointStrategy):
   """Strategy for verifying TensorCore Utilization."""
 
   @property
@@ -278,21 +411,9 @@ class TensorcoreUtilizationStrategy(BaseMetricStrategy):
   def tolerance_percent(self) -> float:
     return 15.0
 
-  def parse_from_monitoring(
-      self, time_series_data: list[monitoring_types.TimeSeries], **kwargs
-  ) -> list[float]:
-    metric_values = {}
-    for ts in time_series_data:
-      if ts.points:
-        accelerator_id = ts.metric.labels["accelerator_id"]
-        point = ts.points[0]
-        metric_values[accelerator_id] = round(point.value.double_value, 2)
-    return [
-        metric_values[key]
-        for key in sorted(
-            metric_values.keys(), key=lambda x: int(x.split("-")[-1])
-        )
-    ]
+  @property
+  def _monitoring_value_type_key(self) -> str:
+    return "double_value"
 
   def parse_from_tpu_info(
       self, tpu_info_metric_output: list[Any]
@@ -306,20 +427,8 @@ class TensorcoreUtilizationStrategy(BaseMetricStrategy):
     return tpu_info_data_values
 
 
-class BufferTransferLatencyStrategy(BaseMetricStrategy):
+class BufferTransferLatencyStrategy(_BaseDistributionStrategy):
   """Strategy for verifying Buffer Transfer Latency from distribution data."""
-
-  def __init__(self, percentiles_to_check: list[float]):
-    """Initializes the Strategy.
-
-    Args:
-      percentiles_to_check: A list of percentiles to verify, e.g., [50, 90, 95,
-        99.9].
-    """
-    if not percentiles_to_check:
-      raise ValueError("percentiles_to_check cannot be empty.")
-    self.percentiles_to_check = sorted(percentiles_to_check)
-    super().__init__()
 
   @property
   def metric_name(self) -> str:
@@ -337,92 +446,21 @@ class BufferTransferLatencyStrategy(BaseMetricStrategy):
   def tolerance_percent(self) -> float:
     return 2.0
 
-  def parse_from_monitoring(
-      self, time_series_data: list[monitoring_types.TimeSeries], **kwargs
-  ) -> list[float]:
-    """Parses and calculates the specified percentiles from Cloud Monitoring's distribution data."""
-    distributions_by_buffer: dict[str, dict[str, Any]] = {}
-    for ts in time_series_data:
-      if ts.points and ts.metric.labels.get("buffer_size"):
-        buffer_size = ts.metric.labels["buffer_size"]
-        dist_value = ts.points[0].value.distribution_value
-        distributions_by_buffer[buffer_size] = {
-            "count": dist_value.count,
-            "bounds": dist_value.bucket_options.explicit_buckets.bounds,
-            "bucket_counts": dist_value.bucket_counts,
-        }
+  @property
+  def _monitoring_group_by_label(self) -> str:
+    return "buffer_size"
 
-    percentile_values_by_buffer: dict[str, dict[float, float]] = {}
-    for buffer_size, data in distributions_by_buffer.items():
-      percentile_values_by_buffer[
-          buffer_size
-      ] = _calculate_percentiles_from_histogram(
-          percentiles=self.percentiles_to_check,
-          total_count=data["count"],
-          bounds=data["bounds"],
-          bucket_counts=data["bucket_counts"],
-      )
+  @property
+  def _tpu_info_table_name(self) -> str:
+    return "TPU Buffer Transfer Latency"
 
-    monitoring_values = []
-    for buffer_size in sorted(distributions_by_buffer.keys()):
-      for p in self.percentiles_to_check:
-        monitoring_values.append(percentile_values_by_buffer[buffer_size][p])
-
-    return monitoring_values
-
-  def parse_from_tpu_info(
-      self, tpu_info_metric_output: list[Any]
-  ) -> list[float]:
-    """Parses percentile values from the output table of the tpu-info tool.
-
-    Args:
-      tpu_info_metric_output: A list of tables from the tpu-info command output.
-
-    Returns:
-      A list of float values representing the parsed percentiles, ordered by
-      buffer size and then by percentile.
-    """
-    parsed_values_by_buffer: dict[str, dict[float, float]] = {}
-
-    for metric_table in tpu_info_metric_output:
-      if metric_table.name == "TPU Buffer Transfer Latency":
-        for row_dict in metric_table.body:
-          buffer_size = row_dict.get("Buffer Size")
-          if not buffer_size:
-            continue
-
-          parsed_values_by_buffer[buffer_size] = {}
-          for p in self.percentiles_to_check:
-            # Handle the special key name for P99.9
-            p_key = f"P{p}" if p != 99.9 else "P999"
-            value_str = row_dict.get(p_key, "")
-
-            match = re.search(r"([\d\.]+)", value_str)
-            if match:
-              parsed_values_by_buffer[buffer_size][p] = float(match.group(1))
-
-    tpu_info_data_values = []
-    for buffer_size in sorted(parsed_values_by_buffer.keys()):
-      for p in self.percentiles_to_check:
-        tpu_info_data_values.append(parsed_values_by_buffer[buffer_size][p])
-
-    return tpu_info_data_values
+  @property
+  def _tpu_info_group_by_key(self) -> str:
+    return "Buffer Size"
 
 
-class HostToDeviceTransferLatenciesStrategy(BaseMetricStrategy):
+class HostToDeviceTransferLatenciesStrategy(_BaseDistributionStrategy):
   """Strategy for verifying Host to Device Transfer Latency from distribution data."""
-
-  def __init__(self, percentiles_to_check: list[float]):
-    """Initializes the Strategy.
-
-    Args:
-      percentiles_to_check: A list of percentiles to verify, e.g., [50, 90, 95,
-        99.9].
-    """
-    if not percentiles_to_check:
-      raise ValueError("percentiles_to_check cannot be empty.")
-    self.percentiles_to_check = sorted(percentiles_to_check)
-    super().__init__()
 
   @property
   def metric_name(self) -> str:
@@ -440,92 +478,21 @@ class HostToDeviceTransferLatenciesStrategy(BaseMetricStrategy):
   def tolerance_percent(self) -> float:
     return 2.0
 
-  def parse_from_monitoring(
-      self, time_series_data: list[monitoring_types.TimeSeries], **kwargs
-  ) -> list[float]:
-    """Parses and calculates the specified percentiles from Cloud Monitoring's distribution data."""
-    distributions_by_buffer: dict[str, dict[str, Any]] = {}
-    for ts in time_series_data:
-      if ts.points and ts.metric.labels.get("buffer_size"):
-        buffer_size = ts.metric.labels["buffer_size"]
-        dist_value = ts.points[0].value.distribution_value
-        distributions_by_buffer[buffer_size] = {
-            "count": dist_value.count,
-            "bounds": dist_value.bucket_options.explicit_buckets.bounds,
-            "bucket_counts": dist_value.bucket_counts,
-        }
+  @property
+  def _monitoring_group_by_label(self) -> str:
+    return "buffer_size"
 
-    percentile_values_by_buffer: dict[str, dict[float, float]] = {}
-    for buffer_size, data in distributions_by_buffer.items():
-      percentile_values_by_buffer[
-          buffer_size
-      ] = _calculate_percentiles_from_histogram(
-          percentiles=self.percentiles_to_check,
-          total_count=data["count"],
-          bounds=data["bounds"],
-          bucket_counts=data["bucket_counts"],
-      )
+  @property
+  def _tpu_info_table_name(self) -> str:
+    return "TPU Host to Device Transfer Latency"
 
-    monitoring_values = []
-    for buffer_size in sorted(distributions_by_buffer.keys()):
-      for p in self.percentiles_to_check:
-        monitoring_values.append(percentile_values_by_buffer[buffer_size][p])
-
-    return monitoring_values
-
-  def parse_from_tpu_info(
-      self, tpu_info_metric_output: list[Any]
-  ) -> list[float]:
-    """Parses percentile values from the output table of the tpu-info tool.
-
-    Args:
-      tpu_info_metric_output: A list of tables from the tpu-info command output.
-
-    Returns:
-      A list of float values representing the parsed percentiles, ordered by
-      buffer size and then by percentile.
-    """
-    parsed_values_by_buffer: dict[str, dict[float, float]] = {}
-
-    for metric_table in tpu_info_metric_output:
-      if metric_table.name == "TPU Host to Device Transfer Latency":
-        for row_dict in metric_table.body:
-          buffer_size = row_dict.get("Buffer Size")
-          if not buffer_size:
-            continue
-
-          parsed_values_by_buffer[buffer_size] = {}
-          for p in self.percentiles_to_check:
-            # Handle the special key name for P99.9
-            p_key = f"P{p}" if p != 99.9 else "P999"
-            value_str = row_dict.get(p_key, "")
-
-            match = re.search(r"([\d\.]+)", value_str)
-            if match:
-              parsed_values_by_buffer[buffer_size][p] = float(match.group(1))
-
-    tpu_info_data_values = []
-    for buffer_size in sorted(parsed_values_by_buffer.keys()):
-      for p in self.percentiles_to_check:
-        tpu_info_data_values.append(parsed_values_by_buffer[buffer_size][p])
-
-    return tpu_info_data_values
+  @property
+  def _tpu_info_group_by_key(self) -> str:
+    return "Buffer Size"
 
 
-class DeviceToHostTransferLatenciesStrategy(BaseMetricStrategy):
+class DeviceToHostTransferLatenciesStrategy(_BaseDistributionStrategy):
   """Strategy for verifying Device to Host Transfer Latency from distribution data."""
-
-  def __init__(self, percentiles_to_check: list[float]):
-    """Initializes the Strategy.
-
-    Args:
-      percentiles_to_check: A list of percentiles to verify, e.g., [50, 90, 95,
-        99.9].
-    """
-    if not percentiles_to_check:
-      raise ValueError("percentiles_to_check cannot be empty.")
-    self.percentiles_to_check = sorted(percentiles_to_check)
-    super().__init__()
 
   @property
   def metric_name(self) -> str:
@@ -543,83 +510,21 @@ class DeviceToHostTransferLatenciesStrategy(BaseMetricStrategy):
   def tolerance_percent(self) -> float:
     return 2.0
 
-  def parse_from_monitoring(
-      self, time_series_data: list[monitoring_types.TimeSeries], **kwargs
-  ) -> list[float]:
-    """Parses and calculates the specified percentiles from Cloud Monitoring's distribution data."""
-    distributions_by_buffer: dict[str, dict[str, Any]] = {}
-    for ts in time_series_data:
-      if ts.points and ts.metric.labels.get("buffer_size"):
-        buffer_size = ts.metric.labels["buffer_size"]
-        dist_value = ts.points[0].value.distribution_value
-        distributions_by_buffer[buffer_size] = {
-            "count": dist_value.count,
-            "bounds": dist_value.bucket_options.explicit_buckets.bounds,
-            "bucket_counts": dist_value.bucket_counts,
-        }
+  @property
+  def _monitoring_group_by_label(self) -> str:
+    return "buffer_size"
 
-    percentile_values_by_buffer: dict[str, dict[float, float]] = {}
-    for buffer_size, data in distributions_by_buffer.items():
-      percentile_values_by_buffer[
-          buffer_size
-      ] = _calculate_percentiles_from_histogram(
-          percentiles=self.percentiles_to_check,
-          total_count=data["count"],
-          bounds=data["bounds"],
-          bucket_counts=data["bucket_counts"],
-      )
+  @property
+  def _tpu_info_table_name(self) -> str:
+    return "TPU Device to Host Transfer Latency"
 
-    monitoring_values = []
-    for buffer_size in sorted(distributions_by_buffer.keys()):
-      for p in self.percentiles_to_check:
-        monitoring_values.append(percentile_values_by_buffer[buffer_size][p])
-
-    return monitoring_values
-
-  def parse_from_tpu_info(
-      self, tpu_info_metric_output: list[Any]
-  ) -> list[float]:
-    parsed_values_by_buffer: dict[str, dict[float, float]] = {}
-
-    for metric_table in tpu_info_metric_output:
-      if metric_table.name == "TPU Device to Host Transfer Latency":
-        for row_dict in metric_table.body:
-          buffer_size = row_dict.get("Buffer Size")
-          if not buffer_size:
-            continue
-
-          parsed_values_by_buffer[buffer_size] = {}
-          for p in self.percentiles_to_check:
-            # Handle the special key name for P99.9
-            p_key = f"P{p}" if p != 99.9 else "P999"
-            value_str = row_dict.get(p_key, "")
-
-            match = re.search(r"([\d\.]+)", value_str)
-            if match:
-              parsed_values_by_buffer[buffer_size][p] = float(match.group(1))
-
-    tpu_info_data_values = []
-    for buffer_size in sorted(parsed_values_by_buffer.keys()):
-      for p in self.percentiles_to_check:
-        tpu_info_data_values.append(parsed_values_by_buffer[buffer_size][p])
-
-    return tpu_info_data_values
+  @property
+  def _tpu_info_group_by_key(self) -> str:
+    return "Buffer Size"
 
 
-class CollectiveEndToEndLatencyLatenciesStrategy(BaseMetricStrategy):
+class CollectiveEndToEndLatencyLatenciesStrategy(_BaseDistributionStrategy):
   """Strategy for verifying Collective End to End Latency from distribution data."""
-
-  def __init__(self, percentiles_to_check: list[float]):
-    """Initializes the Strategy.
-
-    Args:
-      percentiles_to_check: A list of percentiles to verify, e.g., [50, 90, 95,
-        99.9].
-    """
-    if not percentiles_to_check:
-      raise ValueError("percentiles_to_check cannot be empty.")
-    self.percentiles_to_check = sorted(percentiles_to_check)
-    super().__init__()
 
   @property
   def metric_name(self) -> str:
@@ -633,40 +538,17 @@ class CollectiveEndToEndLatencyLatenciesStrategy(BaseMetricStrategy):
   def dag_id_suffix(self) -> str:
     return "collective_e2e_latency"
 
-  def parse_from_monitoring(
-      self, time_series_data: list[monitoring_types.TimeSeries], **kwargs
-  ) -> list[float]:
-    """Parses and calculates the specified percentiles from Cloud Monitoring's distribution data."""
-    distributions_by_buffer: dict[str, dict[str, Any]] = {}
-    for ts in time_series_data:
-      if ts.points and ts.metric.labels.get("collective_type"):
-        collective_type = ts.metric.labels["collective_type"]
-        dist_value = ts.points[0].value.distribution_value
-        distributions_by_buffer[collective_type] = {
-            "count": dist_value.count,
-            "bounds": dist_value.bucket_options.explicit_buckets.bounds,
-            "bucket_counts": dist_value.bucket_counts,
-        }
+  @property
+  def _monitoring_group_by_label(self) -> str:
+    return "collective_type"
 
-    percentile_values_by_buffer: dict[str, dict[float, float]] = {}
-    for collective_type, data in distributions_by_buffer.items():
-      percentile_values_by_buffer[
-          collective_type
-      ] = _calculate_percentiles_from_histogram(
-          percentiles=self.percentiles_to_check,
-          total_count=data["count"],
-          bounds=data["bounds"],
-          bucket_counts=data["bucket_counts"],
-      )
+  @property
+  def _tpu_info_table_name(self) -> str:
+    return "TPU Collective End to End Latency"
 
-    monitoring_values = []
-    for collective_type in sorted(distributions_by_buffer.keys()):
-      for p in self.percentiles_to_check:
-        monitoring_values.append(
-            percentile_values_by_buffer[collective_type][p]
-        )
-
-    return monitoring_values
+  @property
+  def _tpu_info_group_by_key(self) -> str:
+    return "Buffer Size"
 
   def parse_from_tpu_info(
       self, tpu_info_metric_output: list[Any]
@@ -676,12 +558,16 @@ class CollectiveEndToEndLatencyLatenciesStrategy(BaseMetricStrategy):
     for metric_table in tpu_info_metric_output:
       if metric_table.name == "TPU Collective End to End Latency":
         for i, row_dict in enumerate(metric_table.body):
-          # The 'Collective Type' column (e.g., ALL_GATHER / ALL_REDUCE) is missing from the tpu-info output table.
-          # This prevents us from explicitly filtering and distinguishing the two different operations.
+          # The 'Collective Type' column (e.g., ALL_GATHER / ALL_REDUCE) is
+          # missing from the tpu-info output table. This prevents us from
+          # explicitly filtering and distinguishing the two different
+          # operations.
           #
-          # As a temporary solution, we are fetching the values based on the 'Buffer Size' label (e.g., '16MB+').
-          # TODO: This logic must be updated to filter on 'Collective Type' as soon as
-          # the tpu-info column is added to the table to ensure correctness.
+          # As a temporary solution, we are fetching the values based on the
+          # 'Buffer Size' label (e.g., '16MB+').
+          # TODO: b/454457878 - This logic must be updated to filter on
+          # 'Collective Type' as soon as the tpu-info column is added to the
+          # table to ensure correctness.
           buffer_size = row_dict.get("Buffer Size")
           if not buffer_size:
             continue
