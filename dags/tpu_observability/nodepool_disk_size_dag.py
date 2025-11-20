@@ -32,6 +32,7 @@ def _operation_name(project_id, location, op_id_or_name):
       else f"projects/{project_id}/locations/{location}/operations/{op_id_or_name}"
   )
 
+
 # latest version! : widening the query window
 
 
@@ -46,8 +47,9 @@ def wait_for_nodepool_metrics_event(
 
   # widen the window a bit
   start_tu = TimeUtil.from_unix_seconds(start_time)
-  end_tu = TimeUtil.from_unix_seconds(
-      end_time) + QUERY_WINDOW_DURATION_SECONDS  # +1h after op end
+  end_tu = (
+      TimeUtil.from_unix_seconds(end_time) + QUERY_WINDOW_DURATION_SECONDS
+  )  # +1h after op end
 
   # Let query_time_series raise if API errors → Airflow will handle
   series = query_time_series(
@@ -60,8 +62,7 @@ def wait_for_nodepool_metrics_event(
 
   if not series:
     logging.info(
-        "[metrics] No matching time series; repoking "
-        "window=%s → %s",
+        "[metrics] No matching time series; repoking " "window=%s → %s",
         start_tu.to_iso_string(),
         end_tu.to_iso_string(),
     )
@@ -160,6 +161,7 @@ def wait_for_update_to_complete(op_full: str) -> bool:
 
   logging.info("[wait] operation DONE")
   return True
+
 
 # latest! add on getting meta data
 
@@ -314,8 +316,7 @@ with models.DAG(
           "NODE_LOCATIONS", default_var="europe-west4-a"
       ),
       num_nodes=Variable.get("NUM_NODES", default_var=2),
-      machine_type=Variable.get(
-          "MACHINE_TYPE", default_var="ct6e-standard-4t"),
+      machine_type=Variable.get("MACHINE_TYPE", default_var="ct6e-standard-4t"),
       tpu_topology=Variable.get("TPU_TOPOLOGY", default_var="2x4"),
   )
 
@@ -365,8 +366,8 @@ with models.DAG(
     (
         create_nodepool
         >> update_result
-        >> wait_done         # sensor: just waits until DONE
-        >> op_meta           # task: fetches timestamps & op_id
+        >> wait_done  # sensor: just waits until DONE
+        >> op_meta  # task: fetches timestamps & op_id
         >> [poll_metrics, poll_logs]
         >> summary
         >> cleanup_node_pool
