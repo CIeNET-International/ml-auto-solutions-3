@@ -196,12 +196,17 @@ def _get_core_api_client(
 
 
 def _list_workload_pods(
-    core_api: k8s_client.CoreV1Api, workload_id: str
+    core_api: k8s_client.CoreV1Api, workload_id: str, is_axlearn: bool = False
 ) -> k8s_client.V1PodList:
   """List all pods for the given workload."""
+  if is_axlearn:
+    label_selector = f"job-name={workload_id}-job-0"
+  else:
+    label_selector = f"jobset.sigs.k8s.io/jobset-name={workload_id}"
+
   logging.info(f"Getting pods for workload_id: {workload_id}")
   pods = core_api.list_namespaced_pod(
-      label_selector=f"jobset.sigs.k8s.io/jobset-name={workload_id}",
+      label_selector=label_selector,
       namespace="default",
   )
   return pods
@@ -356,14 +361,16 @@ def wait_for_workload_reach_step(
     region: str,
     cluster_name: str,
     workload_id: str,
+    log_pattern: str,
     expect_reach_to_step: str,
+    is_axlearn: bool = False,
 ) -> bool:
   """
   Watch any given training pod, check the given step is already reach before
   deleting a node
   """
   core_api = _get_core_api_client(project_id, region, cluster_name)
-  pods = _list_workload_pods(core_api, workload_id)
+  pods = _list_workload_pods(core_api, workload_id,is_axlearn)
 
   if not pods.items:
     logging.info("No pods found for workload selector: %s.", workload_id)
@@ -387,7 +394,7 @@ def wait_for_workload_reach_step(
         name=pod.metadata.name, namespace=pod.metadata.namespace
     )
     # Check if the workload completed step reached over the expected step
-    completed_step_matches = re.findall(r"completed step: (\d+)", logs)
+    completed_step_matches = re.findall(log_pattern, logs)
     if completed_step_matches:
       current_step = int(completed_step_matches[-1])
       if current_step >= int(expect_reach_to_step):

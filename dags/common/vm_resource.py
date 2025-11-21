@@ -262,6 +262,13 @@ class XpkClusters:
       project=Project.CLOUD_TPU_MULTIPOD_DEV.value,
       zone=Zone.EUROPE_WEST4_B.value,
   )
+  TPU_V5P_128_CLUSTER_TEST = XpkClusterConfig(
+      name="depp-orbax-ml-auto-solutions",
+      device_version=TpuVersion.V5P,
+      core_count=64,
+      project="cloud-tpu-multipod-dev",
+      zone=Zone.EUROPE_WEST4_B.value,
+  )
   TPU_V5E_256_CLUSTER = XpkClusterConfig(
       name="v5e-256-bodaborg-europe-west4",
       device_version=TpuVersion.V5E,
@@ -331,6 +338,9 @@ class DockerImage(enum.Enum):
   PYTORCH_NIGHTLY = (
       "us-central1-docker.pkg.dev/tpu-pytorch-releases/docker/"
       f"xla:nightly_3.10_tpuvm_{datetime.datetime.today().strftime('%Y%m%d')}"
+  )
+  AXLEARN_CUSTOM = (
+      "gcr.io/cloud-tpu-multipod-dev/axlearn-custom:latest"
   )
   AXLEARN_TPU_JAX_STABLE_STACK = (
       "us-docker.pkg.dev/tpu-prod-env-multipod/bite/tpu/axlearn:"
