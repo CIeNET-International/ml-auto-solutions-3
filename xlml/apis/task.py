@@ -23,10 +23,14 @@ from typing import Optional, Tuple, Union
 import airflow
 from airflow.models.taskmixin import DAGNode
 from airflow.utils.task_group import TaskGroup
-from airflow.decorators import task
-from airflow.operators.empty import EmptyOperator
 from xlml.apis import gcp_config, metric_config, test_config, gcs
 from xlml.utils import gpu, metric, name_format, ssh, tpu, xpk, gke
+from airflow.decorators import task
+from airflow.operators.empty import EmptyOperator
+from xlml.apis import gcp_config, metric_config, test_config
+from xlml.utils import gpu, metric, name_format, ssh, tpu, xpk, axlearn, gke
+from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator
+from dags.orbax.util import test_config_util
 
 
 class BaseTask(abc.ABC):
@@ -146,6 +150,220 @@ def run_queued_resource_test(
 
   return test
 
+
+@dataclasses.dataclass
+class AXLearnTask(BaseTask):
+  """This is a class to set up tasks for TPU/GPU AXLearn.
+
+  Attributes:
+    task_test_config: Test configs to run on this TPU/GPU.
+    task_gcp_config: Runtime TPU/GPU creation parameters.
+    task_metric_config: Metric configs to process metrics.
+    workload_provision_timeout: Time allowed for provisioning a workload.
+  """
+
+  task_test_config: Union[
+      test_config.TpuGkeTest, test_config.GpuXpkTest, test_config.CpuGkeTest
+  ]
+  task_gcp_config: gcp_config.GCPConfig
+  task_metric_config: Optional[metric_config.MetricConfig] = None
+  workload_provision_timeout: datetime.timedelta = datetime.timedelta(
+      minutes=300
+  )
+
+
+  def run(
+      self,
+      test_configs: test_config_util.TestConfig,
+      run_name:str,
+      *,
+      axlearn_branch: str = axlearn.MAIN_BRANCH,
+  ) -> DAGNode:
+    """Run a test job within a docker image.
+
+    Attributes:
+      test_configs: Configuration object containing parameters for the test.
+      run_name: A descriptive name for the test run, which is used to generate the
+        unique workload ID.
+      axlearn_branch: (Keyword-only argument) The specific AXLearn repository branch
+        to use for the workload execution. Defaults to `axlearn.MAIN_BRANCH`.
+      trace_steps: (Keyword-only argument) A list of specific steps (e.g., global steps)
+        to trace during the execution.
+
+    Returns:
+      A task group with the following task : run_model.
+    """
+    with TaskGroup(group_id=self.task_test_config.benchmark_id) as group:
+      self.run_model(
+          test_configs=test_configs,
+          run_name=run_name,
+          axlearn_branch=axlearn_branch,
+      )
+    return group
+
+  def run_model(
+      self,
+      test_configs: test_config_util.TestConfig,
+      run_name: str,
+      axlearn_branch: str = "",
+      gcs_location: Optional[airflow.XComArg] = None,
+  ) -> DAGNode:
+    """Run the TPU/GPU model test using AXLearn in a sequential Airflow TaskGroup.
+
+      This method orchestrates a model test run by performing three steps:
+      1. **Launch:** Generates a unique `workload_id` and GCS path, then launches the
+        AXLearn workload (likely a training or evaluation job) using `self.launch_workload`.
+      2. **Wait:** Waits for the launched workload to complete, using a timeout specified
+        in the task configuration.
+      3. **Cleanup:** Cleans up the resources associated with the completed workload.
+
+      Args:
+        test_configs: Configuration object containing parameters for the test (e.g.,
+          cluster name, timeout).
+        run_name: A descriptive name for the test run, used to generate the unique
+          `workload_id`.
+        axlearn_branch: The AXLearn repository branch to use for the workload execution.
+          Defaults to an empty string.
+        gcs_location: Optional GCS path (`airflow.XComArg` or string) for all test
+          artifacts (checkpoints, logs, etc.). If None, a path is generated based on
+          `gcs_subfolder` and `benchmark_id` from `self.task_test_config`.
+        trace_steps: A list of specific steps (e.g., global steps) to trace during
+          the execution.
+
+      Returns:
+        A **DAGNode** (specifically an Airflow **TaskGroup**) that encapsulates the
+        entire model test sequence (launch, wait, cleanup).
+    """
+    with TaskGroup(group_id="run_model") as group:
+      workload_id = axlearn.generate_workload_id(run_name_workload=run_name)
+      if gcs_location:
+        gcs_path = gcs_location
+      else:
+        gcs_path = name_format.generate_gcs_folder_location(
+            self.task_test_config.gcs_subfolder,
+            self.task_test_config.benchmark_id,
+        )
+      launch_workload = self.launch_workload(
+          workload_id=workload_id,
+          run_name=run_name,
+          gcs_path=gcs_path,
+          axlearn_branch=axlearn_branch,
+          test_configs=test_configs,
+      )
+
+      # Can reuse XPK since is a more general function for workload completion.
+      wait_for_workload_completion = xpk.wait_for_workload_completion.override(
+          timeout=int(self.task_test_config.timeout.total_seconds()),
+      )(
+          workload_id=workload_id,
+          project_id=self.task_gcp_config.project_name,
+          region=gke.zone_to_region(self.task_gcp_config.zone),
+          cluster_name=self.task_test_config.cluster_name,
+      )
+
+      clean_up_workload = xpk.clean_up_workload(
+          workload_id=workload_id,
+          project_id=self.task_gcp_config.project_name,
+          zone=self.task_gcp_config.zone,
+          cluster_name=self.task_test_config.cluster_name,
+          xpk_branch = xpk.MAIN_BRANCH,
+
+      )
+
+      ((workload_id, gcs_path)
+       >> launch_workload
+       >> wait_for_workload_completion
+       >> clean_up_workload
+       )
+      return group, gcs_path
+
+  def launch_workload(
+      self,
+      workload_id: str,
+      run_name: str,
+      gcs_path: str,
+      test_configs: test_config_util.TestConfigAXLearn,
+      axlearn_branch: str = "",
+  ) -> DAGNode:
+    """Create the workload and wait for it to provision."""
+    with TaskGroup(group_id="launch_workload") as group:
+
+      # Inject AXLearn Configuration file pointing to the given cluster.
+      cmds = axlearn.create_axlearn_config_cmd(
+        cluster_name=self.task_test_config.cluster_name,
+        project_id=self.task_gcp_config.project_name,
+        zone=self.task_gcp_config.zone,
+      )
+
+      # Setup AXLearn commands before running AXLearn CLI.
+      cmds += axlearn.setup_cmds(
+        cluster_name=self.task_test_config.cluster_name,
+        project_id=self.task_gcp_config.project_name,
+        zone=self.task_gcp_config.zone,
+      )
+
+      # Build final AXLearn command with all cluster specific info.
+      cmds += axlearn.build_axlearn_cmd(
+        task_id="run_workload",
+        cluster_project=self.task_gcp_config.project_name,
+        zone=self.task_gcp_config.zone,
+        cluster_name=self.task_test_config.cluster_name,
+        docker_image=self.task_test_config.docker_image,
+        benchmark_id=self.task_test_config.benchmark_id,
+        workload_id=workload_id,
+        gcs_path=gcs_path,
+        accelerator_type=f"tpu-{self.task_test_config.accelerator.name}",
+        steps=test_configs.steps,
+        checkpoint_steps=test_configs.checkpoint_step,
+        run_name=run_name,
+        module=test_configs.module,
+        model_config=test_configs.model_config,
+        trainer_dir=test_configs.trainer_dir,
+        num_slices=self.task_test_config.num_slices,
+        fsdp=test_configs.fsdp,
+        data=test_configs.data, # For now not doing DP since found errors.
+        train_batch_size=test_configs.train_batch_size,
+        trace_steps=test_configs.trace_steps,
+      )
+
+      # KPO task which run AXLearn CLI command.
+      run_container_task = KubernetesPodOperator(
+            task_id='run_axlearn-cli',
+            # The name of the created pod will be cli-axlearn-pod-xxxx
+            name='cli-axlearn-pod',
+            # Refer to: https://docs.cloud.google.com/composer/docs/composer-2/use-kubernetes-pod-operator#composer-2-kpo-access-project-resources
+            # Cloud Composer 2 uses GKE clusters with Workload Identity Federation for GKE.
+            # Pods that run in the composer-user-workloads namespace can access
+            # Google Cloud resources in the project without additional configuration.
+            # For our pod to be able to work we MUST use composer-user-workloads as namespace.
+            namespace='composer-user-workloads',
+            # Path Docker image gcr.io/cloud-tpu-multipod-dev/axlearn-custom:latest
+            image='gcr.io/cloud-tpu-multipod-dev/axlearn-custom:latest',
+            cmds=['bash', '-cx'],
+            # '&' will provoke the AXLearn will process executed in the background,
+            # with 5 min buffer to initialize then CLI AXLearn pod will be terminated
+            # gracefully. If takes more than 5 min and job still not created (problem),
+            # downstream workload_complete_task will fail since does not found any pod.
+            arguments=[f"{cmds} & sleep 280 && exit 0"],
+            do_xcom_push=False,
+            config_file="/home/airflow/composer_kube_config",
+            kubernetes_conn_id="kubernetes_default"
+      )
+
+      wait_for_workload_start = xpk.wait_for_workload_start.override(
+          timeout=self.workload_provision_timeout.total_seconds()
+      )(
+          workload_id=workload_id,
+          project_id=self.task_gcp_config.project_name,
+          region=gke.zone_to_region(self.task_gcp_config.zone),
+          cluster_name=self.task_test_config.cluster_name,
+      )
+
+      (
+        run_container_task
+        >> wait_for_workload_start
+      )
+      return group
 
 @dataclasses.dataclass
 class XpkTask(BaseTask):
@@ -594,6 +812,7 @@ class XpkTask(BaseTask):
           project_id=self.task_gcp_config.project_name,
           zone=self.task_gcp_config.zone,
           cluster_name=self.task_test_config.cluster_name,
+          xpk_branch=xpk_branch,
       )
 
       (

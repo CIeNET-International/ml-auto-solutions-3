@@ -1,3 +1,4 @@
+
 # Copyright 2024 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -331,6 +332,10 @@ class DockerImage(enum.Enum):
   PYTORCH_NIGHTLY = (
       "us-central1-docker.pkg.dev/tpu-pytorch-releases/docker/"
       f"xla:nightly_3.10_tpuvm_{datetime.datetime.today().strftime('%Y%m%d')}"
+  )
+  AXLEARN_CUSTOM = (
+      "gcr.io/cloud-tpu-multipod-dev/axlearn-custom:"
+      f"{datetime.datetime.today().strftime('%Y-%m-%d')}"
   )
   AXLEARN_TPU_JAX_STABLE_STACK = (
       "us-docker.pkg.dev/tpu-prod-env-multipod/bite/tpu/axlearn:"
