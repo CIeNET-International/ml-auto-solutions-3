@@ -14,9 +14,10 @@ from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.configs.common import MachineConfigMap
 from xlml.utils import mantaray
 
-CONFIG_GCS_URI = "gs://us-east1-tony-test-5eab75b2-bucket/dags/dags/tpu_observability/configs/gke_dag_config.yaml"
-yaml_string = mantaray.load_file_from_gcs(CONFIG_GCS_URI)
-dag_config = yaml.safe_load(yaml_string)
+xlml_jobs_yaml = mantaray.load_file_from_gcs(
+    f"{mantaray.MANTARAY_G3_GS_BUCKET}/xlml_jobs/gke_dag_config.yaml"
+)
+dag_config = yaml.safe_load(xlml_jobs_yaml)
 
 with models.DAG(
     dag_id="gke_node_pool_status",

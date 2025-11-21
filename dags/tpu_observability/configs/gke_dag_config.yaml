@@ -1,8 +1,0 @@
-project_id: "tpu-prod-env-one-vm"
-cluster_name: "tpu-observability-automation"
-node_pool_name: "node-pool-status-v6e-autotest"
-location: "us-east5"
-node_locations: "us-east5-b"
-num_nodes: 4
-wrong_node_location: "asia-east1-c"
-reservation: "cloudtpu-20251107233000-1246578561"
