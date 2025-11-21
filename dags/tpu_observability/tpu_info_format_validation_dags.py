@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import subprocess
+import yaml
 
 from airflow import models
 from airflow.decorators import task
@@ -28,6 +29,7 @@ from dags.tpu_observability.utils import tpu_info_util as tpu_info
 from dags.tpu_observability.utils.jobset_util import JobSet
 from dags.tpu_observability.utils.jobset_util import Workload
 from dags.tpu_observability.configs.common import MachineConfigMap, TpuConfig
+from xlml.utils import mantaray
 
 
 @task
@@ -269,6 +271,9 @@ def validate_latency_table(tpu_info_output: list[tpu_info.Table]):
         f" output:\n{content.raw_body}"
     )
 
+CONFIG_GCS_URI = "gs://us-east1-tony-test-5eab75b2-bucket/dags/dags/tpu_observability/configs/gke_dag_config.yaml"
+yaml_string = mantaray.load_file_from_gcs(CONFIG_GCS_URI)
+dag_config = yaml.safe_load(yaml_string)
 
 with models.DAG(
     dag_id="tpu_info_format_validation_dag",
@@ -313,29 +318,18 @@ with models.DAG(
 ) as dag:
   for machine in MachineConfigMap:
     config = machine.value
+    # Use values from dag_config loaded from YAML or defaults
     cluster_info = node_pool.Info(
-        project_id=models.Variable.get(
-            "TFV_PROJECT_ID", default_var=Project.TPU_PROD_ENV_ONE_VM.value
-        ),
-        cluster_name=models.Variable.get(
-            "TFV_CLUSTER_NAME", default_var="tpu-observability-automation"
-        ),
-        node_pool_name=models.Variable.get(
-            "TFV_NODE_POOL_NAME", default_var="tpu-info-fromat-test-v6e"
-        ),
-        region=models.Variable.get(
-            "TFV_REGION", default_var=Region.US_EAST5.value
-        ),
-        location=models.Variable.get(
-            "TFV_LOCATION", default_var=Region.US_EAST5.value
-        ),
-        node_locations=models.Variable.get(
-            "TFV_NODE_LOCATIONS", default_var=Zone.US_EAST5_B.value
-        ),
-        num_nodes=models.Variable.get("TFV_NUM_NODES", default_var=4),
+        project_id=dag_config["project_id"],
+        cluster_name=dag_config["cluster_name"],
+        node_pool_name=dag_config["node_pool_name"],
+        location=dag_config["location"],
+        node_locations=dag_config["node_locations"],
+        num_nodes=dag_config["num_nodes"],
         machine_type=config.machine_version.value,
         tpu_topology=config.tpu_topology,
     )
+
     cluster_info_2 = replace(
         cluster_info,
         node_pool_name=models.Variable.get(

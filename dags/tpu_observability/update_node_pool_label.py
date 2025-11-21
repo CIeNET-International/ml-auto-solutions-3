@@ -1,6 +1,7 @@
 """A DAG to update the label of a node pool to make node pool unavailable for a while"""
 
 import datetime
+import yaml
 
 from airflow import models
 from airflow.utils.trigger_rule import TriggerRule
@@ -10,7 +11,12 @@ from dags.common.vm_resource import Project, Region, Zone
 from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.configs.common import MachineConfigMap
+from xlml.utils import mantaray
 
+
+CONFIG_GCS_URI = "gs://us-east1-tony-test-5eab75b2-bucket/dags/dags/tpu_observability/configs/gke_dag_config.yaml"
+yaml_string = mantaray.load_file_from_gcs(CONFIG_GCS_URI)
+dag_config = yaml.safe_load(yaml_string)
 
 with models.DAG(
     dag_id="gke_node_pool_label_update",
@@ -41,21 +47,14 @@ with models.DAG(
 ) as dag:
   for machine in MachineConfigMap:
     config = machine.value
+    # Use values from dag_config loaded from YAML or defaults
     node_pool_info = node_pool.Info(
-        project_id="cienet-cmcs",
-        cluster_name=models.Variable.get(
-            "CLUSTER_NAME", default_var="tpu-observability-automation"
-        ),
-        node_pool_name=models.Variable.get(
-            "NODE_POOL_NAME", default_var="update-node-pool-label-v6e-autotest"
-        ),
-        location=models.Variable.get(
-            "LOCATION", default_var=Region.US_CENTRAL1.value
-        ),
-        node_locations=models.Variable.get(
-            "NODE_LOCATIONS", default_var=Zone.US_CENTRAL1_B.value
-        ),
-        num_nodes=models.Variable.get("NUM_NODES", default_var=4),
+        project_id=dag_config["project_id"],
+        cluster_name=dag_config["cluster_name"],
+        node_pool_name=dag_config["node_pool_name"],
+        location=dag_config["location"],
+        node_locations=dag_config["node_locations"],
+        num_nodes=dag_config["num_nodes"],
         machine_type=config.machine_version.value,
         tpu_topology=config.tpu_topology,
     )
