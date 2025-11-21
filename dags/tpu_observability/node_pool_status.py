@@ -2,16 +2,22 @@
 
 import copy
 import datetime
+import yaml
 
 from airflow import models
-from airflow.utils.trigger_rule import TriggerRule
 from airflow.utils.task_group import TaskGroup
+from airflow.utils.trigger_rule import TriggerRule
 
 from dags.map_reproducibility.utils import constants
 from dags.common.vm_resource import Project, Region, Zone
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.configs.common import MachineConfigMap
+from xlml.utils import mantaray
 
+xlml_jobs_yaml = mantaray.load_file_from_gcs(
+    f"{mantaray.MANTARAY_G3_GS_BUCKET}/xlml_jobs/gke_dag_config.yaml"
+)
+dag_config = yaml.safe_load(xlml_jobs_yaml)
 
 with models.DAG(
     dag_id="gke_node_pool_status",
@@ -44,23 +50,14 @@ with models.DAG(
 ) as dag:
   for machine in MachineConfigMap:
     config = machine.value
+    # Use values from dag_config loaded from YAML or defaults
     node_pool_info = node_pool.Info(
-        project_id=models.Variable.get(
-            "PROJECT_ID", default_var=Project.TPU_PROD_ENV_ONE_VM.value
-        ),
-        cluster_name=models.Variable.get(
-            "CLUSTER_NAME", default_var="tpu-observability-automation"
-        ),
-        node_pool_name=models.Variable.get(
-            "NODE_POOL_NAME", default_var="node-pool-status-v6e-autotest"
-        ),
-        location=models.Variable.get(
-            "LOCATION", default_var=Region.US_EAST5.value
-        ),
-        node_locations=models.Variable.get(
-            "NODE_LOCATIONS", default_var=Zone.US_EAST5_B.value
-        ),
-        num_nodes=models.Variable.get("NUM_NODES", default_var=4),
+        project_id=dag_config["project_id"],
+        cluster_name=dag_config["cluster_name"],
+        node_pool_name=dag_config["node_pool_name"],
+        location=dag_config["location"],
+        node_locations=dag_config["node_locations"],
+        num_nodes=dag_config["num_nodes"],
         machine_type=config.machine_version.value,
         tpu_topology=config.tpu_topology,
     )

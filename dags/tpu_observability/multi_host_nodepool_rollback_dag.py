@@ -1,6 +1,7 @@
 """A DAG to ensure a rollback effects the availablility of a mult-host GKE node pool as expected."""
 
 import datetime
+import yaml
 
 from airflow import models
 from airflow.models import Variable
@@ -11,7 +12,13 @@ from dags.map_reproducibility.utils import constants
 from dags.common.vm_resource import Project, Region, Zone
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.configs.common import MachineConfigMap
+from xlml.utils import mantaray
 
+
+xlml_jobs_yaml = mantaray.load_file_from_gcs(
+    f"{mantaray.MANTARAY_G3_GS_BUCKET}/xlml_jobs/gke_dag_config.yaml"
+)
+dag_config = yaml.safe_load(xlml_jobs_yaml)
 
 with models.DAG(
     dag_id="multi-host-availability-rollback",
@@ -53,19 +60,14 @@ with models.DAG(
 ) as dag:
   for machine in MachineConfigMap:
     config = machine.value
+    # Use values from dag_config loaded from YAML or defaults
     node_pool_info = node_pool.Info(
-        project_id=Project.TPU_PROD_ENV_ONE_VM.value,
-        cluster_name=Variable.get(
-            "CLUSTER_NAME", default_var="tpu-observability-automation"
-        ),
-        node_pool_name=Variable.get(
-            "NODE_POOL_NAME", default_var="multi_host_nodepool_rollback_auto"
-        ),
-        location=Variable.get("LOCATION", default_var=Region.US_EAST5.value),
-        node_locations=Variable.get(
-            "NODE_LOCATIONS", default_var=Zone.US_EAST5_B.value
-        ),
-        num_nodes=Variable.get("NUM_NODES", default_var=4),
+        project_id=dag_config["project_id"],
+        cluster_name=dag_config["cluster_name"],
+        node_pool_name=dag_config["node_pool_name"],
+        location=dag_config["location"],
+        node_locations=dag_config["node_locations"],
+        num_nodes=dag_config["num_nodes"],
         machine_type=config.machine_version.value,
         tpu_topology=config.tpu_topology,
     )
