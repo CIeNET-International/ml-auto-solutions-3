@@ -45,11 +45,13 @@ def wait_for_nodepool_metrics_event(
 ) -> bool:
   """Poll Cloud Monitoring for node-pool recovery metrics in [start_time, end_time]."""
 
+  # 1) Work in raw seconds first
+  start_sec = int(start_time)
+  end_sec = int(end_time) + QUERY_WINDOW_DURATION_SECONDS
+
   # widen the window a bit
-  start_tu = TimeUtil.from_unix_seconds(start_time)
-  end_tu = (
-      TimeUtil.from_unix_seconds(end_time) + QUERY_WINDOW_DURATION_SECONDS
-  )  # +1h after op end
+  start_tu = TimeUtil.from_unix_seconds(start_sec)
+  end_tu = TimeUtil.from_unix_seconds(end_sec)
 
   # Let query_time_series raise if API errors → Airflow will handle
   series = query_time_series(
@@ -342,9 +344,10 @@ with models.DAG(
     )
 
     LOG_FILTER_BASE = (
-        'resource.type="k8s_cluster" '
+        'resource.type="gke_nodepool" '
         f'AND resource.labels.cluster_name="{node_pool_info.cluster_name}" '
-        f'AND resource.labels.location="{node_pool_info.location}"'
+        f'AND resource.labels.location="{node_pool_info.location}" '
+        f'AND resource.labels.nodepool_name="{node_pool_info.node_pool_name}"'
     )
 
     poll_logs = wait_for_nodepool_logs_event(
