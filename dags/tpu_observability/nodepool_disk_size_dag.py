@@ -259,23 +259,6 @@ def update_nodepool_disksize(info: node_pool.Info, new_size_gb: int) -> dict:
   return {"op_full": op_full, "start_ts": start_iso}
 
 
-# latest! version 1: using logging
-@task
-def summarize_test(metrics_ok: bool, logs_ok: bool) -> None:
-  """Final verdict task."""
-  logging.info("[summary] metrics_ok=%s, logs_ok=%s", metrics_ok, logs_ok)
-  if not metrics_ok or not logs_ok:
-    raise RuntimeError(
-        f"Expected both metrics and logs sensors to succeed, got: "
-        f"metrics_ok={metrics_ok}, logs_ok={logs_ok}"
-    )
-
-  logging.info(
-      "[summary] Disk-resize node-pool test PASSED: "
-      "GKE operation finished, metric emitted, and log event detected."
-  )
-
-
 with models.DAG(
     dag_id="nodepool_disk_size_ttr",
     start_date=datetime(2025, 6, 26),
@@ -358,8 +341,6 @@ with models.DAG(
         end_time=op_meta["end_sec"],
     )
 
-    summary = summarize_test(poll_metrics, poll_logs)
-
     cleanup_node_pool = node_pool.delete.override(trigger_rule="all_done")(
         node_pool=node_pool_info
     ).as_teardown(
@@ -372,7 +353,6 @@ with models.DAG(
         >> wait_done  # sensor: just waits until DONE
         >> op_meta  # task: fetches timestamps & op_id
         >> [poll_metrics, poll_logs]
-        >> summary
         >> cleanup_node_pool
     )
 
