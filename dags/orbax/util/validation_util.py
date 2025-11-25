@@ -791,10 +791,14 @@ def get_image_name(
   except json.JSONDecodeError:
     raise ValueError("Failed to parse JSON output from gcloud command.")
 
+  logging.info(f"========= All images: {repo_details} ========= ")
   image_name = ""
   for image_info in repo_details:
     tags_list = image_info.get("tags", [])
-    logging.info(f"TAG_LIST: {tags_list}")
+
+    # We are spected to get the tags of all our images.
+    # If tag list contain more than two we know is the latest.
+    # (Since only the latest contains 2 tags.)
     if len(tags_list) >= 2:
       tags_list.remove("latest")
       image_name = f"{path_repository}:{tags_list[0]}"

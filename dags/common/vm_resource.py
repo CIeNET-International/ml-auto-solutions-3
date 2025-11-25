@@ -221,6 +221,13 @@ class RuntimeVersion(enum.Enum):
 class XpkClusters:
   """Common XPK cluster configs."""
 
+  ML_AUTO_SOLUTIONS_AIRFLOW_PROD= XpkClusterConfig(
+      name="us-central1-ml-automation-s-24b05597-gke",
+      device_version=AcceleratorType.CPU,
+      core_count=0,
+      project=Project.CLOUD_ML_AUTO_SOLUTIONS.value,
+      zone=Zone.US_CENTRAL1_A.value,
+  )
   TPU_V4_8_MAS_CLUSTER = XpkClusterConfig(
       name="mas-v4-8",
       device_version=TpuVersion.V4,

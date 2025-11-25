@@ -27,6 +27,7 @@ def get_axlearn_tpu_config(
     test_owner: str,
     time_out_in_min: int,
     cluster: XpkClusterConfig = XpkClusters.TPU_V5P_128_CLUSTER,
+    airflow_cluster: XpkClusterConfig = XpkClusters.ML_AUTO_SOLUTIONS_AIRFLOW_PROD,
     dataset_name: metric_config.DatasetOption = metric_config.DatasetOption.XLML_DATASET,
     num_slices: int = 1,
 ) -> task.AXLearnTask:
@@ -37,6 +38,15 @@ def get_axlearn_tpu_config(
       zone=cluster.zone,
       dataset_name=dataset_name,
   )
+
+  # Task need it for KPO change context before executing AXLearn command.
+  kpo_gcp_config = gcp_config.GCPConfig(
+      project_name=f"{airflow_cluster.project}:{airflow_cluster.name}",
+      zone=airflow_cluster.zone,
+      dataset_name=dataset_name,
+  )
+
+
   latest_docker_image = f"{docker_image.split(':')[0]}:latest"
   job_test_config = test_config.TpuGkeTest(
       test_config.Tpu(
@@ -56,4 +66,5 @@ def get_axlearn_tpu_config(
   return task.AXLearnTask(
       task_test_config=job_test_config,
       task_gcp_config=job_gcp_config,
+      task_gcp_config_kpo=kpo_gcp_config,
   )

@@ -274,20 +274,18 @@ class TestConfigAXLearn(TestConfigAbstract):
   """
 
   run_name: str
+  airflow_cluster: XpkClusters
   instance_type: str
   mesh_type: str
   module: str
-  checkpoint_step: int
   trainer_dir: str
   data_dir: str
-  train_batch_size: int
-  fsdp: int
-  data: int
   trace_steps: list[int]
 
   def __init__(
       self,
       cluster: XpkClusters,
+      airflow_cluster: XpkClusters,
       run_name: str,
       slices: list[int],
       instance_type: str,
@@ -295,13 +293,9 @@ class TestConfigAXLearn(TestConfigAbstract):
       module: str,
       short_id: str,
       steps: int,
-      checkpoint_step: int,
       model_name: str,
       trainer_dir: str,
       data_dir: str,
-      train_batch_size: int,
-      fsdp: int,
-      data: int,
       trace_steps: list[int],
   ):
     """Initializes the AXLearn test configurations.
@@ -326,6 +320,7 @@ class TestConfigAXLearn(TestConfigAbstract):
     """
 
     self.cluster = cluster
+    self.airflow_cluster = airflow_cluster
     self.run_name = run_name
     self.slices = slices
     self.instance_type = instance_type
@@ -333,13 +328,9 @@ class TestConfigAXLearn(TestConfigAbstract):
     self.module = module
     self.short_id = short_id
     self.steps = steps
-    self.checkpoint_step = checkpoint_step
     self.model_config = model_name
     self.trainer_dir = trainer_dir
     self.data_dir = data_dir
-    self.train_batch_size = train_batch_size
-    self.fsdp = fsdp
-    self.data = data
     self.trace_steps = trace_steps
 
   def __str__(self) -> str:
@@ -369,7 +360,8 @@ class TestConfigAXLearn(TestConfigAbstract):
   def generate_step_to_validate(self) -> list[int]:
     """Calculates and returns a list of step numbers to be validated."""
     total_steps = self.steps
-    k = self.checkpoint_step
+    checkpoint_step = 100
+    k = checkpoint_step
     last_step = self.steps
-    return [*range(self.checkpoint_step, total_steps, k), last_step]
+    return [*range(checkpoint_step, total_steps, k), last_step]
 

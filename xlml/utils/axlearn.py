@@ -19,6 +19,7 @@ from absl import logging
 import textwrap
 
 from airflow.decorators import task
+from airflow.hooks.subprocess import SubprocessHook
 
 from xlml.utils import composer
 
@@ -39,6 +40,27 @@ LOGGING_URL_FORMAT = (
     + "mods=allow_workbench_image_override&project={project}"
 )
 
+@task
+def setup_airflow_cluster_context(
+    cluster_name: str,
+    project_id: str,
+    region: str,
+)-> None:
+  """Delete workload."""
+
+  gcloud_command = f"""
+      gcloud container clusters get-credentials {cluster_name} \
+          --region {region} \
+          --project {project_id}
+  """
+  hook = SubprocessHook()
+  result = hook.run_command(
+      ["bash", "-c", gcloud_command],
+  )
+  assert (
+      result.exit_code == 0
+  ), f"XPK clean-up failed with code {result.exit_code}"
+
 
 @task
 def generate_workload_id(run_name_workload: str) -> str:
@@ -47,6 +69,7 @@ def generate_workload_id(run_name_workload: str) -> str:
   real_run_name__running = run_name_workload.split("-")[0]
   logging.info(f"Run_name used: {real_run_name__running}")
   return f"{real_run_name__running}"
+
 
 def build_axlearn_cmd(
     task_id:str,
@@ -58,11 +81,6 @@ def build_axlearn_cmd(
     benchmark_id:str,
     workload_id: str,
     run_name: str,
-    steps: int,
-    checkpoint_steps: int,
-    data: int,
-    fsdp: int,
-    train_batch_size: int,
     accelerator_type: str = "",
     module: str = "",
     model_config: str = "",
@@ -87,7 +105,7 @@ def build_axlearn_cmd(
   })
 
   # Get  image run name and tag separatedly since we will need it for AXLearn CLI
-  # Here tag always gonna be latest.
+  # Here docker image always gone be "<PATH_REPO>:<TAG>" in this case tag=latest.
   image_with_tag = docker_image.split("/")[-1]
   tag = image_with_tag.split(":")[1]
   image_run_name = image_with_tag.split(":")[0]
@@ -132,12 +150,6 @@ def build_axlearn_cmd(
       f"--bundler_spec=image={image_run_name} "
       f"-- \""
     f"ulimit -n 1048576; ulimit -c 0; "
-    rf"sed -i '/num_kv_heads = None/a \ \ \ \ max_step = {steps}' axlearn/experiments/text/gpt/fuji.py; "
-    rf"sed -i 's/^[ \t]*if self.step % 100 == 0 or 0 <= self.step <= 5:/if self.step % 5 == 0:/' axlearn/common/trainer.py; "
-    rf"sed -i 's/^[ \t]*mesh_shape=mesh_shape_from_axes(data=-1, fsdp=64)/mesh_shape=mesh_shape_from_axes(data={data}, fsdp={fsdp})/' axlearn/experiments/text/gpt/fuji.py; "
-    rf"sed -i 's/^\([ \t]*\)train_batch_size = tokens_per_batch \/\/ max_sequence_length/\1train_batch_size = {train_batch_size}/' axlearn/experiments/text/gpt/fuji.py; "
-    rf"sed -i 's/\(lr_warmup_steps: int = \)2000/\150/' axlearn/experiments/text/gpt/common.py; "
-    rf"sed -i '/max_step=max_step,/a \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ save_every_n_steps={checkpoint_steps},' axlearn/experiments/text/gpt/fuji.py; "
     f"python3 -c 'import jax; jax.devices()'; python3 -m axlearn.common.launch_trainer_main\" "
       f"--module={module} --config={model_config} "
       f"--trainer_dir={trainer_dir}/{outpu_dir_name}/{run_name} "
@@ -180,7 +192,6 @@ def create_axlearn_config_cmd(
         labels = "tpu-v5p"
         docker_repo = "gcr.io/{project_id}"
         default_dockerfile = "Dockerfile"
-        service_account_email = "ml-auto-solutions-dev@cloud-tpu-multipod-dev.iam.gserviceaccount.com"
         permanent_bucket = "axlearn-bucket-multipod"
         private_bucket = "axlearn-bucket-multipod"
         ttl_bucket = "axlearn-bucket-multipod"

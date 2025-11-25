@@ -76,6 +76,7 @@ with models.DAG(
   test_configs = [
       test_config_util.TestConfigAXLearn(
           cluster=XpkClusters.TPU_V5P_128_CLUSTER,
+          airflow_cluster=XpkClusters.ML_AUTO_SOLUTIONS_AIRFLOW_PROD,
           run_name="gke_tpu_single",
           slices=[2],
           instance_type="tpu-v5p-128",
@@ -84,10 +85,6 @@ with models.DAG(
           module="text.gpt.c4_trainer",
           model_name="fuji-7B-v2-flash",
           steps=200,
-          checkpoint_step=50,
-          train_batch_size=128,
-          fsdp=128,
-          data=1,
           trainer_dir=test_config_util.DEFAULT_BUCKET_AXLEARN,
           data_dir="gs://axlearn-public/tensorflow_datasets",
           trace_steps=[40, 90, 140, 190],
@@ -118,6 +115,7 @@ with models.DAG(
         # Runs Fuji training on v5p-128 in the provided GCP Project
         axlearn_regular_run = config.get_axlearn_tpu_config(
             cluster=test_config.cluster,
+            airflow_cluster=test_config.airflow_cluster,
             num_slices=slice_num,
             time_out_in_min=60,
             test_name=f"{test_config.short_id}-reg",

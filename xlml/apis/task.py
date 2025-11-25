@@ -31,6 +31,7 @@ from xlml.apis import gcp_config, metric_config, test_config
 from xlml.utils import gpu, metric, name_format, ssh, tpu, xpk, axlearn, gke
 from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator
 from dags.orbax.util import test_config_util
+from kubernetes import client as k8s_client
 
 
 class BaseTask(abc.ABC):
@@ -162,6 +163,7 @@ class AXLearnTask(BaseTask):
     workload_provision_timeout: Time allowed for provisioning a workload.
   """
 
+  task_gcp_config_kpo: gcp_config.GCPConfig
   task_test_config: Union[
       test_config.TpuGkeTest, test_config.GpuXpkTest, test_config.CpuGkeTest
   ]
@@ -288,6 +290,15 @@ class AXLearnTask(BaseTask):
     """Create the workload and wait for it to provision."""
     with TaskGroup(group_id="launch_workload") as group:
 
+      project_id = self.task_gcp_config_kpo.project_name.split(":")[0]
+      cluster_name = self.task_gcp_config_kpo.project_name.split(":")[1]
+      region = gke.zone_to_region(self.task_gcp_config_kpo.zone)
+
+      setup_airflow_cluster_context = axlearn.setup_airflow_cluster_context(cluster_name=cluster_name,
+        project_id=project_id,
+        region=region,
+      )
+
       # Inject AXLearn Configuration file pointing to the given cluster.
       cmds = axlearn.create_axlearn_config_cmd(
         cluster_name=self.task_test_config.cluster_name,
@@ -313,18 +324,14 @@ class AXLearnTask(BaseTask):
         workload_id=workload_id,
         gcs_path=gcs_path,
         accelerator_type=f"tpu-{self.task_test_config.accelerator.name}",
-        steps=test_configs.steps,
-        checkpoint_steps=test_configs.checkpoint_step,
         run_name=run_name,
         module=test_configs.module,
         model_config=test_configs.model_config,
         trainer_dir=test_configs.trainer_dir,
         num_slices=self.task_test_config.num_slices,
-        fsdp=test_configs.fsdp,
-        data=test_configs.data, # For now not doing DP since found errors.
-        train_batch_size=test_configs.train_batch_size,
         trace_steps=test_configs.trace_steps,
       )
+
 
       # KPO task which run AXLearn CLI command.
       run_container_task = KubernetesPodOperator(
@@ -345,11 +352,11 @@ class AXLearnTask(BaseTask):
             # gracefully. If takes more than 5 min and job still not created (problem),
             # downstream workload_complete_task will fail since does not found any pod.
             arguments=[f"{cmds} & sleep 280 && exit 0"],
-            do_xcom_push=False,
             config_file="/home/airflow/composer_kube_config",
             # This will point production airflow cluster. To bypass any 404 issue.
-            cluster_context='gke_cloud-ml-auto-solutions_us-central1_us-central1-ml-automation-s-24b05597-gke',
+            # cluster_context='gke_cloud-ml-auto-solutions_us-central1_us-central1-ml-automation-s-24b05597-gke',
             kubernetes_conn_id="kubernetes_default",
+            termination_grace_period=600,
       )
 
       wait_for_workload_start = xpk.wait_for_workload_start.override(
@@ -362,9 +369,11 @@ class AXLearnTask(BaseTask):
       )
 
       (
-        run_container_task
+        setup_airflow_cluster_context
+        >> run_container_task
         >> wait_for_workload_start
       )
+
       return group
 
 @dataclasses.dataclass
