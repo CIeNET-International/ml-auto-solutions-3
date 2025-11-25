@@ -12,7 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Airflow DAG for validating AXLearn regular orbax (Native) checkpoint saving functionality"""
+"""
+Airflow DAG for validating AXLearn regular orbax (Native) checkpoint saving
+functionality
+"""
 
 import datetime
 
@@ -24,7 +27,7 @@ from dags.common.vm_resource import XpkClusters
 from dags.orbax.configs import axlearn_config as config
 from dags.orbax.util import test_config_util, validation_util
 from xlml.utils.gke import zone_to_region
-import xlml.utils.axlearn as axlearn
+from xlml.utils import axlearn
 
 
 SCHEDULE = "0 21 * * *" if composer_env.is_prod_env() else None
@@ -46,7 +49,10 @@ with models.DAG(
         "TPU",
         "v5p-128",
     ],
-    description="DAG that verifies the AXLearn regular (Native) checkpointing saving functionality",
+    description="""
+      DAG that verifies the AXLearn regular (Native) checkpointing saving
+      functionality
+      """,
     doc_md="""
       # AXLearn Regular Checkpoint Validation DAG.
 
@@ -82,12 +88,9 @@ with models.DAG(
           mesh_type="tpu-v5p-128",
           short_id=f"axlearn-{checkpointing.name}-sav",
           module="text.gpt.c4_trainer",
+          label="tpu-v5p",
           model_name="fuji-7B-v2-flash",
           steps=200,
-          checkpoint_step=50,
-          train_batch_size=128,
-          fsdp=128,
-          data=1,
           trainer_dir=test_config_util.DEFAULT_BUCKET_AXLEARN,
           data_dir="gs://axlearn-public/tensorflow_datasets",
           trace_steps=[40, 90, 140, 190],
@@ -96,10 +99,9 @@ with models.DAG(
   for mode, image_full_path in test_config_util.DOCKER_IMAGES_AXLEARN:
     for test_config in test_configs:
       for slice_num in test_config.slices:
-
         # This task will get all remote repository images. Will print
         # latest image full path --> gcr.io/cienet-cmcs/axlearn-custom:<DATE>.
-        name_image_full_path_latest = validation_util.get_image_name(
+        name_image_full_path_latest = axlearn.get_image_name(
             project_id=test_config.cluster.project,
             path_repository=image_full_path.value.split(":")[0],
         )
@@ -126,7 +128,7 @@ with models.DAG(
         ).run(
             test_configs=test_config,
             axlearn_branch="main",
-            run_name=run_name_id
+            run_name=run_name_id,
         )
 
         end_time = validation_util.generate_timestamp()
@@ -146,10 +148,10 @@ with models.DAG(
             )
         )
 
-        (
-          name_image_full_path_latest
-          >> start_time
-          >> axlearn_regular_run
-          >> end_time
-          >> validate_steps
+        _ = (
+            name_image_full_path_latest
+            >> start_time
+            >> axlearn_regular_run
+            >> end_time
+            >> validate_steps
         )

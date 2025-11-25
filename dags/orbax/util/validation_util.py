@@ -4,14 +4,11 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 from absl import logging
 import re
-import json
-from typing import List, Dict
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from google.cloud import logging as logging_api
 from xlml.apis import gcs
-from airflow.hooks.subprocess import SubprocessHook
 
 
 @task
@@ -31,11 +28,13 @@ def validate_checkpoint_at_steps_are_saved(
     end_time: Optional[datetime] = None,
 ) -> None:
   """
-  Validates that a workload is training correctly by checking for specific log steps.
+  Validates that a workload is training correctly by checking for specific log
+  steps.
 
   This function queries logs from a specified GKE cluster and namespace.
   It searches for a log entry containing the string '(blocking + background)'
-  and then compares the number of steps found against an expected list of steps.
+  and then compares the number of steps found against an expected list of
+  steps.
 
   A mismatch in the number of steps will cause the validation to fail. This can
   happen if, for example, a restore operation causes the step count to restart
@@ -58,7 +57,10 @@ def validate_checkpoint_at_steps_are_saved(
       if ram_disk != "gcs"
       else r"gs://[^/]+/[^/]+/[^/]+/checkpoints/(\d+)"
   )
-  log_pattern = rf"Finished async_save \(blocking \+ background\)\. Time taken: \d+\.\d+s\. directory={directory_pattern}"
+  log_pattern = (
+      rf"Finished async_save \(blocking \+ background\)\. "
+      rf"Time taken: \d+\.\d+s\. directory={directory_pattern}"
+  )
 
   complied_pattern = re.compile(log_pattern)
   entries = list_log_entries(
@@ -110,17 +112,21 @@ def generate_run_name(
   especially for checkpointing and logging purposes.
 
   Args:
-      short_id: A short identifier for the specific model or experiment.
-      checkpointing_type: The name of the checkpointing strategy (e.g., 'emc').
-      slice_number: The number of TPU slices used for the training run.
-      accelerator: The type of accelerator used (e.g., 'tpu-v4').
+    short_id: A short identifier for the specific model or experiment.
+    checkpointing_type: The name of the checkpointing strategy (e.g., 'emc').
+    slice_number: The number of TPU slices used for the training run.
+    accelerator: The type of accelerator used (e.g., 'tpu-v4').
 
   Returns:
-      A string formatted as '{short_id}-mtc-{slice_number}x-{accelerator}-{timestamp}'.
+    A string formatted as
+      '{short_id}-mtc-{slice_number}x-{accelerator}-{timestamp}'.
   """
 
   run_time = datetime.now().strftime("%Y-%m-%d-%H-%M")
-  run_name = f"{short_id}-{checkpointing_type}-{slice_number}x-{accelerator}-{run_time}"
+  run_name = (
+      f"{short_id}-{checkpointing_type}-"
+      f"{slice_number}x-{accelerator}-{run_time}"
+  )
   return run_name
 
 
@@ -140,12 +146,12 @@ def validate_log_with_gcs(
   """
   Validates workload logs against GCS bucket checkpoints.
 
-  This function first queries logs from a specified GKE cluster to determine the
-  GCS bucket path used for checkpointing. It then retrieves logs related to
+  This function first queries logs from a specified GKE cluster to determine
+  the GCS bucket path used for checkpointing. It then retrieves logs related to
   checkpoint save operations, extracts the step numbers, and verifies that the
-  corresponding checkpoint files exist in the GCS bucket. The function passes if the
-  latest step found in the logs matches the latest step found in the GCS bucket's
-  checkpoint filenames. It raises an exception on failure.
+  corresponding checkpoint files exist in the GCS bucket. The function passes
+  if the latest step found in the logs matches the latest step found in the GCS
+  bucket's checkpoint filenames. It raises an exception on failure.
 
   Args:
     project_id: The Google Cloud project ID.
@@ -154,7 +160,8 @@ def validate_log_with_gcs(
     namespace: The Kubernetes namespace. Defaults to "default".
     pod_pattern: A glob pattern to match pod names. Defaults to "*".
     container_name: An optional container name to filter logs by.
-    text_filter: An optional string to filter log entries by their `textPayload`.
+    text_filter: An optional string to filter log entries by their
+      `textPayload`.
     start_time: The start time for log retrieval.
     end_time: The end time for log retrieval.
 
@@ -162,9 +169,9 @@ def validate_log_with_gcs(
     None. The function completes successfully if all validation steps are found.
 
   Raises:
-    AirflowFailException: If the bucket path format is invalid, if checkpoint files
-      are missing, if steps cannot be extracted from log lines,if step lists
-      are empty, or if the latest steps do not match.
+    AirflowFailException: If the bucket path format is invalid, if checkpoint
+      files are missing, if steps cannot be extracted from log lines,if step
+      lists are empty, or if the latest steps do not match.
   """
 
   # Get the entries for the backup steps in the bucket. To later compare the
@@ -193,7 +200,7 @@ def validate_log_with_gcs(
         match_step = re.search(step_pattern, line)
         validate_check_gcs = False
 
-        # If could not found those valuses eg. gcs=2025-08-10_12-09 and step=60.
+        # If could not found those values eg. gcs=2025-08-10_12-09 and step=60.
         if match_gcs and match_step and checkpoint_dir:
           gcs_checkpoint_path = match_gcs.group(0)
           step = match_step.group(1)
@@ -203,7 +210,7 @@ def validate_log_with_gcs(
           )
           logging.info(f"gcs bucket files lenght: {len(bucket_files)}")
           if len(bucket_files) > 0:
-            # Extract .meta file to future comparision
+            # Extract .meta file to future comparison
             for file in bucket_files:
               if ".meta" in file:
                 gcs_save_step_list_bucket.append(file)
@@ -220,15 +227,16 @@ def validate_log_with_gcs(
                 f"Checkpoint files can not found in {gcs_checkpoint_path}"
             )
 
-          # Add it to a global list that we will use later to compare with bucket
+          # Add it to a global list that we will use later to compare with
+          # bucket
           gcs_save_step_list.append(int(step))
         else:
           raise AirflowFailException(
               f"Could not find gcs_checkpoint_path or step in line: {line}"
           )
 
-  # Extract the step number from the LAST RECORDED file in GCS bucket ended with .meta,
-  # which is prefixed with 's' and followed by digits
+  # Extract the step number from the LAST RECORDED file in GCS bucket ended
+  # with .meta, which is prefixed with 's' and followed by digits
   # eg. <name_job>-<cluster_config>-<date>-36-s60-n26-w0.meta
   # The extracted step should be step=60 and is the last saved step.
   if len(gcs_save_step_list_bucket) > 0 and len(gcs_save_step_list) > 0:
@@ -294,9 +302,10 @@ def validate_gcs_checkpoint_files(
 
     if missing_steps:
       raise AirflowFailException(
-          "GCS checkpoint validation failed: Missing checkpoint files for steps"
-          f" {sorted(missing_steps)}. Expected steps:"
-          f" {sorted(expected_steps)}, Found steps: {sorted(found_steps)}"
+          "GCS checkpoint validation failed: Missing checkpoint files for "
+          f"steps {sorted(missing_steps)}. "
+          f"Expected steps: {sorted(expected_steps)}, "
+          f"Found steps: {sorted(found_steps)}"
       )
 
     logging.info("GCS checkpoint validation successful!")
@@ -313,7 +322,8 @@ def extract_step_number_from_file_path(
   Extracts the step number from a file path.
   Args:
     path: The full path to the file or the folder.
-    enable_multi_tier_checkpointing: Whether to enable multi-tier checkpointing.
+    enable_multi_tier_checkpointing: Whether to enable multi-tier
+      checkpointing.
   Returns:
     Optional[int]: The step number extracted from the file path, or None if
     not found.
@@ -546,8 +556,8 @@ def validate_replicator_gcs_restore_log(
     backed_up_steps: Optional[set[int]] = None,
 ) -> None:
   """
-  Validates that the replicator successfully restored checkpoints from GCS backup.
-  This function queries logs from a specified GKE cluster and namespace
+  Validates that the replicator successfully restored checkpoints from GCS
+  backup. This function queries logs from a specified GKE cluster and namespace
   to look for log entries showing replicator restoring from GCS backup.
   It validates that restored steps match previously backed up steps.
   Expected log format:
@@ -558,11 +568,12 @@ def validate_replicator_gcs_restore_log(
     cluster_name: GKE cluster name
     namespace: Kubernetes namespace (defaults to "default")
     pod_pattern: Pattern to match pod names (defaults to "*")
-    start_time: Optional start time for log retrieval (defaults to 12 hours ago)
+    start_time: Optional start time for log retrieval (defaults to 12 hours)
     end_time: Optional end time for log retrieval (defaults to now)
     backed_up_steps: Optional list of backed up steps
   Returns:
-    None: Raises AirflowFailException if replicator GCS restore validation fails
+    None: Raises AirflowFailException if replicator GCS restore validation
+      fails
   """
   entries = list_log_entries(
       project_id=project_id,
@@ -638,7 +649,8 @@ def validate_replicator_gcs_backup_log(
     end_time: Optional[datetime] = None,
 ) -> set[int]:
   """
-  Validates that the replicator successfully backed up checkpoints to GCS and returns backup info.
+  Validates that the replicator successfully backed up checkpoints to GCS and
+  returns backup info.
   This function queries logs from a specified GKE cluster and namespace
   to look for log entries showing replicator backing up checkpoints to GCS.
   Replicator backups happen at time intervals, not specific steps.
@@ -650,7 +662,7 @@ def validate_replicator_gcs_backup_log(
     cluster_name: GKE cluster name
     namespace: Kubernetes namespace (defaults to "default")
     pod_pattern: Pattern to match pod names (defaults to "*")
-    start_time: Optional start time for log retrieval (defaults to 12 hours ago)
+    start_time: Optional start time for log retrieval (defaults to 12 hours)
     end_time: Optional end time for log retrieval (defaults to now)
   Returns:
     dict: Dictionary mapping step numbers to backup folder names {step: folder}
@@ -713,7 +725,6 @@ def validate_checkpoints_save_regular_axlearn(
     start_time: Optional[datetime] = None,
     end_time: Optional[datetime] = None,
 ) -> None:
-
   # This log pattern will be looged in a random pod of the first slice.
   log_pattern = r"^Serialization.*?step_(?P<step>\d+).*"
   complied_pattern = re.compile(log_pattern)
@@ -752,52 +763,3 @@ def validate_checkpoints_save_regular_axlearn(
       f"Successful Validation.\nExpected  Steps:{steps_to_validate}"
       f"\tFound Steps:{steps_are_saved}"
   )
-
-@task
-def get_image_name(
-  project_id: str,
-  path_repository: str,
-)-> str | None :
-  """
-    Retrieves repository details by calling the gcloud CLI command
-    and parsing the output as JSON.
-
-    Args:
-        project_id: Your Google Cloud Project ID.
-        repository_id: The ID of the repository.
-         e.g gcr.io/cienet-cmcs/axlearn-custom
-    Returns:
-        A string with the name of the latest daily image.
-  """
-  list_tags_cmds = (
-        f"gcloud container images list-tags {path_repository} "
-        f"--project={project_id} "
-        f"--format=json | tr -d '\\n\\r'"
-  )
-  cmds = [
-    "set -ue",
-    list_tags_cmds,
-  ]
-  hook = SubprocessHook()
-  result = hook.run_command(
-    ["bash", "-c", ";".join(cmds)]
-  )
-  assert (
-      result.exit_code == 0
-  ), f"XPK command failed with code {result.exit_code}"
-
-  try:
-    repo_details: List[Dict] = json.loads(result.output)
-  except json.JSONDecodeError:
-    raise ValueError("Failed to parse JSON output from gcloud command.")
-
-  image_name = ""
-  for image_info in repo_details:
-    tags_list = image_info.get("tags", [])
-    logging.info(f"TAG_LIST: {tags_list}")
-    if len(tags_list) >= 2:
-      tags_list.remove("latest")
-      image_name = f"{path_repository}:{tags_list[0]}"
-      logging.info(f"========= Running with image : {image_name} ========= ")
-      return f"{path_repository}:latest"
-  raise AirflowFailException('Image not found or is not latest image')

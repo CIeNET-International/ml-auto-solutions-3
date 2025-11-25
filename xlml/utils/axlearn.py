@@ -14,12 +14,17 @@
 """Utilities to run workloads with AXLearn."""
 
 from datetime import datetime
-from typing import List
+import os
+import re
 from absl import logging
 import textwrap
+import json
 
 from airflow.decorators import task
+from airflow.hooks.subprocess import SubprocessHook
+from airflow.exceptions import AirflowFailException
 
+from xlml.utils import gke
 from xlml.utils import composer
 
 
@@ -41,6 +46,33 @@ LOGGING_URL_FORMAT = (
 
 
 @task
+def setup_airflow_cluster_context() -> None:
+  """Get credential for in-cluster to setup CLI AXLearn command."""
+
+  cluster_name = os.environ["COMPOSER_GKE_NAME"]
+  project_id = os.environ["GCP_PROJECT"]
+  region = os.environ["COMPOSER_LOCATION"]
+
+  logging.info(f"{' LOGGING AIRFLOW CLUSTER ':=^80}")
+  logging.info("CLUSTER_NAME: %s", cluster_name)
+  logging.info("PROJECT_ID: %s", project_id)
+  logging.info("REGION: %s", region)
+
+  hook = SubprocessHook()
+  result = hook.run_command([
+      "bash",
+      "-c",
+      (
+          f"gcloud container clusters get-credentials {cluster_name} "
+          f"--region {region}  --project {project_id}"
+      ),
+  ])
+  assert (
+      result.exit_code == 0
+  ), f"XPK clean-up failed with code {result.exit_code}"
+
+
+@task
 def generate_workload_id(run_name_workload: str) -> str:
   """Generate a valid workload ID."""
 
@@ -48,21 +80,17 @@ def generate_workload_id(run_name_workload: str) -> str:
   logging.info(f"Run_name used: {real_run_name__running}")
   return f"{real_run_name__running}"
 
+
 def build_axlearn_cmd(
-    task_id:str,
+    task_id: str,
     gcs_path: str,
     cluster_project: str,
     cluster_name: str,
     zone: str,
     docker_image: str,
-    benchmark_id:str,
+    benchmark_id: str,
     workload_id: str,
     run_name: str,
-    steps: int,
-    checkpoint_steps: int,
-    data: int,
-    fsdp: int,
-    train_batch_size: int,
     accelerator_type: str = "",
     module: str = "",
     model_config: str = "",
@@ -86,18 +114,31 @@ def build_axlearn_cmd(
       "num_slices": num_slices,
   })
 
-  # Get  image run name and tag separatedly since we will need it for AXLearn CLI
-  # Here tag always gonna be latest.
+  # Get image run name and tag separately since we will need it for AXLearn CLI
+  # Here docker image always gone be "<PATH_REPO>:<TAG>",
+  # in this case tag=latest.
   image_with_tag = docker_image.split("/")[-1]
   tag = image_with_tag.split(":")[1]
   image_run_name = image_with_tag.split(":")[0]
 
+  # Extract the full path (e.g., "gcr.io/cienet-cmcs/axlearn-custom")
+  # and the tag (e.g., "latest")
+  match = re.search(r"^(.*)/([^/:]+):(.+)$", docker_image)
+  if not match:
+    raise AirflowFailException(f"Invalid docker image format: {docker_image}")
+
+  # These two values will determine the name of the pod run in AXLearn.
+  image_run_name = match.group(2)
+  tag = match.group(3)
 
   # Create a run_name id for output directory.
-  outpu_dir_name = "-".join(run_name.split("-")[:4])
+  match = re.search(r"^([^-]+-[^-]+-[^-]+-[^-]+)", run_name)
+  if not match:
+    raise AirflowFailException(f"Invalid run name format: {run_name}")
+  outpu_dir_name = match.group(1)
 
   export_var = [
-      f"&& export BASTION_TIER=disabled",
+      "export BASTION_TIER=disabled",
       f"export PROJECT_ID={cluster_project}",
   ]
   trace_list = (
@@ -115,8 +156,10 @@ def build_axlearn_cmd(
 
   # Eg.  We need to limit the number of total steps. Default is to 5000.
   #      reduce_steps = (
-  #         "sed -i 's|max_step = TOTAL_TOKENS\[version\]\[model_size\] // tokens_per_batch|max_step = 100|; /max_step = 100/a save_every_n_steps=500' axlearn/experiments/text/gpt/fuji.py"
-  #         )
+  #          "sed -i 's|max_step = TOTAL_TOKENS\[version\]\[model_size\] // "
+  #          "tokens_per_batch|max_step = 100|; /max_step = 100/a "
+  #          "save_every_n_steps=500' axlearn/experiments/text/gpt/fuji.py"
+  #      )
   # This will be injected in the following AXLearn command.
 
   # The main AXLearn command to run.
@@ -125,20 +168,16 @@ def build_axlearn_cmd(
       f"--runner_name gke_tpu_single "
       f"--name={tag} "
       f"--instance_type={accelerator_type} "
-      f"--max_tries=3 "
+      f"--max_tries=10 "
       f"--num_replicas={num_slices} "
       f"--bundler_spec=allow_dirty=True "
       f"--bundler_type=artifactregistry "
       f"--bundler_spec=image={image_run_name} "
-      f"-- \""
-    f"ulimit -n 1048576; ulimit -c 0; "
-    rf"sed -i '/num_kv_heads = None/a \ \ \ \ max_step = {steps}' axlearn/experiments/text/gpt/fuji.py; "
-    rf"sed -i 's/^[ \t]*if self.step % 100 == 0 or 0 <= self.step <= 5:/if self.step % 5 == 0:/' axlearn/common/trainer.py; "
-    rf"sed -i 's/^[ \t]*mesh_shape=mesh_shape_from_axes(data=-1, fsdp=64)/mesh_shape=mesh_shape_from_axes(data={data}, fsdp={fsdp})/' axlearn/experiments/text/gpt/fuji.py; "
-    rf"sed -i 's/^\([ \t]*\)train_batch_size = tokens_per_batch \/\/ max_sequence_length/\1train_batch_size = {train_batch_size}/' axlearn/experiments/text/gpt/fuji.py; "
-    rf"sed -i 's/\(lr_warmup_steps: int = \)2000/\150/' axlearn/experiments/text/gpt/common.py; "
-    rf"sed -i '/max_step=max_step,/a \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ save_every_n_steps={checkpoint_steps},' axlearn/experiments/text/gpt/fuji.py; "
-    f"python3 -c 'import jax; jax.devices()'; python3 -m axlearn.common.launch_trainer_main\" "
+      f'-- "'
+      f"ulimit -n 1048576; ulimit -c 0; "
+      f"python3 -c 'import jax; jax.devices()'; "
+      f"python3 -m axlearn.common.launch_trainer_main"
+      f'" '
       f"--module={module} --config={model_config} "
       f"--trainer_dir={trainer_dir}/{outpu_dir_name}/{run_name} "
       f"--data_dir=gs://axlearn-public/tensorflow_datasets "
@@ -151,62 +190,59 @@ def build_axlearn_cmd(
       *export_var,
       workload_create_cmd,
   ]
-  final_command_string = ' && '.join(cmds)
-  return final_command_string
-
+  return cmds
 
 
 def create_axlearn_config_cmd(
-    cluster_name: str,
-    project_id: str,
-    zone: str,
+    cluster_name: str, project_id: str, zone: str, label: str = "tpu-v5p"
 ) -> str:
-    """
-    Generates a shell command string to create the .axlearn configuration file
-    using textwrap.dedent for clean multiline string formatting.
-    """
-    cmds = ""
-    cmds += "mkdir -p .axlearn/"
-    config_content = textwrap.dedent(f"""
-        [gcp]
-        _active = "{project_id}:{zone}"
+  """
+  Generates a shell command string to create the .axlearn.default.config
+  configuration file using textwrap.dedent for clean multiline string
+  formatting.
+  """
+  cmds = ""
+  cmds += "mkdir -p ~/.axlearn/"
 
-        [gcp."{project_id}:{zone}"]
-        project = "{project_id}"
-        region = "{zone[:-2]}"
-        zone = "{zone}"
-        gke_cluster = "{cluster_name}"
-        cluster = "{cluster_name}"
-        labels = "tpu-v5p"
-        docker_repo = "gcr.io/{project_id}"
-        default_dockerfile = "Dockerfile"
-        service_account_email = "ml-auto-solutions-dev@cloud-tpu-multipod-dev.iam.gserviceaccount.com"
-        permanent_bucket = "axlearn-bucket-multipod"
-        private_bucket = "axlearn-bucket-multipod"
-        ttl_bucket = "axlearn-bucket-multipod"
-    """).strip()
+  config_content = textwrap.dedent(
+      f"""
+      [gcp]
+      _active = "{project_id}:{zone}"
 
-    escaped_config = config_content.replace('"', r'\"').replace('\n', r'\n')
+      [gcp."{project_id}:{zone}"]
+      project = "{project_id}"
+      region = "{gke.zone_to_region(zone)}"
+      zone = "{zone}"
+      gke_cluster = "{cluster_name}"
+      cluster = "{cluster_name}"
+      labels = "{label}"
+      docker_repo = "gcr.io/{project_id}"
+      default_dockerfile = "Dockerfile"
+      permanent_bucket = "axlearn-bucket-multipod"
+      private_bucket = "axlearn-bucket-multipod"
+      ttl_bucket = "axlearn-bucket-multipod"
+      """
+  ).strip()
 
-    cmds += f" && printf \"{escaped_config}\" > ~/.axlearn/axlearn.default.config"
+  escaped_config = config_content.replace('"', r"\"").replace("\n", r"\n")
 
-    return cmds
+  cmds += f'&& printf "{escaped_config}" > ~/.axlearn/axlearn.default.config'
+
+  return cmds
 
 
 def setup_cmds(
     cluster_name: str,
     project_id: str,
     zone: str,
-)-> str:
-  cmds =[
-      '&& export PYTHONPATH=$PYTHONPATH:/root',
-      'axlearn gcp config activate',
-      'apt-get install -y kubectl google-cloud-sdk-gke-gcloud-auth-plugin',
-      f'gcloud container clusters get-credentials {cluster_name} \
-            --region {zone[:-2]} --project {project_id}'
+) -> str:
+  return [
+      "export PYTHONPATH=$PYTHONPATH:/root",
+      "axlearn gcp config activate",
+      "apt-get install -y kubectl google-cloud-sdk-gke-gcloud-auth-plugin",
+      f"gcloud container clusters get-credentials {cluster_name} \
+            --region {zone[:-2]} --project {project_id}",
   ]
-  final_command_string = ' && '.join(cmds)
-  return final_command_string
 
 
 def generate_run_name(
@@ -215,23 +251,79 @@ def generate_run_name(
     accelerator: str,
 ) -> str:
   """
-    Generates a unique run name for a MaxText run based on given parameters.
+  Generates a unique run name for a MaxText run based on given parameters.
 
-    The function creates a formatted string that includes a short identifier,
-    the number of slices, the accelerator type, and the current timestamp. This
-    run name is useful for uniquely identifying a specific training run,
-    especially for checkpointing and logging purposes.
+  The function creates a formatted string that includes a short identifier,
+  the number of slices, the accelerator type, and the current timestamp. This
+  run name is useful for uniquely identifying a specific training run,
+  especially for checkpointing and logging purposes.
 
-    Args:
-      short_id: A short identifier for the specific model or experiment.
-      checkpointing_type: The name of the checkpointing strategy (e.g., 'emc').
-      slice_number: The number of TPU slices used for the training run.
-      accelerator: The type of accelerator used (e.g., 'tpu-v4').
+  Args:
+    short_id: A short identifier for the specific model or experiment.
+    checkpointing_type: The name of the checkpointing strategy (e.g., 'emc').
+    slice_number: The number of TPU slices used for the training run.
+    accelerator: The type of accelerator used (e.g., 'tpu-v4').
 
-    Returns:
-      A string formatted as '{short_id}-mtc-{slice_number}x-{accelerator}-{timestamp}'.
+  Returns:
+    A string formatted as
+      '{short_id}-mtc-{slice_number}x-{accelerator}-{timestamp}'.
   """
 
   run_time = datetime.now().strftime("%Y-%m-%d-%H-%M")
   run_name_id = f"latest-{short_id}-{slice_number}x-{accelerator}-{run_time}"
   return run_name_id
+
+
+@task
+def get_image_name(
+    project_id: str,
+    path_repository: str,
+) -> str | None:
+  """
+  Retrieves repository details by calling the gcloud CLI command
+  and parsing the output as JSON.
+
+  Args:
+    project_id: Your Google Cloud Project ID.
+    repository_id: The ID of the repository.
+      e.g gcr.io/cienet-cmcs/axlearn-custom
+  Returns:
+    A string with the name of the latest daily image.
+  """
+  list_tags_cmds = (
+      f"gcloud container images list-tags {path_repository} "
+      f"--project={project_id} "
+      f"--format=json | tr -d '\\n\\r'"
+  )
+  cmds = [
+      "set -ue",
+      list_tags_cmds,
+  ]
+
+  hook = SubprocessHook()
+  result = hook.run_command(["bash", "-c", ";".join(cmds)])
+  assert (
+      result.exit_code == 0
+  ), f"XPK command failed with code {result.exit_code}"
+
+  try:
+    repo_details: list[dict] = json.loads(result.output)
+  except json.JSONDecodeError as e:
+    raise ValueError("Failed to parse JSON output from gcloud command.") from e
+
+  # TODO f{'xxxx':=^80}
+  logging.info(f"========= All images: {repo_details[:5]} ========= ")
+  image_name = ""
+  for image_info in repo_details:
+    tags_list = image_info.get("tags", [])
+
+    # We are expected to get the tags of all our images.
+    # If tag list contain more than two we know is the latest.
+    # (Since only the latest contains 2 tags.)
+    if len(tags_list) >= 2:
+      tags_list.remove("latest")
+      image_name = f"{path_repository}:{tags_list[0]}"
+      # TODO f{'xxxx':=^80}
+      logging.info(f"========= Running with image : {image_name} ========= ")
+      return f"{path_repository}:latest"
+  raise AirflowFailException("Image not found or is not latest image")

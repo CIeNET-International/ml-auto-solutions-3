@@ -1,7 +1,6 @@
 """Test Configuration Class utility for orbax testcases"""
 
 import posixpath
-from typing import Optional
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
 from absl import logging
@@ -11,10 +10,10 @@ import re
 from airflow.exceptions import AirflowFailException
 
 from dags import gcs_bucket
-from xlml.utils.gke import zone_to_region
 from dags.common.vm_resource import XpkClusters, DockerImage
 from dags.orbax.util import checkpoint_util
 from dags.multipod.configs.common import SetupMode
+from xlml.utils.gke import zone_to_region
 
 
 DEFAULT_BUCKET = gcs_bucket.ORBAX_AUTOMATION_BUCKET_EUROPE_WEST4
@@ -24,21 +23,17 @@ DEFAULT_RAM_DISK = "/local"
 
 # Only one version of the Docker image is supported at the moment.
 # Other versions (e.g., "stable") may be introduced later.
-DOCKER_IMAGES = [
-    (
-        SetupMode.NIGHTLY,
-        DockerImage.MAXTEXT_TPU_JAX_ORBAX_HEAD,
-    )
-]
+DOCKER_IMAGES = [(
+    SetupMode.NIGHTLY,
+    DockerImage.MAXTEXT_TPU_JAX_ORBAX_HEAD,
+)]
 
 # Only one version of AXLearn is used at the moment with Jax 0.5.3.
 # Other versions (e.g., "stable") may be introduced later.
-DOCKER_IMAGES_AXLEARN = [
-    (
-        SetupMode.NIGHTLY,
-        DockerImage.AXLEARN_CUSTOM,
-    )
-]
+DOCKER_IMAGES_AXLEARN = [(
+    SetupMode.NIGHTLY,
+    DockerImage.AXLEARN_CUSTOM,
+)]
 
 # Valid models and sizes for current Maxtext Repository.
 MODELS = {
@@ -61,13 +56,15 @@ MODELS = {
 
 @dataclass
 class Checkpointing:
-  """Configuration for checkpointing mechanisms in MaxText training.
+  """
+  Configuration for checkpointing mechanisms in MaxText training.
 
   This class defines the checkpointing behavior for training jobs, including
   emergency checkpointing and multi-tier checkpointing options.
 
   Attributes:
-    name: A unique identifier for this checkpointing configuration (e.g., 'mtc', 'emc', 'reg').
+    name: A unique identifier for this checkpointing configuration
+      (e.g., 'mtc', 'emc', 'reg').
     enable_multi_tier_checkpointing: Whether to enable multi-tier checkpointing
       with replicator service for automatic backup to GCS.
     enable_emergency_checkpoint: Whether to enable emergency checkpointing
@@ -81,6 +78,7 @@ class Checkpointing:
 
 class TestConfigAbstract(ABC):
   """Abstract Base Class for all test configuration utilities."""
+
   cluster: XpkClusters
   slices: list[int]
   model_name: str
@@ -99,9 +97,9 @@ class TestConfig(TestConfigAbstract):
 
   machine_type: str
   accelerator: str
-  multi_tier_checkpointing_backup_interval_minutes: Optional[int]
-  local_checkpoint_period: Optional[int]
-  checkpoint_period: Optional[int]
+  multi_tier_checkpointing_backup_interval_minutes: int | None
+  local_checkpoint_period: int | None
+  checkpoint_period: int | None
   ram_disk_size: str
   base_dir: str
   cpc_config: checkpoint_util.CheckpointConfiguration
@@ -116,11 +114,12 @@ class TestConfig(TestConfigAbstract):
       short_id: str,
       steps: int,
       base_dir: str,
-      multi_tier_checkpointing_backup_interval_minutes: Optional[int] = 0,
-      local_checkpoint_period: Optional[int] = 0,
-      checkpoint_period: Optional[int] = 10_000,
+      multi_tier_checkpointing_backup_interval_minutes: int | None = 0,
+      local_checkpoint_period: int | None = 0,
+      checkpoint_period: int | None = 10_000,
   ):
-    """Initializes the test configurations.
+    """
+    Initializes the test configurations.
 
     Args:
       cluster: The specified cluster to be used for the test.
@@ -131,11 +130,12 @@ class TestConfig(TestConfigAbstract):
       short_id: A short identifier for the test run.
       steps: The current step of the training process.
       base_dir: The base directory for storing checkpoints and outputs.
-      multi_tier_checkpointing_backup_interval_minutes: Optional. The allowed time for replicator takes to backup
-        and store checkpoint to bucket.
-      local_checkpoint_period: Optional. The step interval for local checkpoints.
-      checkpoint_period: Optional. The step interval for the checkpoints store in the
-        bucket.
+      multi_tier_checkpointing_backup_interval_minutes: Optional. The allowed
+        time for replicator takes to backup and store checkpoint to bucket.
+      local_checkpoint_period: Optional. The step interval for local
+        checkpoints.
+      checkpoint_period: Optional. The step interval for the checkpoints store
+        in the bucket.
     """
 
     self.cluster = cluster
@@ -150,7 +150,10 @@ class TestConfig(TestConfigAbstract):
     self.steps = steps
     self.local_checkpoint_period = local_checkpoint_period
     self.checkpoint_period = checkpoint_period
-    self.ram_disk_size = f"{self._get_disk_size(slice_num=max(self.slices), mode='mib',multiplier=60)}Mi"
+    ram_disk_size = self._get_disk_size(
+        slice_num=max(self.slices), mode="mib", multiplier=60
+    )
+    self.ram_disk_size = f"{ram_disk_size}Mi"
     self.base_dir = base_dir
     self.cpc_config = checkpoint_util.CheckpointConfiguration(
         project_id=self.cluster.project,
@@ -206,7 +209,8 @@ class TestConfig(TestConfigAbstract):
       if self.local_checkpoint_period and self.local_checkpoint_period > 0:
         command += f"local_checkpoint_period={self.local_checkpoint_period} "
 
-    # Add multi-tier checkpointing parameters only if enabled and emergency checkpoint is enabled
+    # Add multi-tier checkpointing parameters only if enabled and emergency
+    # checkpoint is enabled
     if enable_emergency_checkpoint and enable_multi_tier_checkpointing:
       command += (
           f"enable_multi_tier_checkpointing={enable_multi_tier_checkpointing} "
@@ -215,9 +219,13 @@ class TestConfig(TestConfigAbstract):
           self.multi_tier_checkpointing_backup_interval_minutes
           and self.multi_tier_checkpointing_backup_interval_minutes > 0
       ):
-        command += f"multi_tier_checkpointing_backup_interval_minutes={self.multi_tier_checkpointing_backup_interval_minutes} "
+        command += (
+            "multi_tier_checkpointing_backup_interval_minutes="
+            f"{self.multi_tier_checkpointing_backup_interval_minutes} "
+        )
 
-    # Return as tuple for k8s yaml compatibility - GKE config expects a list of commands
+    # Return as tuple for k8s yaml compatibility - GKE config expects a list of
+    # commands
     return (command,)
 
   def _get_disk_size(
@@ -237,7 +245,8 @@ class TestConfig(TestConfigAbstract):
 
     if model_name not in MODELS:
       raise AirflowFailException(
-          f"Model '{model_name}' not supported. Please choose from: {sorted(MODELS)}"
+          f"Model '{model_name}' not supported. "
+          f"Please choose from: {sorted(MODELS)}"
       )
 
     total_checkpoint = int(size_model) * 10
@@ -262,11 +271,9 @@ class TestConfig(TestConfigAbstract):
     return int(math.ceil(size / page_size) * page_size)
 
 
-"""Test Configuration Class utility for orbax testcases"""
-
-
 class TestConfigAXLearn(TestConfigAbstract):
-  """Holds the general configuration for an AXLearn checkpointing test.
+  """
+  Holds the general configuration for an AXLearn checkpointing test.
 
   This class provides the necessary parameters and utility functions
   for configuring a training run specifically designed for AXLearn tests,
@@ -274,16 +281,14 @@ class TestConfigAXLearn(TestConfigAbstract):
   """
 
   run_name: str
+  airflow_cluster: XpkClusters
   instance_type: str
   mesh_type: str
   module: str
-  checkpoint_step: int
   trainer_dir: str
   data_dir: str
-  train_batch_size: int
-  fsdp: int
-  data: int
   trace_steps: list[int]
+  label: str = "tpu-v5p"
 
   def __init__(
       self,
@@ -295,19 +300,16 @@ class TestConfigAXLearn(TestConfigAbstract):
       module: str,
       short_id: str,
       steps: int,
-      checkpoint_step: int,
+      label: str,
       model_name: str,
       trainer_dir: str,
       data_dir: str,
-      train_batch_size: int,
-      fsdp: int,
-      data: int,
       trace_steps: list[int],
   ):
     """Initializes the AXLearn test configurations.
 
     Args:
-      cluster: The specified cluster (XpkClusters object) to be used for the test.
+      cluster: The specified cluster to be used for the test.
       run_name: The unique identifier for the current training run.
       slices: The list of slices (number of nodes) to be used.
       instance_type: The type of machine instance (e.g., 'tpu-v5litepod-8').
@@ -315,12 +317,19 @@ class TestConfigAXLearn(TestConfigAbstract):
       module: The specific AXLearn module being tested.
       short_id: A short identifier for the test run.
       steps: The total number of training steps the job will run.
+      # TODO: add doc
+      label:
+      # TODO: not used?
       checkpoint_step: The step interval at which checkpoints are saved.
       model_name: The configuration file or string for the model.
       trainer_dir: The base directory for trainer output.
       data_dir: The directory containing the training data.
+      # TODO: not used?
       train_batch_size: The batch size used for training.
-      fsdp: A flag or value indicating the FSDP (Fully Sharded Data Parallel) configuration.
+      # TODO: not used?
+      fsdp: A flag or value indicating the Fully Sharded Data Parallel
+        configuration.
+      # TODO: not used?
       data: A flag or value indicating data parallelism configuration.
       trace_steps: A list of steps where XLA compiler will trace it.
     """
@@ -331,15 +340,12 @@ class TestConfigAXLearn(TestConfigAbstract):
     self.instance_type = instance_type
     self.mesh_type = mesh_type
     self.module = module
+    self.label = label
     self.short_id = short_id
     self.steps = steps
-    self.checkpoint_step = checkpoint_step
     self.model_config = model_name
     self.trainer_dir = trainer_dir
     self.data_dir = data_dir
-    self.train_batch_size = train_batch_size
-    self.fsdp = fsdp
-    self.data = data
     self.trace_steps = trace_steps
 
   def __str__(self) -> str:
@@ -352,24 +358,28 @@ class TestConfigAXLearn(TestConfigAbstract):
         "module": self.module,
         "short_id": self.short_id,
         "step": self.steps,
+        # TODO: not used?
         "checkpoint_step": self.checkpoint_step,
         "model_config": self.model_config,
         "trainer_dir": self.trainer_dir,
         "data_dir": self.data_dir,
+        # TODO: not used?
         "train_batch_size": self.train_batch_size,
+        # TODO: not used?
         "fsdp": self.fsdp,
+        # TODO: not used?
         "data": self.data,
-        "trace_steps":self.trace_steps,
+        "trace_steps": self.trace_steps,
     }
     output = ["\n✨ **AXLearn Test Configuration Debugging ** ✨"]
     for key, value in attributes.items():
-        output.append(f"  **{key.ljust(18)}**: {value}")
+      output.append(f"  **{key.ljust(18)}**: {value}")
     return "\n".join(output)
 
   def generate_step_to_validate(self) -> list[int]:
     """Calculates and returns a list of step numbers to be validated."""
     total_steps = self.steps
-    k = self.checkpoint_step
+    checkpoint_step = 100
+    k = checkpoint_step
     last_step = self.steps
-    return [*range(self.checkpoint_step, total_steps, k), last_step]
-
+    return [*range(checkpoint_step, total_steps, k), last_step]
