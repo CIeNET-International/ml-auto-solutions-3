@@ -17,9 +17,11 @@
 
 import datetime
 
-from xlml.apis import gcp_config, metric_config, task, test_config
+from xlml.apis import gcp_config, task, test_config
+from xlml.apis.metric_config import DatasetOption
 from xlml.apis.xpk_cluster_config import XpkClusterConfig
 from dags.common.vm_resource import XpkClusters
+
 
 def get_axlearn_tpu_config(
     test_name: str,
@@ -27,7 +29,7 @@ def get_axlearn_tpu_config(
     test_owner: str,
     time_out_in_min: int,
     cluster: XpkClusterConfig = XpkClusters.TPU_V5P_128_CLUSTER,
-    dataset_name: metric_config.DatasetOption = metric_config.DatasetOption.XLML_DATASET,
+    dataset_name: DatasetOption = DatasetOption.XLML_DATASET,
     num_slices: int = 1,
 ) -> task.AXLearnTask:
   """Setup the AXLearn tpu env config."""
@@ -37,6 +39,7 @@ def get_axlearn_tpu_config(
       zone=cluster.zone,
       dataset_name=dataset_name,
   )
+
   latest_docker_image = f"{docker_image.split(':')[0]}:latest"
   job_test_config = test_config.TpuGkeTest(
       test_config.Tpu(
