@@ -71,7 +71,7 @@ with models.DAG(
     run_model_cmds = []
     for model_size, num_cores in models:
       for n in num_slices:
-        cmd = f"bash src/MaxText/configs/{tpu}/{model_size}.sh EXECUTABLE=train_compile M_COMPILE_TOPOLOGY={tpu}-{num_cores} M_COMPILE_TOPOLOGY_NUM_SLICES={n}"
+        cmd = f"bash src/MaxText/configs/{tpu}/{model_size}.sh EXECUTABLE=train_compile M_COMPILE_TOPOLOGY={tpu}-{num_cores} M_COMPILE_TOPOLOGY_NUM_SLICES={n} DATASET_PATH=gs://us-central1-ml-automation-s-bc6c8818-bucket/dags/maxtext-configs-aot-synthetic-dataset/synthetic OUTPUT_PATH=gs://us-central1-ml-automation-s-bc6c8818-bucket/dags/maxtext-configs-aot-synthetic-dataset/dummy-output-dir"
         run_model_cmds.append(cmd)
     run_model_cmds_dict[tpu] = run_model_cmds
 
