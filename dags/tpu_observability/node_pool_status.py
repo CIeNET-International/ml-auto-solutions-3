@@ -47,7 +47,7 @@ with models.DAG(
     node_pool_info = node_pool.Info(
         project_id=models.Variable.get("PROJECT_ID", default_var="cienet-cmcs"),
         cluster_name=models.Variable.get(
-            "CLUSTER_NAME", default_var="yuna-auto-test"
+            "CLUSTER_NAME", default_var="tpu-observability-automation"
         ),
         node_pool_name=models.Variable.get(
             "NODE_POOL_NAME", default_var="node-pool-status-v6e-autotest"
