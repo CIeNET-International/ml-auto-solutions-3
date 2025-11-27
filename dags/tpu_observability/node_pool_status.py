@@ -10,8 +10,7 @@ from airflow.utils.task_group import TaskGroup
 from dags.map_reproducibility.utils import constants
 from dags.common.vm_resource import Project, Region, Zone
 from dags.tpu_observability.utils import node_pool_util as node_pool
-from dags.tpu_observability.configs.common import MachineConfigMap
-from dags.tpu_observability.configs.log_metadata import log_metadata
+from dags.tpu_observability.configs.common import MachineConfigMap, log_metadata
 
 
 with models.DAG(
