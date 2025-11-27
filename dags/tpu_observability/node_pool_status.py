@@ -74,7 +74,6 @@ with models.DAG(
     )
 
     with TaskGroup(group_id=f"v{config.tpu_version.value}"):
-
       task_id = "get_log_metadata"
       log_op = log_metadata.override(task_id=task_id)(
           cluster_project=node_pool_info.project_id,
@@ -85,7 +84,7 @@ with models.DAG(
           workload_id="",
           docker_image="",
           accelerator_type=node_pool_info.machine_type,
-          num_slices="1"
+          num_slices="1",
       )
 
       task_id = "create_node_pool"

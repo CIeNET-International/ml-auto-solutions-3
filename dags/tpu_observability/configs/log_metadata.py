@@ -14,7 +14,6 @@ def log_metadata(
     accelerator_type,
     num_slices,
 ):
-
   composer.log_metadata_for_xlml_dashboard({
       "cluster_project": cluster_project,
       "region": region,
