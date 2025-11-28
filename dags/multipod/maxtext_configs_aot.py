@@ -71,6 +71,7 @@ with models.DAG(
     run_model_cmds = []
     for model_size, num_cores in models:
       for n in num_slices:
+        # setting required string values (DATASET_PATH and OUTPUT_PATH) for Pydantic Validation
         cmd = f"bash src/MaxText/configs/{tpu}/{model_size}.sh EXECUTABLE=train_compile M_COMPILE_TOPOLOGY={tpu}-{num_cores} M_COMPILE_TOPOLOGY_NUM_SLICES={n} DATASET_PATH=dummy-dataset OUTPUT_PATH=dummy-output-dir"
         run_model_cmds.append(cmd)
     run_model_cmds_dict[tpu] = run_model_cmds
