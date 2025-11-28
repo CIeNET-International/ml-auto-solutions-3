@@ -15,4 +15,5 @@
 export PYTHONPATH=$PWD
 export XLMLTEST_CONFIGS=$PWD/dags/jsonnet/
 
-find dags -name '*.py' |  xargs -n 1 -t python
+# find dags -name '*.py' |  xargs -n 1 -t python
+python dags/tpu_observability/tpu_info_format_validation_dags.py

@@ -16,11 +16,15 @@
 
 import os
 import re
+import tempfile
 from typing import List
-from absl import logging
 
+from absl import logging
 from airflow.decorators import task
 from airflow.providers.google.cloud.operators.gcs import GCSHook
+import yaml
+
+from dags.tpu_observability.utils import subprocess_util as subprocess
 
 
 def obtain_file_list(gcs_path: str) -> List[str]:
@@ -88,3 +92,41 @@ def wait_for_file_to_exist(file_path: str) -> bool:
 
   logging.info("Target file not found in the specified GCS path.")
   return False
+
+
+class GCSConfigLoader:
+  """Handles GCS-related configuration variables and file loading operations."""
+
+  BUCKET = "gs://ml-auto-solutions-configs"
+  CONFIG_FILENAME = "dag_config.yaml"
+
+  @staticmethod
+  def load_file_from_gcs(gs_file_path: str) -> str:
+    """Loads a file from a Google Cloud Storage bucket using the gsutil command-line tool.
+
+    This function is defined as a static method as it does not rely on any
+    instance state of GCSConfigLoader.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+      temp_file_path = f"{tmpdir}/downloaded_config"
+
+      subprocess.run_exec(
+          cmd=f"gsutil -m cp {gs_file_path} {temp_file_path}",
+          log_output=False,
+      )
+
+      with open(temp_file_path, "r") as f:
+        return f.read()
+
+  @classmethod
+  def load_dag_config(cls) -> dict:
+    """Loads and parses the DAG configuration YAML file from GCS.
+
+    Defined as a classmethod to access class attributes (BUCKET and FILENAME).
+    """
+
+    subprocess.run_exec(
+      cmd=f"gcloud container clusters get-credentials cienet-cmcs --region us-central1"
+    )
+    dag_yaml = cls.load_file_from_gcs(f"{cls.BUCKET}/{cls.CONFIG_FILENAME}")
+    return yaml.safe_load(dag_yaml)
