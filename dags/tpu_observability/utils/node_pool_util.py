@@ -16,6 +16,7 @@ from google.cloud import monitoring_v3
 from dags.tpu_observability.utils.time_util import TimeUtil
 from dags.tpu_observability.utils.gcp_util import query_time_series
 from dags.tpu_observability.utils import subprocess_util as subprocess
+from xlml.utils import composer
 
 
 class Status(enum.Enum):
@@ -61,6 +62,15 @@ def create(
     ignore_failure: bool = False,
 ) -> None:
   """Creates a GKE node pool by the given node pool information."""
+
+  composer.log_metadata_for_xlml_dashboard({
+      "cluster_project": node_pool.project_id,
+      "region": node_pool.region,
+      "zone": node_pool.zone,
+      "cluster_name": node_pool.cluster_name,
+      "node_pool_name": node_pool.node_pool_name,
+      "accelerator_type": node_pool.machine_type,
+  })
 
   command = (
       f"gcloud container node-pools create {node_pool.node_pool_name} "
