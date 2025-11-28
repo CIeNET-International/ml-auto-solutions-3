@@ -298,7 +298,12 @@ with models.DAG(
       """,
 ) as dag:
   for machine in MachineConfigMap:
-    dag_config = GCSConfigLoader.load_dag_config()
+    @task
+    def test():
+      dag_config = GCSConfigLoader.load_dag_config()
+      return dag_config 
+
+    dag_config = test()
     config = machine.value
     cluster_info = node_pool.Info(
         project_id=dag_config["common"]["project_id"],
