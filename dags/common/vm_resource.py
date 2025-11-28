@@ -1,3 +1,4 @@
+
 # Copyright 2024 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -220,6 +221,13 @@ class RuntimeVersion(enum.Enum):
 class XpkClusters:
   """Common XPK cluster configs."""
 
+  ML_AUTO_SOLUTIONS_AIRFLOW_PROD= XpkClusterConfig(
+      name="us-central1-ml-automation-s-24b05597-gke",
+      device_version=AcceleratorType.CPU,
+      core_count=0,
+      project=Project.CLOUD_ML_AUTO_SOLUTIONS.value,
+      zone=Zone.US_CENTRAL1_A.value,
+  )
   TPU_V4_8_MAS_CLUSTER = XpkClusterConfig(
       name="mas-v4-8",
       device_version=TpuVersion.V4,
@@ -331,6 +339,10 @@ class DockerImage(enum.Enum):
   PYTORCH_NIGHTLY = (
       "us-central1-docker.pkg.dev/tpu-pytorch-releases/docker/"
       f"xla:nightly_3.10_tpuvm_{datetime.datetime.today().strftime('%Y%m%d')}"
+  )
+  AXLEARN_CUSTOM = (
+      "gcr.io/cloud-tpu-multipod-dev/axlearn-custom:"
+      f"{datetime.datetime.today().strftime('%Y-%m-%d')}"
   )
   AXLEARN_TPU_JAX_STABLE_STACK = (
       "us-docker.pkg.dev/tpu-prod-env-multipod/bite/tpu/axlearn:"
