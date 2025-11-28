@@ -7,6 +7,7 @@ from dataclasses import replace
 import datetime
 import os
 import re
+import subprocess
 import tempfile
 
 from airflow import models
@@ -15,7 +16,7 @@ from airflow.exceptions import AirflowFailException
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
-from dags.common.vm_resource import Zone, Region
+from dags.common.vm_resource import Region, Zone
 from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.configs.common import MachineConfigMap, TpuConfig
 from dags.tpu_observability.utils import jobset_util as jobset
@@ -23,6 +24,7 @@ from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.tpu_observability.utils import tpu_info_util as tpu_info
 from dags.tpu_observability.utils.jobset_util import JobSet, Workload
+from xlml.apis.gcs import GCSConfigLoader
 
 
 @task
@@ -46,7 +48,7 @@ def get_tpu_info_from_pod(node_pool: node_pool.Info, pod_name: str) -> str:
 
     cmd = " && ".join([
         jobset.Command.get_credentials_command(node_pool),
-        (f"kubectl exec {pod_name} -n default -- tpu-info"),
+        f"kubectl exec {pod_name} -n default -- tpu-info",
     ])
 
     return subprocess.run_exec(cmd, env=env)
@@ -296,35 +298,27 @@ with models.DAG(
       """,
 ) as dag:
   for machine in MachineConfigMap:
+    dag_config = GCSConfigLoader.load_dag_config()
     config = machine.value
     cluster_info = node_pool.Info(
-        project_id=models.Variable.get(
-            "TFV_PROJECT_ID", default_var="cienet-cmcs"
-        ),
-        cluster_name=models.Variable.get(
-            "TFV_CLUSTER_NAME", default_var="tpu-observability-automation"
-        ),
-        node_pool_name=models.Variable.get(
-            "TFV_NODE_POOL_NAME", default_var="tpu-info-fromat-test-v6e"
-        ),
-        region=models.Variable.get(
-            "TFV_REGION", default_var=Region.US_CENTRAL1.value
-        ),
-        location=models.Variable.get(
-            "TFV_LOCATION", default_var=Region.US_CENTRAL1.value
-        ),
-        node_locations=models.Variable.get(
-            "TFV_NODE_LOCATIONS", default_var=Zone.US_CENTRAL1_B.value
-        ),
-        num_nodes=models.Variable.get("TFV_NUM_NODES", default_var=4),
+        project_id=dag_config["common"]["project_id"],
+        cluster_name=dag_config["common"]["cluster_name"],
+        node_pool_name=dag_config["dag_tpu_info_format_validation_dag"][
+            "node_pool_name"
+        ],
+        region=dag_config["dag_tpu_info_format_validation_dag"]["region"],
+        location=dag_config["common"]["location"],
+        node_locations=dag_config["common"]["node_locations"],
+        num_nodes=dag_config["common"]["num_nodes"],
         machine_type=config.machine_version.value,
         tpu_topology=config.tpu_topology,
     )
+
     cluster_info_2 = replace(
         cluster_info,
-        node_pool_name=models.Variable.get(
-            "TFV_NODE_POOL_NAME", default_var="tpu-info-format-test-v6e-2"
-        ),
+        node_pool_name=dag_config["dag_tpu_info_format_validation_dag"][
+            "node_pool_name_2"
+        ],
     )
 
     jobset_config = JobSet(
@@ -352,7 +346,7 @@ with models.DAG(
             retries=2,
         )(
             node_pool=cluster_info,
-            reservation="cloudtpu-20251107233000-1246578561",
+            reservation=dag_config["common"]["reservation"],
         )
 
         create_second_node_pool = node_pool.create.override(
@@ -360,7 +354,7 @@ with models.DAG(
             retries=2,
         )(
             node_pool=cluster_info_2,
-            reservation="cloudtpu-20251107233000-1246578561",
+            reservation=dag_config["common"]["reservation"],
         )
 
       apply_time = jobset.run_workload(

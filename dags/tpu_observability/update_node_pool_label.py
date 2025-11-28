@@ -1,15 +1,14 @@
 """A DAG to update the label of a node pool to make node pool unavailable for a while"""
 
 import datetime
-
 from airflow import models
-from airflow.utils.trigger_rule import TriggerRule
 from airflow.utils.task_group import TaskGroup
-
+from airflow.utils.trigger_rule import TriggerRule
 from dags.common.vm_resource import Project, Region, Zone
 from dags.map_reproducibility.utils import constants
-from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.configs.common import MachineConfigMap
+from dags.tpu_observability.utils import node_pool_util as node_pool
+from xlml.apis.gcs import GCSConfigLoader
 
 
 with models.DAG(
@@ -40,22 +39,17 @@ with models.DAG(
     """,
 ) as dag:
   for machine in MachineConfigMap:
+    dag_config = GCSConfigLoader.load_dag_config()
     config = machine.value
     node_pool_info = node_pool.Info(
-        project_id="cienet-cmcs",
-        cluster_name=models.Variable.get(
-            "CLUSTER_NAME", default_var="tpu-observability-automation"
-        ),
-        node_pool_name=models.Variable.get(
-            "NODE_POOL_NAME", default_var="update-node-pool-label-v6e-autotest"
-        ),
-        location=models.Variable.get(
-            "LOCATION", default_var=Region.US_CENTRAL1.value
-        ),
-        node_locations=models.Variable.get(
-            "NODE_LOCATIONS", default_var=Zone.US_CENTRAL1_B.value
-        ),
-        num_nodes=models.Variable.get("NUM_NODES", default_var=4),
+        project_id=dag_config["common"]["project_id"],
+        cluster_name=dag_config["common"]["cluster_name"],
+        node_pool_name=dag_config["dag_gke_node_pool_label_update"][
+            "node_pool_name"
+        ],
+        location=dag_config["common"]["location"],
+        node_locations=dag_config["common"]["node_locations"],
+        num_nodes=dag_config["common"]["num_nodes"],
         machine_type=config.machine_version.value,
         tpu_topology=config.tpu_topology,
     )
@@ -65,7 +59,7 @@ with models.DAG(
     with TaskGroup(group_id=f"v{config.tpu_version.value}"):
       create_node_pool = node_pool.create.override(task_id="create_node_pool")(
           node_pool=node_pool_info,
-          reservation="cloudtpu-20251107233000-1246578561",
+          reservation=dag_config["common"]["reservation"],
       )
 
       wait_for_availability = node_pool.wait_for_availability.override(
