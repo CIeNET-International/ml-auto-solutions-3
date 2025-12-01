@@ -29,6 +29,7 @@ from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from google.cloud import logging_v2
 from google.cloud import monitoring_v3
+from google.cloud.monitoring_v3 import types as monitoring_types
 
 from dags.tpu_observability.utils.time_util import TimeUtil
 from dags.tpu_observability.utils.gcp_util import query_time_series
@@ -504,7 +505,7 @@ def _query_ttr_metric(node_pool: Info) -> datetime:
           f'resource.labels.cluster_name = "{node_pool.cluster_name}" '
           f'resource.labels.node_pool_name = "{node_pool.node_pool_name}"'
       ),
-      interval=types.TimeInterval({
+      interval=monitoring_types.TimeInterval({
           "end_time": {"seconds": now},
           # Metrics are sampled every 60s and stored in the GCP backend,
           # but it may take up to 2 minutes for the data to become
@@ -536,7 +537,7 @@ def _query_ttr_metric(node_pool: Info) -> datetime:
   return False
 
 
-@task.sensor(poke_interval=30, timeout=1800, mode="reschedule")
+@task.sensor(poke_interval=30, timeout=2400, mode="reschedule")
 def wait_for_ttr(
     node_pool: Info,
     **context,
@@ -545,7 +546,7 @@ def wait_for_ttr(
 
   This is a task waits for the node pool has TTR records occurred
   by querying the status metric and comparing it with the expected status.
-  The default task runs every 30s for 1800s.
+  The default task runs every 30s for 2400s.
 
   Args:
       node_pool: An instance of the Info class that encapsulates
