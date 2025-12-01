@@ -18,18 +18,15 @@ pool as expected.
 """
 
 import datetime
-
 from airflow import models
 from airflow.models import Variable
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
-
-from dags import composer_env
-from dags.common import test_owner
+from dags.common.vm_resource import Project, Region, Zone
 from dags.map_reproducibility.utils import constants
-from dags.common.vm_resource import Region, Zone
-from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.configs.common import MachineConfigMap
+from dags.tpu_observability.utils import node_pool_util as node_pool
+from xlml.apis.gcs import GCSConfigLoader
 
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
@@ -73,20 +70,19 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     """,
 ) as dag:
   for machine in MachineConfigMap:
+    dag_config = GCSConfigLoader.load_dag_config()
     config = machine.value
     cluster_name = "tpu-observability-automation"
     cluster_name += "-prod" if composer_env.is_prod_env() else "-dev"
     node_pool_info = node_pool.Info(
-        project_id="cienet-cmcs",
-        cluster_name=cluster_name,
-        node_pool_name=Variable.get(
-            "NODE_POOL_NAME", default_var="multi-host-nodepool-rollback-auto"
-        ),
-        location=Variable.get("LOCATION", default_var=Region.US_CENTRAL1.value),
-        node_locations=Variable.get(
-            "NODE_LOCATIONS", default_var=Zone.US_CENTRAL1_B.value
-        ),
-        num_nodes=Variable.get("NUM_NODES", default_var=4),
+        project_id=dag_config["common"]["project_id"],
+        cluster_name=dag_config["common"]["cluster_name"],
+        node_pool_name=dag_config["dag_multi_host_nodepool_rollback"][
+            "node_pool_name"
+        ],
+        location=dag_config["common"]["location"],
+        node_locations=dag_config["common"]["node_locations"],
+        num_nodes=dag_config["common"]["num_nodes"],
         machine_type=config.machine_version.value,
         tpu_topology=config.tpu_topology,
     )
@@ -98,7 +94,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     ):
       create_node_pool = node_pool.create.override(owner=test_owner.QUINN_M)(
           node_pool=node_pool_info,
-          reservation="cloudtpu-20251107233000-1246578561",
+          reservation=dag_config["common"]["reservation"],
       )
 
       wait_node_pool_available = node_pool.wait_for_availability(
