@@ -494,42 +494,40 @@ def _query_ttr_metric(node_pool: Info) -> datetime:
       A boolean indicating whether TTR records were found in the
         specified GKE node pool.
   """
-  now = int(time.time())
-  api_client = monitoring_v3.MetricServiceClient()
-  request = monitoring_v3.ListTimeSeriesRequest(
-      name=f"projects/{node_pool.project_id}",
-      filter=(
-          'metric.type="kubernetes.io/node_pool/accelerator/times_to_recover" '
-          f'resource.labels.project_id = "{node_pool.project_id}" '
-          f'resource.labels.location="{node_pool.location}" '
-          f'resource.labels.cluster_name = "{node_pool.cluster_name}" '
-          f'resource.labels.node_pool_name = "{node_pool.node_pool_name}"'
-      ),
-      interval=monitoring_types.TimeInterval({
-          "end_time": {"seconds": now},
-          # Metrics are sampled every 60s and stored in the GCP backend,
-          # but it may take up to 2 minutes for the data to become
-          # available on the client side.
-          # Therefore, a longer time interval is necessary.
-          # A 10-minute window is an arbitrary but sufficient choice to
-          # ensure we can retrieve the latest metric data.
-          "start_time": {"seconds": now - 600},
-      }),
-      view=monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.FULL,
-  )
+  now = datetime.datetime.now()
+  # Metrics are sampled every 60s and stored in the GCP backend,
+  # but it may take up to 2 minute for the metric data to become
+  # available on the client side.
+  # Therefore, a longer time interval is necessary.
+  # A 10-minute window is an arbitrary but sufficient choice to
+  # ensure we can retrieve the latest metric data.
+  start_time_datetime = now - datetime.timedelta(minutes=10)
+  start_time = TimeUtil.from_datetime(start_time_datetime)
+  end_time = TimeUtil.from_datetime(now)
 
-  page_result = api_client.list_time_series(request=request)
-  if not page_result:
-    raise AirflowFailException(
-        f"No TTR metric data found in node pool {node_pool.node_pool_name}."
-    )
+  filter_string = [
+      'metric.type="kubernetes.io/node_pool/accelerator/times_to_recover"',
+      f'resource.labels.project_id = "{node_pool.project_id}"',
+      f'resource.labels.location="{node_pool.location}"',
+      f'resource.labels.cluster_name = "{node_pool.cluster_name}"',
+      f'resource.labels.node_pool_name = "{node_pool.node_pool_name}"',
+  ]
+
+  page_result = query_time_series(
+      project_id=node_pool.project_id,
+      filter_str=" AND ".join(filter_string),
+      start_time=start_time,
+      end_time=end_time,
+  )
 
   for page in page_result.pages:
     # Check if the page object has any time_series entries.
     if page.time_series:
+      print("Have time series: ", page)
       logging.info("Found time series data in the page.")
       return True
     else:
+      print("Doesn't have series: ", page)
       logging.info("Page has no time series data.")
 
   # If we finish iterating through all pages and found nothing.
@@ -599,3 +597,40 @@ def update_labels(node_pool: Info, node_labels: dict) -> None:
   )
 
   subprocess.run_exec(command)
+
+
+def check_duration_and_determine_branch(**kwargs) -> str:
+  """Determines which task to do next based on the given duration and threshold
+
+  Reads the duration from XCom and returns the next Task ID
+  based on the threshold.
+
+  Returns:
+      The Task ID ('wait_for_ttr' or 'skip_ttr_check') to proceed to.
+  Raises:
+      RuntimeError: If the operation duration could not be retrieved from XCom.
+  """
+  ti = kwargs["ti"]
+  config = kwargs["config"]
+  threshold_seconds = kwargs["_THRESHOLD_SECONDS"]
+  duration_seconds = ti.xcom_pull(
+      task_ids=f"v{config.tpu_version.value}.get_node_pool_update_duration",
+      key="return_value",
+  )
+
+  if duration_seconds is None:
+    error_msg = "No update duration found."
+    raise AirflowFailException(error_msg)
+
+  if duration_seconds >= threshold_seconds:
+    logging.info(
+        f"Duration ({duration_seconds:.2f}s) >= {threshold_seconds}s. "
+        f"Proceeding to TTR check."
+    )
+    return f"v{config.tpu_version.value}.wait_for_ttr"
+  else:
+    logging.info(
+        f"Duration ({duration_seconds:.2f}s) < {threshold_seconds}s. "
+        f"Skipping TTR check."
+    )
+    return f"v{config.tpu_version.value}.skip_ttr_check"

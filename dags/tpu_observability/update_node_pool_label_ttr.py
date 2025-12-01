@@ -15,44 +15,7 @@ from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.configs.common import MachineConfigMap
 from dags.tpu_observability.utils import node_pool_util as node_pool
 
-
 _THRESHOLD_SECONDS = 150.0
-
-
-def check_duration_and_determine_branch(**kwargs) -> str:
-  """Determines which task to do next based on the given duration and threshold
-
-  Reads the duration from XCom and returns the next Task ID
-  based on the threshold.
-
-  Returns:
-      The Task ID ('wait_for_ttr' or 'skip_ttr_check') to proceed to.
-  Raises:
-      RuntimeError: If the operation duration could not be retrieved from XCom.
-  """
-  ti = kwargs["ti"]
-  duration_seconds = ti.xcom_pull(
-      task_ids=f"v{config.tpu_version.value}.get_node_pool_update_duration",
-      key="return_value",
-  )
-
-  if duration_seconds is None:
-    error_msg = "No update duration found."
-    raise AirflowFailException(error_msg)
-
-  if duration_seconds >= _THRESHOLD_SECONDS:
-    logging.info(
-        f"Duration ({duration_seconds:.2f}s) >= {_THRESHOLD_SECONDS}s. "
-        f"Proceeding to TTR check."
-    )
-    return f"v{config.tpu_version.value}.wait_for_ttr"
-  else:
-    logging.info(
-        f"Duration ({duration_seconds:.2f}s) < {_THRESHOLD_SECONDS}s. "
-        f"Skipping TTR check."
-    )
-    return f"v{config.tpu_version.value}.skip_ttr_check"
-
 
 with models.DAG(
     dag_id="update_node_pool_label_ttr",
@@ -149,7 +112,11 @@ with models.DAG(
       task_id = "determine_next_branch"
       determine_next_branch = BranchPythonOperator(
           task_id=task_id,
-          python_callable=check_duration_and_determine_branch,
+          python_callable=node_pool.check_duration_and_determine_branch,
+          op_kwargs={
+              "config": config,
+              "_THRESHOLD_SECONDS": _THRESHOLD_SECONDS,
+          },
           dag=dag,
       )
 
