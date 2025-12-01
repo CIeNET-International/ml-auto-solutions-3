@@ -537,7 +537,7 @@ def _query_ttr_metric(node_pool: Info) -> datetime:
   return False
 
 
-@task.sensor(poke_interval=30, timeout=2400, mode="reschedule")
+@task.sensor(poke_interval=30, timeout=3600, mode="reschedule")
 def wait_for_ttr(
     node_pool: Info,
     **context,
@@ -546,7 +546,7 @@ def wait_for_ttr(
 
   This is a task waits for the node pool has TTR records occurred
   by querying the status metric and comparing it with the expected status.
-  The default task runs every 30s for 2400s.
+  The default task runs every 30s for 3600s.
 
   Args:
       node_pool: An instance of the Info class that encapsulates
