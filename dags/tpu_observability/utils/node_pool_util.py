@@ -21,13 +21,12 @@ import json
 import logging
 import random
 import re
-import subprocess
 import time
+import types
 from typing import List, Optional
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
-from airflow.hooks.subprocess import SubprocessHook
 from google.cloud import logging_v2
 from google.cloud import monitoring_v3
 
@@ -449,7 +448,8 @@ def get_node_pool_update_duration(node_pool: Info) -> Optional[float]:
           f'resource.labels.location="{node_pool.location}" '
           f'resource.labels.cluster_name="{node_pool.cluster_name}" '
           f'resource.labels.nodepool_name="{node_pool.node_pool_name}" '
-          'protoPayload.methodName="google.container.v1.ClusterManager.UpdateNodePool" '
+          "protoPayload.methodName="
+          '"google.container.v1.ClusterManager.UpdateNodePool" '
       ),
       order_by=logging_v2.DESCENDING,
       max_results=2,
@@ -490,7 +490,8 @@ def _query_ttr_metric(node_pool: Info) -> datetime:
         the configuration and metadata of a GKE node pool.
 
   Returns:
-      A boolean indicating whether TTR records were found in the specified GKE node pool.
+      A boolean indicating whether TTR records were found in the
+        specified GKE node pool.
   """
   now = int(time.time())
   api_client = monitoring_v3.MetricServiceClient()
