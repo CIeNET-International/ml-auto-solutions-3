@@ -170,7 +170,7 @@ with models.DAG(
           setups=create_node_pool,
       )
 
-      (
+      _ = (
           create_node_pool
           >> wait_for_provisioning
           >> wait_for_running
