@@ -22,6 +22,8 @@ from typing import List
 from absl import logging
 from airflow.decorators import task
 from airflow.providers.google.cloud.operators.gcs import GCSHook
+from airflow.exceptions import AirflowException
+from airflow.hooks.subprocess import SubprocessHook
 import yaml
 
 from dags.tpu_observability.utils import subprocess_util as subprocess
@@ -126,3 +128,44 @@ class GCSConfigLoader:
     """
     dag_yaml = cls.load_file_from_gcs(f"{cls.BUCKET}/{cls.CONFIG_FILENAME}")
     return yaml.safe_load(dag_yaml)
+
+
+# @task
+# def load_dag_config_from_gcs(gcs_path:str) -> dict:
+#   """Loads and parses the DAG configuration YAML file from GCS."""
+#   logging.info(f"Attempting to load config from: {gcs_path}")
+
+#   with tempfile.TemporaryDirectory() as tmpdir:
+#     temp_file_path = f"{tmpdir}/downloaded_config"
+
+#     hook = SubprocessHook()
+#     command = ["gsutil", "-m", "cp", gcs_path, temp_file_path]
+#     logging.info(f"Running command: {' '.join(command)}")
+#     hook.run_command(command)
+
+#     with open(temp_file_path, "r", encoding="utf-8") as f:
+#       dag_yaml = f.read()
+
+#   return yaml.safe_load(dag_yaml)
+
+
+@task
+def load_dag_config_from_gcs(gcs_path: str) -> dict:
+  """Loads and parses the DAG configuration YAML file from GCS."""
+  logging.info(f"Attempting to load config from: {gcs_path}")
+
+  with tempfile.TemporaryDirectory() as tmpdir:
+    temp_file_path = os.path.join(tmpdir, "downloaded_config")
+
+    hook = SubprocessHook()
+    command = ["gsutil", "-m", "cp", gcs_path, temp_file_path]
+    logging.info(f"Running command: {' '.join(command)}")
+    hook.run_command(command)
+
+    with open(temp_file_path, "r", encoding="utf-8") as f:
+      dag_yaml = f.read()
+
+  try:
+    return yaml.safe_load(dag_yaml)
+  except yaml.YAMLError as e:
+    raise yaml.YAMLError(f"Failed to parse YAML from '{gcs_path}': {e}") from e

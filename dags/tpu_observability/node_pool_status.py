@@ -20,11 +20,11 @@ import datetime
 from airflow import models
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
-from dags.common.vm_resource import Project, Region, Zone
+
 from dags.map_reproducibility.utils import constants
-from dags.tpu_observability.configs.common import MachineConfigMap
+from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_PATH
 from dags.tpu_observability.utils import node_pool_util as node_pool
-from xlml.apis.gcs import GCSConfigLoader
+from xlml.apis.gcs import GCSConfigLoader, load_dag_config_from_gcs
 
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
@@ -70,6 +70,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
         location=dag_config["common"]["location"],
         node_locations=dag_config["common"]["node_locations"],
         num_nodes=dag_config["common"]["num_nodes"],
+        reservation=dag_config["common"]["reservation"],
         machine_type=config.machine_version.value,
         tpu_topology=config.tpu_topology,
     )
@@ -94,7 +95,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           owner=test_owner.YUNA_T,
       )(
           node_pool=node_pool_info,
-          reservation=dag_config["common"]["reservation"],
       )
 
       task_id = "wait_for_provisioning"

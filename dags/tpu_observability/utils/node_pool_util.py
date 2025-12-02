@@ -69,12 +69,12 @@ class Info:
   machine_type: str = None
   num_nodes: int = None
   tpu_topology: str = None
+  reservation: str = None
 
 
 @task
 def create(
     node_pool: Info,
-    reservation: str = None,
     ignore_failure: bool = False,
 ) -> None:
   """Creates a GKE node pool by the given node pool information."""
@@ -99,8 +99,8 @@ def create(
       f"--tpu-topology={node_pool.tpu_topology} "
   )
 
-  if reservation:
-    command += f" --reservation-affinity=specific --reservation={reservation}"
+  if node_pool.reservation:
+    command += f" --reservation-affinity=specific --reservation={node_pool.reservation}"
 
   if ignore_failure:
     command += "2>&1 || true "

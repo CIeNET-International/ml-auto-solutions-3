@@ -18,3 +18,6 @@ class MachineConfigMap(enum.Enum):
       tpu_topology="4x4",
       machine_version=MachineVersion.CT6E_STAND_4T,
   )
+
+
+GCS_CONFIG_PATH = "gs://ml-auto-solutions-configs/dag_config.yaml"
