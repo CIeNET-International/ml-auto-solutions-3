@@ -1,10 +1,8 @@
 """A DAG to validate the status of a GKE node pool after changing its label."""
 
 import datetime
-import logging
 
 from airflow import models
-from airflow.exceptions import AirflowFailException
 from airflow.operators.python import BranchPythonOperator
 from airflow.operators.empty import EmptyOperator
 from airflow.utils.task_group import TaskGroup
