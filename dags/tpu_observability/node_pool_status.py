@@ -18,13 +18,14 @@ import copy
 import datetime
 
 from airflow import models
+from airflow.decorators import task
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
 from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_PATH
 from dags.tpu_observability.utils import node_pool_util as node_pool
-from xlml.apis.gcs import GCSConfigLoader, load_dag_config_from_gcs
+from xlml.apis import gcs
 
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
@@ -59,36 +60,49 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     """,
 ) as dag:
   for machine in MachineConfigMap:
-    dag_config = GCSConfigLoader.load_dag_config()
     config = machine.value
-    cluster_name = "tpu-observability-automation"
-    cluster_name += "-prod" if composer_env.is_prod_env() else "-dev"
-    node_pool_info = node_pool.Info(
-        project_id=dag_config["common"]["project_id"],
-        cluster_name=dag_config["common"]["cluster_name"],
-        node_pool_name=dag_config["dag_gke_node_pool_status"]["node_pool_name"],
-        location=dag_config["common"]["location"],
-        node_locations=dag_config["common"]["node_locations"],
-        num_nodes=dag_config["common"]["num_nodes"],
-        reservation=dag_config["common"]["reservation"],
-        machine_type=config.machine_version.value,
-        tpu_topology=config.tpu_topology,
-    )
 
-    problematic_node_pool_info = copy.deepcopy(node_pool_info)
-    problematic_node_pool_info.node_pool_name += "-wrong"
-    # Choosing a region that is different from the cluster location but still
-    # compatible with the specified TPU cause the cluster creation to fail
-    # due to mismatched node locations.
-    problematic_node_pool_info.node_locations = dag_config[
-        "dag_gke_node_pool_status"
-    ]["wrong_node_location"]
+    @task
+    def create_problematic_info(
+        base_node_pool_info: node_pool.Info, dag_config: dict
+    ) -> node_pool.Info:
+      """Creates a node pool info with problematic configurations.
+      Args:
+        base_node_pool_info (node_pool.Info): The base node pool info to copy
+          and modify.
+        dag_config (dict): The DAG configuration dictionary.
+      Returns:
+        node_pool.Info: The modified node pool info with problematic settings.
+      """
 
-    # Keyword arguments are generated dynamically at runtime (pylint does not
-    # know this signature).
-    with TaskGroup(  # pylint: disable=unexpected-keyword-arg
-        group_id=f"v{config.tpu_version.value}"
-    ):
+      # Choosing a region that is different from the cluster location but still
+      # compatible with the specified TPU cause the cluster creation to fail
+      # due to mismatched node locations.
+      problematic_info = copy.deepcopy(base_node_pool_info)
+      problematic_info.node_pool_name += "-wrong"
+      problematic_info.node_locations = dag_config["dag_gke_node_pool_status"][
+          "wrong_node_location"
+      ]
+      return problematic_info
+
+    with TaskGroup(group_id=f"v{config.tpu_version.value}"):
+      dag_config = gcs.load_dag_config_from_gcs.override(
+          task_id="load_dag_config"
+      )(gcs_path=GCS_CONFIG_PATH)
+
+      node_pool_info = node_pool.create_node_pool_info_task.override(
+          task_id="create_node_pool_info"
+      )(
+          dag_config=dag_config,
+          dag_name="dag_gke_node_pool_status",
+          machine_type=config.machine_version.value,
+          tpu_topology=config.tpu_topology,
+      )
+
+      problematic_node_pool_info = create_problematic_info.override(
+          task_id="create_problematic_node_pool_info"
+      )(base_node_pool_info=node_pool_info, dag_config=dag_config)
+
       task_id = "create_node_pool"
       create_node_pool = node_pool.create.override(
           task_id=task_id,
@@ -168,7 +182,10 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       # Airflow uses >> for task chaining, which is pointless for pylint.
       # pylint: disable=pointless-statement
       normal_flow = (
-          create_node_pool
+          dag_config
+          >> node_pool_info
+          >> problematic_node_pool_info
+          >> create_node_pool
           >> wait_for_provisioning
           >> wait_for_running
           >> delete_node

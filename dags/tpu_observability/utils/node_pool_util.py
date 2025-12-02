@@ -73,6 +73,39 @@ class Info:
 
 
 @task
+def create_node_pool_info_task(
+    dag_config: dict, dag_name: str, machine_type: str, tpu_topology: str
+) -> Info:
+  """Constructs node_pool.Info from the loaded DAG config and machine details.
+
+  Args:
+      dag_config: The dictionary loaded from the DAG configuration YAML.
+      dag_name: The name of the DAG for which the node pool info is being created.
+      machine_type: The machine type for the node pool.
+      tpu_topology: The TPU topology for the node pool.
+
+  Returns:
+      An instance of node_pool.Info.
+  """
+  dag_specific_config = dag_config.get(dag_name, {})
+  common_config = dag_config.get("common", {})
+
+  node_pool_info = Info(
+      project_id=common_config.get("project_id"),
+      cluster_name=common_config.get("cluster_name"),
+      node_pool_name=dag_specific_config.get("node_pool_name"),
+      region=dag_specific_config.get("region"),
+      location=common_config.get("location"),
+      node_locations=common_config.get("node_locations"),
+      num_nodes=common_config.get("num_nodes"),
+      reservation=common_config.get("reservation"),
+      machine_type=machine_type,
+      tpu_topology=tpu_topology,
+  )
+  return node_pool_info
+
+
+@task
 def create(
     node_pool: Info,
     ignore_failure: bool = False,

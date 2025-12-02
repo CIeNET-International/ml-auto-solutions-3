@@ -27,7 +27,7 @@ from airflow.utils.trigger_rule import TriggerRule
 from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_PATH
 from dags.tpu_observability.utils import node_pool_util as node_pool
-from xlml.apis.gcs import GCSConfigLoader, load_dag_config_from_gcs
+from xlml.apis import gcs
 
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
@@ -71,30 +71,23 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     """,
 ) as dag:
   for machine in MachineConfigMap:
-    dag_config = GCSConfigLoader.load_dag_config()
     config = machine.value
-    cluster_name = "tpu-observability-automation"
-    cluster_name += "-prod" if composer_env.is_prod_env() else "-dev"
-    node_pool_info = node_pool.Info(
-        project_id=dag_config["common"]["project_id"],
-        cluster_name=dag_config["common"]["cluster_name"],
-        node_pool_name=dag_config["dag_multi_host_nodepool_rollback"][
-            "node_pool_name"
-        ],
-        location=dag_config["common"]["location"],
-        node_locations=dag_config["common"]["node_locations"],
-        num_nodes=dag_config["common"]["num_nodes"],
-        reservation=dag_config["common"]["reservation"],
-        machine_type=config.machine_version.value,
-        tpu_topology=config.tpu_topology,
-    )
 
-    # Keyword arguments are generated dynamically at runtime (pylint does not
-    # know this signature).
-    with TaskGroup(  # pylint: disable=unexpected-keyword-arg
-        group_id=f"v{config.tpu_version.value}"
-    ):
-      create_node_pool = node_pool.create.override(owner=test_owner.QUINN_M)(
+    with TaskGroup(group_id=f"v{config.tpu_version.value}"):
+      dag_config = gcs.load_dag_config_from_gcs.override(
+          task_id="load_dag_config"
+      )(gcs_path=GCS_CONFIG_PATH)
+
+      node_pool_info = node_pool.create_node_pool_info_task.override(
+          task_id="create_node_pool_info"
+      )(
+          dag_config=dag_config,
+          dag_name="dag_multi_host_nodepool_rollback",
+          machine_type=config.machine_version.value,
+          tpu_topology=config.tpu_topology,
+      )
+
+      create_node_pool = node_pool.create(
           node_pool=node_pool_info,
       )
 
@@ -124,7 +117,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       # Airflow uses >> for task chaining, which is pointless for pylint.
       # pylint: disable=pointless-statement
       (
-          create_node_pool
+          dag_config
+          >> node_pool_info
+          >> create_node_pool
           >> wait_node_pool_available
           >> rollback_node_pool
           >> wait_node_pool_unavailable
