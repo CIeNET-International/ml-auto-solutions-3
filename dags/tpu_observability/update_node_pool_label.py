@@ -19,15 +19,13 @@ A DAG to update the label of a node pool to make node pool unavailable
 import datetime
 
 from airflow import models
-from absl import logging
-from airflow.decorators import task
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
 from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_PATH
 from dags.tpu_observability.utils import node_pool_util as node_pool
-from xlml.apis.gcs import GCSConfigLoader, load_dag_config_from_gcs
+from xlml.apis import gcs
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
 # know this signature).
@@ -59,64 +57,22 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     """,
 ) as dag:
   for machine in MachineConfigMap:
-    # dag_config = GCSConfigLoader.load_dag_config()
-    # dag_config = load_dag_config_from_gcs(GCS_CONFIG_PATH)
     config = machine.value
-    # node_pool_info = node_pool.Info(
-    #     project_id=dag_config["common"]["project_id"],
-    #     cluster_name=dag_config["common"]["cluster_name"],
-    #     node_pool_name=dag_config["dag_gke_node_pool_label_update"][
-    #         "node_pool_name"
-    #     ],
-    #     location=dag_config["common"]["location"],
-    #     node_locations=dag_config["common"]["node_locations"],
-    #     num_nodes=dag_config["common"]["num_nodes"],
-    #     machine_type=config.machine_version.value,
-    #     tpu_topology=config.tpu_topology,
-    # )
-
     LABELS_TO_UPDATE = {"env": "prod"}
 
     with TaskGroup(group_id=f"v{config.tpu_version.value}"):
-      # 1. Load dag_config within a task
-      dag_config = load_dag_config_from_gcs.override(task_id="load_dag_config")(
-          gcs_path=GCS_CONFIG_PATH
-      )
+      dag_config = gcs.load_dag_config_from_gcs.override(
+          task_id="load_dag_config"
+      )(gcs_path=GCS_CONFIG_PATH)
 
-      # 2. Create node_pool_info within a task, after dag_config is resolved
-      @task
-      def create_node_pool_info_task(dag_config: dict):
-        """Constructs node_pool.Info from the loaded DAG config."""
-        logging.info(
-            f"Resolved dag_config: {dag_config}, type: {type(dag_config)}, type of reservation: {type(dag_config['common']['reservation'])}"
-        )
-        node_pool_info = node_pool.Info(
-            project_id=dag_config["common"]["project_id"],
-            cluster_name=dag_config["common"]["cluster_name"],
-            node_pool_name=dag_config["dag_gke_node_pool_label_update"][
-                "node_pool_name"
-            ],
-            location=dag_config["common"]["location"],
-            node_locations=dag_config["common"]["node_locations"],
-            num_nodes=dag_config["common"]["num_nodes"],
-            reservation=dag_config["common"]["reservation"],
-            machine_type=config.machine_version.value,
-            tpu_topology=config.tpu_topology,
-        )
-
-        return node_pool_info
-
-      @task
-      def show_dag_config(dag_config: dict):
-        logging.info(
-            f"dag_config inside show_dag_config: {dag_config}, type: {type(dag_config)}"
-        )
-
-      node_pool_info = create_node_pool_info_task.override(
+      node_pool_info = node_pool.create_node_pool_info_task.override(
           task_id="create_node_pool_info"
-      )(dag_config=dag_config)
-
-      show_dag_config.override(task_id="show_dag_config")(dag_config=dag_config)
+      )(
+          dag_config=dag_config,
+          dag_name="dag_gke_node_pool_label_update",
+          machine_type=config.machine_version.value,
+          tpu_topology=config.tpu_topology,
+      )
 
       create_node_pool = node_pool.create.override(task_id="create_node_pool")(
           node_pool=node_pool_info,
@@ -147,7 +103,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       # Airflow uses >> for task chaining, which is pointless for pylint.
       # pylint: disable=pointless-statement
       (
-          create_node_pool
+          dag_config
+          >> node_pool_info
+          >> create_node_pool
           >> wait_for_availability
           >> update_node_pool_label
           >> wait_for_unavailable
