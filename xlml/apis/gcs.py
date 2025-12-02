@@ -21,12 +21,10 @@ from typing import List
 
 from absl import logging
 from airflow.decorators import task
-from airflow.providers.google.cloud.operators.gcs import GCSHook
 from airflow.exceptions import AirflowException
+from airflow.providers.google.cloud.operators.gcs import GCSHook
 from airflow.hooks.subprocess import SubprocessHook
 import yaml
-
-from dags.tpu_observability.utils import subprocess_util as subprocess
 
 
 def obtain_file_list(gcs_path: str) -> List[str]:
@@ -96,71 +94,36 @@ def wait_for_file_to_exist(file_path: str) -> bool:
   return False
 
 
-class GCSConfigLoader:
-  """Handles GCS-related configuration variables and file loading operations."""
-
-  BUCKET = "gs://ml-auto-solutions-configs"
-  CONFIG_FILENAME = "dag_config.yaml"
-
-  @staticmethod
-  def load_file_from_gcs(gs_file_path: str) -> str:
-    """Loads a file from a Google Cloud Storage bucket using the gsutil command-line tool.
-
-    This function is defined as a static method as it does not rely on any
-    instance state of GCSConfigLoader.
-    """
-    with tempfile.TemporaryDirectory() as tmpdir:
-      temp_file_path = f"{tmpdir}/downloaded_config"
-
-      subprocess.run_exec(
-          cmd=f"gsutil -m cp {gs_file_path} {temp_file_path}",
-          log_output=False,
-      )
-
-      with open(temp_file_path, "r") as f:
-        return f.read()
-
-  @classmethod
-  def load_dag_config(cls) -> dict:
-    """Loads and parses the DAG configuration YAML file from GCS.
-
-    Defined as a classmethod to access class attributes (BUCKET and FILENAME).
-    """
-    dag_yaml = cls.load_file_from_gcs(f"{cls.BUCKET}/{cls.CONFIG_FILENAME}")
-    return yaml.safe_load(dag_yaml)
-
-
-# @task
-# def load_dag_config_from_gcs(gcs_path:str) -> dict:
-#   """Loads and parses the DAG configuration YAML file from GCS."""
-#   logging.info(f"Attempting to load config from: {gcs_path}")
-
-#   with tempfile.TemporaryDirectory() as tmpdir:
-#     temp_file_path = f"{tmpdir}/downloaded_config"
-
-#     hook = SubprocessHook()
-#     command = ["gsutil", "-m", "cp", gcs_path, temp_file_path]
-#     logging.info(f"Running command: {' '.join(command)}")
-#     hook.run_command(command)
-
-#     with open(temp_file_path, "r", encoding="utf-8") as f:
-#       dag_yaml = f.read()
-
-#   return yaml.safe_load(dag_yaml)
-
-
 @task
 def load_dag_config_from_gcs(gcs_path: str) -> dict:
   """Loads and parses the DAG configuration YAML file from GCS."""
   logging.info(f"Attempting to load config from: {gcs_path}")
 
+  if not gcs_path.startswith("gs://"):
+    raise ValueError(
+        f"Invalid GCS path: '{gcs_path}'. Path must start with 'gs://'."
+    )
+
+  if not (
+      gcs_path.lower().endswith(".yaml") or gcs_path.lower().endswith(".yml")
+  ):
+    logging.warning(
+        f"GCS path '{gcs_path}' does not have a typical YAML extension (.yaml or .yml). "
+        "Proceeding, but be aware this might not be a YAML file."
+    )
+
   with tempfile.TemporaryDirectory() as tmpdir:
     temp_file_path = os.path.join(tmpdir, "downloaded_config")
 
-    hook = SubprocessHook()
-    command = ["gsutil", "-m", "cp", gcs_path, temp_file_path]
-    logging.info(f"Running command: {' '.join(command)}")
-    hook.run_command(command)
+    try:
+      hook = SubprocessHook()
+      command = ["gsutil", "-m", "cp", gcs_path, temp_file_path]
+      logging.info(f"Running command: {' '.join(command)}")
+      hook.run_command(command)
+
+    except AirflowException as e:
+      logging.error(f"Airflow Exception during gsutil cp: {e}")
+      raise
 
     with open(temp_file_path, "r", encoding="utf-8") as f:
       dag_yaml = f.read()
