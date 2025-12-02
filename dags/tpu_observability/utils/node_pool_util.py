@@ -429,24 +429,26 @@ def wait_for_availability(
 
 @task
 def get_node_pool_update_duration(node_pool: Info) -> Optional[float]:
-  """Queries the latest status of the specified GKE node pool.
+  """Calculates the duration of the latest node pool update operation.
 
-  This function retrieves the status by querying the metric
-  "kubernetes.io/node_pool/status" via the Google Cloud Monitoring API.
+  This function retrieves the two most recent log entries for the method
+  "google.container.v1.ClusterManager.UpdateNodePool" via the Cloud Logging API.
+  It calculates the duration by computing the difference between the timestamps
+  of the start and end events for the same operation.
 
   Args:
       node_pool: An instance of the Info class that encapsulates
         the configuration and metadata of a GKE node pool.
 
   Returns:
-      A float enum representing the update duration of the node pool in seconds.
+      A float representing the update duration in seconds, or None if
+      valid start and end log entries for the same operation are not found.
   """
   logging_api_client = logging_v2.Client(project=node_pool.project_id)
   log_entries = logging_api_client.list_entries(
       filter_=(
           'resource.type="gke_nodepool" '
           f'resource.labels.project_id="{node_pool.project_id}" '
-          f'resource.labels.location="{node_pool.location}" '
           f'resource.labels.cluster_name="{node_pool.cluster_name}" '
           f'resource.labels.nodepool_name="{node_pool.node_pool_name}" '
           "protoPayload.methodName="
@@ -458,33 +460,36 @@ def get_node_pool_update_duration(node_pool: Info) -> Optional[float]:
 
   entries_list = list(log_entries)
   if len(entries_list) != 2:
+    logging.warning("Expected 2 log entries, found %d", len(entries_list))
     return None
 
-  last_entry = entries_list[0]
-  first_entry = entries_list[1]
+  end_entry = entries_list[0]
+  start_entry = entries_list[1]
 
   op_start_id = (
-      first_entry.operation.get("id") if first_entry.operation else None
+      start_entry.operation.get("id") if start_entry.operation else None
   )
-  op_end_id = last_entry.operation.get("id") if last_entry.operation else None
+  op_end_id = end_entry.operation.get("id") if end_entry.operation else None
 
   if not op_start_id or op_start_id != op_end_id:
+    logging.warning("Operation IDs do not match or are missing.")
     return None
 
-  start_ts = first_entry.timestamp.replace(tzinfo=datetime.timezone.utc)
-  end_ts = last_entry.timestamp.replace(tzinfo=datetime.timezone.utc)
+  duration = (end_entry.timestamp - start_entry.timestamp).total_seconds()
 
-  duration = end_ts - start_ts
+  if duration < 0:
+    logging.warning("Negative duration detected. Check log query order.")
+    return None
 
-  return duration.total_seconds()
+  return duration
 
 
-def _query_ttr_metric(node_pool: Info) -> datetime:
+def _query_ttr_metric(node_pool: Info) -> bool:
   """Queries the TTR records of the specified GKE node pool.
 
-  This function verifies if there are recovery events occurred by querying
-  the metric "kubernetes.io/node_pool/accelerator/times_to_recover" via
-  the Google Cloud Monitoring API.
+  This function verifies if the 'times to recover' records have occurred
+  by querying the metric "kubernetes.io/node_pool/accelerator/times_to_recover"
+  via the Google Cloud Monitoring API.
 
   Args:
       node_pool: An instance of the Info class that encapsulates
@@ -508,7 +513,6 @@ def _query_ttr_metric(node_pool: Info) -> datetime:
   filter_string = [
       'metric.type="kubernetes.io/node_pool/accelerator/times_to_recover"',
       f'resource.labels.project_id = "{node_pool.project_id}"',
-      f'resource.labels.location="{node_pool.location}"',
       f'resource.labels.cluster_name = "{node_pool.cluster_name}"',
       f'resource.labels.node_pool_name = "{node_pool.node_pool_name}"',
   ]
@@ -520,7 +524,7 @@ def _query_ttr_metric(node_pool: Info) -> datetime:
       end_time=end_time,
   )
 
-  for page in page_result.pages:
+  for page in page_result:
     # Check if the page object has any time_series entries.
     if page.time_series:
       print("Have time series: ", page)
@@ -540,22 +544,22 @@ def wait_for_ttr(
     node_pool: Info,
     **context,
 ) -> bool:
-  """Waits for the node pool times to recover records occurred.
+  """Waits for the node pool 'times to recover' records to occur.
 
-  This is a task waits for the node pool has TTR records occurred
+  This task waits for the node pool to have TTR records occurred
   by querying the status metric and comparing it with the expected status.
-  The default task runs every 30s for 3600s.
+  Checks every 30s for up to 3600s.
 
   Args:
       node_pool: An instance of the Info class that encapsulates
         the configuration and metadata of a GKE node pool.
       context: The Airflow context dictionary, which includes task metadata.
   Returns:
-      A boolean indicating whether the node pool has TTR records occurred.
+      A boolean indicating whether TTR records have occurred for the node pool.
   """
   timeout = context["task"].timeout
   logging.info(
-      "Waiting for finding TTR records in node pool '%s' within %s"
+      "Waiting for TTR records in node pool '%s' (Timeout: %s seconds)..."
       " seconds...",
       node_pool.node_pool_name,
       timeout,
@@ -563,10 +567,10 @@ def wait_for_ttr(
 
   ttr_data_found = _query_ttr_metric(node_pool)
   if ttr_data_found:
-    logging.info("TTR metric data found! Proceeding to validation.")
+    logging.info("TTR records found! Proceeding to validation.")
     return True
   else:
-    logging.info("TTR metric data not found yet.")
+    logging.info("TTR records not found yet.")
     return False
 
 
@@ -600,10 +604,10 @@ def update_labels(node_pool: Info, node_labels: dict) -> None:
 
 
 def check_duration_and_determine_branch(**kwargs) -> str:
-  """Determines which task to do next based on the given duration and threshold
+  """Determines which task to do next based on the given duration and threshold.
 
-  Reads the duration from XCom and returns the next Task ID
-  based on the threshold.
+  Reads the duration from XCom and determines whether to wait for the
+  'times to recover' record to become available in the next step.
 
   Returns:
       The Task ID ('wait_for_ttr' or 'skip_ttr_check') to proceed to.
