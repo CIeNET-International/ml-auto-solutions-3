@@ -337,6 +337,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
         location=dag_config["common"]["location"],
         node_locations=dag_config["common"]["node_locations"],
         num_nodes=dag_config["common"]["num_nodes"],
+        reservation=dag_config["common"]["reservation"],
         machine_type=config.machine_version.value,
         tpu_topology=config.tpu_topology,
     )
@@ -381,7 +382,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             retries=2,
         )(
             node_pool=cluster_info,
-            reservation=dag_config["common"]["reservation"],
         )
 
         create_second_node_pool = node_pool.create.override(
@@ -389,7 +389,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             retries=2,
         )(
             node_pool=cluster_info_2,
-            reservation=dag_config["common"]["reservation"],
         )
 
       apply_time = jobset.run_workload(
