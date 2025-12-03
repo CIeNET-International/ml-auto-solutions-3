@@ -1,4 +1,4 @@
-"""A DAG to validate the status of a GKE node pool after changing its label."""
+"""A DAG to validate GKE node pool Times To Recover(TTR) metrics by triggering a label update."""
 
 import datetime
 
@@ -28,25 +28,29 @@ with models.DAG(
         "v6e-16",
     ],
     description=(
-        "This DAG tests the GKE nodel pool's status by updating its label and "
-        "confirming the state transitions are correct."
+        "This DAG verifies the GKE node pool's Times To Recover(TTR) metrics "
+        "by triggering a label update and confirming the recovery time "
+        "is recorded when the update duration exceeds 150 seconds."
     ),
     doc_md="""
-      # GKE Node Pool Status Validation DAG
+      # GKE Node Pool Times To Recover(TTR) Metric Validation DAG
 
       ### Description
-      This DAG automates the process of creating a GKE
-      node pool, changing its node pool label, and verifying whether the node pool
-      status is reported correctly.
+      This DAG automates the validation of GKE node pool Times To Recover(TTR) metrics.
+      It creates a node pool and updates its labels then verifies that the TTR metric
+      is correctly generated and reported to Google Cloud Monitoring when the
+      update operation takes longer than 150 seconds.
 
       ### Prerequisites
-      This test requires an existing cluster.
+      This test requires an existing GKE cluster.
 
       ### Procedures
-      It creates a node pool, waits for it from provisioning to be running,
-      changes the node pool label to trigger reconciliation, waits for it to become
-      running again, and finally cleans up.
-      The node pool will be cleaned up after the tests.
+      1. Create a temporary node pool.
+      2. Wait for the node pool to be RUNNING.
+      3. Update the node pool label.
+      4. Wait for the Times To Recover(TTR) metrics to appear in Google Cloud Monitoring
+         (only expected if the update duration > 150s).
+      5. Clean up the node pool after the tests.
     """,
 ) as dag:
   for machine in MachineConfigMap:

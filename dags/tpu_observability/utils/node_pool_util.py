@@ -21,7 +21,6 @@ import json
 import logging
 import random
 import re
-import time
 import types
 from typing import List, Optional
 
@@ -29,7 +28,6 @@ from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from google.cloud import logging_v2
 from google.cloud import monitoring_v3
-from google.cloud.monitoring_v3 import types as monitoring_types
 
 from dags.tpu_observability.utils.time_util import TimeUtil
 from dags.tpu_observability.utils.gcp_util import query_time_series
@@ -484,11 +482,11 @@ def get_node_pool_update_duration(node_pool: Info) -> Optional[float]:
   return duration
 
 
-def _query_ttr_metric(node_pool: Info) -> bool:
-  """Queries the TTR records of the specified GKE node pool.
+def _has_ttr_records(node_pool: Info) -> bool:
+  """Queries the Times To Recover(TTR) records of the specified GKE node pool.
 
-  This function verifies if the 'times to recover' records have occurred
-  by querying the metric "kubernetes.io/node_pool/accelerator/times_to_recover"
+  This function verifies if the TTR records have occurred by querying
+  the metric "kubernetes.io/node_pool/accelerator/times_to_recover"
   via the Google Cloud Monitoring API.
 
   Args:
@@ -500,19 +498,21 @@ def _query_ttr_metric(node_pool: Info) -> bool:
         specified GKE node pool.
   """
   now = datetime.datetime.now()
-  # Metrics are sampled every 60s and stored in the GCP backend,
-  # but it may take up to 2 minute for the metric data to become
-  # available on the client side.
-  # Therefore, a longer time interval is necessary.
-  # A 10-minute window is an arbitrary but sufficient choice to
-  # ensure we can retrieve the latest metric data.
-  start_time_datetime = now - datetime.timedelta(minutes=10)
+  # Metrics are sampled every 60s, but there is a significant ingestion delay
+  # (up to 60 minutes) for the data to become available on the client side.
+  # Crucially, the data retains its original timestamp (Event Time) when it
+  # finally appears.
+  # Therefore, a Lookback Window larger than the delay is necessary.
+  # A 70-minute window ensures that even if the data arrives 60 minutes late,
+  # the original event timestamp still falls within our query range.
+  start_time_datetime = now - datetime.timedelta(minutes=70)
   start_time = TimeUtil.from_datetime(start_time_datetime)
   end_time = TimeUtil.from_datetime(now)
 
   filter_string = [
       'metric.type="kubernetes.io/node_pool/accelerator/times_to_recover"',
       f'resource.labels.project_id = "{node_pool.project_id}"',
+      f'resource.labels.location="{node_pool.location}"',
       f'resource.labels.cluster_name = "{node_pool.cluster_name}"',
       f'resource.labels.node_pool_name = "{node_pool.node_pool_name}"',
   ]
@@ -524,18 +524,10 @@ def _query_ttr_metric(node_pool: Info) -> bool:
       end_time=end_time,
   )
 
-  for page in page_result:
-    # Check if the page object has any time_series entries.
-    if page.time_series:
-      print("Have time series: ", page)
-      logging.info("Found time series data in the page.")
+  for time_series in page_result:
+    if time_series.points:
       return True
-    else:
-      print("Doesn't have series: ", page)
-      logging.info("Page has no time series data.")
 
-  # If we finish iterating through all pages and found nothing.
-  logging.info("No TTR metric data found in any page.")
   return False
 
 
@@ -544,7 +536,7 @@ def wait_for_ttr(
     node_pool: Info,
     **context,
 ) -> bool:
-  """Waits for the node pool 'times to recover' records to occur.
+  """Waits for the node pool Times To Recover(TTR) records to occur.
 
   This task waits for the node pool to have TTR records occurred
   by querying the status metric and comparing it with the expected status.
@@ -559,14 +551,12 @@ def wait_for_ttr(
   """
   timeout = context["task"].timeout
   logging.info(
-      "Waiting for TTR records in node pool '%s' (Timeout: %s seconds)..."
-      " seconds...",
+      "Waiting for TTR records in node pool '%s' (Timeout: %s seconds)...",
       node_pool.node_pool_name,
       timeout,
   )
 
-  ttr_data_found = _query_ttr_metric(node_pool)
-  if ttr_data_found:
+  if _has_ttr_records(node_pool):
     logging.info("TTR records found! Proceeding to validation.")
     return True
   else:
@@ -607,7 +597,7 @@ def check_duration_and_determine_branch(**kwargs) -> str:
   """Determines which task to do next based on the given duration and threshold.
 
   Reads the duration from XCom and determines whether to wait for the
-  'times to recover' record to become available in the next step.
+  Times To Recover(TTR) record to become available in the next step.
 
   Returns:
       The Task ID ('wait_for_ttr' or 'skip_ttr_check') to proceed to.
