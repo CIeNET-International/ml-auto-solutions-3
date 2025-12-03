@@ -21,7 +21,6 @@ import json
 import logging
 import random
 import re
-import types
 from typing import List, Optional
 
 from airflow.decorators import task
