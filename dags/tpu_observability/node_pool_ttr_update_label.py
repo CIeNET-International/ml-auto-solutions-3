@@ -9,21 +9,20 @@ from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
 from dags.common.vm_resource import Region, Zone
-from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.configs.common import MachineConfigMap
 from dags.tpu_observability.utils import node_pool_util as node_pool
 
 _THRESHOLD_SECONDS = 150.0
 
 with models.DAG(
-    dag_id="update_node_pool_label_ttr",
+    dag_id="node_pool_ttr_update_label",
     start_date=datetime.datetime(2025, 9, 30),
-    schedule=constants.Schedule.WEEKDAY_PST_6PM_EXCEPT_THURSDAY,
+    schedule="0 4 * * *",
     catchup=False,
     tags=[
         "gke",
         "tpu-observability",
-        "update-node-pool-label-ttr",
+        "node-pool-ttr-update-label",
         "TPU",
         "v6e-16",
     ],
@@ -62,7 +61,7 @@ with models.DAG(
         ),
         node_pool_name=models.Variable.get(
             "NODE_POOL_NAME",
-            default_var="update-node-pool-label-ttr-v6e-autotest",
+            default_var="ttr-update-label-ttr-v6e-autotest",
         ),
         location=models.Variable.get(
             "LOCATION", default_var=Region.US_CENTRAL1.value
@@ -112,14 +111,14 @@ with models.DAG(
       )
 
       task_id = "determine_next_branch"
-      determine_next_branch = BranchPythonOperator(
-          task_id=task_id,
-          python_callable=node_pool.check_duration_and_determine_branch,
-          op_kwargs={
-              "config": config,
-              "_THRESHOLD_SECONDS": _THRESHOLD_SECONDS,
-          },
-          dag=dag,
+      determine_next_branch = (
+          node_pool.check_duration_and_determine_branch.override(
+              task_id=task_id
+          )(
+              duration=get_node_pool_update_duration,
+              threshold=_THRESHOLD_SECONDS,
+              config=config,
+          )
       )
 
       # Task: if node pool update duration >= 150 seconds, do the TTR check.
