@@ -19,7 +19,7 @@ import datetime
 from airflow import models
 from dags import composer_env, gcs_bucket
 from dags.common import test_owner
-from dags.common.vm_resource import TpuVersion, Zone, DockerImage, XpkClusters
+from dags.common.vm_resource import DockerImage, XpkClusters
 from dags.multipod.configs import gke_config
 from dags.multipod.configs.common import SetupMode
 
@@ -48,7 +48,9 @@ with models.DAG(
   }
   clusters = {
       # accelerator: cluster name
-      "v4-8": XpkClusters.TPU_V4_8_MAXTEXT_CLUSTER,
+      # TODO: b/465618653 The TPU_V4_8_MAXTEXT_CLUSTER does not have vertex-tensorboard yet.
+      # TODO: Switch back to the correct cluster once it's configured.
+      "v4-8": XpkClusters.TPU_V4_16_CLUSTER,
       "v4-16": XpkClusters.TPU_V4_16_CLUSTER,
   }
 
@@ -62,13 +64,25 @@ with models.DAG(
             "python3 -m MaxText.train MaxText/configs/base.yml"
             f" run_name=$RUN_NAME base_output_directory={base_output_directory}"
             f" dataset_path={dataset_path} profiler=xplane steps=10",
-            "gsutil ls gs://cloud-ai-platform-*/tensorboard-*/$EXPERIMENT_NAME",
+            # TODO: b/465619132 This path is invalid.
+            # TODO: Unsure where it came from; need to revert to the correct path later.
+            # "gsutil ls gs://cloud-ai-platform-*/tensorboard-*/$EXPERIMENT_NAME",
         )
+        # TODO: Remove this section once the cluster issue is resolved
+        # TODO: as the naming conflict will disappear.
+        if slice_num == 1:
+            # profiling-vertex-ai-tensorboard-stable-v4-8, v4
+            test_group_name = f"profiling-vertex-ai-tensorboard-{mode.value}-{accelerator}"
+        elif slice_num == 2:
+            # profiling-vertex-ai-tensorboard-stable-2xv4-16
+            test_group_name = f"profiling-vertex-ai-tensorboard-{mode.value}-2x{accelerator}"
+        else:
+            test_group_name = f"profiling-vertex-ai-tensorboard-{mode.value}-{slice_num}x{accelerator}"
         profiling_in_vertex_ai_tb_test = gke_config.get_gke_config(
             num_slices=slice_num,
             cluster=clusters[accelerator],
             time_out_in_min=240,
-            test_name=f"profiling-vertex-ai-tensorboard-{mode.value}",
+            test_name=test_group_name,
             run_model_cmds=profiling_in_vertex_ai_tb_cmds,
             docker_image=image.value,
             test_owner=test_owner.SURBHI_J,
