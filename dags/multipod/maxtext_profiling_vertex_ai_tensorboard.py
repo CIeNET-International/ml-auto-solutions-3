@@ -72,10 +72,14 @@ with models.DAG(
         # TODO: as the naming conflict will disappear.
         if slice_num == 1:
           # profiling-vertex-ai-tensorboard-stable-v4-8, v4
-          test_group_name = f"profiling-vertex-ai-tensorboard-{mode.value}-{accelerator}"
+          test_group_name = (
+              f"profiling-vertex-ai-tensorboard-{mode.value}-{accelerator}"
+          )
         elif slice_num == 2:
           # profiling-vertex-ai-tensorboard-stable-2xv4-16
-          test_group_name = f"profiling-vertex-ai-tensorboard-{mode.value}-2x{accelerator}"
+          test_group_name = (
+              f"profiling-vertex-ai-tensorboard-{mode.value}-2x{accelerator}"
+          )
         else:
           test_group_name = f"profiling-vertex-ai-tensorboard-{mode.value}-{slice_num}x{accelerator}"
         profiling_in_vertex_ai_tb_test = gke_config.get_gke_config(
