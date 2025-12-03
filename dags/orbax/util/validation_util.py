@@ -697,3 +697,55 @@ def validate_replicator_gcs_backup_log(
   logging.info("Replicator backup validation successful!")
 
   return backed_up_steps
+
+
+@task
+def validate_checkpoints_save_regular_axlearn(
+    project_id: str,
+    run_name: str,
+    location: str,
+    cluster_name: str,
+    steps_to_validate: list,
+    pod_pattern: Optional[str] = ".*",
+    start_time: Optional[datetime] = None,
+    end_time: Optional[datetime] = None,
+) -> None:
+
+  # This log pattern will be looged in a random pod of the first slice.
+  log_pattern = r"^Serialization.*?step_(?P<step>\d+).*"
+  complied_pattern = re.compile(log_pattern)
+  logging.info(f"Run_name: {run_name.split('-')[0]}\n")
+  entries = list_log_entries(
+      project_id=project_id,
+      location=location,
+      cluster_name=cluster_name,
+      pod_pattern=pod_pattern,
+      text_filter=f'jsonPayload.message=~"{log_pattern}"',
+      start_time=start_time,
+      end_time=end_time,
+  )
+  steps_are_saved: set[int] = set()  # Use a set for faster lookup.
+  for entry in entries:
+    if not isinstance(entry, logging_api.StructEntry):
+      raise AirflowFailException(
+          "Log entry must be contain a jsonPayload attribute."
+      )
+    message = entry.payload.get("message")
+    if not message:
+      raise AirflowFailException(f"Failed to parse entry {entry}")
+
+    m = complied_pattern.search(message)
+    if m:
+      steps_are_saved.add(int(m.group(1)))
+
+  for step in steps_to_validate:
+    if step not in steps_are_saved:
+      logging.info(f"Found entries: {entries}")
+      raise AirflowFailException(
+          f"Failed to validate. Expect steps are saved: {steps_to_validate}; "
+          f"got: {steps_are_saved}"
+      )
+  logging.info(
+      f"Successful Validation.\nExpected  Steps:{steps_to_validate}"
+      f"\tFound Steps:{steps_are_saved}"
+  )
