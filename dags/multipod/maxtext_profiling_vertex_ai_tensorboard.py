@@ -17,7 +17,7 @@ A DAG to test MaxText Automatic Profile Upload to Vertex AI Tensorboard.
 """
 import datetime
 from airflow import models
-from dags import composer_env, gcs_bucket
+from dags import gcs_bucket
 from dags.common import test_owner
 from dags.common.vm_resource import DockerImage, XpkClusters
 from dags.multipod.configs import gke_config
@@ -48,7 +48,8 @@ with models.DAG(
   }
   clusters = {
       # accelerator: cluster name
-      # TODO: b/465618653 The TPU_V4_8_MAXTEXT_CLUSTER does not have vertex-tensorboard yet.
+      # TODO: b/465618653 The TPU_V4_8_MAXTEXT_CLUSTER does not
+      # have vertex-tensorboard yet.
       # TODO: Switch back to the correct cluster once it's configured.
       "v4-8": XpkClusters.TPU_V4_16_CLUSTER,
       "v4-16": XpkClusters.TPU_V4_16_CLUSTER,
@@ -65,7 +66,8 @@ with models.DAG(
             f" run_name=$RUN_NAME base_output_directory={base_output_directory}"
             f" dataset_path={dataset_path} profiler=xplane steps=10",
             # TODO: b/465619132 This path is invalid.
-            # TODO: Unsure where it came from; need to revert to the correct path later.
+            # TODO: Unsure where it came from;
+            # need to revert to the correct path later.
             # "gsutil ls gs://cloud-ai-platform-*/tensorboard-*/$EXPERIMENT_NAME",
         )
         # TODO: Remove this section once the cluster issue is resolved
