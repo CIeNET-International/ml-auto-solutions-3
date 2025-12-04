@@ -93,7 +93,6 @@ def wait_for_file_to_exist(file_path: str) -> bool:
   return False
 
 
-@task
 def load_yaml_from_gcs(gcs_path: str) -> dict:
   """Loads and parses the DAG configuration YAML file from GCS."""
   logging.info(f"Attempting to load config from: {gcs_path}")
