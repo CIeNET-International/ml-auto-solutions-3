@@ -74,15 +74,15 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     config = machine.value
 
     with TaskGroup(group_id=f"v{config.tpu_version.value}"):
-      dag_config = gcs.load_dag_config_from_gcs.override(
-          task_id="load_dag_config"
+      dag_config = gcs.load_yaml_from_gcs.override(
+          task_id="load_yaml_from_gcs"
       )(gcs_path=GCS_CONFIG_PATH)
 
-      node_pool_info = node_pool.create_node_pool_info_task.override(
-          task_id="create_node_pool_info"
+      node_pool_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
+          task_id="build_node_pool_info_from_gcs_yaml"
       )(
-          dag_config=dag_config,
-          dag_name="dag_multi_host_nodepool_rollback",
+          config=dag_config,
+          section_name="dag_multi_host_nodepool_rollback",
           machine_type=config.machine_version.value,
           tpu_topology=config.tpu_topology,
       )

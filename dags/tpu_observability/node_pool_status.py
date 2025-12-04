@@ -27,10 +27,7 @@ from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_P
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from xlml.apis import gcs
 
-
-# Keyword arguments are generated dynamically at runtime (pylint does not
-# know this signature).
-with models.DAG(  # pylint: disable=unexpected-keyword-arg
+with models.DAG(
     dag_id="gke_node_pool_status",
     start_date=datetime.datetime(2025, 8, 1),
     schedule=constants.Schedule.DAILY_PST_6PM,
@@ -63,45 +60,30 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     config = machine.value
 
     @task
-    def create_problematic_info(
-        base_node_pool_info: node_pool.Info, dag_config: dict
-    ) -> node_pool.Info:
-      """Creates a node pool info with problematic configurations.
-      Args:
-        base_node_pool_info (node_pool.Info): The base node pool info to copy
-          and modify.
-        dag_config (dict): The DAG configuration dictionary.
-      Returns:
-        node_pool.Info: The modified node pool info with problematic settings.
-      """
-
-      # Choosing a region that is different from the cluster location but still
-      # compatible with the specified TPU cause the cluster creation to fail
-      # due to mismatched node locations.
-      problematic_info = copy.deepcopy(base_node_pool_info)
-      problematic_info.node_pool_name += "-wrong"
-      problematic_info.node_locations = dag_config["dag_gke_node_pool_status"][
-          "wrong_node_location"
-      ]
-      return problematic_info
+    def generate_problematic_node_pool_name(
+        node_pool_info: node_pool.Info,
+    ) -> str:
+      """Generates a problematic node pool name."""
+      return f"{node_pool_info.node_pool_name}-wrong"
 
     with TaskGroup(group_id=f"v{config.tpu_version.value}"):
-      dag_config = gcs.load_dag_config_from_gcs.override(
-          task_id="load_dag_config"
+      dag_config = gcs.load_yaml_from_gcs.override(
+          task_id="load_yaml_from_gcs"
       )(gcs_path=GCS_CONFIG_PATH)
 
-      node_pool_info = node_pool.create_node_pool_info_task.override(
-          task_id="create_node_pool_info"
+      node_pool_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
+          task_id="build_node_pool_info_from_gcs_yaml"
       )(
-          dag_config=dag_config,
-          dag_name="dag_gke_node_pool_status",
+          config=dag_config,
+          section_name="dag_gke_node_pool_status",
           machine_type=config.machine_version.value,
           tpu_topology=config.tpu_topology,
       )
 
-      problematic_node_pool_info = create_problematic_info.override(
-          task_id="create_problematic_node_pool_info"
-      )(base_node_pool_info=node_pool_info, dag_config=dag_config)
+      problematic_node_pool_info = node_pool.copy_node_pool_info_with_override(
+          info=node_pool_info,
+          node_pool_name=generate_problematic_node_pool_name(node_pool_info),
+      )
 
       task_id = "create_node_pool"
       create_node_pool = node_pool.create.override(
