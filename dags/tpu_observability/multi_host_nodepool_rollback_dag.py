@@ -20,14 +20,12 @@ pool as expected.
 import datetime
 
 from airflow import models
-from airflow.models import Variable
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
 from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_PATH
 from dags.tpu_observability.utils import node_pool_util as node_pool
-from xlml.apis import gcs
 
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
@@ -74,14 +72,10 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     config = machine.value
 
     with TaskGroup(group_id=f"v{config.tpu_version.value}"):
-      dag_config = gcs.load_yaml_from_gcs.override(
-          task_id="load_yaml_from_gcs"
-      )(gcs_path=GCS_CONFIG_PATH)
-
       node_pool_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
           task_id="build_node_pool_info_from_gcs_yaml"
       )(
-          config=dag_config,
+          gcs_path=GCS_CONFIG_PATH,
           section_name="dag_multi_host_nodepool_rollback",
           machine_type=config.machine_version.value,
           tpu_topology=config.tpu_topology,
@@ -117,8 +111,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       # Airflow uses >> for task chaining, which is pointless for pylint.
       # pylint: disable=pointless-statement
       (
-          dag_config
-          >> node_pool_info
+          node_pool_info
           >> create_node_pool
           >> wait_node_pool_available
           >> rollback_node_pool
