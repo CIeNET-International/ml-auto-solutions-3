@@ -1,0 +1,150 @@
+"""A DAG to validate GKE node pool Times To Recover(TTR) metrics by triggering a label update."""
+
+import datetime
+
+from airflow import models
+from airflow.operators.empty import EmptyOperator
+from airflow.utils.task_group import TaskGroup
+from airflow.utils.trigger_rule import TriggerRule
+
+from dags.common.vm_resource import Region, Zone
+from dags.tpu_observability.configs.common import MachineConfigMap
+from dags.tpu_observability.utils import node_pool_util as node_pool
+
+_THRESHOLD_SECONDS = 150.0
+
+with models.DAG(
+    dag_id="node_pool_ttr_update_label",
+    start_date=datetime.datetime(2025, 9, 30),
+    schedule="0 4 * * *",
+    catchup=False,
+    tags=[
+        "gke",
+        "tpu-observability",
+        "node-pool-ttr-update-label",
+        "TPU",
+        "v6e-16",
+    ],
+    description=(
+        "This DAG verifies the GKE node pool's Times To Recover(TTR) metrics "
+        "by triggering a label update and confirming the recovery time "
+        "is recorded when the update duration exceeds 150 seconds."
+    ),
+    doc_md="""
+      # GKE Node Pool Times To Recover(TTR) Metric Validation DAG
+
+      ### Description
+      This DAG automates the validation of GKE node pool Times To Recover(TTR) metrics.
+      It creates a node pool and updates its labels then verifies that the TTR metric
+      is correctly generated and reported to Google Cloud Monitoring when the
+      update operation takes longer than 150 seconds.
+
+      ### Prerequisites
+      This test requires an existing GKE cluster.
+
+      ### Procedures
+      1. Create a temporary node pool.
+      2. Wait for the node pool to be RUNNING.
+      3. Update the node pool label.
+      4. Wait for the Times To Recover(TTR) metrics to appear in Google Cloud Monitoring
+         (only expected if the update duration > 150s).
+      5. Clean up the node pool after the tests.
+    """,
+) as dag:
+  for machine in MachineConfigMap:
+    config = machine.value
+    node_pool_info = node_pool.Info(
+        project_id=models.Variable.get("PROJECT_ID", default_var="cienet-cmcs"),
+        cluster_name=models.Variable.get(
+            "CLUSTER_NAME", default_var="tpu-observability-automation"
+        ),
+        node_pool_name=models.Variable.get(
+            "NODE_POOL_NAME",
+            default_var="ttr-update-label-ttr-v6e-autotest",
+        ),
+        location=models.Variable.get(
+            "LOCATION", default_var=Region.US_CENTRAL1.value
+        ),
+        node_locations=models.Variable.get(
+            "NODE_LOCATIONS", default_var=Zone.US_CENTRAL1_B.value
+        ),
+        num_nodes=models.Variable.get("NUM_NODES", default_var=4),
+        machine_type=config.machine_version.value,
+        tpu_topology=config.tpu_topology,
+    )
+
+    LABELS_TO_UPDATE = {"test_key": "test_val"}
+
+    with TaskGroup(group_id=f"v{config.tpu_version.value}"):
+      task_id = "create_node_pool"
+      create_node_pool = node_pool.create.override(task_id=task_id)(
+          node_pool=node_pool_info,
+          reservation="cloudtpu-20251107233000-1246578561",
+      )
+
+      task_id = "wait_for_provisioning"
+      wait_for_provisioning = node_pool.wait_for_status.override(
+          task_id=task_id
+      )(node_pool=node_pool_info, status=node_pool.Status.PROVISIONING)
+
+      task_id = "wait_for_running"
+      wait_for_running = node_pool.wait_for_status.override(task_id=task_id)(
+          node_pool=node_pool_info, status=node_pool.Status.RUNNING
+      )
+
+      task_id = "update_node_pool_label"
+      update_node_pool_label = node_pool.update_labels.override(
+          task_id=task_id
+      )(node_pool=node_pool_info, node_labels=LABELS_TO_UPDATE)
+
+      task_id = "wait_for_recovered"
+      wait_for_recovered = node_pool.wait_for_status.override(task_id=task_id)(
+          node_pool=node_pool_info, status=node_pool.Status.RUNNING
+      )
+
+      task_id = "get_node_pool_update_duration"
+      get_node_pool_update_duration = (
+          node_pool.get_node_pool_update_duration.override(task_id=task_id)(
+              node_pool=node_pool_info
+          )
+      )
+
+      task_id = "determine_next_branch"
+      determine_next_branch = (
+          node_pool.check_duration_and_determine_branch.override(
+              task_id=task_id
+          )(
+              duration=get_node_pool_update_duration,
+              threshold=_THRESHOLD_SECONDS,
+              config=config,
+          )
+      )
+
+      # Task: if node pool update duration >= 150 seconds, do the TTR check.
+      task_id = "wait_for_ttr"
+      wait_for_ttr = node_pool.wait_for_ttr.override(task_id=task_id)(
+          node_pool=node_pool_info
+      )
+
+      # Task: if node pool update duration < 150 seconds, skip the TTR check.
+      task_id = "skip_ttr_check"
+      skip_ttr_check = EmptyOperator(task_id=task_id)
+
+      task_id = "cleanup_node_pool"
+      cleanup_node_pool = node_pool.delete.override(
+          task_id=task_id, trigger_rule=TriggerRule.ALL_DONE
+      )(node_pool=node_pool_info).as_teardown(
+          setups=create_node_pool,
+      )
+
+      _ = (
+          create_node_pool
+          >> wait_for_provisioning
+          >> wait_for_running
+          >> update_node_pool_label
+          >> wait_for_recovered
+          >> get_node_pool_update_duration
+          >> determine_next_branch
+          >> [wait_for_ttr, skip_ttr_check]
+          >> cleanup_node_pool
+      )
