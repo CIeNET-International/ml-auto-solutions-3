@@ -424,7 +424,7 @@ def wait_for_availability(
 
 
 @task
-def get_node_pool_update_duration(node_pool: Info) -> float | None:
+def get_node_pool_update_duration(node_pool: Info) -> float:
   """Calculates the duration of the latest node pool update operation.
 
   This function retrieves the two most recent log entries for the method
@@ -437,8 +437,11 @@ def get_node_pool_update_duration(node_pool: Info) -> float | None:
         the configuration and metadata of a GKE node pool.
 
   Returns:
-      A float representing the update duration in seconds, or None if
-      valid start and end log entries for the same operation are not found.
+      A float representing the update duration in seconds.
+
+  Raises:
+      AirflowFailException: If valid start and end log entries are not found,
+          if the operation IDs do not match, or if the calculated duration is negative.
   """
   now = datetime.datetime.now()
   # A 10-minute window is an arbitrary but sufficient choice to
@@ -466,8 +469,8 @@ def get_node_pool_update_duration(node_pool: Info) -> float | None:
 
   entries_list = list(log_entries)
   if len(entries_list) != 2:
-    logging.warning("Expected 2 log entries, found %d", len(entries_list))
-    return None
+    error_msg = f"Expected 2 log entries, found {len(entries_list)}."
+    raise AirflowFailException(error_msg)
 
   end_entry = entries_list[0]
   start_entry = entries_list[1]
@@ -478,14 +481,14 @@ def get_node_pool_update_duration(node_pool: Info) -> float | None:
   op_end_id = end_entry.operation.get("id") if end_entry.operation else None
 
   if not op_start_id or op_start_id != op_end_id:
-    logging.warning("Operation IDs do not match or are missing.")
-    return None
+    error_msg = "Operation IDs do not match or are missing."
+    raise AirflowFailException(error_msg)
 
   duration = (end_entry.timestamp - start_entry.timestamp).total_seconds()
 
   if duration < 0:
-    logging.warning("Negative duration detected. Check log query order.")
-    return None
+    error_msg = "Negative duration detected."
+    raise AirflowFailException(error_msg)
 
   return duration
 
@@ -506,26 +509,26 @@ def wait_for_ttr(
       node_pool: An instance of the Info class that encapsulates
         the configuration and metadata of a GKE node pool.
       context: The Airflow context dictionary, which includes task metadata.
+
   Returns:
       A boolean indicating whether TTR records have occurred for the node pool.
   """
   timeout = context["task"].timeout
+  dag_start_date = context["dag_run"].start_date
   logging.info(
       "Waiting for TTR records in node pool '%s' (Timeout: %s seconds)...",
       node_pool.node_pool_name,
       timeout,
   )
 
+  # Using a dynamic query window to handle Metric Ingestion Delay (~60 mins):
+  # We anchor the start_time to the DAG execution start time.
+  # This serves two purposes:
+  # 1. It ensures the window is wide enough to catch the delayed metric data
+  #    (which retains its original Event Timestamp) as the sensor retries.
+  # 2. It strictly filters out any stale records from previous DAG runs.
+  start_time = TimeUtil.from_datetime(dag_start_date)
   now = datetime.datetime.now()
-  # Metrics are sampled every 60s, but there is a significant ingestion delay
-  # (up to 60 minutes) for the data to become available on the client side.
-  # Crucially, the data retains its original timestamp (Event Time) when it
-  # finally appears.
-  # Therefore, a Lookback Window larger than the delay is necessary.
-  # A 70-minute window ensures that even if the data arrives 60 minutes late,
-  # the original event timestamp still falls within our query range.
-  start_time_datetime = now - datetime.timedelta(minutes=70)
-  start_time = TimeUtil.from_datetime(start_time_datetime)
   end_time = TimeUtil.from_datetime(now)
 
   filter_string = [
@@ -590,10 +593,18 @@ def check_duration_and_determine_branch(
   Uses the duration seconds to determine whether to wait for the
   Times To Recover(TTR) record to become available in the next step.
 
+  Args:
+      duration: The duration of the node pool update operation in seconds.
+      threshold: The time threshold in seconds to determine if the TTR check
+        is necessary.
+      config: An instance of the TpuConfig class containing version metadata,
+        used to construct the downstream task ID.
+
   Returns:
       The Task ID ('wait_for_ttr' or 'skip_ttr_check') to proceed to.
+
   Raises:
-      RuntimeError: If the operation duration is invalid.
+      AirflowFailException: If the update duration is None.
   """
   if duration is None:
     error_msg = "No update duration found."
