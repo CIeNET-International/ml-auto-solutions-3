@@ -48,6 +48,8 @@ with models.DAG(
       (SetupMode.NIGHTLY, DockerImage.MAXTEXT_TPU_STABLE_STACK_NIGHTLY_JAX),
   ]
 
+  last_task = None
+
   for mode, image in docker_images:
     command = (
         f'export HF_TOKEN={HF_TOKEN}',
@@ -67,3 +69,8 @@ with models.DAG(
         docker_image=image.value,
         test_owner=test_owner.SURBHI_J,
     ).run()
+    if last_task:
+      # This sets 'current_task' to run ONLY after 'last_task' is successful.
+      last_task >> maxtext_v4_configs_test
+
+    last_task = maxtext_v4_configs_test
