@@ -67,7 +67,11 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       """Generates a problematic node pool name."""
       return f"{node_pool_info.node_pool_name}-wrong"
 
-    with TaskGroup(group_id=f"v{config.tpu_version.value}"):
+    # Keyword arguments are generated dynamically at runtime (pylint does not
+    # know this signature).
+    with TaskGroup(  # pylint: disable=unexpected-keyword-arg
+        group_id=f"v{config.tpu_version.value}"
+    ):
       node_pool_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
           task_id="build_node_pool_info_from_gcs_yaml"
       )(

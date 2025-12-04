@@ -116,15 +116,19 @@ def load_yaml_from_gcs(gcs_path: str) -> dict:
     hook = SubprocessHook()
     command = ["gsutil", "-m", "cp", gcs_path, temp_file_path]
     logging.info(f"Running command: {' '.join(command)}")
-    hook.run_command(command)
+    result = hook.run_command(command)
+    assert (
+        result.exit_code == 0
+    ), f"gsutil command failed with exit code {result.exit_code}"
 
     if not os.path.exists(temp_file_path):
-      error_msg = (
+      logging.error(
           f"gsutil cp command completed, but '{temp_file_path}' was not created. "
           "This often means the copy failed. Check gsutil stdout/stderr in logs."
       )
-      logging.error(error_msg)
-      raise FileNotFoundError(f"[Errno 2] {error_msg}")
+      raise FileNotFoundError(
+          f"[Errno 2] Failed to download file from GCS path: {gcs_path}"
+      )
 
     with open(temp_file_path, "r", encoding="utf-8") as f:
       dag_yaml = f.read()
