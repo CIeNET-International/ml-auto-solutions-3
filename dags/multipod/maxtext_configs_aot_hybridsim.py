@@ -43,7 +43,7 @@ def hybridsim_compile_and_run(test_group_id):
     )
 
     tpu_version_str = (
-      v5e_alt if tpu.value == TpuVersion.V5E.value else tpu.value
+        v5e_alt if tpu.value == TpuVersion.V5E.value else tpu.value
     )
     # Run AOT workload: generate HLO, upload to GCS
     aot_cmd = (
