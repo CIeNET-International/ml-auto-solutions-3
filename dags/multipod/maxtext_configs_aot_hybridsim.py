@@ -21,7 +21,7 @@ from airflow.utils.task_group import TaskGroup
 from dags import composer_env
 from dags.common.quarantined_tests import QuarantineTests
 from dags.common import test_owner
-from dags.common.vm_resource import TpuVersion, Zone, DockerImage, XpkClusters, Project
+from dags.common.vm_resource import TpuVersion, DockerImage, XpkClusters
 from dags.multipod.configs import gke_config
 from xlml.utils import name_format
 from dags.multipod.configs import gke_config
@@ -42,10 +42,22 @@ def hybridsim_compile_and_run(test_group_id):
         test_group_id,
     )
 
+    tpu_version_str = (
+      v5e_alt if tpu.value == TpuVersion.V5E.value else tpu.value
+  )
     # Run AOT workload: generate HLO, upload to GCS
     aot_cmd = (
-        'export XLA_FLAGS="--xla_dump_to=/tmp/xla_dump/ --xla_dump_large_constants"',
-        f"bash src/MaxText/configs/v{v5e_alt if tpu.value == TpuVersion.V5E.value else tpu.value}/{model_size}.sh EXECUTABLE=train_compile M_COMPILE_TOPOLOGY=v{v5e_alt if tpu.value == TpuVersion.V5E.value else tpu.value}-{num_cores} M_COMPILE_TOPOLOGY_NUM_SLICES={n} DATASET_PATH=dummy-dataset OUTPUT_PATH=dummy-output-dir",
+        (
+            'export XLA_FLAGS="--xla_dump_to=/tmp/xla_dump/'
+            ' --xla_dump_large_constants"'
+        ),
+        (
+            f"bash src/MaxText/configs/v{tpu_version_str}/{model_size}.sh"
+            " EXECUTABLE=train_compile"
+            f" M_COMPILE_TOPOLOGY=v{tpu_version_str}-{num_cores}"
+            f" M_COMPILE_TOPOLOGY_NUM_SLICES={n}"
+            f" DATASET_PATH=dummy-dataset OUTPUT_PATH=dummy-output-dir"
+        ),
         "gsutil -m cp -r /tmp/xla_dump/ ${GCS_OUTPUT}",
     )
     maxtext_aot = gke_config.get_gke_config(
@@ -61,7 +73,11 @@ def hybridsim_compile_and_run(test_group_id):
     chip_config = "default" if tpu == TpuVersion.V5E else "megacore"
     hybridsim_cmd = (
         "gsutil cp gs://cloud-hybridsim-prod/run_hybridsim.sh .",
-        f"bash run_hybridsim.sh GCS_XLA_DUMP_PATH=${{GCS_OUTPUT}}xla_dump GCS_OUTPUT_PATH=${{GCS_OUTPUT}}estimated_cost_ns.jsonl CHIP_CONFIG={chip_config} MODULE_NAME_PATTERN=jit_train_step*",
+        (
+            f"bash run_hybridsim.sh GCS_XLA_DUMP_PATH=${{GCS_OUTPUT}}xla_dump"
+            f" GCS_OUTPUT_PATH=${{GCS_OUTPUT}}estimated_cost_ns.jsonl"
+            f" CHIP_CONFIG={chip_config} MODULE_NAME_PATTERN=jit_train_step*"
+),
     )
     job_metric_config = metric_config.MetricConfig(
         json_lines=metric_config.JSONLinesConfig(
@@ -72,7 +88,10 @@ def hybridsim_compile_and_run(test_group_id):
     maxtext_hybridsim = gke_config.get_gke_config(
         cluster=cluster,
         time_out_in_min=240,
-        test_name=f"maxtext-{model_size}-{n}xv{tpu.value}-{num_cores}-hybridsim",
+        test_name=(
+            f"maxtext-{model_size}-{n}xv{tpu.value}-{num_cores}"
+            "-hybridsim"
+        ),
         run_model_cmds=hybridsim_cmd,
         docker_image=DockerImage.CLOUD_HYBRIDSIM_NIGHTLY.value,
         test_owner=test_owner.AIRFLOW,
@@ -102,7 +121,12 @@ with models.DAG(
   model_configs = {
       # accelerator: [(model_size, num_cores), ...],
       TpuVersion.V4: [("22b", 128), ("52b", 384)],
-      TpuVersion.V5E: [("16b", 256), ("32b", 256), ("64b", 256), ("128b", 256)],
+      TpuVersion.V5E: [
+          ("16b", 256),
+          ("32b", 256),
+          ("64b", 256),
+          ("128b", 256),
+      ],
   }
   num_slices = [1, 2, 4, 8]
   clusters = {
