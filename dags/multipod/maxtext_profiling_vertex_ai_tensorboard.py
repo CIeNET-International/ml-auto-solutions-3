@@ -61,14 +61,21 @@ with models.DAG(
         current_time = datetime.datetime.now()
         current_datetime = current_time.strftime("%Y-%m-%d-%H-%M-%S")
         profiling_in_vertex_ai_tb_cmds = (
-            f"export RUN_NAME=vertex-ai-{mode.value}-{slice_num}x-{accelerator}-{current_datetime}",
-            "python3 -m MaxText.train MaxText/configs/base.yml"
-            f" run_name=$RUN_NAME base_output_directory={base_output_directory}"
-            f" dataset_path={dataset_path} profiler=xplane steps=10",
+            (
+                f"export RUN_NAME=vertex-ai-{mode.value}-{slice_num}x"
+                f"-{accelerator}-{current_datetime}"
+            ),
+(
+                "python3 -m MaxText.train MaxText/configs/base.yml"
+                f" run_name=$RUN_NAME base_output_directory"
+                f"={base_output_directory} dataset_path={dataset_path}"
+                f" profiler=xplane steps=10"
+            ),
             # TODO: b/465619132 This path is invalid.
             # TODO: Unsure where it came from;
             # need to revert to the correct path later.
-            # "gsutil ls gs://cloud-ai-platform-*/tensorboard-*/$EXPERIMENT_NAME",
+            # "gsutil ls gs://cloud-ai-platform-*/tensorboard-*/
+            # $EXPERIMENT_NAME",
         )
         # TODO: Remove this section once the cluster issue is resolved
         # TODO: as the naming conflict will disappear.
@@ -83,7 +90,10 @@ with models.DAG(
               f"profiling-vertex-ai-tensorboard-{mode.value}-2x{accelerator}"
           )
         else:
-          test_group_name = f"profiling-vertex-ai-tensorboard-{mode.value}-{slice_num}x{accelerator}"
+          test_group_name = (
+            f"profiling-vertex-ai-tensorboard-{mode.value}-{slice_num}"
+            f"x{accelerator}"
+          )
         profiling_in_vertex_ai_tb_test = gke_config.get_gke_config(
             num_slices=slice_num,
             cluster=clusters[accelerator],
