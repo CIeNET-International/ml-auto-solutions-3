@@ -44,7 +44,7 @@ def hybridsim_compile_and_run(test_group_id):
 
     tpu_version_str = (
       v5e_alt if tpu.value == TpuVersion.V5E.value else tpu.value
-  )
+    )
     # Run AOT workload: generate HLO, upload to GCS
     aot_cmd = (
         (
@@ -77,7 +77,7 @@ def hybridsim_compile_and_run(test_group_id):
             f"bash run_hybridsim.sh GCS_XLA_DUMP_PATH=${{GCS_OUTPUT}}xla_dump"
             f" GCS_OUTPUT_PATH=${{GCS_OUTPUT}}estimated_cost_ns.jsonl"
             f" CHIP_CONFIG={chip_config} MODULE_NAME_PATTERN=jit_train_step*"
-),
+        ),
     )
     job_metric_config = metric_config.MetricConfig(
         json_lines=metric_config.JSONLinesConfig(
@@ -89,8 +89,7 @@ def hybridsim_compile_and_run(test_group_id):
         cluster=cluster,
         time_out_in_min=240,
         test_name=(
-            f"maxtext-{model_size}-{n}xv{tpu.value}-{num_cores}"
-            "-hybridsim"
+            f"maxtext-{model_size}-{n}xv{tpu.value}-{num_cores}-hybridsim"
         ),
         run_model_cmds=hybridsim_cmd,
         docker_image=DockerImage.CLOUD_HYBRIDSIM_NIGHTLY.value,
