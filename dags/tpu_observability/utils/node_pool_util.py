@@ -29,6 +29,7 @@ from google.cloud import monitoring_v3
 from dags.tpu_observability.utils.time_util import TimeUtil
 from dags.tpu_observability.utils.gcp_util import query_time_series
 from dags.tpu_observability.utils import subprocess_util as subprocess
+from xlml.apis import gcs
 from xlml.utils import composer
 
 
@@ -74,7 +75,7 @@ class Info:
 
 @task
 def build_node_pool_info_from_gcs_yaml(
-    config: dict, section_name: str, **overrides
+    gcs_path: str, section_name: str, **overrides
 ) -> Info:
   """Builds a node_pool.Info instance by merging configurations.
 
@@ -83,7 +84,7 @@ def build_node_pool_info_from_gcs_yaml(
   Only fields that exist in the node_pool.Info dataclass are included.
 
   Args:
-      config: The dictionary loaded from the DAG configuration YAML.
+      gcs_path: The GCS path to the DAG configuration YAML file.
       section_name: The top-level key in the YAML representing the
         specific DAG's configuration (e.g., 'dag_gke_node_pool_label_update').
       **overrides: Additional key-value pairs to override any settings
@@ -92,6 +93,8 @@ def build_node_pool_info_from_gcs_yaml(
   Returns:
       An initialized node_pool.Info dataclass instance.
   """
+  config = gcs.load_yaml_from_gcs(gcs_path)
+
   common_cfg = config.get("common", {})
   section_cfg = config.get(section_name, {})
 

@@ -31,10 +31,6 @@ from airflow.exceptions import AirflowFailException
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
-from dags import composer_env
-from dags.common import test_owner
-from dags.common.vm_resource import Region
-from dags.common.vm_resource import Zone
 from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.configs.common import MachineConfigMap, TpuConfig, GCS_CONFIG_PATH
 from dags.tpu_observability.utils import jobset_util as jobset
@@ -42,7 +38,6 @@ from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.tpu_observability.utils import tpu_info_util as tpu_info
 from dags.tpu_observability.utils.jobset_util import JobSet, Workload
-from xlml.apis import gcs
 
 
 @task
@@ -332,18 +327,11 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     config = machine.value
 
     @task
-    def create_cluster_info_2_task(
-        base_cluster_info: node_pool.Info, dag_config_dict: dict
-    ) -> node_pool.Info:
-      """Creates cluster_info_2 by replacing
-      node_pool_name in base_cluster_info.
-      """
-      return replace(
-          base_cluster_info,
-          node_pool_name=dag_config_dict["dag_tpu_info_format_validation_dag"][
-              "node_pool_name_2"
-          ],
-      )
+    def generate_second_node_pool_name(
+        node_pool_info: node_pool.Info,
+    ) -> str:
+      """Generates a second node pool name."""
+      return f"{node_pool_info.node_pool_name}-2"
 
     jobset_config = JobSet(
         jobset_name="tpu-info-{{ ds_nodash }}-{{ ti.job_id }}",
@@ -364,22 +352,19 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     workload_script = Workload.JAX_TPU_BENCHMARK
 
     with TaskGroup(group_id=f"v{config.tpu_version.value}"):
-      dag_config = gcs.load_yaml_from_gcs.override(
-          task_id="load_yaml_from_gcs"
-      )(gcs_path=GCS_CONFIG_PATH)
-
       cluster_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
           task_id="build_node_pool_info_from_gcs_yaml"
       )(
-          config=dag_config,
+          gcs_path=GCS_CONFIG_PATH,
           section_name="dag_tpu_info_format_validation_dag",
           machine_type=config.machine_version.value,
           tpu_topology=config.tpu_topology,
       )
 
-      cluster_info_2 = create_cluster_info_2_task.override(
-          task_id="create_cluster_info_2"
-      )(base_cluster_info=cluster_info, dag_config_dict=dag_config)
+      cluster_info_2 = node_pool.copy_node_pool_info_with_override(
+          info=cluster_info,
+          node_pool_name=generate_second_node_pool_name(cluster_info),
+      )
 
       with TaskGroup(group_id="create_node_pool") as create_node_pool:
         create_first_node_pool = node_pool.create.override(
@@ -511,8 +496,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       (cleanup_first_node_pool >> cleanup_second_node_pool)
 
       (
-          dag_config
-          >> cluster_info
+          cluster_info
           >> cluster_info_2
           >> create_node_pool
           >> apply_time
