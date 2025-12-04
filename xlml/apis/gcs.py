@@ -21,9 +21,8 @@ from typing import List
 
 from absl import logging
 from airflow.decorators import task
-from airflow.exceptions import AirflowException
-from airflow.providers.google.cloud.operators.gcs import GCSHook
 from airflow.hooks.subprocess import SubprocessHook
+from airflow.providers.google.cloud.operators.gcs import GCSHook
 import yaml
 
 
@@ -95,7 +94,7 @@ def wait_for_file_to_exist(file_path: str) -> bool:
 
 
 @task
-def load_dag_config_from_gcs(gcs_path: str) -> dict:
+def load_yaml_from_gcs(gcs_path: str) -> dict:
   """Loads and parses the DAG configuration YAML file from GCS."""
   logging.info(f"Attempting to load config from: {gcs_path}")
 
@@ -115,20 +114,20 @@ def load_dag_config_from_gcs(gcs_path: str) -> dict:
   with tempfile.TemporaryDirectory() as tmpdir:
     temp_file_path = os.path.join(tmpdir, "downloaded_config")
 
-    try:
-      hook = SubprocessHook()
-      command = ["gsutil", "-m", "cp", gcs_path, temp_file_path]
-      logging.info(f"Running command: {' '.join(command)}")
-      hook.run_command(command)
+    hook = SubprocessHook()
+    command = ["gsutil", "-m", "cp", gcs_path, temp_file_path]
+    logging.info(f"Running command: {' '.join(command)}")
+    hook.run_command(command)
 
-    except AirflowException as e:
-      logging.error(f"Airflow Exception during gsutil cp: {e}")
-      raise
+    if not os.path.exists(temp_file_path):
+      error_msg = (
+          f"gsutil cp command completed, but '{temp_file_path}' was not created. "
+          "This often means the copy failed. Check gsutil stdout/stderr in logs."
+      )
+      logging.error(error_msg)
+      raise FileNotFoundError(f"[Errno 2] {error_msg}")
 
     with open(temp_file_path, "r", encoding="utf-8") as f:
       dag_yaml = f.read()
 
-  try:
-    return yaml.safe_load(dag_yaml)
-  except yaml.YAMLError as e:
-    raise yaml.YAMLError(f"Failed to parse YAML from '{gcs_path}': {e}") from e
+  return yaml.safe_load(dag_yaml)

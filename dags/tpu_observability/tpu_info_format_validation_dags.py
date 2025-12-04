@@ -66,7 +66,7 @@ def get_tpu_info_from_pod(info: node_pool.Info, pod_name: str) -> str:
     env["KUBECONFIG"] = temp_config_file.name
 
     cmd = " && ".join([
-        jobset.Command.get_credentials_command(node_pool),
+        jobset.Command.get_credentials_command(info),
         f"kubectl exec {pod_name} -n default -- tpu-info",
     ])
 
@@ -338,13 +338,12 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       """Creates cluster_info_2 by replacing
       node_pool_name in base_cluster_info.
       """
-      cluster_info_2 = replace(
+      return replace(
           base_cluster_info,
           node_pool_name=dag_config_dict["dag_tpu_info_format_validation_dag"][
               "node_pool_name_2"
           ],
       )
-      return cluster_info_2
 
     jobset_config = JobSet(
         jobset_name="tpu-info-{{ ds_nodash }}-{{ ti.job_id }}",
@@ -365,15 +364,15 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     workload_script = Workload.JAX_TPU_BENCHMARK
 
     with TaskGroup(group_id=f"v{config.tpu_version.value}"):
-      dag_config = gcs.load_dag_config_from_gcs.override(
-          task_id="load_dag_config"
+      dag_config = gcs.load_yaml_from_gcs.override(
+          task_id="load_yaml_from_gcs"
       )(gcs_path=GCS_CONFIG_PATH)
 
-      cluster_info = node_pool.create_node_pool_info_task.override(
-          task_id="create_node_pool_info"
+      cluster_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
+          task_id="build_node_pool_info_from_gcs_yaml"
       )(
-          dag_config=dag_config,
-          dag_name="dag_tpu_info_format_validation_dag",
+          config=dag_config,
+          section_name="dag_tpu_info_format_validation_dag",
           machine_type=config.machine_version.value,
           tpu_topology=config.tpu_topology,
       )

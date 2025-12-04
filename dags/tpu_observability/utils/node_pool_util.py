@@ -73,36 +73,73 @@ class Info:
 
 
 @task
-def create_node_pool_info_task(
-    dag_config: dict, dag_name: str, machine_type: str, tpu_topology: str
+def build_node_pool_info_from_gcs_yaml(
+    config: dict, section_name: str, **overrides
 ) -> Info:
-  """Constructs node_pool.Info from the loaded DAG config and machine details.
+  """Builds a node_pool.Info instance by merging configurations.
+
+  This task merges values from the 'common' section of the provided dag_config,
+  a DAG-specific section (given by section_name), and any provided overrides.
+  Only fields that exist in the node_pool.Info dataclass are included.
 
   Args:
-      dag_config: The dictionary loaded from the DAG configuration YAML.
-      dag_name: The name of the DAG for which the node pool info is being created.
-      machine_type: The machine type for the node pool.
-      tpu_topology: The TPU topology for the node pool.
+      config: The dictionary loaded from the DAG configuration YAML.
+      section_name: The top-level key in the YAML representing the
+        specific DAG's configuration (e.g., 'dag_gke_node_pool_label_update').
+      **overrides: Additional key-value pairs to override any settings
+        from the YAML.
 
   Returns:
-      An instance of node_pool.Info.
+      An initialized node_pool.Info dataclass instance.
   """
-  dag_specific_config = dag_config.get(dag_name, {})
-  common_config = dag_config.get("common", {})
+  common_cfg = config.get("common", {})
+  section_cfg = config.get(section_name, {})
 
-  node_pool_info = Info(
-      project_id=common_config.get("project_id"),
-      cluster_name=common_config.get("cluster_name"),
-      node_pool_name=dag_specific_config.get("node_pool_name"),
-      region=dag_specific_config.get("region"),
-      location=common_config.get("location"),
-      node_locations=common_config.get("node_locations"),
-      num_nodes=common_config.get("num_nodes"),
-      reservation=common_config.get("reservation"),
-      machine_type=machine_type,
-      tpu_topology=tpu_topology,
-  )
-  return node_pool_info
+  known_fields = {f.name for f in dataclasses.fields(Info)}
+
+  def warn_unknown(name: str, d: dict) -> None:
+    unknown = [k for k in d.keys() if k not in known_fields]
+    if unknown:
+      logging.warning(f"Ignoring unknown fields in {name}: {unknown}")
+
+  warn_unknown("common section in yaml", common_cfg)
+  warn_unknown(f"{section_name} section in yaml", section_cfg)
+  warn_unknown("override fields", overrides)
+
+  merged = {k: v for k, v in common_cfg.items() if k in known_fields}
+  for k, v in section_cfg.items():
+    if k in known_fields and v is not None:
+      merged[k] = v
+
+  for k, v in overrides.items():
+    if k in known_fields and v is not None:
+      merged[k] = v
+
+  return Info(**merged)
+
+
+@task
+def copy_node_pool_info_with_override(info: Info, **overrides) -> Info:
+  """Copies a node_pool.Info instance and applies overrides.
+
+  Args:
+      info: The base node_pool.Info instance to copy.
+      **overrides: Key-value pairs to override fields in the copied Info.
+
+  Returns:
+      A new node_pool.Info instance with overrides applied.
+  """
+  known = {f.name for f in dataclasses.fields(Info)}
+
+  unknown = [k for k in overrides if k not in known]
+  if unknown:
+    logging.warning(f"Ignoring unknown fields in overrides: {unknown}")
+
+  cfg = {k: v for k, v in overrides.items() if k in known and v is not None}
+  if not cfg:
+    return info  # Nothing to change.
+
+  return dataclasses.replace(info, **cfg)
 
 
 @task
