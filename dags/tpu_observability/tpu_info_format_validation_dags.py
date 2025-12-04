@@ -351,7 +351,11 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 
     workload_script = Workload.JAX_TPU_BENCHMARK
 
-    with TaskGroup(group_id=f"v{config.tpu_version.value}"):
+    # Keyword arguments are generated dynamically at runtime (pylint does not
+    # know this signature).
+    with TaskGroup(  # pylint: disable=unexpected-keyword-arg
+        group_id=f"v{config.tpu_version.value}"
+    ):
       cluster_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
           task_id="build_node_pool_info_from_gcs_yaml"
       )(
@@ -366,7 +370,11 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           node_pool_name=generate_second_node_pool_name(cluster_info),
       )
 
-      with TaskGroup(group_id="create_node_pool") as create_node_pool:
+      # Keyword arguments are generated dynamically at runtime (pylint does not
+      # know this signature).
+      with TaskGroup(  # pylint: disable=unexpected-keyword-arg
+          group_id="create_node_pool"
+      ) as create_node_pool:
         create_first_node_pool = node_pool.create.override(
             task_id="node_pool_1",
             retries=2,
