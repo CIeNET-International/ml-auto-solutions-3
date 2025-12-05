@@ -48,9 +48,10 @@ with models.DAG(
   }
   clusters = {
       # accelerator: cluster name
-      # TODO: b/465618653 The TPU_V4_8_MAXTEXT_CLUSTER does not
-      # have vertex-tensorboard yet.
-      # TODO: Switch back to the correct cluster once it's configured.
+      # TODO(b/465618653): Switch back to v4-8 once the issue is resolved.
+      # Temporary use the cluster for v4-16 since the original does not have
+      # the "vertex-tensorboard" compatibility.
+      # "v4-8": XpkClusters.TPU_V4_8_MAXTEXT_CLUSTER
       "v4-8": XpkClusters.TPU_V4_16_CLUSTER,
       "v4-16": XpkClusters.TPU_V4_16_CLUSTER,
   }
