@@ -71,9 +71,8 @@ with models.DAG(
                 f"={base_output_directory} dataset_path={dataset_path}"
                 f" profiler=xplane steps=10"
             ),
-            # TODO: b/465619132 This path is invalid.
-            # TODO: Unsure where it came from;
-            # need to revert to the correct path later.
+            # TODO(b/465619132): Revert this change once the issue is resolved.
+            # Comment out due to the path is invalid.
             # "gsutil ls gs://cloud-ai-platform-*/tensorboard-*/
             # $EXPERIMENT_NAME",
         )
