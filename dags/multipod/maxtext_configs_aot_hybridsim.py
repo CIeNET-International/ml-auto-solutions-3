@@ -30,7 +30,6 @@ from dags.common.vm_resource import TpuVersion, DockerImage, XpkClusters
 from dags.multipod.configs import gke_config
 
 
-
 # Run once a day at 1 pm UTC (5 am PST / 6 am PDT)
 SCHEDULED_TIME = "0 13 * * *" if composer_env.is_prod_env() else None
 
