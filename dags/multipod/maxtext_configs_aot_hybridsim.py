@@ -13,33 +13,36 @@
 # limitations under the License.
 
 """
-A DAG to run AOT compilation and HybridSim tests for MaxText model configs on TPU v4, v5e.
+A DAG to run AOT compilation and HybridSim tests
+for MaxText model configs on TPU v4, v5e.
 """
 import datetime
 from airflow import models
 from airflow.utils.task_group import TaskGroup
+
+from xlml.utils import name_format
+from xlml.apis import metric_config
+
 from dags import composer_env
 from dags.common.quarantined_tests import QuarantineTests
 from dags.common import test_owner
 from dags.common.vm_resource import TpuVersion, DockerImage, XpkClusters
 from dags.multipod.configs import gke_config
-from xlml.utils import name_format
-from dags.multipod.configs import gke_config
-from xlml.apis import metric_config
+
 
 
 # Run once a day at 1 pm UTC (5 am PST / 6 am PDT)
 SCHEDULED_TIME = "0 13 * * *" if composer_env.is_prod_env() else None
 
 
-def hybridsim_compile_and_run(test_group_id):
-  with TaskGroup(group_id=test_group_id, prefix_group_id=True) as group:
+def hybridsim_compile_and_run(group_id):
+  with TaskGroup(group_id=group_id, prefix_group_id=True) as _:
     gcs_subfolder = f"{test_owner.Team.MULTIPOD.value}/maxtext"
     shared_gcs_location = name_format.generate_gcs_folder_location.override(
-        task_id=f"{test_group_id}_generate_gcs_folder_location"
+        task_id=f"{group_id}_generate_gcs_folder_location"
     )(
         f"{gcs_subfolder}/maxtext_configs_aot_hybridsim/v{tpu.value}",
-        test_group_id,
+        group_id,
     )
 
     tpu_version_str = (
@@ -97,7 +100,7 @@ def hybridsim_compile_and_run(test_group_id):
         user_specified_job_metric_config=job_metric_config,
     ).run(gcs_location=shared_gcs_location)
 
-    shared_gcs_location >> maxtext_aot >> maxtext_hybridsim
+    _ = shared_gcs_location >> maxtext_aot >> maxtext_hybridsim
 
 
 with models.DAG(
