@@ -1,3 +1,17 @@
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Utilities for managing JobSets in GKE clusters for TPU observability."""
 
 import dataclasses
@@ -14,7 +28,6 @@ from typing import Final
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from google.cloud.monitoring_v3 import types
-import google.auth.transport.requests
 import kubernetes
 
 from dags.tpu_observability.utils import node_pool_util as node_pool
@@ -310,17 +323,15 @@ def get_running_pods(node_pool: node_pool.Info, namespace="default") -> list:
     A list of all the pods in the "running" state.
   """
   with tempfile.TemporaryDirectory() as tmpdir:
-    kube_dir = tmpdir + "/kubeconfig"
     env = os.environ.copy()
-    env["KUBECONFIG"] = kube_dir
+    env["KUBECONFIG"] = tmpdir + "/kubeconfig"
 
     cmd = " && ".join([
         Command.get_credentials_command(node_pool),
-        (f"kubectl get pods -n {namespace} -o json"),
+        f"kubectl get pods -n {namespace} -o json",
     ])
 
     stdout = subprocess.run_exec(cmd, env=env)
-    logging.info("Command Execute:\n %s", cmd)
 
     data = json.loads(stdout)
 

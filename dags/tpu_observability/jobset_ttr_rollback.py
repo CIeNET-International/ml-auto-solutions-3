@@ -1,3 +1,17 @@
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """A DAG to test the jobset time-to-recover metric from a node pool rollback."""
 
 import datetime
@@ -7,16 +21,18 @@ from airflow.utils.trigger_rule import TriggerRule
 from airflow.utils.task_group import TaskGroup
 
 from dags.common.vm_resource import Project, Region, Zone
-from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils.jobset_util import JobSet, Workload
 from dags.tpu_observability.configs.common import MachineConfigMap
 
-with models.DAG(
+
+# Keyword arguments are generated dynamically at runtime (pylint does not
+# know this signature).
+with models.DAG(  # pylint: disable=unexpected-keyword-arg
     dag_id="jobset_rollback_ttr",
     start_date=datetime.datetime(2025, 8, 10),
-    schedule=constants.Schedule.WEEKDAY_PDT_12_30AM_EXCEPT_THURSDAY,
+    schedule="00 02 * * *",
     catchup=False,
     tags=[
         "cloud-ml-auto-solutions",
@@ -24,6 +40,8 @@ with models.DAG(
         "time-to-recover",
         "tpu-obervability",
         "rollback",
+        "TPU",
+        "v6e-16",
     ],
     description=(
         "This DAG tests the use of a node-pool rollback to interrupt a "
@@ -56,7 +74,7 @@ with models.DAG(
     cluster_info = node_pool.Info(
         project_id=models.Variable.get("PROJECT_ID", default_var="cienet-cmcs"),
         cluster_name=models.Variable.get(
-            "CLUSTER_NAME", default_var="qmcgarry-central-test"
+            "CLUSTER_NAME", default_var="tpu-observability-automation"
         ),
         node_pool_name=models.Variable.get(
             "NODE_POOL_NAME", default_var="jobset-ttr-rollback-v6e"
@@ -91,11 +109,11 @@ with models.DAG(
         tpu_cores_per_pod=4,
     )
 
-    workload_script = Workload.JAX_TPU_BENCHMARK
-
-    LABELS_TO_UPDATE = {"env": "prod"}
-
-    with TaskGroup(group_id=f"v{config.tpu_version.value}"):
+    # Keyword arguments are generated dynamically at runtime (pylint does not
+    # know this signature).
+    with TaskGroup(  # pylint: disable=unexpected-keyword-arg
+        group_id=f"v{config.tpu_version.value}"
+    ):
       create_node_pool = node_pool.create(
           node_pool=cluster_info,
           reservation="cloudtpu-20251107233000-1246578561",
@@ -104,7 +122,7 @@ with models.DAG(
       start_workload = jobset.run_workload(
           node_pool=cluster_info,
           yaml_config=jobset_config.generate_yaml(
-              workload_script=workload_script
+              workload_script=Workload.JAX_TPU_BENCHMARK
           ),
           namespace=jobset_config.namespace,
       )
