@@ -311,7 +311,9 @@ def get_replica_num(
   return replicas
 
 
-def get_running_pods(node_pool: node_pool.Info, namespace="default") -> list:
+def get_running_pods(
+    node_pool: node_pool.Info, namespace="default"
+) -> list[str]:
   """Get a list of pods which are in the "running" state.
 
   Args:
@@ -320,7 +322,8 @@ def get_running_pods(node_pool: node_pool.Info, namespace="default") -> list:
     namespace: The kubernetes namespace which is being searched for running
     pods.
   Returns:
-    A list of all the pods in the "running" state.
+    A list containing the names of all the pods in the "running" state as
+    strings.
   """
   with tempfile.TemporaryDirectory() as tmpdir:
     env = os.environ.copy()
@@ -499,7 +502,7 @@ def wait_for_jobset_started(
 
 
 @task.sensor(poke_interval=60, timeout=3600, mode="reschedule")
-def wait_for_jobset_ttr(node_pool: node_pool.Info) -> bool:
+def wait_for_jobset_ttr_to_be_found(node_pool: node_pool.Info) -> bool:
   """Polls the jobset time_between_interruptions metric.
 
   A sensor task which polls the jobset time_between_interruptions metric
@@ -522,8 +525,8 @@ def wait_for_jobset_ttr(node_pool: node_pool.Info) -> bool:
   logging.info("Start time %s", start_time)
 
   time_series = query_time_series(
-      node_pool.project_id,
-      (
+      project_id=node_pool.project_id,
+      filter_str=(
           'metric.type="kubernetes.io/jobset/times_to_recover" '
           f'resource.labels.cluster_name="{node_pool.cluster_name}" '
       ),
@@ -531,12 +534,10 @@ def wait_for_jobset_ttr(node_pool: node_pool.Info) -> bool:
       end_time=end_time,
   )
 
-  # We just need to know that the event happened at all
-  if len(time_series) > 0:
-    logging.info("Event detected at %s", now)
-    return True
-  logging.info("No time series found at %s. Continuing...", now)
-  return False
+  # This function checks whether the TTR metric is present;
+  # it does not assess its value.
+  logging.info("Time series: %s", time_series)
+  return len(time_series) > 0
 
 
 @task.sensor(poke_interval=30, timeout=600, mode="reschedule")

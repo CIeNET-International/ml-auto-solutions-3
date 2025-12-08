@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""A DAG to test the jobset time-to-recover metric from a node pool rollback."""
+"""A DAG to test jobset time-to-recover metric using a node-pool rollback."""
 
 import datetime
 
@@ -134,7 +134,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 
       rollback_node_pool = node_pool.rollback(node_pool=cluster_info)
 
-      wait_for_metric_upload = jobset.wait_for_jobset_ttr(
+      wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found(
           node_pool=cluster_info
       )
 
