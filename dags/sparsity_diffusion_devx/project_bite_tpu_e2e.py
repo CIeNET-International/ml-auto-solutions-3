@@ -17,6 +17,7 @@
 import datetime
 from airflow import models
 from airflow.utils.task_group import TaskGroup
+
 from dags import composer_env
 from dags.common import test_owner
 from dags.common.vm_resource import TpuVersion, Zone, RuntimeVersion, Project
@@ -157,50 +158,62 @@ with models.DAG(
       group_id='bite_tpu_unittests', prefix_group_id=False
   ) as bite_unittests:
     # Trillium (v6e) with JAX 0.5.3
-    v6e_unittests_053 = config.get_bite_tpu_unittests_config(
+    jax_053_unittests_v6e_4 = config.get_bite_tpu_unittests_config(
         **trillium_conf,
         jax_version='0.5.3',
         **common,
     )
     # Trillium (v6e) with JAX 0.4.38
-    v6e_unittests_0438 = config.get_bite_tpu_unittests_config(
+    jax_0438_unittests_v6e_4 = config.get_bite_tpu_unittests_config(
         **trillium_conf,
         jax_version='0.4.38',
         **common,
     )
     # Trillium (v6e) with JAX nightly
-    v6e_unittests_nightly = config.get_bite_tpu_unittests_config(
+    jax_nightly_unittests_v6e_4 = config.get_bite_tpu_unittests_config(
         **trillium_conf,
         **common,
     )
     # V5P with JAX 0.5.3
-    v5p_unittests_053 = config.get_bite_tpu_unittests_config(
+    jax_053_unittests_v5p_8 = config.get_bite_tpu_unittests_config(
         **v5p_conf,
         jax_version='0.5.3',
         **common,
     )
     # V5P with JAX 0.4.38
-    v5p_unittests_0438 = config.get_bite_tpu_unittests_config(
+    jax_0438_unittests_v5p_8 = config.get_bite_tpu_unittests_config(
         **v5p_conf,
         jax_version='0.4.38',
         **common,
     )
     # V5P with JAX nightly
-    v5p_unittests_nightly = config.get_bite_tpu_unittests_config(
+    jax_nightly_unittests_v5p_8 = config.get_bite_tpu_unittests_config(
         **v5p_conf,
         **common,
     )
     # V5E with JAX nightly
-    v5e_unittests_nightly = config.get_bite_tpu_unittests_config(
+    jax_nightly_unittests_v5e_8 = config.get_bite_tpu_unittests_config(
         **v5e_conf,
         **common,
     )
 
+    # Airflow uses >> for task chaining, which is pointless for pylint.
+    # pylint: disable=pointless-statement
+    [
+        jax_053_unittests_v5p_8,
+        jax_0438_unittests_v5p_8,
+        jax_nightly_unittests_v5p_8,
+        jax_nightly_unittests_v5e_8,
+        jax_053_fuji_v5p_8,
+        jax_main_fuji_v5p_8,
+    ]
+
     (
-        v6e_unittests_053
-        >> v6e_unittests_0438
-        >> v6e_unittests_nightly
+        jax_053_unittests_v6e_4
+        >> jax_0438_unittests_v6e_4
+        >> jax_nightly_unittests_v6e_4
         >> jax_053_fuji_v6e_8
         >> jax_main_fuji_v6e_8
         >> jax_pinned_053_fuji_v6e_8
     )
+    # pylint: enable=pointless-statement
