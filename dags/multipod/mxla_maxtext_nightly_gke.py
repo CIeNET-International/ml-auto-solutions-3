@@ -37,7 +37,7 @@ def add_egress_ip_to_gke(ti, cluster_name, project_id, region):
   preserved.
   """
 
-  airflow_ip = ti.xcom_pull(task_ids='get_airflow_egress_ip')
+  airflow_ip = ti.xcom_pull(task_ids="get_airflow_egress_ip")
   if not airflow_ip:
     raise ValueError("cannot get Airflow Egress IP from XCom")
 
