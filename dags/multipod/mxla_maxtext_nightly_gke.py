@@ -180,41 +180,41 @@ with models.DAG(
     start_date=datetime.datetime(2024, 3, 12),
     catchup=False,
 ) as dag:
-    jax_nightly_image = DockerImage.MAXTEXT_TPU_JAX_NIGHTLY
-    DEFAULT_TEST_NAME = "mxla-maxtext-nightly-gke"
+  jax_nightly_image = DockerImage.MAXTEXT_TPU_JAX_NIGHTLY
+  DEFAULT_TEST_NAME = "mxla-maxtext-nightly-gke"
 
-    quarantine_task_group = TaskGroup(
-      group_id="Quarantine", dag=dag, prefix_group_id=False
+  quarantine_task_group = TaskGroup(
+    group_id="Quarantine", dag=dag, prefix_group_id=False
   )
 
-    get_airflow_egress_ip = BashOperator(
-    task_id='get_airflow_egress_ip',
-    bash_command='curl https://ifconfig.me',
+  get_airflow_egress_ip = BashOperator(
+  task_id='get_airflow_egress_ip',
+  bash_command='curl https://ifconfig.me',
   )
 
-    add_ip_to_gke_auth_networks = PythonOperator(
-      task_id='add_ip_to_gke_auth_networks',
-      python_callable=add_egress_ip_to_gke,
-      op_kwargs={
-          'cluster_name': V6E_CLUSTER_NAME,
-          'project_id': V6E_PROJECT_ID,
-          'region': V6E_REGION,
+  add_ip_to_gke_auth_networks = PythonOperator(
+    task_id='add_ip_to_gke_auth_networks',
+    python_callable=add_egress_ip_to_gke,
+    op_kwargs={
+        'cluster_name': V6E_CLUSTER_NAME,
+        'project_id': V6E_PROJECT_ID,
+        'region': V6E_REGION,
       },
   )
 
-    remove_ip_from_gke_auth_networks = PythonOperator(
-      task_id='remove_ip_from_gke_auth_networks',
-      python_callable=remove_egress_ip_from_gke,
-      op_kwargs={
-          'cluster_name': V6E_CLUSTER_NAME,
-          'project_id': V6E_PROJECT_ID,
-          'region': V6E_REGION,
+  remove_ip_from_gke_auth_networks = PythonOperator(
+    task_id='remove_ip_from_gke_auth_networks',
+    python_callable=remove_egress_ip_from_gke,
+    op_kwargs={
+        'cluster_name': V6E_CLUSTER_NAME,
+        'project_id': V6E_PROJECT_ID,
+        'region': V6E_REGION,
       },
       trigger_rule=TriggerRule.ALL_DONE,
   )
 
     # --- v5p tests  ---
-    maxtext_nightly_1slice_v5p_8 = gke_config.get_gke_maxtext_nightly_config(
+  maxtext_nightly_1slice_v5p_8 = gke_config.get_gke_maxtext_nightly_config(
       cluster=XpkClusters.TPU_V5P_8_CLUSTER,
       time_out_in_min=60,
       test_name=DEFAULT_TEST_NAME,
@@ -222,7 +222,7 @@ with models.DAG(
       test_owner="RAYMOND_Z",
   ).run_with_quarantine(quarantine_task_group)
 
-    maxtext_nightly_2slice_v5p_8 = gke_config.get_gke_maxtext_nightly_config(
+  maxtext_nightly_2slice_v5p_8 = gke_config.get_gke_maxtext_nightly_config(
       num_slices=2,
       cluster=XpkClusters.TPU_V5P_8_CLUSTER,
       time_out_in_min=60,
@@ -231,7 +231,7 @@ with models.DAG(
       test_owner="RAYMOND_Z",
   ).run_with_quarantine(quarantine_task_group)
 
-    maxtext_nightly_4slice_v5p_8 = gke_config.get_gke_maxtext_nightly_config(
+  maxtext_nightly_4slice_v5p_8 = gke_config.get_gke_maxtext_nightly_config(
       num_slices=4,
       cluster=XpkClusters.TPU_V5P_8_CLUSTER,
       time_out_in_min=60,
@@ -240,7 +240,7 @@ with models.DAG(
       test_owner="RAYMOND_Z",
   ).run_with_quarantine(quarantine_task_group)
 
-    maxtext_nightly_8slice_v5p_8 = gke_config.get_gke_maxtext_nightly_config(
+  maxtext_nightly_8slice_v5p_8 = gke_config.get_gke_maxtext_nightly_config(
       num_slices=8,
       cluster=XpkClusters.TPU_V5P_8_CLUSTER,
       time_out_in_min=60,
@@ -250,7 +250,7 @@ with models.DAG(
   ).run_with_quarantine(quarantine_task_group)
 
     # --- v6e tests  ---
-    maxtext_nightly_1slice_v6e_8 = gke_config.get_gke_maxtext_nightly_config(
+  maxtext_nightly_1slice_v6e_8 = gke_config.get_gke_maxtext_nightly_config(
       cluster=XpkClusters.TPU_V6E_8_CLUSTER,
       time_out_in_min=60,
       test_name=DEFAULT_TEST_NAME,
@@ -258,7 +258,7 @@ with models.DAG(
       test_owner="RAYMOND_Z",
   ).run_with_quarantine(quarantine_task_group)
 
-    maxtext_nightly_2slice_v6e_8 = gke_config.get_gke_maxtext_nightly_config(
+  maxtext_nightly_2slice_v6e_8 = gke_config.get_gke_maxtext_nightly_config(
       num_slices=2,
       cluster=XpkClusters.TPU_V6E_8_CLUSTER,
       time_out_in_min=60,
@@ -267,7 +267,7 @@ with models.DAG(
       test_owner="RAYMOND_Z",
   ).run_with_quarantine(quarantine_task_group)
 
-    maxtext_nightly_4slice_v6e_8 = gke_config.get_gke_maxtext_nightly_config(
+  maxtext_nightly_4slice_v6e_8 = gke_config.get_gke_maxtext_nightly_config(
       num_slices=4,
       cluster=XpkClusters.TPU_V6E_8_CLUSTER,
       time_out_in_min=60,
@@ -276,7 +276,7 @@ with models.DAG(
       test_owner="RAYMOND_Z",
   ).run_with_quarantine(quarantine_task_group)
 
-    maxtext_nightly_8slice_v6e_8 = gke_config.get_gke_maxtext_nightly_config(
+  maxtext_nightly_8slice_v6e_8 = gke_config.get_gke_maxtext_nightly_config(
       num_slices=8,
       cluster=XpkClusters.TPU_V6E_8_CLUSTER,
       time_out_in_min=60,
@@ -285,24 +285,24 @@ with models.DAG(
       test_owner="RAYMOND_Z",
   ).run_with_quarantine(quarantine_task_group)
 
-    v5p_test_chain = (
+  v5p_test_chain = (
       maxtext_nightly_1slice_v5p_8
       >> maxtext_nightly_2slice_v5p_8
       >> maxtext_nightly_4slice_v5p_8
       >> maxtext_nightly_8slice_v5p_8
   )
 
-    v6e_test_chain = (
+  v6e_test_chain = (
       maxtext_nightly_1slice_v6e_8
       >> maxtext_nightly_2slice_v6e_8
       >> maxtext_nightly_4slice_v6e_8
       >> maxtext_nightly_8slice_v6e_8
   )
 
-    ip_setup_chain = get_airflow_egress_ip >> add_ip_to_gke_auth_networks
+  ip_setup_chain = get_airflow_egress_ip >> add_ip_to_gke_auth_networks
 
-    _ = ip_setup_chain >> v5p_test_chain
+  _ = ip_setup_chain >> v5p_test_chain
 
-    _ = ip_setup_chain >> v6e_test_chain
+  _ = ip_setup_chain >> v6e_test_chain
 
-    _ = [v5p_test_chain, v6e_test_chain] >> remove_ip_from_gke_auth_networks
+  _ = [v5p_test_chain, v6e_test_chain] >> remove_ip_from_gke_auth_networks
