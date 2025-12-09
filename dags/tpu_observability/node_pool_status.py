@@ -16,11 +16,8 @@
 
 import copy
 import datetime
-import logging
 
 from airflow import models
-from airflow.decorators import task
-from airflow.operators.dummy import DummyOperator
 from airflow.utils.trigger_rule import TriggerRule
 from airflow.utils.task_group import TaskGroup
 
@@ -28,61 +25,6 @@ from dags.map_reproducibility.utils import constants
 from dags.common.vm_resource import Region, Zone
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.configs.common import MachineConfigMap
-from dags.tpu_observability.utils import subprocess_util as subprocess
-
-
-@task.branch
-def branch_on_node_pool_existence(
-    node_pool_info: node_pool.Info, cleanup_task_id: str, skip_task_id: str
-):
-  """
-  Checks if a GKE node pool exists and branches to either the cleanup task
-  or a skip task.
-
-  Args:
-      node_pool_info: An instance of the node_pool.Info class.
-      cleanup_task_id: The task ID to branch to if the node pool exists.
-      skip_task_id: The task ID to branch to if the node pool does not exist.
-
-  Returns:
-      The task ID string to branch to.
-  """
-  command = (
-      f"gcloud container node-pools describe {node_pool_info.node_pool_name} "
-      f"--project={node_pool_info.project_id} "
-      f"--cluster={node_pool_info.cluster_name} "
-      f"--location={node_pool_info.location} "
-      "--format=json"
-  )
-  try:
-    subprocess.run_exec(command)
-    logging.info(
-        "Node pool '%s' exists. Branching to '%s'.",
-        node_pool_info.node_pool_name,
-        cleanup_task_id,
-    )
-    return cleanup_task_id
-  except Exception as e:
-    error_message = str(e)
-    logging.info("Error while checking node pool existence: %s", error_message)
-    # When gcloud describe fails because the resource is not found, subprocess.run_exec
-    # will raise an exception, and the error message will contain "message=Not found" or "code=404".
-    if "message=Not found" in error_message or "code=404" in error_message:
-      logging.info(
-          "Node pool '%s' does not exist (caught exception). Branching to '%s'.",
-          node_pool_info.node_pool_name,
-          skip_task_id,
-      )
-      return skip_task_id
-    else:
-      logging.warning(
-          "An unexpected error occurred while checking node pool '%s' existence: %s. "
-          "Defaulting to attempting cleanup by branching to '%s'.",
-          node_pool_info.node_pool_name,
-          error_message,
-          cleanup_task_id,
-      )
-      return cleanup_task_id
 
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
@@ -192,22 +134,12 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           node_pool=node_pool_info, status=node_pool.Status.STOPPING
       )
 
-      check_and_branch_cleanup = branch_on_node_pool_existence.override(
-          task_id="check_and_branch_cleanup",
-          trigger_rule=TriggerRule.ONE_SUCCESS,
-      )(
-          node_pool_info=node_pool_info,
-          cleanup_task_id=f"v{config.tpu_version.value}.cleanup_node_pool",
-          skip_task_id=f"v{config.tpu_version.value}.skip_cleanup",
-      )
-
+      task_id = "cleanup_node_pool"
       cleanup_node_pool = node_pool.delete.override(
-          task_id="cleanup_node_pool", trigger_rule=TriggerRule.ALL_DONE
+          task_id=task_id, trigger_rule=TriggerRule.ALL_DONE
       )(node_pool=node_pool_info).as_teardown(
           setups=create_node_pool,
       )
-
-      skip_cleanup = DummyOperator(task_id="skip_cleanup")
 
       # Intentionally create a node pool with problematic configurations
       # to validate that it enters the ERROR state.
@@ -245,9 +177,8 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           >> wait_for_recovered
           >> delete_node_pool
           >> wait_for_stopping
-          >> check_and_branch_cleanup
+          >> cleanup_node_pool
       )
-      check_and_branch_cleanup >> [cleanup_node_pool, skip_cleanup]
 
       flow_for_error_state = (
           create_problematic_node_pool_info
