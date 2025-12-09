@@ -52,16 +52,13 @@ def add_egress_ip_to_gke(ti, cluster_name, project_id, region):
       cluster_name,
       f"--region={region}",
       f"--project={project_id}",
-      "--format=value(masterAuthorizedNetworksConfig.cidrBlocks)"
+      "--format=value(masterAuthorizedNetworksConfig.cidrBlocks)",
   ]
 
   try:
     result = subprocess.run(
-          describe_cmd,
-          capture_output=True,
-          text=True,
-          check=True
-        )
+        describe_cmd, capture_output=True, text=True, check=True
+    )
     existing_networks_str = result.stdout.strip()
   except subprocess.CalledProcessError as e:
     print(f"describe GKE failed: {e.stderr}")
@@ -86,7 +83,7 @@ def add_egress_ip_to_gke(ti, cluster_name, project_id, region):
       f"--region={region}",
       f"--project={project_id}",
       "--enable-master-authorized-networks",
-      f"--master-authorized-networks={master_networks}"
+      f"--master-authorized-networks={master_networks}",
   ]
 
   print(f"Executing update command: {' '.join(update_cmd)}")
@@ -122,15 +119,12 @@ def remove_egress_ip_from_gke(ti, cluster_name, project_id, region):
       cluster_name,
       f"--region={region}",
       f"--project={project_id}",
-      "--format=value(masterAuthorizedNetworksConfig.cidrBlocks)"
+      "--format=value(masterAuthorizedNetworksConfig.cidrBlocks)",
   ]
 
   try:
     result = subprocess.run(
-          describe_cmd,
-          capture_output=True,
-          text=True,
-          check=True
+        describe_cmd, capture_output=True, text=True, check=True
     )
     existing_networks_str = result.stdout.strip()
   except subprocess.CalledProcessError as e:
@@ -164,7 +158,7 @@ def remove_egress_ip_from_gke(ti, cluster_name, project_id, region):
       f"--region={region}",
       f"--project={project_id}",
       "--enable-master-authorized-networks",
-      f"--master-authorized-networks={master_networks}"
+      f"--master-authorized-networks={master_networks}",
   ]
 
   print(f"Executing update command: {' '.join(update_cmd)}")
