@@ -28,9 +28,6 @@ from dags.common.vm_resource import DockerImage, XpkClusters
 from dags.multipod.configs import gke_config
 
 
-
-
-
 def add_egress_ip_to_gke(ti, cluster_name, project_id, region):
   """
   Adds the Airflow Egress IP (fetched via XCom) to the Master Authorized
@@ -42,29 +39,33 @@ def add_egress_ip_to_gke(ti, cluster_name, project_id, region):
 
   airflow_ip = ti.xcom_pull(task_ids='get_airflow_egress_ip')
   if not airflow_ip:
-      raise ValueError("cannot get Airflow Egress IP from XCom")
+    raise ValueError("cannot get Airflow Egress IP from XCom")
 
   new_cidr = f"{airflow_ip}/32"
   print(f"Airflow Egress IP (New CIDR): {new_cidr}")
 
   describe_cmd = [
-      "gcloud", "container", "clusters", "describe", cluster_name,
+      "gcloud",
+      "container",
+      "clusters",
+      "describe",
+      cluster_name,
       f"--region={region}",
       f"--project={project_id}",
       "--format=value(masterAuthorizedNetworksConfig.cidrBlocks)"
-    ]
+  ]
 
   try:
-      result = subprocess.run(
+    result = subprocess.run(
           describe_cmd,
           capture_output=True,
           text=True,
           check=True
         )
-      existing_networks_str = result.stdout.strip()
+    existing_networks_str = result.stdout.strip()
   except subprocess.CalledProcessError as e:
-      print(f"describe GKE failed: {e.stderr}")
-      raise
+    print(f"describe GKE failed: {e.stderr}")
+    raise
 
   cidr_pattern = r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d{1,2}\b"
   existing_networks = re.findall(cidr_pattern, existing_networks_str)
@@ -77,20 +78,24 @@ def add_egress_ip_to_gke(ti, cluster_name, project_id, region):
   print(f"Complete Master Authorized Networks List: {master_networks}")
 
   update_cmd = [
-      "gcloud", "container", "clusters", "update", cluster_name,
+      "gcloud",
+      "container",
+      "clusters",
+      "update",
+      cluster_name,
       f"--region={region}",
       f"--project={project_id}",
       "--enable-master-authorized-networks",
       f"--master-authorized-networks={master_networks}"
-    ]
+  ]
 
   print(f"Executing update command: {' '.join(update_cmd)}")
   try:
-      subprocess.run(update_cmd, check=True)
-      print("GKE networks update success.")
+    subprocess.run(update_cmd, check=True)
+    print("GKE networks update success.")
   except subprocess.CalledProcessError as e:
-      print(f"Update GKE cluster failed: {e.stderr}")
-      raise
+    print(f"Update GKE cluster failed: {e.stderr}")
+    raise
 def remove_egress_ip_from_gke(ti, cluster_name, project_id, region):
   """
   Removes the Airflow Egress IP (fetched via XCom) from the Master Authorized
@@ -103,63 +108,71 @@ def remove_egress_ip_from_gke(ti, cluster_name, project_id, region):
   airflow_ip = ti.xcom_pull(task_ids="get_airflow_egress_ip")
 
   if not airflow_ip:
-      print("Warning: Airflow IP not found in XCom. Skipping removal.")
-      return
+    print("Warning: Airflow IP not found in XCom. Skipping removal.")
+    return
 
   target_cidr = f"{airflow_ip}/32"
   print(f"Target CIDR for removal: {target_cidr}")
 
   describe_cmd = [
-      "gcloud", "container", "clusters", "describe", cluster_name,
+      "gcloud",
+      "container",
+      "clusters",
+      "describe",
+      cluster_name,
       f"--region={region}",
       f"--project={project_id}",
       "--format=value(masterAuthorizedNetworksConfig.cidrBlocks)"
-    ]
+  ]
 
   try:
-      result = subprocess.run(
+    result = subprocess.run(
           describe_cmd,
           capture_output=True,
           text=True,
           check=True
-        )
-      existing_networks_str = result.stdout.strip()
+    )
+    existing_networks_str = result.stdout.strip()
   except subprocess.CalledProcessError as e:
-      print(f"describe GKE cluster failed: {e.stderr}")
-      return
+    print(f"describe GKE cluster failed: {e.stderr}")
+    return
 
   cidr_pattern = r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d{1,2}\b"
   # existing_networks ['IP/32', 'IP/32', ...] list
   existing_networks_clean = re.findall(cidr_pattern, existing_networks_str)
 
   all_networks = set(existing_networks_clean)
-  all_networks.discard('')
+  all_networks.discard("")
 
   if target_cidr in all_networks:
-      all_networks.remove(target_cidr)
-      print(f"Successfully removed {target_cidr} from the list.")
+    all_networks.remove(target_cidr)
+    print(f"Successfully removed {target_cidr} from the list.")
   else:
-      print(f"Target CIDR {target_cidr} not found. Skipping removal.")
-      return
+    print(f"Target CIDR {target_cidr} not found. Skipping removal.")
+    return
 
   master_networks = ",".join(sorted(list(all_networks)))
 
   print(f"Complete Networks List after removal (Cleaned): {master_networks}")
 
   update_cmd = [
-      "gcloud", "container", "clusters", "update", cluster_name,
+      "gcloud",
+      "container",
+      "clusters",
+      "update",
+      cluster_name,
       f"--region={region}",
       f"--project={project_id}",
       "--enable-master-authorized-networks",
       f"--master-authorized-networks={master_networks}"
-    ]
+  ]
 
   print(f"Executing update command: {' '.join(update_cmd)}")
   try:
-      subprocess.run(update_cmd, check=True)
-      print("Remove GKE network success！")
+    subprocess.run(update_cmd, check=True)
+    print("Remove GKE network success！")
   except subprocess.CalledProcessError as e:
-      print(f"remove GKE network failed, or only one ip left: {e.stderr}")
+    print(f"remove GKE network failed, or only one ip left: {e.stderr}")
 
 
 SCHEDULED_TIME = "None" if composer_env.is_prod_env() else None
