@@ -93,6 +93,8 @@ def add_egress_ip_to_gke(ti, cluster_name, project_id, region):
   except subprocess.CalledProcessError as e:
     print(f"Update GKE cluster failed: {e.stderr}")
     raise
+
+
 def remove_egress_ip_from_gke(ti, cluster_name, project_id, region):
   """
   Removes the Airflow Egress IP (fetched via XCom) from the Master Authorized
