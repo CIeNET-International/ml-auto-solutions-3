@@ -17,9 +17,6 @@ from dags.tpu_observability.utils.gcp_util import query_time_series, query_log_e
 QUERY_WINDOW_DURATION_SECONDS = 3600
 
 
-# latest version! : widening the query window
-
-
 @task.sensor(poke_interval=60, timeout=7200, mode="reschedule")
 def wait_for_nodepool_metrics_event(
     project_id: str,
@@ -69,7 +66,6 @@ def wait_for_nodepool_metrics_event(
   return True
 
 
-# latest! version3: remove printout and try/except bubble
 @task.sensor(poke_interval=60, timeout=7200, mode="reschedule")
 def wait_for_nodepool_logs_event(
     project_id: str,
@@ -121,7 +117,6 @@ def wait_for_nodepool_logs_event(
   return True
 
 
-# latest! version6: rename the variable(cm/op/req)
 @task.sensor(poke_interval=10, timeout=3600, mode="reschedule")
 def wait_for_update_to_complete(operation_name: str) -> bool:
   """Sensor that waits for the GKE node-pool update operation to reach DONE."""
@@ -147,7 +142,6 @@ def wait_for_update_to_complete(operation_name: str) -> bool:
   return True
 
 
-# latest! version 1: rename variable name (cm/op/req)
 @task
 def get_update_operation_meta(operation_name: str) -> dict:
   """Fetches operation metadata and computes timing info.
@@ -210,42 +204,47 @@ def get_update_operation_meta(operation_name: str) -> dict:
   }
 
 
-# latest! rename the variable name(cm/op/req) and remove start_ts
 @task
-def update_nodepool_disksize(info: node_pool.Info, new_size_gb: int) -> dict:
-  """Calls GKE UpdateNodePool and returns the full operation name.
+def get_nodepool_disk_size(node_pool: node_pool.Info) -> int:
+  """Return the current boot disk size (GB) of the node pool."""
+  client = container_v1.ClusterManagerClient()
 
-  Returns:
-    {
-      "operation_name": "projects/.../locations/.../operations/operation-XXXXX"
-    }
-  """
-  cluster_mgr_client = container_v1.ClusterManagerClient()
-
-  nodepool_resource = (
-      f"projects/{info.project_id}/locations/{info.location}/"
-      f"clusters/{info.cluster_name}/nodePools/{info.node_pool_name}"
+  nodepool_name = (
+      f"projects/{node_pool.project_id}/locations/{node_pool.location}/"
+      f"clusters/{node_pool.cluster_name}/nodePools/{node_pool.node_pool_name}"
   )
 
-  request = container_v1.UpdateNodePoolRequest(
-      name=nodepool_resource,
-      disk_size_gb=int(new_size_gb),
-  )
+  response = client.get_node_pool(name=nodepool_name)
 
-  operation_response = cluster_mgr_client.update_node_pool(request=request)
+  disk_size = getattr(response.config, "disk_size_gb", None)
 
-  operation_name = (
-      operation_response.name
-      if operation_response.name.startswith("projects/")
-      else f"projects/{info.project_id}/locations/{info.location}/operations/{operation_response.name}"
-  )
+  if disk_size is None:
+    raise RuntimeError(f"Nodepool returned no disk_size_gb: {response}")
 
-  logging.info("[update] operation_name=%s", operation_name)
+  return int(disk_size)
+
+
+@task
+def validate_disk_resize(
+    original: int, updated: int, expected_new_size: int
+) -> bool:
+  if original == expected_new_size:
+    raise RuntimeError(
+        f"Disk resize test invalid: original size already = {expected_new_size} GB."
+    )
+
+  if updated != expected_new_size:
+    raise RuntimeError(
+        f"Disk resize failed: expected {expected_new_size}, got {updated}"
+    )
+
   logging.info(
-      "[update] start_ts=%s",
-      TimeUtil.from_iso_string(operation_response.start_time).to_iso_string(),
+      "[validate_disk_resize] OK: original=%d updated=%d expected=%d",
+      original,
+      updated,
+      expected_new_size,
   )
-  return {"operation_name": operation_name}
+  return True
 
 
 with models.DAG(
@@ -297,11 +296,25 @@ with models.DAG(
   with TaskGroup(group_id="v6e") as v6e_group:
     create_nodepool = node_pool.create(node_pool=node_pool_info)
 
-    update_result = update_nodepool_disksize(node_pool_info, new_size_gb=150)
+    get_original_disk_size = get_nodepool_disk_size(node_pool_info)
 
-    wait_done = wait_for_update_to_complete(update_result["operation_name"])
+    operation_name = node_pool.update(
+        node_pool_info,
+        new_size_gb=150,
+        return_operation_name=True,
+    )
 
-    op_meta = get_update_operation_meta(update_result["operation_name"])
+    wait_done = wait_for_update_to_complete(operation_name)
+
+    op_meta = get_update_operation_meta(operation_name)
+
+    get_updated_disk_size = get_nodepool_disk_size(node_pool_info)
+
+    disk_resize_check = validate_disk_resize(
+        original=get_original_disk_size,
+        updated=get_updated_disk_size,
+        expected_new_size=150,
+    )
 
     poll_metrics = wait_for_nodepool_metrics_event(
         project_id=node_pool_info.project_id,
@@ -334,9 +347,12 @@ with models.DAG(
 
     (
         create_nodepool
-        >> update_result
+        >> get_original_disk_size
+        >> operation_name
         >> wait_done
         >> op_meta
+        >> get_updated_disk_size
+        >> disk_resize_check
         >> [poll_metrics, poll_logs]
         >> cleanup_node_pool
     )

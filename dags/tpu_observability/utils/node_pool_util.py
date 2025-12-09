@@ -26,6 +26,7 @@ from typing import List
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from google.cloud import monitoring_v3
+from google.cloud import container_v1
 
 from dags.tpu_observability.utils.time_util import TimeUtil
 from dags.tpu_observability.utils.gcp_util import query_time_series
@@ -450,3 +451,77 @@ def update_labels(node_pool: Info, node_labels: dict) -> None:
   )
 
   subprocess.run_exec(command)
+
+
+@task
+def update(
+    node_pool: Info,
+    *,
+    disk_size_gb: int | None = None,
+    return_operation_name: bool = True,
+) -> str | None:
+  """Update a GKE node pool and optionally return the long operation name.
+
+  Only fields that are not None are included in the request, so this can be
+  reused by different DAGs for different types of updates; more fields can be added later.
+
+  Args:
+    node_pool: Info describing the node pool.
+    disk_size_gb: Optional new boot disk size (GB).
+    return_operation_name: Whether to return the operation name.
+
+  Returns:
+    A string like: "projects/.../locations/.../operations/operation-XXXX"
+    if return_operation_name=True; otherwise None.
+
+  Raises:
+    ValueError: If no updatable fields were provided.
+  """
+
+  # Validate that *at least one* update argument is provided
+  provided_params = {
+      "disk_size_gb": disk_size_gb,
+  }
+
+  # Only keep params where value is NOT None
+  non_null_params = {k: v for k, v in provided_params.items() if v is not None}
+
+  if not non_null_params:
+    raise ValueError(
+        "update_node_pool: at least one update parameter must be provided "
+        "(e.g., disk_size_gb)."
+    )
+
+  # Build the request dynamically (but only disk_size for now)
+  cluster_client = container_v1.ClusterManagerClient()
+
+  nodepool_name = (
+      f"projects/{node_pool.project_id}/locations/{node_pool.location}/"
+      f"clusters/{node_pool.cluster_name}/nodePools/{node_pool.node_pool_name}"
+  )
+
+  request = container_v1.UpdateNodePoolRequest(name=nodepool_name)
+
+  if disk_size_gb is not None:
+    request.disk_size_gb = int(disk_size_gb)
+
+  logging.info(
+      "[update_node_pool] Updating nodepool=%s with params=%s",
+      nodepool_name,
+      non_null_params,
+  )
+
+  operation_response = cluster_client.update_node_pool(request=request)
+
+  operation_name = (
+      operation_response.name
+      if operation_response.name.startswith("projects/")
+      else f"projects/{node_pool.project_id}/locations/{node_pool.location}/operations/{operation_response.name}"
+  )
+
+  logging.info("[update_node_pool] operation_name=%s", operation_name)
+  logging.info(
+      "[update_node_pool] start_time=%s", operation_response.start_time
+  )
+
+  return operation_name if return_operation_name else None
