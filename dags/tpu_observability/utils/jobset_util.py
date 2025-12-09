@@ -59,7 +59,10 @@ class Workload:
           jax.distributed.initialize()
 
           global_devices = jax.devices()
-          print(f"[Host {jax.process_index()}] Got {len(global_devices)} global devices")
+          print(
+              f"[Host {jax.process_index()}] "
+              f"Got {len(global_devices)} global devices"
+          )
           mesh = Mesh(global_devices, ("x",))
 
           print(f"[Host {jax.process_index()}] Allocating data...")
@@ -90,7 +93,8 @@ class Workload:
           print(f"[Host {jax.process_index()}] Starting benchmark...")
 
           start = time.time()
-          for i in range(1_000_000): # Remember to control loop time to control experiment time
+          # Remember to control loop time to control experiment time
+          for i in range(1_000_000):
               result = matmul_ultra_heavy(x, y)
           result.block_until_ready()
           end = time.time()
@@ -106,6 +110,7 @@ class Workload:
   )
 
 
+# pylint: disable=line-too-long
 _TEMPLATE = string.Template(
     textwrap.dedent(
         """
@@ -148,11 +153,13 @@ _TEMPLATE = string.Template(
         """
     )
 )
+# pylint: enable=line-too-long
 
 
 @dataclasses.dataclass
 class JobSet:
-  """Generates YAML configurations for Kubernetes JobSets.
+  """
+  Generates YAML configurations for Kubernetes JobSets.
 
   This class helps in creating JobSet YAMLs by providing a template and allowing
   customization of various parameters like jobset name, replicas, TPU
@@ -208,7 +215,8 @@ class JobSet:
 
 
 class Command:
-  """A collection of static methods to generate Kubernetes and gcloud commands.
+  """
+  A collection of static methods to generate Kubernetes and gcloud commands.
 
   This class provides methods to construct shell commands for interacting with
   GKE clusters, including authentication, applying/deleting JobSets, and
@@ -217,14 +225,15 @@ class Command:
 
   @staticmethod
   def get_credentials_command(node_pool: node_pool.Info) -> str:
-    """Returns the command to authenticate `gcloud` with the specified GKE cluster.
+    """
+    Returns the command to authenticate `gcloud` with the specified GKE cluster.
 
     Args:
       node_pool: Configuration object with cluster details.
 
     Returns:
       A string containing the command to authenticate `gcloud` with the
-      specified GKE cluster.
+        specified GKE cluster.
     """
     for attr_name in ["cluster_name", "region", "project_id"]:
       if not getattr(node_pool, attr_name):
@@ -267,7 +276,8 @@ class Command:
 def get_replica_num(
     replica_type: str, job_name: str, node_pool: node_pool.Info
 ) -> int:
-  """Get the number of a certain type of replicas from a running jobset.
+  """
+  Get the number of a certain type of replicas from a running jobset.
 
   This uses the Kubernetes API to connect to a desired cluster and returns
   the number of replicas in a certain status.
@@ -314,16 +324,17 @@ def get_replica_num(
 def get_running_pods(
     node_pool: node_pool.Info, namespace="default"
 ) -> list[str]:
-  """Get a list of pods which are in the "running" state.
+  """
+  Get a list of pods which are in the "running" state.
 
   Args:
     node_pool: The Info object containing the cluster information needed for
-    the kubernetes API to connect to it.
+      the kubernetes API to connect to it.
     namespace: The kubernetes namespace which is being searched for running
-    pods.
+      pods.
   Returns:
     A list containing the names of all the pods in the "running" state as
-    strings.
+      strings.
   """
   with tempfile.TemporaryDirectory() as tmpdir:
     env = os.environ.copy()
@@ -353,7 +364,8 @@ def get_running_pods(
 def run_workload(
     node_pool: node_pool.Info, yaml_config: str, namespace: str
 ) -> TimeUtil:
-  """Applies the specified YAML file to the GKE cluster.
+  """
+  Applies the specified YAML file to the GKE cluster.
 
   Args:
     node_pool: Configuration object with cluster details.
@@ -379,7 +391,8 @@ def run_workload(
 
 @task
 def end_workload(node_pool: node_pool.Info, jobset_name: str, namespace: str):
-  """Deletes all JobSets from the GKE cluster to clean up resources.
+  """
+  Deletes all JobSets from the GKE cluster to clean up resources.
 
   This task executes a bash script to:
   1. Authenticate `gcloud` with the specified GKE cluster.
@@ -406,7 +419,8 @@ def end_workload(node_pool: node_pool.Info, jobset_name: str, namespace: str):
 
 @task
 def get_active_pods(node_pool: node_pool.Info, namespace: str) -> list[str]:
-  """Deletes all JobSets from the GKE cluster to clean up resources.
+  """
+  Deletes all JobSets from the GKE cluster to clean up resources.
 
   This task executes a bash script to:
   1. Authenticate `gcloud` with the specified GKE cluster.
@@ -444,7 +458,9 @@ def wait_for_jobset_started(
     pod_name_list: str,
     job_apply_time: datetime.datetime,
 ) -> bool:
-  """Waits for the jobset to start by polling Cloud Logging for positive tensorcore utilization metrics.
+  """
+  Waits for the jobset to start by polling Cloud Logging for positive tensorcore
+  utilization metrics.
 
   This task polls Cloud Logging for a specific log pattern that appears
   shortly after the TPU job begins execution within the specified container.
@@ -503,7 +519,8 @@ def wait_for_jobset_started(
 
 @task.sensor(poke_interval=60, timeout=3600, mode="reschedule")
 def wait_for_jobset_ttr_to_be_found(node_pool: node_pool.Info) -> bool:
-  """Polls the jobset time_between_interruptions metric.
+  """
+  Polls the jobset time_between_interruptions metric.
 
   A sensor task which polls the jobset time_between_interruptions metric
   every 60 seconds for 60 minutes. 60 minutes is used here since this
@@ -544,7 +561,8 @@ def wait_for_jobset_ttr_to_be_found(node_pool: node_pool.Info) -> bool:
 def wait_for_jobset_status_occurrence(
     replica_type: str, job_name: str, node_pool: node_pool.Info
 ):
-  """A sensor which checks if are any jobset replicas in a status type.
+  """
+  A sensor which checks if are any jobset replicas in a status type.
 
   Args:
     replica_type(str): The type of status being checked for.

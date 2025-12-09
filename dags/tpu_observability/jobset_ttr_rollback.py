@@ -20,7 +20,7 @@ from airflow import models
 from airflow.utils.trigger_rule import TriggerRule
 from airflow.utils.task_group import TaskGroup
 
-from dags.common.vm_resource import Project, Region, Zone
+from dags.common.vm_resource import Region, Zone
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils.jobset_util import JobSet, Workload
@@ -154,6 +154,8 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           setups=create_node_pool,
       )
 
+      # Airflow uses >> for task chaining, which is pointless for pylint.
+      # pylint: disable=pointless-statement
       (
           create_node_pool
           >> start_workload
@@ -163,3 +165,4 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           >> cleanup_workload
           >> cleanup_node_pool
       )
+      # pylint: enable=pointless-statement
