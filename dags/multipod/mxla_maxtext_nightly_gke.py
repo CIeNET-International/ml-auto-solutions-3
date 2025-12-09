@@ -184,36 +184,36 @@ with models.DAG(
   DEFAULT_TEST_NAME = "mxla-maxtext-nightly-gke"
 
   quarantine_task_group = TaskGroup(
-    group_id="Quarantine", dag=dag, prefix_group_id=False
+      group_id="Quarantine", dag=dag, prefix_group_id=False
   )
 
   get_airflow_egress_ip = BashOperator(
-  task_id='get_airflow_egress_ip',
-  bash_command='curl https://ifconfig.me',
+    task_id='get_airflow_egress_ip',
+    bash_command='curl https://ifconfig.me',
   )
 
   add_ip_to_gke_auth_networks = PythonOperator(
-    task_id='add_ip_to_gke_auth_networks',
-    python_callable=add_egress_ip_to_gke,
-    op_kwargs={
-        'cluster_name': V6E_CLUSTER_NAME,
-        'project_id': V6E_PROJECT_ID,
-        'region': V6E_REGION,
+      task_id='add_ip_to_gke_auth_networks',
+      python_callable=add_egress_ip_to_gke,
+      op_kwargs={
+          'cluster_name': V6E_CLUSTER_NAME,
+          'project_id': V6E_PROJECT_ID,
+          'region': V6E_REGION,
       },
   )
 
   remove_ip_from_gke_auth_networks = PythonOperator(
-    task_id='remove_ip_from_gke_auth_networks',
-    python_callable=remove_egress_ip_from_gke,
-    op_kwargs={
-        'cluster_name': V6E_CLUSTER_NAME,
-        'project_id': V6E_PROJECT_ID,
-        'region': V6E_REGION,
-      },
-      trigger_rule=TriggerRule.ALL_DONE,
+      task_id='remove_ip_from_gke_auth_networks',
+      python_callable=remove_egress_ip_from_gke,
+      op_kwargs={
+          'cluster_name': V6E_CLUSTER_NAME,
+          'project_id': V6E_PROJECT_ID,
+          'region': V6E_REGION,
+        },
+        trigger_rule=TriggerRule.ALL_DONE,
   )
 
-    # --- v5p tests  ---
+  # --- v5p tests  ---
   maxtext_nightly_1slice_v5p_8 = gke_config.get_gke_maxtext_nightly_config(
       cluster=XpkClusters.TPU_V5P_8_CLUSTER,
       time_out_in_min=60,
