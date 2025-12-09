@@ -208,6 +208,7 @@ with models.DAG(
         jax_main_fuji_v5p_8,
     ]
 
+    # Running all v6e tests in parallel often leads to timeouts while waiting for resources.
     (
         jax_053_unittests_v6e_4
         >> jax_0438_unittests_v6e_4
