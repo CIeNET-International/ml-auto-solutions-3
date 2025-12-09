@@ -534,12 +534,6 @@ def wait_for_jobset_ttr_to_be_found(node_pool: node_pool.Info) -> bool:
     the configuration and metadata of a GKE node pool and workload.
   """
   now = datetime.datetime.now()
-  end_time = TimeUtil.from_datetime(now)
-  start_time = TimeUtil.from_datetime(now - datetime.timedelta(minutes=60))
-
-  logging.info("Now %s", now)
-  logging.info("End time %s", end_time)
-  logging.info("Start time %s", start_time)
 
   time_series = query_time_series(
       project_id=node_pool.project_id,
@@ -547,8 +541,8 @@ def wait_for_jobset_ttr_to_be_found(node_pool: node_pool.Info) -> bool:
           'metric.type="kubernetes.io/jobset/times_to_recover" '
           f'resource.labels.cluster_name="{node_pool.cluster_name}" '
       ),
-      start_time=start_time,
-      end_time=end_time,
+      start_time=TimeUtil.from_datetime(now - datetime.timedelta(minutes=60)),
+      end_time=TimeUtil.from_datetime(now),
   )
 
   # This function checks whether the TTR metric is present;
