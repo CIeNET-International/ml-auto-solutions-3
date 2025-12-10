@@ -77,28 +77,12 @@ with models.DAG(
             # "gsutil ls gs://cloud-ai-platform-*/tensorboard-*/
             # $EXPERIMENT_NAME",
         )
-        # TODO: Remove this section once the cluster issue is resolved
-        # TODO: as the naming conflict will disappear.
-        if slice_num == 1:
-          # profiling-vertex-ai-tensorboard-stable-v4-8, v4
-          test_group_name = (
-              f"profiling-vertex-ai-tensorboard-{mode.value}-{accelerator}"
-          )
-        elif slice_num == 2:
-          # profiling-vertex-ai-tensorboard-stable-2xv4-16
-          test_group_name = (
-              f"profiling-vertex-ai-tensorboard-{mode.value}-2x{accelerator}"
-          )
-        else:
-          test_group_name = (
-              f"profiling-vertex-ai-tensorboard-{mode.value}-{slice_num}"
-              f"x{accelerator}"
-          )
+
         profiling_in_vertex_ai_tb_test = gke_config.get_gke_config(
             num_slices=slice_num,
             cluster=clusters[accelerator],
             time_out_in_min=240,
-            test_name=test_group_name,
+            test_name=f"profiling-vertex-ai-tensorboard-{mode.value}-{accelerator}",
             run_model_cmds=profiling_in_vertex_ai_tb_cmds,
             docker_image=image.value,
             test_owner=test_owner.SURBHI_J,
