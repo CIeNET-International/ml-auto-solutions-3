@@ -191,7 +191,6 @@ with models.DAG(
   last_task = None
   GCS_SUBFOLDER = f"{test_owner.Team.JAX_MODELS_AND_PERFORMANCE.value}/maxtext"
 
-
   for model, test_scripts_details in multicluster_test_models.items():
     for image_key, image_value in docker_image.items():
       current_group_id = f"chained_tests_{model}_{image_key}"
