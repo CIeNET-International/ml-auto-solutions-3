@@ -82,7 +82,9 @@ with models.DAG(
             num_slices=slice_num,
             cluster=clusters[accelerator],
             time_out_in_min=240,
-            test_name=f"profiling-vertex-ai-tensorboard-{mode.value}-{accelerator}",
+            # TODO(b/465618653): Switch back to v4-8 once the issue is resolved.
+            test_name=("profiling-vertex-ai-tensorboard-"
+                      f"{mode.value}-{accelerator}"),
             run_model_cmds=profiling_in_vertex_ai_tb_cmds,
             docker_image=image.value,
             test_owner=test_owner.SURBHI_J,
