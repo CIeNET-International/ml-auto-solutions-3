@@ -23,10 +23,9 @@ import random
 import re
 
 from airflow.decorators import task
-from airflow.exceptions import AirflowFailException
+from airflow.exceptions import AirflowFailException, AirflowSensorTimeout
 from google.cloud import monitoring_v3
 
-from dags.tpu_observability.configs.common import TpuConfig
 from dags.tpu_observability.utils.time_util import TimeUtil
 from dags.tpu_observability.utils.gcp_util import query_log_entries, query_time_series
 from dags.tpu_observability.utils import subprocess_util as subprocess
@@ -496,6 +495,7 @@ def get_node_pool_update_duration(node_pool: Info) -> float:
 @task.sensor(poke_interval=30, timeout=3600, mode="reschedule")
 def wait_for_ttr(
     node_pool: Info,
+    recovery_time: float,
     **context,
 ) -> bool:
   """Waits for the node pool Times To Recover(TTR) records to occur.
@@ -516,8 +516,10 @@ def wait_for_ttr(
   timeout = context["task"].timeout
   dag_start_date = context["dag_run"].start_date
   logging.info(
-      "Waiting for TTR records in node pool '%s' (Timeout: %s seconds)...",
+      "Waiting for TTR records for node pool '%s' "
+      "(Recovery Time: %s, Timeout: %s seconds)...",
       node_pool.node_pool_name,
+      recovery_time,
       timeout,
   )
 
@@ -582,42 +584,3 @@ def update_labels(node_pool: Info, node_labels: dict) -> None:
   )
 
   subprocess.run_exec(command)
-
-
-@task.branch
-def check_duration_and_determine_branch(
-    duration: float, threshold: float, config: TpuConfig
-) -> str:
-  """Determines which task to do next based on the given duration and threshold.
-
-  Uses the duration seconds to determine whether to wait for the
-  Times To Recover(TTR) record to become available in the next step.
-
-  Args:
-      duration: The duration of the node pool update operation in seconds.
-      threshold: The time threshold in seconds to determine if the TTR check
-        is necessary.
-      config: An instance of the TpuConfig class containing version metadata,
-        used to construct the downstream task ID.
-
-  Returns:
-      The Task ID ('wait_for_ttr' or 'skip_ttr_check') to proceed to.
-
-  Raises:
-      AirflowFailException: If the update duration is None.
-  """
-  if duration is None:
-    error_msg = "No update duration found."
-    raise AirflowFailException(error_msg)
-
-  if duration >= threshold:
-    logging.info(
-        f"Duration ({duration:.2f}s) >= {threshold}s. "
-        f"Proceeding to TTR check."
-    )
-    return f"v{config.tpu_version.value}.wait_for_ttr"
-  else:
-    logging.info(
-        f"Duration ({duration:.2f}s) < {threshold}s. " f"Skipping TTR check."
-    )
-    return f"v{config.tpu_version.value}.skip_ttr_check"

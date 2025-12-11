@@ -3,7 +3,6 @@
 import datetime
 
 from airflow import models
-from airflow.operators.empty import EmptyOperator
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
@@ -11,7 +10,6 @@ from dags.common.vm_resource import Region, Zone
 from dags.tpu_observability.configs.common import MachineConfigMap
 from dags.tpu_observability.utils import node_pool_util as node_pool
 
-_THRESHOLD_SECONDS = 150.0
 
 with models.DAG(
     dag_id="node_pool_ttr_update_label",
@@ -28,7 +26,7 @@ with models.DAG(
     description=(
         "This DAG verifies the GKE node pool's Times To Recover(TTR) metrics "
         "by triggering a label update and confirming the recovery time "
-        "is recorded when the update duration exceeds 150 seconds."
+        "is recorded"
     ),
     doc_md="""
       # GKE Node Pool Times To Recover(TTR) Metric Validation DAG
@@ -36,8 +34,7 @@ with models.DAG(
       ### Description
       This DAG automates the validation of GKE node pool Times To Recover(TTR) metrics.
       It creates a node pool and updates its labels then verifies that the TTR metric
-      is correctly generated and reported to Google Cloud Monitoring when the
-      update operation takes longer than 150 seconds.
+      is correctly generated and reported to Google Cloud Monitoring.
 
       ### Prerequisites
       This test requires an existing GKE cluster.
@@ -46,8 +43,7 @@ with models.DAG(
       1. Create a temporary node pool.
       2. Wait for the node pool to be RUNNING.
       3. Update the node pool label.
-      4. Wait for the Times To Recover(TTR) metrics to appear in Google Cloud Monitoring
-         (only expected if the update duration > 150s).
+      4. Wait for the Times To Recover(TTR) metrics to appear in Google Cloud Monitoring.
       5. Clean up the node pool after the tests.
     """,
 ) as dag:
@@ -109,26 +105,10 @@ with models.DAG(
           )
       )
 
-      task_id = "determine_next_branch"
-      determine_next_branch = (
-          node_pool.check_duration_and_determine_branch.override(
-              task_id=task_id
-          )(
-              duration=get_node_pool_update_duration,
-              threshold=_THRESHOLD_SECONDS,
-              config=config,
-          )
-      )
-
-      # Task: if node pool update duration >= 150 seconds, do the TTR check.
       task_id = "wait_for_ttr"
       wait_for_ttr = node_pool.wait_for_ttr.override(task_id=task_id)(
-          node_pool=node_pool_info
+          node_pool=node_pool_info, recovery_time=get_node_pool_update_duration
       )
-
-      # Task: if node pool update duration < 150 seconds, skip the TTR check.
-      task_id = "skip_ttr_check"
-      skip_ttr_check = EmptyOperator(task_id=task_id)
 
       task_id = "cleanup_node_pool"
       cleanup_node_pool = node_pool.delete.override(
@@ -144,7 +124,6 @@ with models.DAG(
           >> update_node_pool_label
           >> wait_for_recovered
           >> get_node_pool_update_duration
-          >> determine_next_branch
-          >> [wait_for_ttr, skip_ttr_check]
+          >> wait_for_ttr
           >> cleanup_node_pool
       )
