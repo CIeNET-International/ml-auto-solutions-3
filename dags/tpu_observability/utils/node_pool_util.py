@@ -111,17 +111,58 @@ def create(
 
 @task
 def delete(node_pool: Info) -> None:
-  """Deletes the GKE node pool using gcloud command."""
+  """Deletes the GKE node pool using gcloud command. Skips if the node pool is not found.
 
-  command = (
+  This function first checks if the node pool exists. If it does not, the task
+  completes successfully without attempting a delete operation.
+
+  Args:
+      node_pool: An instance of the Info class that encapsulates the
+        configuration and metadata of a GKE node pool.
+  """
+  logging.info(
+      "Checking if node pool '%s' exists before attempting deletion.",
+      node_pool.node_pool_name,
+  )
+
+  check_command = (
+      f"gcloud container node-pools describe {node_pool.node_pool_name} "
+      f"--project={node_pool.project_id} "
+      f"--cluster={node_pool.cluster_name} "
+      f"--location={node_pool.location} "
+      "--format=json"
+  )
+
+  try:
+    stdout = subprocess.run_exec(check_command)
+    if "message=Not found" in stdout or "code=404" in stdout:
+      logging.info(
+          "Node pool '%s' not found. Skipping deletion.",
+          node_pool.node_pool_name,
+      )
+      return
+    logging.info(
+        "Node pool '%s' exists. Proceeding with deletion.",
+        node_pool.node_pool_name,
+    )
+
+  except Exception as e:
+    error_message = str(e)
+    if "message=Not found" in error_message or "code=404" in error_message:
+      logging.info(
+          "Node pool '%s' not found (caught exception). Skipping deletion.",
+          node_pool.node_pool_name,
+      )
+      return
+
+  delete_command = (
       f"gcloud container node-pools delete {node_pool.node_pool_name} "
       f"--project={node_pool.project_id} "
       f"--cluster={node_pool.cluster_name} "
       f"--location={node_pool.location} "
       "--quiet"
   )
-
-  subprocess.run_exec(command)
+  subprocess.run_exec(delete_command)
 
 
 def list_nodes(node_pool: Info) -> List[str]:
