@@ -75,7 +75,7 @@ class Info:
 
 @task
 def build_node_pool_info_from_gcs_yaml(
-    gcs_path: str, section_name: str, **overrides
+    gcs_path: str, section_name: str, env: str = "prod", **overrides
 ) -> Info:
   """Builds a node_pool.Info instance by merging configurations.
 
@@ -87,6 +87,8 @@ def build_node_pool_info_from_gcs_yaml(
       gcs_path: The GCS path to the DAG configuration YAML file.
       section_name: The top-level key in the YAML representing the
         specific DAG's configuration (e.g., 'dag_gke_node_pool_label_update').
+      env: The environment name (e.g., 'dev', 'prod') to load
+        from the YAML configuration.
       **overrides: Additional key-value pairs to override any settings
         from the YAML.
 
@@ -95,8 +97,8 @@ def build_node_pool_info_from_gcs_yaml(
   """
   config = gcs.load_yaml_from_gcs(gcs_path)
 
-  common_cfg = config.get("common", {})
-  section_cfg = config.get(section_name, {})
+  common_cfg = config.get("env", {}).get(env, {})
+  section_cfg = config.get("dag", {}).get(section_name, {})
 
   known_fields = {f.name for f in dataclasses.fields(Info)}
 
@@ -142,7 +144,12 @@ def copy_node_pool_info_with_override(info: Info, **overrides) -> Info:
   if not cfg:
     return info  # Nothing to change.
 
-  return dataclasses.replace(info, **cfg)
+  # return dataclasses.replace(info, **cfg)
+  replaced_info = dataclasses.replace(info, **cfg)
+  logging.info(
+      f"Created a new node_pool.Info instance with overrides: {replaced_info}"
+  )
+  return replaced_info
 
 
 @task

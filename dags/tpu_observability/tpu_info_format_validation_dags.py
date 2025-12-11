@@ -360,7 +360,8 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           task_id="build_node_pool_info_from_gcs_yaml"
       )(
           gcs_path=GCS_CONFIG_PATH,
-          section_name="dag_tpu_info_format_validation_dag",
+          section_name="tpu_info_format_validation_dag",
+          env="prod",
           machine_type=config.machine_version.value,
           tpu_topology=config.tpu_topology,
       )
