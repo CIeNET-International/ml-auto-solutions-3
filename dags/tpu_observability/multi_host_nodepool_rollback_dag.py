@@ -80,7 +80,8 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           task_id="build_node_pool_info_from_gcs_yaml"
       )(
           gcs_path=GCS_CONFIG_PATH,
-          section_name="dag_multi_host_nodepool_rollback",
+          section_name="multi_host_nodepool_rollback",
+          env="prod",
           machine_type=config.machine_version.value,
           tpu_topology=config.tpu_topology,
       )

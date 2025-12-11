@@ -65,7 +65,14 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
         node_pool_info: node_pool.Info,
     ) -> str:
       """Generates a problematic node pool name."""
-      return f"{node_pool_info.node_pool_name}-wrong"
+      return f"{node_pool_info.node_pool_name}-x"
+
+    @task
+    def generate_problematic_node_location(
+        node_pool_info: node_pool.Info,
+    ) -> str:
+      """Generates a problematic node location."""
+      return f"{node_pool_info.location}-c"
 
     # Keyword arguments are generated dynamically at runtime (pylint does not
     # know this signature).
@@ -76,7 +83,8 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           task_id="build_node_pool_info_from_gcs_yaml"
       )(
           gcs_path=GCS_CONFIG_PATH,
-          section_name="dag_gke_node_pool_status",
+          section_name="gke_node_pool_status",
+          env="prod",
           machine_type=config.machine_version.value,
           tpu_topology=config.tpu_topology,
       )
@@ -84,6 +92,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       problematic_node_pool_info = node_pool.copy_node_pool_info_with_override(
           info=node_pool_info,
           node_pool_name=generate_problematic_node_pool_name(node_pool_info),
+          node_locations=generate_problematic_node_location(node_pool_info),
       )
 
       task_id = "create_node_pool"
