@@ -363,9 +363,8 @@ def get_running_pods(
 @task
 def run_workload(
     node_pool: node_pool.Info, yaml_config: str, namespace: str
-) -> TimeUtil:
-  """
-  Applies the specified YAML file to the GKE cluster.
+) -> datetime.datetime:
+  """Applies the specified YAML file to the GKE cluster.
 
   Args:
     node_pool: Configuration object with cluster details.
