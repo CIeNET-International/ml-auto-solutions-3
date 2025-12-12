@@ -264,9 +264,7 @@ def wait_for_workload_start(
   if pods.items:
     logging.info(f"{f' Pod Statuses for Workload {workload_id} ':-^80}")
     for pod in pods.items:
-      pod_name = pod.metadata.name
-      pod_phase = pod.status.phase
-      logging.info(f"Pod: {pod_name}, Status: {pod_phase}")
+      logging.info(f"Pod: {pod.metadata.name}, Status: {pod.status.phase}")
     logging.info("-" * 80)
 
   print(f"Found {len(pods.items)} pods for workload {workload_id}")
@@ -285,9 +283,7 @@ def wait_for_workload_completion(
   if pods.items:
     logging.info(f"{f' Pod Statuses for Workload {workload_id} ':-^80}")
     for pod in pods.items:
-      pod_name = pod.metadata.name
-      pod_phase = pod.status.phase
-      logging.info(f"Pod: {pod_name}, Status: {pod_phase}")
+      logging.info(f"Pod: {pod.metadata.name}, Status: {pod.status.phase}")
     logging.info("-" * 80)
   # ---------------------------
 
