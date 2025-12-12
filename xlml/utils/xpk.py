@@ -260,15 +260,15 @@ def wait_for_workload_start(
   core_api = _get_core_api_client(project_id, region, cluster_name)
   pods = _list_workload_pods(core_api, workload_id)
 
-  # --- new log ---
+  # Logging the status of each retrieved pod for troubleshoot
   if pods.items:
-    logging.info(f"--- Pod Statuses for Workload {workload_id} ---")
+    logging.info(f"{f' Pod Statuses for Workload {workload_id} ':-^80}")
     for pod in pods.items:
       pod_name = pod.metadata.name
       pod_phase = pod.status.phase
       logging.info(f"Pod: {pod_name}, Status: {pod_phase}")
-    logging.info("---------------------------------------------")
-  # ---------------------------
+    logging.info("-" * 80)
+
   print(f"Found {len(pods.items)} pods for workload {workload_id}")
   return len(pods.items) > 0
 
@@ -281,14 +281,14 @@ def wait_for_workload_completion(
   core_api = _get_core_api_client(project_id, region, cluster_name)
   pods = _list_workload_pods(core_api, workload_id)
 
-  # --- new log ---
+  # Logging the status of each retrieved pod for troubleshoot
   if pods.items:
-    logging.info(f"--- Pod Statuses for Workload {workload_id} ---")
+    logging.info(f"{f' Pod Statuses for Workload {workload_id} ':-^80}")
     for pod in pods.items:
       pod_name = pod.metadata.name
       pod_phase = pod.status.phase
       logging.info(f"Pod: {pod_name}, Status: {pod_phase}")
-    logging.info("---------------------------------------------")
+    logging.info("-" * 80)
   # ---------------------------
 
   if not pods.items:
