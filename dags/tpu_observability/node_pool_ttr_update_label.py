@@ -98,16 +98,9 @@ with models.DAG(
           node_pool=node_pool_info, status=node_pool.Status.RUNNING
       )
 
-      task_id = "get_node_pool_update_duration"
-      get_node_pool_update_duration = (
-          node_pool.get_node_pool_update_duration.override(task_id=task_id)(
-              node_pool=node_pool_info
-          )
-      )
-
       task_id = "wait_for_ttr"
       wait_for_ttr = node_pool.wait_for_ttr.override(task_id=task_id)(
-          node_pool=node_pool_info, recovery_time=get_node_pool_update_duration
+          node_pool=node_pool_info, operation_start_time=update_node_pool_label
       )
 
       task_id = "cleanup_node_pool"
@@ -123,7 +116,6 @@ with models.DAG(
           >> wait_for_running
           >> update_node_pool_label
           >> wait_for_recovered
-          >> get_node_pool_update_duration
           >> wait_for_ttr
           >> cleanup_node_pool
       )
