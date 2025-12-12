@@ -112,18 +112,20 @@ def run_workload(
   """Run workload through xpk tool."""
 
   # Log required info for XLML PLX Dashboard
-  composer.log_metadata_for_xlml_dashboard({
-      "cluster_project": cluster_project,
-      "zone": zone,
-      "cluster_name": cluster_name,
-      "task_id": task_id,
-      "workload_id": workload_id,
-      "gcs_path": gcs_path,
-      "benchmark_id": benchmark_id,
-      "docker_image": docker_image,
-      "accelerator_type": accelerator_type,
-      "num_slices": num_slices,
-  })
+  composer.log_metadata_for_xlml_dashboard(
+      {
+          "cluster_project": cluster_project,
+          "zone": zone,
+          "cluster_name": cluster_name,
+          "task_id": task_id,
+          "workload_id": workload_id,
+          "gcs_path": gcs_path,
+          "benchmark_id": benchmark_id,
+          "docker_image": docker_image,
+          "accelerator_type": accelerator_type,
+          "num_slices": num_slices,
+      }
+  )
 
   with tempfile.TemporaryDirectory() as tmpdir:
     if accelerator_type in [
@@ -250,6 +252,14 @@ def wait_for_workload_start(
   """Check if the workload has started."""
   core_api = _get_core_api_client(project_id, region, cluster_name)
   pods = _list_workload_pods(core_api, workload_id)
+
+  # Logging the status of each retrieved pod for troubleshoot
+  if pods.items:
+    logging.info(f"{f' Pod Statuses for Workload {workload_id} ':-^80}")
+    for pod in pods.items:
+      logging.info(f"Pod: {pod.metadata.name}, Status: {pod.status.phase}")
+    logging.info("-" * 80)
+
   print(f"Found {len(pods.items)} pods for workload {workload_id}")
   return len(pods.items) > 0
 
@@ -261,6 +271,14 @@ def wait_for_workload_completion(
   """Check the workload status."""
   core_api = _get_core_api_client(project_id, region, cluster_name)
   pods = _list_workload_pods(core_api, workload_id)
+
+  # Logging the status of each retrieved pod for troubleshoot
+  if pods.items:
+    logging.info(f"{f' Pod Statuses for Workload {workload_id} ':-^80}")
+    for pod in pods.items:
+      logging.info(f"Pod: {pod.metadata.name}, Status: {pod.status.phase}")
+    logging.info("-" * 80)
+  # ---------------------------
 
   if not pods.items:
     logging.info(f"No pods found for workload selector: {workload_id}.")
