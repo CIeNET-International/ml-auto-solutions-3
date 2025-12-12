@@ -24,6 +24,7 @@ from airflow.decorators import task
 from airflow.hooks.subprocess import SubprocessHook
 from airflow.exceptions import AirflowFailException
 
+from dags import composer_env
 from xlml.utils import gke
 from xlml.utils import composer
 
@@ -72,15 +73,6 @@ def setup_airflow_cluster_context() -> None:
   ), f"XPK clean-up failed with code {result.exit_code}"
 
 
-@task
-def generate_workload_id(run_name_workload: str) -> str:
-  """Generate a valid workload ID."""
-
-  real_run_name__running = run_name_workload.split("-")[0]
-  logging.info(f"Run_name used: {real_run_name__running}")
-  return f"{real_run_name__running}"
-
-
 def build_axlearn_cmd(
     task_id: str,
     gcs_path: str,
@@ -90,7 +82,6 @@ def build_axlearn_cmd(
     docker_image: str,
     benchmark_id: str,
     workload_id: str,
-    run_name: str,
     accelerator_type: str = "",
     module: str = "",
     model_config: str = "",
@@ -114,30 +105,31 @@ def build_axlearn_cmd(
       "num_slices": num_slices,
   })
 
-  # Extract the full path (e.g., "gcr.io/cienet-cmcs/axlearn-custom")
-  # and the tag (e.g., "latest")
-  regex = r"^(?P<full_path>.*)/(?P<run_image>[^/:]+):(?P<tag>.+)$"
-  match = re.search(regex, docker_image)
+  # TODO: project ID
+  # valid command:
+  # gcloud container images add-tag gcr.io/cloud-tpu-multipod-dev/axlearn-custom:2025-11-21 gcr.io/cloud-tpu-multipod-dev/axlearn-custom:automation-dev-2025-12-12-11-43-2 --project=cloud-tpu-multipod-dev --quiet
+  update_image_tag_cmd = (
+      "gcloud artifacts docker tags add "
+      f"{docker_image}:latest "
+      f"{docker_image}:{workload_id} "
+      "--project=cloud-tpu-multipod-dev "
+      "--quiet"
+  )
+
+  # TODO: can we name the folder? a fixed one
+  # The output directory will be construct from the workload_id
+  # workload_id: "automation-prod-2025-11-19-05-15"
+  # output_dir_name: automation-prod
+  regex = r"^(?P<output_dir_name>(?:[^-]+-){2}[^-]+)"
+  match = re.search(regex, workload_id)
   if not match:
-    raise AirflowFailException(f"Invalid docker image format: {docker_image}")
+    raise AirflowFailException(f"Invalid run name format: {workload_id}")
+  output_dir_name = match.group("output_dir_name")
 
-  # These two values will determine the name of the pod run in AXLearn.
-  image_run_name = match.group("run_image")
-  tag = match.group("tag")
-
-  # The output directory will be construct from the run_name
-  # run_name: latest-axlearn-reg-rest-2x-tpu-v5p-64-2025-11-19-05-15
-  # outpu_dir_name: latest-axlearn-reg-rest
-  regex = r"^(?P<output_dir_name>(?:[^-]+-){3}[^-]+)"
-  match = re.search(regex, run_name)
-  if not match:
-    raise AirflowFailException(f"Invalid run name format: {run_name}")
-  outpu_dir_name = match.group("output_dir_name")
-
-  export_var = [
-      "export BASTION_TIER=disabled",
-      f"export PROJECT_ID={cluster_project}",
-  ]
+  export_var = (
+      "export BASTION_TIER=disabled; "
+      f"export PROJECT_ID={cluster_project}"
+  )
   trace_list = ""
   if len(trace_steps) > 0:
     trace_list = "--trace_at_steps=" + ",".join(map(str, trace_steps))
@@ -161,31 +153,28 @@ def build_axlearn_cmd(
   workload_create_cmd = (
       f"axlearn gcp launch run --cluster={cluster_name} "
       f"--runner_name gke_tpu_single "
-      f"--name={tag} "
+      f"--name={workload_id} "
       f"--instance_type={accelerator_type} "
       f"--max_tries=10 "
       f"--num_replicas={num_slices} "
       f"--bundler_spec=allow_dirty=True "
       f"--bundler_type=artifactregistry "
-      f"--bundler_spec=image={image_run_name} "
+      f"--bundler_spec=image={docker_image} "
       f'-- "'
       f"ulimit -n 1048576; ulimit -c 0; "
       f"python3 -c 'import jax; jax.devices()'; "
       f"python3 -m axlearn.common.launch_trainer_main"
       f'" '
       f"--module={module} --config={model_config} "
-      f"--trainer_dir={trainer_dir}/{outpu_dir_name}/{run_name} "
+      f"--trainer_dir={trainer_dir}/{output_dir_name}/{workload_id} "
       f"--data_dir=gs://axlearn-public/tensorflow_datasets "
       f"--mesh_selector={accelerator_type} "
       f"--jax_backend=tpu "
       f"--initialization_timeout=1200 {trace_list} "
   )
 
-  cmds = [
-      *export_var,
-      workload_create_cmd,
-  ]
-  return cmds
+  # TODO: type incompatible
+  return [export_var, update_image_tag_cmd, workload_create_cmd]
 
 
 def create_axlearn_config_cmd(
@@ -240,11 +229,7 @@ def setup_cmds(
   ]
 
 
-def generate_run_name(
-    short_id: str,
-    slice_number: int,
-    accelerator: str,
-) -> str:
+def generate_workload_id() -> str:
   """
   Generates a unique run name for a MaxText run based on given parameters.
 
@@ -265,58 +250,5 @@ def generate_run_name(
   """
 
   run_time = datetime.now().strftime("%Y-%m-%d-%H-%M")
-  run_name_id = f"latest-{short_id}-{slice_number}x-{accelerator}-{run_time}"
-  return run_name_id
-
-
-@task
-def get_image_name(
-    project_id: str,
-    path_repository: str,
-) -> str | None:
-  """
-  Retrieves repository details by calling the gcloud CLI command
-  and parsing the output as JSON.
-
-  Args:
-    project_id: Your Google Cloud Project ID.
-    repository_id: The ID of the repository.
-      e.g gcr.io/cienet-cmcs/axlearn-custom
-  Returns:
-    A string with the name of the latest daily image.
-  """
-  list_tags_cmds = (
-      f"gcloud container images list-tags {path_repository} "
-      f"--project={project_id} "
-      f"--format=json | tr -d '\\n\\r'"
-  )
-  cmds = [
-      "set -ue",
-      list_tags_cmds,
-  ]
-
-  hook = SubprocessHook()
-  result = hook.run_command(["bash", "-c", ";".join(cmds)])
-  assert (
-      result.exit_code == 0
-  ), f"XPK command failed with code {result.exit_code}"
-
-  try:
-    repo_details: list[dict] = json.loads(result.output)
-  except json.JSONDecodeError as e:
-    raise ValueError("Failed to parse JSON output from gcloud command.") from e
-
-  logging.info(f"{f'First 5 Images: {repo_details[:5]}':=^80}")
-  image_name = ""
-  for image_info in repo_details:
-    tags_list = image_info.get("tags", [])
-
-    # We are expected to get the tags of all our images.
-    # If tag list contain more than two we know is the latest.
-    # (Since only the latest contains 2 tags.)
-    if len(tags_list) >= 2:
-      tags_list.remove("latest")
-      image_name = f"{path_repository}:{tags_list[0]}"
-      logging.info(f"{f'Running wirh Image: {image_name}':=^80}")
-      return f"{path_repository}:latest"
-  raise AirflowFailException("Image not found or is not latest image")
+  env = "prod" if composer_env.is_prod_env() else "dev"
+  return f"automation-{env}-{run_time}"

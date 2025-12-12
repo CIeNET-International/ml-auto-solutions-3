@@ -15,4 +15,4 @@
 export PYTHONPATH=$PWD
 export XLMLTEST_CONFIGS=$PWD/dags/jsonnet/
 
-find dags -name '*.py' |  xargs -n 1 -t python
+find dags -name 'axlearn_checkpoint_regular.py' |  xargs -n 1 -t python

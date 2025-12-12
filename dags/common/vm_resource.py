@@ -333,8 +333,9 @@ class DockerImage(enum.Enum):
       f"xla:nightly_3.10_tpuvm_{datetime.datetime.today().strftime('%Y%m%d')}"
   )
   AXLEARN_CUSTOM = (
-      "gcr.io/cloud-tpu-multipod-dev/axlearn-custom:"
-      f"{datetime.datetime.today().strftime('%Y-%m-%d')}"
+      # AXLearn's Docker/Artifact Registry bundler uses the run/workload name as
+      # the image tag, so we intentionally keep only the base image repo here.
+      "gcr.io/cloud-tpu-multipod-dev/axlearn-custom"
   )
   AXLEARN_TPU_JAX_STABLE_STACK = (
       "us-docker.pkg.dev/tpu-prod-env-multipod/bite/tpu/axlearn:"

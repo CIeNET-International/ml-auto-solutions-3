@@ -40,7 +40,6 @@ def get_axlearn_tpu_config(
       dataset_name=dataset_name,
   )
 
-  latest_docker_image = f"{docker_image.split(':')[0]}:latest"
   job_test_config = test_config.TpuGkeTest(
       test_config.Tpu(
           version=cluster.device_version,
@@ -53,7 +52,7 @@ def get_axlearn_tpu_config(
       task_owner=test_owner,
       num_slices=num_slices,
       cluster_name=cluster.name,
-      docker_image=latest_docker_image,
+      docker_image=docker_image,
   )
 
   return task.AXLearnTask(

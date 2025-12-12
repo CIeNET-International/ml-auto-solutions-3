@@ -184,7 +184,7 @@ class AXLearnTask(BaseTask):
   def run(
       self,
       test_configs: test_config_util.TestConfig,
-      run_name: str,
+      workload_id: str,
       *,
       axlearn_branch: str = axlearn.MAIN_BRANCH,
   ) -> DAGNode:
@@ -206,7 +206,7 @@ class AXLearnTask(BaseTask):
     with TaskGroup(group_id=self.task_test_config.benchmark_id) as group:
       self.run_model(
           test_configs=test_configs,
-          run_name=run_name,
+          workload_id=workload_id,
           axlearn_branch=axlearn_branch,
       )
     return group
@@ -214,7 +214,7 @@ class AXLearnTask(BaseTask):
   def run_model(
       self,
       test_configs: test_config_util.TestConfig,
-      run_name: str,
+      workload_id: str,
       axlearn_branch: str = "",
       gcs_location: Optional[airflow.XComArg] = None,
   ) -> DAGNode:
@@ -248,7 +248,8 @@ class AXLearnTask(BaseTask):
       the entire model test sequence (launch, wait, cleanup).
     """
     with TaskGroup(group_id="run_model") as group:
-      workload_id = axlearn.generate_workload_id(run_name_workload=run_name)
+      # TODO: remove it whole?
+      # workload_id = axlearn.generate_workload_id(run_name_workload=run_name)
 
       if gcs_location:
         gcs_path = gcs_location
@@ -260,7 +261,6 @@ class AXLearnTask(BaseTask):
 
       launch_workload = self.launch_workload(
           workload_id=workload_id,
-          run_name=run_name,
           gcs_path=gcs_path,
           axlearn_branch=axlearn_branch,
           test_configs=test_configs,
@@ -285,7 +285,7 @@ class AXLearnTask(BaseTask):
       )
 
       _ = (
-          (workload_id, gcs_path)
+          gcs_path
           >> launch_workload
           >> wait_for_workload_completion
           >> clean_up_workload
@@ -296,7 +296,6 @@ class AXLearnTask(BaseTask):
   def launch_workload(
       self,
       workload_id: str,
-      run_name: str,
       gcs_path: str,
       test_configs: test_config_util.TestConfigAXLearn,
       axlearn_branch: str = "",
@@ -335,7 +334,6 @@ class AXLearnTask(BaseTask):
               workload_id=workload_id,
               gcs_path=gcs_path,
               accelerator_type=f"tpu-{self.task_test_config.accelerator.name}",
-              run_name=run_name,
               module=test_configs.module,
               model_config=test_configs.model_config,
               trainer_dir=test_configs.trainer_dir,
