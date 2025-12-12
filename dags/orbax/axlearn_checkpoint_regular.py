@@ -96,23 +96,20 @@ with models.DAG(
           trace_steps=[40, 90, 140, 190],
       ),
   ]
-  for mode, image_full_path in test_config_util.DOCKER_IMAGES_AXLEARN:
+  for mode, image in test_config_util.DOCKER_IMAGES_AXLEARN:
     for test_config in test_configs:
       for slice_num in test_config.slices:
-        # This task will get all remote repository images. Will print
-        # latest image full path --> gcr.io/cienet-cmcs/axlearn-custom:<DATE>.
-        name_image_full_path_latest = axlearn.get_image_name(
-            project_id=test_config.cluster.project,
-            path_repository=image_full_path.value.split(":")[0],
-        )
+        # TODO: remove it whole?
+        # # This task will get all remote repository images. Will print
+        # # latest image full path --> gcr.io/cienet-cmcs/axlearn-custom:<DATE>.
+        # name_image_full_path_latest = axlearn.get_image_name(
+        #     project_id=test_config.cluster.project,
+        #     path_repository=image.value.split(":")[0],
+        # )
 
         # This task will create the run_name_id always with latest.
         # e.g: gcr.io/cienet-cmcs/axlearn-custom:latest
-        run_name_id = axlearn.generate_run_name(
-            short_id=test_config.short_id,
-            slice_number=slice_num,
-            accelerator=test_config.instance_type,
-        )
+        workload_id = axlearn.generate_workload_id()
 
         start_time = validation_util.generate_timestamp()
 
@@ -121,14 +118,13 @@ with models.DAG(
         axlearn_regular_run = config.get_axlearn_tpu_config(
             cluster=test_config.cluster,
             num_slices=slice_num,
-            time_out_in_min=60,
+            time_out_in_min=90,
             test_name=f"{test_config.short_id}-reg",
-            docker_image=image_full_path.value,
+            docker_image=image.value,
             test_owner=test_owner.CAMILO_Q,
         ).run(
             test_configs=test_config,
-            axlearn_branch="main",
-            run_name=run_name_id,
+            workload_id=workload_id,
         )
 
         end_time = validation_util.generate_timestamp()
@@ -140,7 +136,7 @@ with models.DAG(
                 project_id=test_config.cluster.project,
                 location=zone_to_region(test_config.cluster.zone),
                 cluster_name=test_config.cluster.name,
-                run_name=run_name_id,
+                run_name=workload_id,
                 pod_pattern=".*-0",
                 start_time=start_time,
                 end_time=end_time,
@@ -149,7 +145,7 @@ with models.DAG(
         )
 
         _ = (
-            name_image_full_path_latest
+            workload_id
             >> start_time
             >> axlearn_regular_run
             >> end_time

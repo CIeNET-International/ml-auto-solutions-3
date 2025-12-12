@@ -40,7 +40,6 @@ def get_axlearn_tpu_config(
       dataset_name=dataset_name,
   )
 
-  latest_docker_image = f"{docker_image.split(':')[0]}:latest"
   job_test_config = test_config.TpuGkeTest(
       test_config.Tpu(
           version=cluster.device_version,
@@ -53,10 +52,13 @@ def get_axlearn_tpu_config(
       task_owner=test_owner,
       num_slices=num_slices,
       cluster_name=cluster.name,
-      docker_image=latest_docker_image,
+      docker_image=docker_image,
   )
 
   return task.AXLearnTask(
       task_test_config=job_test_config,
       task_gcp_config=job_gcp_config,
+      image_name="axlearn-custom",  # TODO
+      image_repo="gcr.io/cloud-tpu-multipod-dev",  # TODO
+      image_full_url="gcr.io/cloud-tpu-multipod-dev/axlearn-custom",  # TODO
   )
