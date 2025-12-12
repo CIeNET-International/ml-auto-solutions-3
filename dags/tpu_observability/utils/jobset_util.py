@@ -250,7 +250,7 @@ class Command:
 @task
 def run_workload(
     node_pool: node_pool.Info, yaml_config: str, namespace: str
-) -> TimeUtil:
+) -> datetime.datetime:
   """Applies the specified YAML file to the GKE cluster.
 
   Args:
