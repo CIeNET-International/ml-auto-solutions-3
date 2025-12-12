@@ -56,7 +56,7 @@ with models.DAG(
         ),
         node_pool_name=models.Variable.get(
             "NODE_POOL_NAME",
-            default_var="ttr-update-label-ttr-v6e-autotest",
+            default_var="ttr-update-label-v6e-autotest",
         ),
         location=models.Variable.get(
             "LOCATION", default_var=Region.US_CENTRAL1.value
