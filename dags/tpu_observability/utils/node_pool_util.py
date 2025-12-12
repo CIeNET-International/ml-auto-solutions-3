@@ -425,7 +425,7 @@ def wait_for_availability(
 @task.sensor(poke_interval=30, timeout=3600, mode="reschedule")
 def wait_for_ttr(
     node_pool: Info,
-    operation_start_time: datetime,
+    operation_start_time: TimeUtil,
     **context,
 ) -> bool:
   """Waits for the node pool Times To Recover(TTR) records to occur.
@@ -438,8 +438,8 @@ def wait_for_ttr(
   Args:
       node_pool: An instance of the Info class that encapsulates
         the configuration and metadata of a GKE node pool.
-      operation_start_time: The timestamp when the node pool update operation
-        started. This serves as the start time for the metric query window.
+      operation_start_time: A TimeUtil object representing the start time of
+        the operation. This serves as the anchor for the metric query window.
       context: The Airflow context dictionary, which includes task metadata.
 
   Returns:
@@ -458,7 +458,7 @@ def wait_for_ttr(
   # 1. It ensures the window is wide enough to catch the delayed metric data
   #    (which retains its original Event Timestamp) as the sensor retries.
   # 2. It strictly filters out any stale records from previous DAG runs.
-  start_time = TimeUtil.from_datetime(operation_start_time)
+  start_time = operation_start_time
   now = datetime.datetime.now()
   end_time = TimeUtil.from_datetime(now)
 
@@ -487,20 +487,23 @@ def wait_for_ttr(
 
 
 @task
-def update_labels(node_pool: Info, node_labels: dict) -> datetime:
+def update_labels(node_pool: Info, node_labels: dict) -> TimeUtil:
   """Updates the labels of a GKE node pool using gcloud command.
 
-  This task updates GKE node pool labels via gcloud and
-  returns the operation start timestamp.
+  This task updates GKE node pool labels via gcloud.
+  It captures the current time before execution and returns it as
+  a TimeUtil object for downstream tracking.
 
   Args:
     node_pool: An instance of the Info class.
     node_labels: A dictionary of labels to update or remove.
 
   Returns:
-    A UTC timestamp marking the start of the update operation.
+    A TimeUtil object representing the UTC timestamp when the operation started.
   """
-  operation_start_time = datetime.datetime.now(datetime.timezone.utc)
+  operation_start_time = TimeUtil.from_datetime(
+      datetime.datetime.now(datetime.timezone.utc)
+  )
 
   if not node_labels:
     logging.info("The specified label is empty, nothing to update.")
