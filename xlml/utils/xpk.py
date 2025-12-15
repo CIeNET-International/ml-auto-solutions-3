@@ -273,13 +273,15 @@ def wait_for_workload_start(
             reason = container_status.state.waiting.reason
             message = container_status.state.waiting.message
             logging.warning(
-              f"  Container '{container_status.name}' WAITING. Reason: {reason}. Message: {message}"
+                f"  Container '{container_status.name}' WAITING. Reason: {reason}. Message: {message}"
             )
           # Terminated status
           elif container_status.state and container_status.state.terminated:
             reason = container_status.state.terminated.reason
             exit_code = container_status.state.terminated.exit_code
-            logging.error(f"  Container '{container_status.name}' TERMINATED. Reason: {reason}. Exit Code: {exit_code}")
+            logging.error(
+                f"  Container '{container_status.name}' TERMINATED. Reason: {reason}. Exit Code: {exit_code}"
+            )
     logging.info("-" * 80)
 
   print(f"Found {len(pods.items)} pods for workload {workload_id}")
@@ -316,7 +318,6 @@ def wait_for_workload_completion(
                 f"  Container '{container_status.name}' TERMINATED. Reason: {reason}. Exit Code: {exit_code}"
             )
     logging.info("-" * 80)
-
 
   if not pods.items:
     logging.info(f"No pods found for workload selector: {workload_id}.")
