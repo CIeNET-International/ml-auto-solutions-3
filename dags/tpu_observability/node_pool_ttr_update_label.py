@@ -52,7 +52,7 @@ with models.DAG(
     node_pool_info = node_pool.Info(
         project_id=models.Variable.get("PROJECT_ID", default_var="cienet-cmcs"),
         cluster_name=models.Variable.get(
-            "CLUSTER_NAME", default_var="tpu-observability-automation"
+            "CLUSTER_NAME", default_var="tpu-observability-automation-dev"
         ),
         node_pool_name=models.Variable.get(
             "NODE_POOL_NAME",
