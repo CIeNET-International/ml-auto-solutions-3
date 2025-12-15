@@ -306,13 +306,15 @@ def wait_for_workload_completion(
             reason = container_status.state.waiting.reason
             message = container_status.state.waiting.message
             logging.warning(
-              f"  Container '{container_status.name}' WAITING. Reason: {reason}. Message: {message}"
+                f"  Container '{container_status.name}' WAITING. Reason: {reason}. Message: {message}"
             )
           # Terminated status
           elif container_status.state and container_status.state.terminated:
             reason = container_status.state.terminated.reason
             exit_code = container_status.state.terminated.exit_code
-            logging.error(f"  Container '{container_status.name}' TERMINATED. Reason: {reason}. Exit Code: {exit_code}")
+            logging.error(
+                f"  Container '{container_status.name}' TERMINATED. Reason: {reason}. Exit Code: {exit_code}"
+            )
     logging.info("-" * 80)
 
 
