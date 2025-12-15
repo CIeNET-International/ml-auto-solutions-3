@@ -272,7 +272,9 @@ def wait_for_workload_start(
           if container_status.state and container_status.state.waiting:
             reason = container_status.state.waiting.reason
             message = container_status.state.waiting.message
-            logging.warning(f"  Container '{container_status.name}' WAITING. Reason: {reason}. Message: {message}")
+            logging.warning(
+              f"  Container '{container_status.name}' WAITING. Reason: {reason}. Message: {message}"
+            )
           # Terminated status
           elif container_status.state and container_status.state.terminated:
             reason = container_status.state.terminated.reason
@@ -303,7 +305,9 @@ def wait_for_workload_completion(
           if container_status.state and container_status.state.waiting:
             reason = container_status.state.waiting.reason
             message = container_status.state.waiting.message
-            logging.warning(f"  Container '{container_status.name}' WAITING. Reason: {reason}. Message: {message}")
+            logging.warning(
+              f"  Container '{container_status.name}' WAITING. Reason: {reason}. Message: {message}"
+            )
           # Terminated status
           elif container_status.state and container_status.state.terminated:
             reason = container_status.state.terminated.reason
