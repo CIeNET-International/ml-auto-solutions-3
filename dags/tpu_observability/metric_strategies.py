@@ -1,3 +1,18 @@
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+"""Metric verification strategies for the tpu-info CLI tool."""
+
 from abc import ABC, abstractmethod
 import re
 from typing import Any
@@ -77,7 +92,8 @@ class BaseMetricStrategy(ABC):
 
   @property
   def tolerance_percent(self) -> float:
-    """The relative tolerance (in percent) to use for this metric's verification.
+    """The relative tolerance (in percent) to use for this metric's
+    verification.
 
     Subclasses should override this value to set a custom tolerance.
     """
@@ -170,7 +186,10 @@ class _BaseSimplePointStrategy(BaseMetricStrategy):
 
 
 class _BaseDistributionStrategy(BaseMetricStrategy):
-  """Template class: Handles the common logic for parsing Distribution (histogram) data from Monitoring and calculating percentiles."""
+  """
+  Template class: Handles the common logic for parsing Distribution (histogram)
+  data from Monitoring and calculating percentiles.
+  """
 
   def __init__(self, percentiles_to_check: list[float]):
     """Generic initializer."""
@@ -194,7 +213,9 @@ class _BaseDistributionStrategy(BaseMetricStrategy):
   @property
   @abstractmethod
   def _tpu_info_group_by_key(self) -> str:
-    """The column name in the tpu-info table used for grouping, e.g., 'Buffer Size'."""
+    """
+    The column name in the tpu-info table used for grouping e.g., 'Buffer Size'.
+    """
     pass
 
   def parse_from_monitoring(
@@ -299,7 +320,7 @@ class MemoryUsedStrategy(_BaseSimplePointStrategy):
       if metric_table.name == "TPU HBM Usage":
         for row_dict in metric_table.body:
           hbm_value = row_dict["HBM Usage (GiB)"]
-          # Regex to parse the HBM usage string format: "USED.XX GiB / TOTAL.XX GiB".
+          # Parses HBM usage from "USED.XX GiB / TOTAL.XX GiB".
           # Group 1 captures the USED memory value.
           # Group 2 captures the TOTAL memory value.
           match = re.search(
@@ -344,7 +365,8 @@ class MemoryTotalStrategy(_BaseSimplePointStrategy):
       if metric_table.name == "TPU HBM Usage":
         for row_dict in metric_table.body:
           hbm_value = row_dict["HBM Usage (GiB)"]
-          # Regex to parse the HBM usage string format: "USED.XX GiB / TOTAL.XX GiB".
+          # Regex to parse the HBM usage string format:
+          # "USED.XX GiB / TOTAL.XX GiB".
           # Group 1 captures the USED memory value.
           # Group 2 captures the TOTAL memory value.
           match = re.search(
@@ -492,7 +514,9 @@ class HostToDeviceTransferLatenciesStrategy(_BaseDistributionStrategy):
 
 
 class DeviceToHostTransferLatenciesStrategy(_BaseDistributionStrategy):
-  """Strategy for verifying Device to Host Transfer Latency from distribution data."""
+  """
+  Strategy for verifying Device to Host Transfer Latency from distribution data.
+  """
 
   @property
   def metric_name(self) -> str:
@@ -524,7 +548,9 @@ class DeviceToHostTransferLatenciesStrategy(_BaseDistributionStrategy):
 
 
 class CollectiveEndToEndLatencyLatenciesStrategy(_BaseDistributionStrategy):
-  """Strategy for verifying Collective End to End Latency from distribution data."""
+  """
+  Strategy for verifying Collective End to End Latency from distribution data.
+  """
 
   @property
   def metric_name(self) -> str:
