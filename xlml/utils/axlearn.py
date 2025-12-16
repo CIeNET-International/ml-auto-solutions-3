@@ -13,14 +13,16 @@
 
 """Utilities to run workloads with AXLearn."""
 
-from datetime import datetime
+import datetime as dt
 import os
 import re
 from absl import logging
 import textwrap
+import time
 
 import airflow
 from airflow.decorators import task
+from airflow.exceptions import AirflowException
 from airflow.hooks.subprocess import SubprocessHook
 from airflow.exceptions import AirflowFailException
 from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator
@@ -30,33 +32,25 @@ from dags import composer_env
 from xlml.utils import gke
 from xlml.utils import composer
 from dags.common.vm_resource import DockerImage
+from xlml.utils import xpk
 
-
-MAIN_BRANCH = "main"
 
 KPO_LABEL_KEY = "axlearn-kpo-label"
 KPO_LABEL_VAL = "axlearn_cli_kpo_worker"
+
 # pylint: disable=line-too-long
-# MUST use this fixed namespace for Cloud Composer 2.
-# See: https://cloud.google.com/composer/docs/composer-2/use-kubernetes-pod-operator#composer-2-kpo-access-project-resources
 KPO_NAMESPACE = "composer-user-workloads"
+"""
+**MUST** use this fixed namespace for Cloud Composer 2.
+See: https://cloud.google.com/composer/docs/composer-2/use-kubernetes-pod-operator#composer-2-kpo-access-project-resources
+"""
 # pylint: enable=line-too-long
 
-LOGGING_URL_FORMAT = (
-    "https://pantheon.corp.google.com/logs/query;"
-    + "query=resource.type%3D%22k8s_container%22%0A"
-    + "resource.labels.project_id%3D%22{project}%22%0A"
-    + "resource.labels.location%3D%22{region}%22%0A"
-    + "resource.labels.cluster_name%3D%22{cluster}%22%0A"
-    + "resource.labels.namespace_name%3D%22default%22%0A"
-    + "labels.k8s-pod%2Fjobset_sigs_k8s_io%2F"
-    + "jobset-name%3D%22{workload_id}%22%20severity%3E%3DDEFAULT;"
-    + "storageScope=project;duration=P7D?e=13803378&"
-    + "mods=allow_workbench_image_override&project={project}"
+
+@task(
+    retry_delay=dt.timedelta(seconds=15),
+    retries=4,
 )
-
-
-@task
 def reset_kube_config() -> None:
   """Get credential for in-cluster to setup CLI AXLearn command."""
 
@@ -83,15 +77,18 @@ def reset_kube_config() -> None:
   ), f"XPK clean-up failed with code {result.exit_code}"
 
 
-@task
+@task(
+    retry_delay=dt.timedelta(seconds=15),
+    retries=4,
+)
 def update_image_tag_cmd(image_name: str, workload_id: str):
-  # TODO: (dev only) (just for backup)
-  # gcloud container images add-tag gcr.io/cloud-tpu-multipod-dev/axlearn-custom gcr.io/cloud-tpu-multipod-dev/axlearn-custom:automation-dev-2025-12-12-11-43-2 --quiet
-  #
-  # AXLearn pulls this particular image {docker_image}:{workload_id} when
-  # creating the Pod.
-  # Tag the image with {workload_id} before submitting the workload via the
-  # AXLearn CLI.
+  """
+  AXLearn pulls this particular image {docker_image}:{workload_id} when
+  creating the pod.
+
+  Tag the image with {workload_id} before submitting the workload via the
+  AXLearn CLI.
+  """
 
   hook = SubprocessHook()
   result = hook.run_command([
@@ -113,32 +110,86 @@ def update_image_tag_cmd(image_name: str, workload_id: str):
     name="cli-axlearn-pod",
     namespace=KPO_NAMESPACE,
     config_file="/home/airflow/composer_kube_config",
-    on_finish_action=OnFinishAction.KEEP_POD,
-    labels={KPO_LABEL_KEY: KPO_LABEL_VAL},
+    image=DockerImage.AXLEARN_CUSTOM,  # Default, but caller should override it.
+    labels={KPO_LABEL_KEY: KPO_LABEL_VAL},  # Label for debug purposes.
+    retries=0,
 )
-def run_in_kpo(command_to_execute: str, **kwargs):
-  return KubernetesPodOperator(
-      task_id="run_axlearn-cli",
-      name="cli-axlearn-pod",
-      namespace=KPO_NAMESPACE,
-      config_file="/home/airflow/composer_kube_config",
-      image=kwargs["image"],
-      cmds=["bash", "-cx", f"{command_to_execute} & exit 0"],
-      on_finish_action=OnFinishAction.KEEP_POD,
-      labels={KPO_LABEL_KEY: KPO_LABEL_VAL},
+def start_cli_in_kpo(
+    start_axlearn_cli_command: str,
+    provisioning_timeout_in_sec: int,
+    workload_id: str,
+):
+  """
+  Launch AXLearn CLI in an isolated Kubernetes Pod (via @task.kubernetes) and
+  wait until the workload's Pods become Ready (or the wait times out).
+
+  Airflow injects this function as a temporary Python script into the Pod and
+  executes it there. Because only the Python standard library is guaranteed to
+  be available at runtime (unless baked into the image), this function avoids
+  third-party imports.
+
+  Args:
+    start_axlearn_cli_command: Full shell command that starts AXLearn (the CLI
+      will submit the workload to GKE).
+    provisioning_timeout_in_sec: Maximum seconds to wait for Pods to reach the
+      Ready condition.
+    workload_id: Workload/JobSet identifier used to discover Pods (e.g., via a
+      label selector).
+    project_id: GCP project that hosts the target GKE cluster.
+    region: Region of the target GKE cluster.
+    cluster_name: Name of the target GKE cluster.
+
+  Returns:
+    None. The task completes when readiness is observed.
+
+  Raises:
+    Exception: If the AXLearn CLI command fails, or if Pods do not become Ready
+      before the timeout.
+  """
+
+  from absl import logging
+  import subprocess
+
+  def exec_command(cmd: str):
+    logging.info("[cli-axlearn-pod] executing command:\n %s\n", cmd)
+    res = subprocess.run(
+        cmd,
+        shell=True,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+      logging.info("[cli-axlearn-pod] stderr: %s", res.stderr)
+      raise Exception(
+          f"Failed to run command {cmd}; "
+          f"exit code: {res.returncode}; "
+          f"error: {res.stderr}"
+      )
+
+    logging.info("[cli-axlearn-pod] stdout: %s", res.stdout)
+    return
+
+  exec_command(start_axlearn_cli_command)
+  exec_command(
+      f"timeout {provisioning_timeout_in_sec}s bash -c "
+      f"'until kubectl get pods -A | grep -q {workload_id}; do sleep 5; done'; "
+      f"kubectl wait -A "
+      f"-l jobset.sigs.k8s.io/jobset-name={workload_id} "
+      f"--for=condition=Ready pod --timeout={provisioning_timeout_in_sec}s"
   )
 
 
-@task
+@task(retries=0)
 def generate_workload_id() -> str:
   """Generates a unique run name for a AXLearn run."""
 
-  run_time = datetime.now().strftime("%Y%m%d%H%M")
+  run_time = dt.datetime.now().strftime("%Y%m%d%H%M")
   env = "prod" if composer_env.is_prod_env() else "dev"
   return f"automation-{env}-{run_time}"
 
 
-@task
+@task(retries=0)
 def generate_axlearn_cli_command(
     task_id: str,
     gcs_path: str,
@@ -172,6 +223,7 @@ def generate_axlearn_cli_command(
       "num_slices": num_slices,
   })
 
+  cfg_file = "~/.axlearn/axlearn.default.config"
   cfg_content = textwrap.dedent(
       f"""
       [gcp]
@@ -192,24 +244,10 @@ def generate_axlearn_cli_command(
       """
   ).strip()
 
-  cfg_file = "~/.axlearn/axlearn.default.config"
-
-  gen_config_cmds = [
-      "mkdir -p ~/.axlearn",
-      f"cat > {cfg_file} <<'EOF'\n{cfg_content}\nEOF\necho 'file created'",
-  ]
-
-  setup_cmds = [
-      "export PYTHONPATH=$PYTHONPATH:/root",
-      "axlearn gcp config activate",
-      "apt-get install -y kubectl google-cloud-sdk-gke-gcloud-auth-plugin",
-      f"gcloud container clusters get-credentials {cluster_name} \
-            --region {gke.zone_to_region(zone)} --project {project_id}",
-  ]
-
-  axlearn_cli_cmd = (
-      f"axlearn gcp launch run --cluster={cluster_name} "  # TODO
+  axlearn_cli = (
+      f"axlearn gcp launch start --cluster={cluster_name} "
       f"--runner_name gke_tpu_single "
+      f"--user_id=axlearn_cli_kpo"
       f"--name={workload_id} "
       f"--instance_type={accelerator_type} "
       f"--max_tries=10 "
@@ -232,23 +270,27 @@ def generate_axlearn_cli_command(
       f"--initialization_timeout=1200 "
   )
   if trace_steps:
-    axlearn_start_cmd += f"--trace_at_steps={','.join(map(str, trace_steps))}"
+    axlearn_cli += f"--trace_at_steps={','.join(map(str, trace_steps))}"
 
-  # 300 seconds should be sufficient for the CLI to deploy the workload,
-  # the CLI is useless once the workload is deployed.
-  exit_with_delay = " & sleep 300 && exit 0"
+  # fmt: off
+  return " && ".join([
+      # Generating the configuration file for AXLearn workload.
+      "mkdir -p ~/.axlearn",
+      f"cat > {cfg_file} <<'EOF'\n{cfg_content}\nEOF\necho 'file created'",
 
-  run_workload_cmds = [
+      # Setups for the AXLearn CLI.
+      "export PYTHONPATH=$PYTHONPATH:/root",
+      "axlearn gcp config activate",
+      "apt-get install -y kubectl google-cloud-sdk-gke-gcloud-auth-plugin",
+      f"gcloud container clusters get-credentials {cluster_name} \
+            --region {gke.zone_to_region(zone)} --project {project_id}",
+
+      # Starting the AXLearn CLI.
       "export BASTION_TIER=disabled",
       f"export PROJECT_ID={project_id}",
-      axlearn_cli_cmd + exit_with_delay,
-  ]
-
-  return " && ".join([
-      *gen_config_cmds,
-      *setup_cmds,
-      *run_workload_cmds,
+      axlearn_cli,
   ])
+  # fmt: on
 
 
 class CommandBuilder:
