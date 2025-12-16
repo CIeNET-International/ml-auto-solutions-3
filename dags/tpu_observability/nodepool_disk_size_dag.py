@@ -83,156 +83,51 @@ def wait_for_nodepool_metrics_event(
   return True
 
 
-@task.sensor(poke_interval=60, timeout=7200, mode="reschedule")
-def wait_for_nodepool_logs_event(
-    project_id: str,
-    base_filter: str,
-    op_id: str,
-    start_time: int,
-    end_time: int,
-) -> bool:
+@task
+def check_duration_false_negative(
+    start_time_unixseconds: int,
+    end_time_unixseconds: int,
+    threshold_s: int = 150,
+) -> None:
   """
-  Polls Cloud Logging for node pool update or recovery log entries.
+  Logs whether the observed update+recovery window is shorter than a threshold.
 
-  This sensor searches GKE logs within a specific time window to determine
-  whether the node pool update operation generated the expected log events.
-  It is typically used together with the Monitoring sensor to confirm both
-  the control-plane and data-plane signals of a successful recovery.
+  This is an informational check used to indicate potential false negatives
+  when downstream metrics/logs are expected to appear only after a certain
+  minimum restart window.
 
   Args:
-    project_id: The Google Cloud project to query.
-    filter_query: A Log Explorer filter expression.
-    start_time_unixseconds: Start of the search window (Unix seconds).
-    end_time_unixseconds: End of the search window (Unix seconds).
-
-  Returns:
-    True if at least one matching log entry is found; otherwise False.
+    start_time_unixseconds: Anchor timestamp (Unix seconds) recorded when the
+      update command started.
+    end_time_unixseconds: Anchor timestamp (Unix seconds) recorded after the
+      node pool returns to RUNNING.
+    threshold_s: Threshold in seconds used for the false-negative heuristic.
   """
-
-  start_timeutil = TimeUtil.from_unix_seconds(start_time)
-  end_timeutil = TimeUtil.from_unix_seconds(end_time)
-
-  full_filter = f'{base_filter} AND operation.id="{op_id}"'
-
-  entries = query_log_entries(
-      project_id=project_id,
-      filter_str=full_filter,
-      start_time=start_timeutil,
-      end_time=end_timeutil,
-  )
-
-  if not entries:
-    logging.info(
-        "[logs] No matching log entries; repoking window=%s → %s",
-        start_timeutil.to_iso_string(),
-        end_timeutil.to_iso_string(),
-    )
-    return False
-
-  first = entries[0]
+  duration_s = max(0, int(end_time_unixseconds) - int(start_time_unixseconds))
   logging.info(
-      "[logs] Log event detected. count=%d, timestamp=%s, log_name=%s",
-      len(entries),
-      first.timestamp,
-      first.log_name,
+      "[duration_check] start=%d end=%d duration=%ss threshold=%ss",
+      start_time_unixseconds,
+      end_time_unixseconds,
+      duration_s,
+      threshold_s,
   )
 
-  payload = getattr(first, "text_payload", None) or getattr(
-      first, "json_payload", None
-  )
-  if payload:
-    snippet = str(payload)
-    if len(snippet) > 200:
-      snippet = snippet[:200] + "…"
-    logging.info("[logs] first entry payload snippet: %s", snippet)
-
-  return True
-
-
-@task.sensor(poke_interval=10, timeout=3600, mode="reschedule")
-def wait_for_update_to_complete(operation_name: str) -> bool:
-  """Sensor that waits for the GKE node-pool update operation to reach DONE."""
-  cluster_mgr_client = ClusterManagerClient()
-  operation_response = cluster_mgr_client.get_operation(name=operation_name)
-
-  status = getattr(
-      operation_response.status, "name", str(operation_response.status)
-  )
-  logging.info("[wait] operation_name=%s status=%s", operation_name, status)
-
-  if status != "DONE":
-    return False
-
-  operation_response_error = operation_response.error
-  if operation_response_error and (
-      operation_response_error.message or operation_response_error.details
-  ):
-    raise RuntimeError(
-        f"GKE operation finished with error: {operation_response_error}"
+  if duration_s < threshold_s:
+    logging.info(
+        "Restart shorter than %d seconds. This may cause a false negative.",
+        threshold_s,
     )
-
-  logging.info("[wait] operation_name=%s reached DONE", operation_name)
-  return True
+  else:
+    logging.info(
+        "Restart longer than %d seconds. False negative should not occur.",
+        threshold_s,
+    )
 
 
 @task
-def get_update_operation_meta(operation_name: str) -> dict:
-  """Fetches operation metadata and computes timing info.
-
-  Returns:
-      operation_id: str,       # e.g. "operation-17636..."
-      start_time_unixseconds: int,    # unix seconds
-      end_time_unixseconds: int,      # unix seconds
-  """
-  cluster_manager_client = ClusterManagerClient()
-  operation_response = cluster_manager_client.get_operation(name=operation_name)
-
-  # Extract operation_id for use in Logging filters
-  # If operation_name is full path, the short name is usually the last segment.
-  if operation_name.startswith("projects/"):
-    operation_id = operation_name.rsplit("/", 1)[-1]
-  else:
-    operation_id = operation_response.name or operation_name
-
-  # GKE returns RFC3339 strings for start_time / end_time in this environment
-  if operation_response.start_time:
-    start_timeutil = TimeUtil.from_iso_string(operation_response.start_time)
-  else:
-    raise RuntimeError("Operation is DONE but start_time is missing")
-
-  if operation_response.end_time:
-    end_timeutil = TimeUtil.from_iso_string(operation_response.end_time)
-  else:
-    # Very rare; safest is to anchor end at start
-    end_timeutil = start_timeutil
-
-  start_time_unixseconds = start_timeutil.to_unix_seconds()
-  end_time_unixseconds = end_timeutil.to_unix_seconds()
-  duration_s = max(0, end_time_unixseconds - start_time_unixseconds)
-
-  logging.info(
-      "[op_meta] operation_name=%s operation_id=%s start=%s end=%s duration=%ss",
-      operation_name,
-      operation_id,
-      start_time_unixseconds.to_iso_string(),
-      end_time_unixseconds.to_iso_string(),
-      duration_s,
-  )
-
-  if duration_s < 150:
-    logging.info(
-        "Restart shorter than 150 seconds. This may cause a false negative."
-    )
-  else:
-    logging.info(
-        "Restart longer than 150 seconds. False negative should not occur."
-    )
-
-  return (
-      operation_id,
-      start_time_unixseconds,
-      end_time_unixseconds,
-  )
+def capture_now() -> int:
+  """Returns the current Unix timestamp in seconds."""
+  return int(datetime.datetime.now())
 
 
 @task
@@ -255,19 +150,7 @@ def get_nodepool_disk_size(node_pool: node_pool.Info) -> int:
     RuntimeError: If the disk size cannot be determined from the API response.
   """
 
-  client = container_v1.ClusterManagerClient()
-
-  nodepool_name = (
-      f"projects/{node_pool.project_id}/locations/{node_pool.location}/"
-      f"clusters/{node_pool.cluster_name}/nodePools/{node_pool.node_pool_name}"
-  )
-
-  response = client.get_node_pool(name=nodepool_name)
-
-  disk_size = getattr(response.config, "disk_size_gb", None)
-
-  if disk_size is None:
-    raise RuntimeError(f"Nodepool returned no disk_size_gb: {response}")
+  #
 
   return int(disk_size)
 
@@ -366,19 +249,24 @@ for machine in MachineConfigMap:
 
       original_disk_size = get_nodepool_disk_size(node_pool_info)
 
-      operation_name = node_pool.update(
-          node_pool_info,
-          new_size_gb=(original_disk_size + 50),
-          return_operation_name=True,
+      #
+      update_spec = node_pool.NodePoolUpdateSpec(
+          disk_size_gb=original_disk_size + 50
+      )
+      updater = node_pool.NodePoolUpdater(node_pool_info)
+      # need to check on the format
+      update_start_time = updater.update(update_spec)
+
+      task_id = "wait_for_running"
+      wait_for_running = node_pool.wait_for_status.override(task_id=task_id)(
+          node_pool=node_pool_info, status=node_pool.Status.RUNNING
       )
 
-      wait_done = wait_for_update_to_complete(operation_name)
+      update_end_time = capture_now()
 
-      (
-          operation_id,
-          start_time_unixseconds,
-          end_time_unixseconds,
-      ) = get_update_operation_meta(operation_name)
+      duration_check = check_duration_false_negative(
+          update_start_time, update_end_time
+      )
 
       updated_disk_size = get_nodepool_disk_size(node_pool_info)
 
@@ -393,21 +281,8 @@ for machine in MachineConfigMap:
               'metric.type="kubernetes.io/node_pool/accelerator/times_to_recover" '
               f'AND resource.labels.cluster_name="{node_pool_info.cluster_name}"'
           ),
-          start_time=start_time_unixseconds,
-          end_time=end_time_unixseconds,
-      )
-
-      poll_logs = wait_for_nodepool_logs_event(
-          project_id=node_pool_info.project_id,
-          base_filter=(
-              'resource.type="gke_nodepool" '
-              f'AND resource.labels.cluster_name="{node_pool_info.cluster_name}" '
-              f'AND resource.labels.location="{node_pool_info.location}" '
-              f'AND resource.labels.nodepool_name="{node_pool_info.node_pool_name}"'
-          ),
-          op_id=operation_id,
-          start_time=start_time_unixseconds,
-          end_time=end_time_unixseconds,
+          start_time=update_start_time,
+          end_time=update_end_time + QUERY_WINDOW_DURATION_SECONDS,
       )
 
       cleanup_node_pool = node_pool.delete.override(
@@ -419,11 +294,10 @@ for machine in MachineConfigMap:
       (
           create_nodepool
           >> original_disk_size
-          >> operation_name
-          >> wait_done
-          >> op_meta
+          >> update_start_time  # need to check on the function decorator
+          >> wait_for_running
           >> updated_disk_size
           >> disk_resize_check
-          >> [poll_metrics, poll_logs]
+          >> poll_metrics
           >> cleanup_node_pool
       )

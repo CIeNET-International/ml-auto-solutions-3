@@ -26,7 +26,6 @@ from typing import List
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from google.cloud import monitoring_v3
-from google.cloud import container_v1
 
 from dags.tpu_observability.utils.time_util import TimeUtil
 from dags.tpu_observability.utils.gcp_util import query_time_series
@@ -453,75 +452,58 @@ def update_labels(node_pool: Info, node_labels: dict) -> None:
   subprocess.run_exec(command)
 
 
-@task
-def update(
-    node_pool: Info,
-    *,
-    disk_size_gb: int | None = None,
-    return_operation_name: bool = True,
-) -> str | None:
-  """Update a GKE node pool and optionally return the long operation name.
+@dataclasses.dataclass
+class NodePoolUpdateSpec:
+  # Start with only what you need; extend later.
+  disk_size_gb: int | None = None
+  machine_type: str | None = None
+  num_nodes: int | None = None
+  # labels: dict[str, str] | None = None  # example for later
 
-  Only fields that are not None are included in the request, so this can be
-  reused by different DAGs for different types of updates; more fields can be added later.
 
-  Args:
-    node_pool: Info describing the node pool.
-    disk_size_gb: Optional new boot disk size (GB).
-    return_operation_name: Whether to return the operation name.
+class NodePoolUpdater:
+  """Builds and executes gcloud node-pool updates (supports multi-flag updates)."""
 
-  Returns:
-    A string like: "projects/.../locations/.../operations/operation-XXXX"
-    if return_operation_name=True; otherwise None.
+  def __init__(self, node_pool: Info) -> None:
+    self.info = node_pool
 
-  Raises:
-    ValueError: If no updatable fields were provided.
-  """
+  def update(self, spec: NodePoolUpdateSpec, *, quiet: bool = True) -> int:
+    flags: list[str] = []
 
-  # Validate that *at least one* update argument is provided
-  provided_params = {
-      "disk_size_gb": disk_size_gb,
-  }
+    if spec.disk_size_gb is not None:
+      flags += ["--disk-size", str(int(spec.disk_size_gb))]
 
-  # Only keep params where value is NOT None
-  non_null_params = {k: v for k, v in provided_params.items() if v is not None}
+    if spec.machine_type is not None:
+      flags += ["--machine-type", spec.machine_type]
 
-  if not non_null_params:
-    raise ValueError(
-        "update_node_pool: at least one update parameter must be provided "
-        "(e.g., disk_size_gb)."
+    if spec.num_nodes is not None:
+      flags += ["--num-nodes", str(int(spec.num_nodes))]
+
+    # If you later support labels, you’d serialize dict -> "k=v,k2=v2"
+    # if spec.labels is not None:
+    #     labels_str = ",".join(f"{k}={v}" for k, v in spec.labels.items())
+    #     flags += ["--update-labels", labels_str]
+
+    if not flags:
+      raise ValueError("update(): at least one update field must be provided.")
+
+    command = (
+        f"gcloud container node-pools update {self.info.node_pool_name} "
+        f"--project={self.info.project_id} "
+        f"--cluster={self.info.cluster_name} "
+        f"--location={self.info.location} " + " ".join(flags)
     )
 
-  # Build the request dynamically (but only disk_size for now)
-  cluster_client = container_v1.ClusterManagerClient()
+    if quiet:
+      command += " --quiet"
 
-  nodepool_name = (
-      f"projects/{node_pool.project_id}/locations/{node_pool.location}/"
-      f"clusters/{node_pool.cluster_name}/nodePools/{node_pool.node_pool_name}"
-  )
+    anchor_second = datetime.datetime.now()
+    logging.info(
+        "[nodepool_update] running: %s (anchor_time=%s)",
+        command,
+        anchor_second.isoformat(),
+    )
 
-  request = container_v1.UpdateNodePoolRequest(name=nodepool_name)
+    subprocess.run_exec(command)
 
-  if disk_size_gb is not None:
-    request.disk_size_gb = int(disk_size_gb)
-
-  logging.info(
-      "[update_node_pool] Updating nodepool=%s with params=%s",
-      nodepool_name,
-      non_null_params,
-  )
-
-  operation_response = cluster_client.update_node_pool(request=request)
-
-  operation_name = (
-      operation_response.name
-      if operation_response.name.startswith("projects/")
-      else f"projects/{node_pool.project_id}/locations/{node_pool.location}/operations/{operation_response.name}"
-  )
-
-  logging.info("[update_node_pool] operation_name=%s", operation_name)
-  logging.info(
-      "[update_node_pool] start_time=%s", operation_response.start_time
-  )
-
-  return operation_name if return_operation_name else None
+    return anchor_second
