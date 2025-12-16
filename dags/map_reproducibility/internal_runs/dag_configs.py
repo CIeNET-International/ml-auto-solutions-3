@@ -237,11 +237,11 @@ DAG_CONFIGS_A4_NEMO = {
 DAG_CONFIGS_ULTRA_NEMO = {
     "recipes/a3ultra/nemo/a3ultra_llama3.1-8b_8gpus_fp8_nemo.yaml": {
         "timeout_minutes": 20,
-        "release_schedule": "30 2 * * 6",
+        "release_schedule": "30 1 * * 6",
     },
     "recipes/a3ultra/nemo/a3ultra_llama3.1-8b_8gpus_bf16_nemo.yaml": {
         "timeout_minutes": 20,
-        "release_schedule": "0 2 * * 6",
+        "release_schedule": "0 1 * * 6",
     },
     "recipes/a3ultra/nemo/a3ultra_llama3.1-70b_256gpus_fp8_nemo.yaml": {
         "timeout_minutes": 25,
