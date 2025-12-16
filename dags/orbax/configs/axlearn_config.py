@@ -25,8 +25,10 @@ from dags.common.vm_resource import XpkClusters
 
 def get_axlearn_tpu_config(
     test_name: str,
-    docker_image: str,
     test_owner: str,
+    docker_image_full_url: str,
+    docker_image_name: str,
+    docker_image_repo: str,
     time_out_in_min: int,
     cluster: XpkClusterConfig = XpkClusters.TPU_V5P_128_CLUSTER,
     dataset_name: DatasetOption = DatasetOption.XLML_DATASET,
@@ -52,13 +54,13 @@ def get_axlearn_tpu_config(
       task_owner=test_owner,
       num_slices=num_slices,
       cluster_name=cluster.name,
-      docker_image=docker_image,
+      docker_image=docker_image_full_url,
   )
 
   return task.AXLearnTask(
       task_test_config=job_test_config,
       task_gcp_config=job_gcp_config,
-      image_name="axlearn-custom",  # TODO
-      image_repo="gcr.io/cloud-tpu-multipod-dev",  # TODO
-      image_full_url="gcr.io/cloud-tpu-multipod-dev/axlearn-custom",  # TODO
+      image_name=docker_image_name,
+      image_repo=docker_image_repo,
+      image_full_url=docker_image_full_url,
   )
