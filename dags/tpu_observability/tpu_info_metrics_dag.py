@@ -1,12 +1,26 @@
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
-This script uses a factory pattern to dynamically generate an Airflow DAG
-for each metric verification strategy.
+This script uses a factory pattern to dynamically generate an Airflow DAG for
+each metric verification strategy.
 """
+
 from dataclasses import replace
 import datetime
 import logging
 import os
-import re
 import tempfile
 
 from airflow import models
@@ -14,12 +28,12 @@ from airflow.decorators import task
 from airflow.exceptions import AirflowException
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
-from google.cloud.monitoring_v3 import types as monitoring_types
 
 from dags import composer_env
-from dags.common.vm_resource import MachineVersion
-from dags.common.vm_resource import Project, Region, Zone
-from dags.map_reproducibility.utils import constants
+from dags.common.vm_resource import Zone, Region
+from dags.tpu_observability.configs.common import MachineConfigMap
+from dags.tpu_observability.metric_strategies import ALL_METRIC_STRATEGIES
+from dags.tpu_observability.metric_strategies import BaseMetricStrategy
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils import subprocess_util as subprocess
@@ -27,9 +41,8 @@ from dags.tpu_observability.utils import tpu_info_util as tpu_info
 from dags.tpu_observability.utils.gcp_util import query_time_series
 from dags.tpu_observability.utils.node_pool_util import Info
 from dags.tpu_observability.utils.time_util import TimeUtil
-from dags.tpu_observability.metric_strategies import BaseMetricStrategy
-from dags.tpu_observability.metric_strategies import ALL_METRIC_STRATEGIES
-from dags.tpu_observability.configs.common import MachineConfigMap
+from google.cloud.monitoring_v3 import types as monitoring_types
+
 
 SCHEDULE = "0 10 * * *" if composer_env.is_prod_env() else None
 
@@ -228,178 +241,183 @@ with models.DAG(
     schedule=SCHEDULE,
     catchup=False,
     tags=["gke", "tpu-observability", "tpu-info", "unified"],
-    description="Verifies multiple TPU metrics in a single DAG using TaskGroups.",
+    description=(
+        "Verifies multiple TPU metrics in a single DAG using TaskGroups."
+    ),
 ) as dag:
   for machine in MachineConfigMap:
     config = machine.value
 
-  cluster_info = node_pool.Info(
-      project_id=models.Variable.get(
-          "TFV_PROJECT_ID", default_var="cienet-cmcs"
-      ),
-      cluster_name=models.Variable.get(
-          "TFV_CLUSTER_NAME", default_var="tpu-observability-automation"
-      ),
-      node_pool_name=models.Variable.get(
-          "TFV_NODE_POOL_NAME", default_var="tpu-info-fromat-test-v6e-1"
-      ),
-      region=models.Variable.get(
-          "TFV_REGION", default_var=Region.US_CENTRAL1.value
-      ),
-      location=models.Variable.get(
-          "TFV_LOCATION", default_var=Region.US_CENTRAL1.value
-      ),
-      node_locations=models.Variable.get(
-          "TFV_NODE_LOCATIONS", default_var=Zone.US_CENTRAL1_B.value
-      ),
-      num_nodes=models.Variable.get("TFV_NUM_NODES", default_var=4),
-      machine_type=config.machine_version.value,
-      tpu_topology=config.tpu_topology,
-  )
-  cluster_info_2 = replace(
-      cluster_info,
-      node_pool_name=models.Variable.get(
-          "TFV_NODE_POOL_NAME", default_var="tpu-info-format-test-v6e-2"
-      ),
-  )
+    cluster_info = node_pool.Info(
+        project_id=models.Variable.get(
+            "TFV_PROJECT_ID", default_var="cienet-cmcs"
+        ),
+        cluster_name=models.Variable.get(
+            "TFV_CLUSTER_NAME", default_var="tpu-observability-automation"
+        ),
+        node_pool_name=models.Variable.get(
+            "TFV_NODE_POOL_NAME", default_var="tpu-info-fromat-test-v6e-1"
+        ),
+        region=models.Variable.get(
+            "TFV_REGION", default_var=Region.US_CENTRAL1.value
+        ),
+        location=models.Variable.get(
+            "TFV_LOCATION", default_var=Region.US_CENTRAL1.value
+        ),
+        node_locations=models.Variable.get(
+            "TFV_NODE_LOCATIONS", default_var=Zone.US_CENTRAL1_B.value
+        ),
+        num_nodes=models.Variable.get("TFV_NUM_NODES", default_var=4),
+        machine_type=config.machine_version.value,
+        tpu_topology=config.tpu_topology,
+    )
+    cluster_info_2 = replace(
+        cluster_info,
+        node_pool_name=models.Variable.get(
+            "TFV_NODE_POOL_NAME", default_var="tpu-info-format-test-v6e-2"
+        ),
+    )
 
-  jobset_config = jobset.JobSet(
-      jobset_name=f"tpu-info-v6e-workload",
-      namespace="default",
-      max_restarts=5,
-      replicated_job_name="tpu-job-slice",
-      replicas=2,
-      backoff_limit=0,
-      completions=4,
-      parallelism=4,
-      tpu_accelerator_type="tpu-v6e-slice",
-      tpu_topology="4x4",
-      container_name="jax-tpu-worker",
-      image="asia-northeast1-docker.pkg.dev/cienet-cmcs/yuna-docker/tpu-info:v0.5.1",
-      tpu_cores_per_pod=4,
-  )
+    jobset_config = jobset.JobSet(
+        jobset_name="tpu-info-v6e-workload",
+        namespace="default",
+        max_restarts=5,
+        replicated_job_name="tpu-job-slice",
+        replicas=2,
+        backoff_limit=0,
+        completions=4,
+        parallelism=4,
+        tpu_accelerator_type="tpu-v6e-slice",
+        tpu_topology="4x4",
+        container_name="jax-tpu-worker",
+        image="asia-northeast1-docker.pkg.dev/cienet-cmcs/yuna-docker/tpu-info:v0.5.1",
+        tpu_cores_per_pod=4,
+    )
 
-  workload_script = jobset.Workload.JAX_TPU_BENCHMARK
+    workload_script = jobset.Workload.JAX_TPU_BENCHMARK
 
-  with TaskGroup(group_id=f"v{config.tpu_version.value}"):
-    with TaskGroup(group_id="create_node_pool") as create_node_pool:
-      create_first_node_pool = node_pool.create.override(
-          task_id="node_pool_1",
-          retries=2,
+    with TaskGroup(group_id=f"v{config.tpu_version.value}"):
+      with TaskGroup(group_id="create_node_pool") as create_node_pool:
+        create_first_node_pool = node_pool.create.override(
+            task_id="node_pool_1",
+            retries=2,
+        )(
+            node_pool=cluster_info,
+            reservation="cloudtpu-20251107233000-1246578561",
+        )
+
+        create_second_node_pool = node_pool.create.override(
+            task_id="node_pool_2",
+            retries=2,
+        )(
+            node_pool=cluster_info_2,
+            reservation="cloudtpu-20251107233000-1246578561",
+        )
+      apply_time = jobset.run_workload(
+          node_pool=cluster_info,
+          yaml_config=jobset_config.generate_yaml(
+              workload_script=workload_script
+          ),
+          namespace=jobset_config.namespace,
+      )
+
+      active_pods = jobset.get_active_pods.override(task_id="get_active_pod")(
+          node_pool=cluster_info,
+          namespace=jobset_config.namespace,
+      )
+
+      wait_for_job_start = jobset.wait_for_jobset_started.override(
+          task_id="wait_for_job_start"
+      )(cluster_info, pod_name_list=active_pods, job_apply_time=apply_time)
+
+      verification_results = {}
+      all_verification_groups = []
+
+      for strategy in ALL_METRIC_STRATEGIES:
+        group_id = f"verify_{strategy.dag_id_suffix}"
+
+        with TaskGroup(group_id=group_id) as verification_group:
+          tpu_info_metric_outputs = (
+              get_tpu_info_metric_from_pod.override(
+                  task_id="get_tpu_info_metric_table"
+              )
+              .partial(
+                  node_pool=cluster_info,
+                  namespace=jobset_config.namespace,
+                  metric_name=strategy.tpu_info_metric_name,
+              )
+              .expand(pod_name=active_pods)
+          )
+
+          tpu_info_metric_output = (
+              tpu_info.parse_tpu_info_output.override(
+                  task_id="get_each_metric_table"
+              )
+              .partial()
+              .expand(output=tpu_info_metric_outputs)
+          )
+
+          verify_metric = (
+              run_metric_verification.override(task_id="run_verification")
+              .partial(
+                  node_pool=cluster_info,
+                  job_apply_time=apply_time,
+                  metric_strategy=strategy,
+              )
+              .expand(comparison_data=active_pods.zip(tpu_info_metric_output))
+          )
+
+        all_verification_groups.append(verification_group)
+
+        verification_results[strategy.dag_id_suffix] = verify_metric
+
+      summary = summarize_results.override(
+          task_id="summarize_results", trigger_rule=TriggerRule.ALL_DONE
+      )(
+          verification_results_dict=verification_results,
+          active_pods=active_pods,
+      )
+
+      clean_up_workload = jobset.end_workload.override(
+          task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
       )(
           node_pool=cluster_info,
-          reservation="cloudtpu-20251107233000-1246578561",
+          jobset_name=jobset_config.jobset_name,
+          namespace=jobset_config.namespace,
+      ).as_teardown(
+          setups=apply_time
       )
 
-      create_second_node_pool = node_pool.create.override(
-          task_id="node_pool_2",
-          retries=2,
-      )(
-          node_pool=cluster_info_2,
-          reservation="cloudtpu-20251107233000-1246578561",
-      )
-    apply_time = jobset.run_workload(
-        node_pool=cluster_info,
-        yaml_config=jobset_config.generate_yaml(
-            workload_script=workload_script
-        ),
-        namespace=jobset_config.namespace,
-    )
-
-    active_pods = jobset.get_active_pods.override(task_id="get_active_pod")(
-        node_pool=cluster_info,
-        namespace=jobset_config.namespace,
-    )
-
-    wait_for_job_start = jobset.wait_for_jobset_started.override(
-        task_id="wait_for_job_start"
-    )(cluster_info, pod_name_list=active_pods, job_apply_time=apply_time)
-
-    verification_results = {}
-    all_verification_groups = []
-
-    for strategy in ALL_METRIC_STRATEGIES:
-      group_id = f"verify_{strategy.dag_id_suffix}"
-
-      with TaskGroup(group_id=group_id) as verification_group:
-        tpu_info_metric_outputs = (
-            get_tpu_info_metric_from_pod.override(
-                task_id="get_tpu_info_metric_table"
-            )
-            .partial(
-                node_pool=cluster_info,
-                namespace=jobset_config.namespace,
-                metric_name=strategy.tpu_info_metric_name,
-            )
-            .expand(pod_name=active_pods)
+      with TaskGroup(group_id="cleanup_node_pool") as cleanup_node_pool:
+        cleanup_first_node_pool = node_pool.delete.override(
+            task_id="cleanup_node_pool_1",
+            trigger_rule=TriggerRule.ALL_DONE,
+            retries=2,
+        )(node_pool=cluster_info).as_teardown(
+            setups=create_node_pool,
         )
 
-        tpu_info_metric_output = (
-            tpu_info.parse_tpu_info_output.override(
-                task_id="get_each_metric_table"
-            )
-            .partial()
-            .expand(output=tpu_info_metric_outputs)
+        cleanup_second_node_pool = node_pool.delete.override(
+            task_id="cleanup_node_pool_2",
+            trigger_rule=TriggerRule.ALL_DONE,
+            retries=2,
+        )(node_pool=cluster_info_2).as_teardown(
+            setups=create_node_pool,
         )
 
-        verify_metric = (
-            run_metric_verification.override(task_id="run_verification")
-            .partial(
-                node_pool=cluster_info,
-                job_apply_time=apply_time,
-                metric_strategy=strategy,
-            )
-            .expand(comparison_data=active_pods.zip(tpu_info_metric_output))
-        )
+      # Airflow uses >> for task chaining, which is pointless for pylint.
+      # pylint: disable=pointless-statement
+      [create_first_node_pool, create_second_node_pool]
+      (cleanup_first_node_pool >> cleanup_second_node_pool)
 
-      all_verification_groups.append(verification_group)
-
-      verification_results[strategy.dag_id_suffix] = verify_metric
-
-    summary = summarize_results.override(
-        task_id="summarize_results", trigger_rule=TriggerRule.ALL_DONE
-    )(
-        verification_results_dict=verification_results,
-        active_pods=active_pods,
-    )
-
-    clean_up_workload = jobset.end_workload.override(
-        task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
-    )(
-        node_pool=cluster_info,
-        jobset_name=jobset_config.jobset_name,
-        namespace=jobset_config.namespace,
-    ).as_teardown(
-        setups=apply_time
-    )
-
-    with TaskGroup(group_id="cleanup_node_pool") as cleanup_node_pool:
-      cleanup_first_node_pool = node_pool.delete.override(
-          task_id="cleanup_node_pool_1",
-          trigger_rule=TriggerRule.ALL_DONE,
-          retries=2,
-      )(node_pool=cluster_info).as_teardown(
-          setups=create_node_pool,
+      (
+          create_node_pool
+          >> apply_time
+          >> active_pods
+          >> wait_for_job_start
+          >> all_verification_groups
+          >> summary
+          >> clean_up_workload
+          >> cleanup_node_pool
       )
-
-      cleanup_second_node_pool = node_pool.delete.override(
-          task_id="cleanup_node_pool_2",
-          trigger_rule=TriggerRule.ALL_DONE,
-          retries=2,
-      )(node_pool=cluster_info_2).as_teardown(
-          setups=create_node_pool,
-      )
-
-    [create_first_node_pool, create_second_node_pool]
-    (cleanup_first_node_pool >> cleanup_second_node_pool)
-
-    (
-        create_node_pool
-        >> apply_time
-        >> active_pods
-        >> wait_for_job_start
-        >> all_verification_groups
-        >> summary
-        >> clean_up_workload
-        >> cleanup_node_pool
-    )
+      # pylint: enable=pointless-statement
