@@ -465,7 +465,7 @@ def wait_for_ttr(
   filter_string = [
       'metric.type="kubernetes.io/node_pool/accelerator/times_to_recover"',
       f'resource.labels.project_id = "{node_pool.project_id}"',
-      f'resource.labels.location="{node_pool.location}"',
+      f'resource.labels.location = "{node_pool.location}"',
       f'resource.labels.cluster_name = "{node_pool.cluster_name}"',
       f'resource.labels.node_pool_name = "{node_pool.node_pool_name}"',
   ]
