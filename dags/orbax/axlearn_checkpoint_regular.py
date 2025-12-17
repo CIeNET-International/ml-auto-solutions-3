@@ -23,8 +23,8 @@ from airflow import models
 
 from dags import composer_env
 from dags.common import test_owner
-from dags.common.vm_resource import XpkClusters, TpuVersion, Zone
-from dags.orbax.configs import axlearn_config as config
+from dags.common.vm_resource import TpuVersion, Zone
+from dags.orbax.configs.axlearn_config import get_axlearn_tpu_config
 from dags.orbax.util import test_config_util, validation_util
 from xlml.utils.gke import zone_to_region
 from xlml.utils import axlearn
@@ -33,6 +33,17 @@ from xlml.apis.xpk_cluster_config import XpkClusterConfig
 
 SCHEDULE = "* 13 * * *" if composer_env.is_prod_env() else None
 DAG_TEST_NAME = "axlearn_reg_save"
+
+RESERVE_TIME_FOR_OTHERS = datetime.timedelta(minutes=5)
+RESERVE_TIME_FOR_PRE_WORKLOAD = datetime.timedelta(minutes=5)
+RESERVE_TIME_FOR_WORKLOAD = datetime.timedelta(minutes=90)
+RESERVE_TIME_FOR_POST_WORKLOAD = datetime.timedelta(minutes=5)
+DAG_TIMEOUT = (
+    RESERVE_TIME_FOR_OTHERS
+    + RESERVE_TIME_FOR_PRE_WORKLOAD
+    + RESERVE_TIME_FOR_WORKLOAD
+    + RESERVE_TIME_FOR_POST_WORKLOAD
+)
 
 # TODO: dev only
 DEV_CLUSTER = XpkClusterConfig(
@@ -46,6 +57,7 @@ DEV_CLUSTER = XpkClusterConfig(
 
 with models.DAG(
     dag_id=DAG_TEST_NAME,
+    dagrun_timeout=DAG_TIMEOUT,
     start_date=datetime.datetime(2025, 6, 30),
     schedule_interval=SCHEDULE,
     catchup=False,
@@ -68,7 +80,7 @@ with models.DAG(
 
       ### Description
       This DAG (Directed Acyclic Graph) automates the process of validating
-      checkpoint saving when using **AXLearn Native Checkpointer ** features.
+      checkpoint saving when using **AXLearn Native Checkpointer** features.
       It will check that the checkpoints are being stored in the GCS bucket.
       Also the steps flag controls how many steps the job will run.
 
@@ -76,11 +88,11 @@ with models.DAG(
       To run this test, you need an existing cluster.
 
       ### Procedures
-      1.  **Install necessary dependencies for AXLearn:** Setup AXLearn CLI and all
-      AXLearn necessary dependencies.
-      2.  **Run AXLearn JobSets:** The DAG runs a AXLearn JobSet.
-      3.  The DAG validates that **AXLearn checkpoints** are being saved correctly
-      in the `GCS bucket` by checking bucket and pod logs.
+      1. **Install necessary dependencies for AXLearn:** Setup AXLearn CLI and
+        all AXLearn necessary dependencies.
+      2. **Run AXLearn JobSets:** The DAG runs a AXLearn JobSet.
+      3. The DAG validates that **AXLearn checkpoints** are being saved
+        correctly in the `GCS bucket` by checking bucket and pod logs.
     """,
     concurrency=2,
 ) as dag:
@@ -89,70 +101,74 @@ with models.DAG(
       enable_multi_tier_checkpointing=False,
       enable_emergency_checkpoint=False,
   )
-  test_configs = [
+  axlearn_configs = [
       test_config_util.TestConfigAXLearn(
           # cluster=XpkClusters.TPU_V5P_128_CLUSTER,
           cluster=DEV_CLUSTER,  # TODO: dev only
-          run_name="gke_tpu_single",
-          slices=[2],
-          instance_type="tpu-v5p-128",
-          mesh_type="tpu-v5p-128",
-          short_id=f"axlearn-{checkpointing.name}-sav",
+          run_name="gke_tpu_single",  # not used?
+          slices=[2],  # not used?
+          instance_type="tpu-v5p-128",  # not used?
+          mesh_type="tpu-v5p-128",  # not used?
+          short_id=f"axlearn-{checkpointing.name}-sav",  # not used?
           module="text.gpt.c4_trainer",
           label="tpu-v5p",
           model_name="fuji-7B-v2-flash",
-          steps=200,
+          steps=200,  # not used?
           trainer_dir=test_config_util.DEFAULT_BUCKET_AXLEARN,
           data_dir="gs://axlearn-public/tensorflow_datasets",
           trace_steps=[40, 90, 140, 190],
       ),
   ]
   for mode, image in test_config_util.DOCKER_IMAGES_AXLEARN:
-    for test_config in test_configs:
-      for slice_num in test_config.slices:
+    image_repo, image_name = image.value.rsplit("/", 1)
+
+    for axlearn_config in axlearn_configs:
+      for slice_num in axlearn_config.slices:
         workload_id = axlearn.generate_workload_id()
 
         start_time = validation_util.generate_timestamp()
 
-        image_repo, image_name = image.value.rsplit("/", 1)
-
         # AXLearn head against JAX 0.5.3
         # Runs Fuji training on v5p-128 in the provided GCP Project
-        axlearn_regular_run = config.get_axlearn_tpu_config(
-            cluster=test_config.cluster,
-            num_slices=slice_num,
-            time_out_in_min=90,
-            test_name=f"{test_config.short_id}-reg",
-            docker_image_full_url=image.value,
-            docker_image_repo=image_repo,
-            docker_image_name=image_name,
+        run = get_axlearn_tpu_config(
+            test_name=f"{axlearn_config.short_id}-reg",
             test_owner=test_owner.CAMILO_Q,
+            docker_image_full_url=image.value,
+            docker_image_name=image_name,
+            docker_image_repo=image_repo,
+            cluster=axlearn_config.cluster,
+            workload_provision_timeout=RESERVE_TIME_FOR_PRE_WORKLOAD,
+            workload_run_timeout=RESERVE_TIME_FOR_WORKLOAD,
+            workload_post_test_timeout=RESERVE_TIME_FOR_POST_WORKLOAD,
+            num_slices=slice_num,
         ).run(
-            test_configs=test_config,
             workload_id=workload_id,
+            module=axlearn_config.module,
+            model_name=axlearn_config.model_name,
+            trainer_dir=axlearn_config.trainer_dir,
+            trace_steps=axlearn_config.trace_steps,
+            label=axlearn_config.label,
         )
 
         end_time = validation_util.generate_timestamp()
 
-        steps_to_validate = test_config.generate_step_to_validate()
-
         validate_steps = (
             validation_util.validate_checkpoints_save_regular_axlearn(
-                project_id=test_config.cluster.project,
-                location=zone_to_region(test_config.cluster.zone),
-                cluster_name=test_config.cluster.name,
+                project_id=axlearn_config.cluster.project,
+                location=zone_to_region(axlearn_config.cluster.zone),
+                cluster_name=axlearn_config.cluster.name,
                 run_name=workload_id,
                 pod_pattern=".*-0",
                 start_time=start_time,
                 end_time=end_time,
-                steps_to_validate=steps_to_validate,
+                steps_to_validate=axlearn_config.generate_step_to_validate(),
             )
         )
 
         _ = (
             workload_id
             >> start_time
-            >> axlearn_regular_run
+            >> run
             >> end_time
             >> validate_steps
         )

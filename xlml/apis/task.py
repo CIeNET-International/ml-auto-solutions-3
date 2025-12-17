@@ -25,15 +25,10 @@ from airflow.models.taskmixin import DAGNode
 from airflow.utils.task_group import TaskGroup
 from airflow.decorators import task
 from airflow.operators.empty import EmptyOperator
-from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator
-from airflow.providers.cncf.kubernetes.utils.pod_manager import OnFinishAction
 
 from dags.common.quarantined_tests import QuarantineTests
-from dags.orbax.util import test_config_util
-from xlml.apis import gcp_config, metric_config, test_config
 from xlml.utils import gpu, metric, name_format, ssh, tpu, xpk, axlearn, gke
 from xlml.apis import gcp_config, metric_config, test_config, gcs
-from xlml.utils import gpu, metric, name_format, ssh, tpu, xpk, gke
 
 
 class BaseTask(abc.ABC):
@@ -166,215 +161,284 @@ class AXLearnTask(BaseTask):
   """
   This is a class to set up tasks for TPU/GPU AXLearn.
 
+  TODO:
   Attributes:
-    image_name: TODO
-    image_repo: TODO
-    image_full_url: TODO
     task_test_config: Test configs to run on this TPU/GPU.
     task_gcp_config: Runtime TPU/GPU creation parameters.
     task_metric_config: Metric configs to process metrics.
     workload_provision_timeout: Time allowed for provisioning a workload.
   """
 
+  test_cfg: Union[
+      test_config.TpuGkeTest, test_config.GpuXpkTest, test_config.CpuGkeTest
+  ]
+  gcp_cfg: gcp_config.GCPConfig
+
+  workload_provision_timeout: datetime.timedelta
+  workload_run_timeout: datetime.timedelta
+  workload_post_test_timeout: datetime.timedelta
+
   image_name: str
   image_repo: str
   image_full_url: str
-  task_test_config: Union[
-      test_config.TpuGkeTest, test_config.GpuXpkTest, test_config.CpuGkeTest
-  ]
-  task_gcp_config: gcp_config.GCPConfig
-  task_metric_config: Optional[metric_config.MetricConfig] = None
-  workload_provision_timeout: datetime.timedelta = datetime.timedelta(
-      minutes=5
-  )
 
   def run(
       self,
-      test_configs: test_config_util.TestConfig,
       workload_id: airflow.XComArg,
+      module: str,
+      model_name: str,
+      trainer_dir: str,
+      trace_steps: list[int],
+      label: str,
   ) -> DAGNode:
     """
     Run a test job within a docker image.
 
     Attributes:
       test_configs: Configuration object containing parameters for the test.
-      workload_id: A descriptive name for the test run, which is used to generate
-        the unique workload ID.
+      workload_id: A descriptive name for the test run, which is used to
+        generate the unique workload ID.
 
     Returns:
       A task group with the following task : run_model.
     """
-    with TaskGroup(group_id=self.task_test_config.benchmark_id) as group:
-      self.run_model(
-          test_configs=test_configs,
+    with TaskGroup(group_id=self.test_cfg.benchmark_id) as group:
+      update_image_tag_cmd = axlearn.update_image_tag_cmd(
+          image_name=self.image_full_url,
           workload_id=workload_id,
       )
-    return group
 
-  def run_model(
-      self,
-      test_configs: test_config_util.TestConfig,
-      workload_id: airflow.XComArg,
-  ) -> DAGNode:
-    """
-    Run the TPU/GPU model test using AXLearn in a sequential Airflow TaskGroup.
-
-    This method orchestrates a model test run by performing three steps:
-    1. **Launch:** Generates a unique `workload_id` and GCS path, then launches
-       the AXLearn workload (likely a training or evaluation job) using
-       `self.launch_workload`.
-    2. **Wait:** Waits for the launched workload to complete, using a timeout
-       specified in the task configuration.
-    3. **Cleanup:** Cleans up the resources associated with the completed
-       workload.
-
-    Args:
-      test_configs: Configuration object containing parameters for the test
-        (e.g., cluster name, timeout).
-      workload_id: A descriptive name for the test run, used to generate the
-        unique `workload_id`.
-
-    Returns:
-      A **DAGNode** (specifically an Airflow **TaskGroup**) that encapsulates
-      the entire model test sequence (launch, wait, cleanup).
-    """
-    with TaskGroup(group_id="run_model") as group:
-      gcs_path = name_format.generate_gcs_folder_location(
-          self.task_test_config.gcs_subfolder,
-          self.task_test_config.benchmark_id,
-      )
-
-      launch_workload = self.launch_workload_and_wait_for_start(
-          workload_id=workload_id,
-          gcs_path=gcs_path,
-          test_configs=test_configs,
-      )
-
-      # wait_for_workload_start = xpk.wait_for_workload_start.override(
-      #     timeout=self.workload_provision_timeout.total_seconds()
-      # )(
-      #     workload_id=workload_id,
-      #     project_id=self.task_gcp_config.project_name,
-      #     region=gke.zone_to_region(self.task_gcp_config.zone),
-      #     cluster_name=self.task_test_config.cluster_name,
-      # )
-
-      # Can reuse XPK since is a more general function for workload completion.
-      wait_for_workload_completion = xpk.wait_for_workload_completion.override(
-          timeout=int(self.task_test_config.timeout.total_seconds()),
-      )(
-          workload_id=workload_id,
-          project_id=self.task_gcp_config.project_name,
-          region=gke.zone_to_region(self.task_gcp_config.zone),
-          cluster_name=self.task_test_config.cluster_name,
-      )
-
-      clean_up_workload = xpk.clean_up_workload(
-          workload_id=workload_id,
-          project_id=self.task_gcp_config.project_name,
-          zone=self.task_gcp_config.zone,
-          cluster_name=self.task_test_config.cluster_name,
-          xpk_branch=xpk.MAIN_BRANCH,
-      )
-
-      _ = (
-          gcs_path
-          >> launch_workload
-          # >> wait_for_workload_start
-          >> wait_for_workload_completion
-          >> clean_up_workload
-      )
-
-      return group, gcs_path
-
-  def launch_workload_and_wait_for_start(
-      self,
-      workload_id: airflow.XComArg,
-      gcs_path: str,
-      test_configs: test_config_util.TestConfigAXLearn,
-  ) -> DAGNode:
-    """Create the workload and wait for it to provision."""
-    with TaskGroup(group_id="launch_workload") as group:
       gen_cmds = axlearn.generate_axlearn_cli_command(
           task_id="run_workload",
-          gcs_path=gcs_path,
-          project_id=self.task_gcp_config.project_name,
-          cluster_name=self.task_test_config.cluster_name,
-          zone=self.task_gcp_config.zone,
+          workload_id=workload_id,
+          project_id=self.gcp_cfg.project_name,
+          zone=self.gcp_cfg.zone,
+          cluster_name=self.test_cfg.cluster_name,
           docker_image_name=self.image_name,
           docker_image_repo=self.image_repo,
           docker_image_full_url=self.image_full_url,
-          benchmark_id=self.task_test_config.benchmark_id,
-          workload_id=workload_id,
-          accelerator_type=f"tpu-{self.task_test_config.accelerator.name}",
-          module=test_configs.module,
-          model_config=test_configs.model_config,
-          trainer_dir=test_configs.trainer_dir,
-          num_slices=self.task_test_config.num_slices,
-          trace_steps=test_configs.trace_steps,
-          label=test_configs.label,
+          accelerator_type=f"tpu-{self.test_cfg.accelerator.name}",
+          num_slices=self.test_cfg.num_slices,
+          module=module,
+          model_config=model_name,
+          trainer_dir=trainer_dir,
+          trace_steps=trace_steps,
+          label=label,
       )
 
-      # The default worker pod's kube_config may contain leftover
-      # contexts/configs from previous DAGs (e.g., after `gcloud container
-      # clusters get-credentials`) that point to a different GKE cluster.
-      # Reset it so kubectl/gcloud—and the KPO we launch—target the Composer
-      # cluster and use the correct Workload Identity–backed SA.
-      reset_kube_config = axlearn.reset_kube_config()
-
-      update_image_tag_cmd = axlearn.update_image_tag_cmd(
-          image_name=self.task_test_config.docker_image,
-          workload_id=workload_id,
-      )
-
-      submit_workload_and_wait_provision = axlearn.start_cli_in_kpo.override(
-          image=self.image_full_url,
-      )(
+      run_workload = axlearn.start_cli_in_kpo(
           start_axlearn_cli_command=gen_cmds,
-          provisioning_timeout_in_sec=int(
-              self.workload_provision_timeout.total_seconds()
-          ),
           workload_id=workload_id,
-          # project_id=self.task_gcp_config.project_name,
-          # region=gke.zone_to_region(self.task_gcp_config.zone),
-          # cluster_name=self.task_test_config.cluster_name,
+          provisioning_timeout_in_sec=self.workload_provision_timeout,
+          workload_run_timeout_in_sec=self.workload_run_timeout,
+          image=self.image_full_url,
       )
 
-      # # KPO task which run AXLearn CLI command.
-      # run_container_task = KubernetesPodOperator(
-      #     task_id="run_axlearn-cli",
-      #     name="cli-axlearn-pod",
-      #     namespace=axlearn.KPO_NAMESPACE,
-      #     config_file="/home/airflow/composer_kube_config",
-      #     image=self.image_full_url,
-      #     cmds=["bash", "-cx", gen_cmds],
-      #     # # "&" will provoke the AXLearn will process executed in the
-      #     # # background, with 5 min buffer to initialize then CLI AXLearn pod
-      #     # # will be terminated gracefully. If takes more than 5 min and job
-      #     # # still not created (problem), downstream workload_complete_task will
-      #     # # fail since does not found any pod.
-      #     # arguments=[f"{final_command_string} & sleep 280 && exit 0"],
-      #     # termination_grace_period=600,
-      #     labels={axlearn.KPO_LABEL_KEY: axlearn.KPO_LABEL_VAL},
-      #     # timeout of k8s/container
-      #     active_deadline_seconds=int(
-      #         self.task_test_config.timeout.total_seconds()
-      #     ),
-      #     # timeout of Airflow task
-      #     execution_timeout=(
-      #         self.task_test_config.timeout + self.workload_provision_timeout
-      #     ),
-      #     retries=0,
-      # )
+      wait_for_workload_start = xpk.wait_for_workload_start.override(
+          timeout=self.workload_provision_timeout.total_seconds(),
+      )(
+          workload_id=workload_id,
+          project_id=self.gcp_cfg.project_name,
+          region=gke.zone_to_region(self.gcp_cfg.zone),
+          cluster_name=self.test_cfg.cluster_name,
+      )
+
+      wait_for_workload_completion = xpk.wait_for_workload_completion.override(
+          timeout=int(self.workload_run_timeout.total_seconds()),
+      )(
+          workload_id=workload_id,
+          project_id=self.gcp_cfg.project_name,
+          region=gke.zone_to_region(self.gcp_cfg.zone),
+          cluster_name=self.test_cfg.cluster_name,
+      )
+
+      cleanup = xpk.clean_up_workload.override(
+          timeout=int(self.workload_post_test_timeout.total_seconds()),
+      )(
+          workload_id=workload_id,
+          project_id=self.gcp_cfg.project_name,
+          zone=self.gcp_cfg.zone,
+          cluster_name=self.test_cfg.cluster_name,
+          xpk_branch=xpk.MAIN_BRANCH,
+      )
+
+      flow1 = run_workload
+      flow2 = wait_for_workload_start >> wait_for_workload_completion >> cleanup
 
       _ = (
-          gen_cmds
-          >> reset_kube_config
-          >> update_image_tag_cmd
-          >> submit_workload_and_wait_provision
+          update_image_tag_cmd
+          >> gen_cmds
+          >> [flow1, flow2]
+          >> cleanup
       )
 
-      return group
+    return group
+
+  # def run_model(
+  #     self,
+  #     test_configs: test_config_util.TestConfig,
+  #     workload_id: airflow.XComArg,
+  # ) -> DAGNode:
+  #   """
+  #   Run the TPU/GPU model test using AXLearn in a sequential Airflow TaskGroup.
+
+  #   This method orchestrates a model test run by performing three steps:
+  #   1. **Launch:** Generates a unique `workload_id` and GCS path, then launches
+  #      the AXLearn workload (likely a training or evaluation job) using
+  #      `self.launch_workload`.
+  #   2. **Wait:** Waits for the launched workload to complete, using a timeout
+  #      specified in the task configuration.
+  #   3. **Cleanup:** Cleans up the resources associated with the completed
+  #      workload.
+
+  #   Args:
+  #     test_configs: Configuration object containing parameters for the test
+  #       (e.g., cluster name, timeout).
+  #     workload_id: A descriptive name for the test run, used to generate the
+  #       unique `workload_id`.
+
+  #   Returns:
+  #     A **DAGNode** (specifically an Airflow **TaskGroup**) that encapsulates
+  #     the entire model test sequence (launch, wait, cleanup).
+  #   """
+  #   with TaskGroup(group_id="run_model") as group:
+  #     gcs_path = name_format.generate_gcs_folder_location(
+  #         self.task_test_config.gcs_subfolder,
+  #         self.task_test_config.benchmark_id,
+  #     )
+
+  #     launch_workload = self.launch_workload_and_wait_for_start(
+  #         workload_id=workload_id,
+  #         gcs_path=gcs_path,
+  #         test_configs=test_configs,
+  #     )
+
+  #     wait_for_workload_start = xpk.wait_for_workload_start.override(
+  #         timeout=self.workload_provision_timeout.total_seconds()
+  #     )(
+  #         workload_id=workload_id,
+  #         project_id=self.task_gcp_config.project_name,
+  #         region=gke.zone_to_region(self.task_gcp_config.zone),
+  #         cluster_name=self.task_test_config.cluster_name,
+  #     )
+
+  #     # Can reuse XPK since is a more general function for workload completion.
+  #     wait_for_workload_completion = xpk.wait_for_workload_completion.override(
+  #         timeout=int(self.task_test_config.timeout.total_seconds()),
+  #     )(
+  #         workload_id=workload_id,
+  #         project_id=self.task_gcp_config.project_name,
+  #         region=gke.zone_to_region(self.task_gcp_config.zone),
+  #         cluster_name=self.task_test_config.cluster_name,
+  #     )
+
+  #     clean_up_workload = xpk.clean_up_workload(
+  #         workload_id=workload_id,
+  #         project_id=self.task_gcp_config.project_name,
+  #         zone=self.task_gcp_config.zone,
+  #         cluster_name=self.task_test_config.cluster_name,
+  #         xpk_branch=xpk.MAIN_BRANCH,
+  #     )
+
+  #     _ = (
+  #         gcs_path
+  #         >> launch_workload
+  #         >> wait_for_workload_start
+  #         >> wait_for_workload_completion
+  #         >> clean_up_workload
+  #     )
+
+  #     return group, gcs_path
+
+  # # TODO: remove backup code
+  # def launch_workload_and_wait_for_start(
+  #     self,
+  #     workload_id: airflow.XComArg,
+  #     gcs_path: str,
+  #     test_configs: test_config_util.TestConfigAXLearn,
+  # ) -> DAGNode:
+  #   """Create the workload and wait for it to provision."""
+  #   with TaskGroup(group_id="launch_workload") as group:
+  #     gen_cmds = axlearn.generate_axlearn_cli_command(
+  #         task_id="run_workload",
+  #         gcs_path=gcs_path,
+  #         project_id=self.task_gcp_config.project_name,
+  #         cluster_name=self.task_test_config.cluster_name,
+  #         zone=self.task_gcp_config.zone,
+  #         docker_image_name=self.image_name,
+  #         docker_image_repo=self.image_repo,
+  #         docker_image_full_url=self.image_full_url,
+  #         benchmark_id=self.task_test_config.benchmark_id,
+  #         workload_id=workload_id,
+  #         accelerator_type=f"tpu-{self.task_test_config.accelerator.name}",
+  #         module=test_configs.module,
+  #         model_config=test_configs.model_config,
+  #         trainer_dir=test_configs.trainer_dir,
+  #         num_slices=self.task_test_config.num_slices,
+  #         trace_steps=test_configs.trace_steps,
+  #         label=test_configs.label,
+  #     )
+
+  #     # The default worker pod's kube_config may contain leftover
+  #     # contexts/configs from previous DAGs (e.g., after `gcloud container
+  #     # clusters get-credentials`) that point to a different GKE cluster.
+  #     # Reset it so kubectl/gcloud—and the KPO we launch—target the Composer
+  #     # cluster and use the correct Workload Identity–backed SA.
+  #     reset_kube_config = axlearn.reset_kube_config()
+
+  #     update_image_tag_cmd = axlearn.update_image_tag_cmd(
+  #         image_name=self.task_test_config.docker_image,
+  #         workload_id=workload_id,
+  #     )
+
+  #     submit_workload_and_wait_provision = axlearn.start_cli_in_kpo.override(
+  #         image=self.image_full_url,
+  #     )(
+  #         start_axlearn_cli_command=gen_cmds,
+  #         provisioning_timeout_in_sec=int(
+  #             self.workload_provision_timeout.total_seconds()
+  #         ),
+  #         workload_id=workload_id,
+  #         # project_id=self.task_gcp_config.project_name,
+  #         # region=gke.zone_to_region(self.task_gcp_config.zone),
+  #         # cluster_name=self.task_test_config.cluster_name,
+  #     )
+
+  #     # # KPO task which run AXLearn CLI command.
+  #     # run_container_task = KubernetesPodOperator(
+  #     #     task_id="run_axlearn-cli",
+  #     #     name="cli-axlearn-pod",
+  #     #     namespace=axlearn.KPO_NAMESPACE,
+  #     #     config_file="/home/airflow/composer_kube_config",
+  #     #     image=self.image_full_url,
+  #     #     cmds=["bash", "-cx", gen_cmds],
+  #     #     # # "&" will provoke the AXLearn will process executed in the
+  #     #     # # background, with 5 min buffer to initialize then CLI AXLearn pod
+  #     #     # # will be terminated gracefully. If takes more than 5 min and job
+  #     #     # # still not created (problem), downstream workload_complete_task will
+  #     #     # # fail since does not found any pod.
+  #     #     # arguments=[f"{final_command_string} & sleep 280 && exit 0"],
+  #     #     # termination_grace_period=600,
+  #     #     labels={axlearn.KPO_LABEL_KEY: axlearn.KPO_LABEL_VAL},
+  #     #     # timeout of k8s/container
+  #     #     active_deadline_seconds=int(
+  #     #         self.task_test_config.timeout.total_seconds()
+  #     #     ),
+  #     #     # timeout of Airflow task
+  #     #     execution_timeout=(
+  #     #         self.task_test_config.timeout + self.workload_provision_timeout
+  #     #     ),
+  #     #     retries=0,
+  #     # )
+
+  #     _ = (
+  #         gen_cmds
+  #         >> reset_kube_config
+  #         >> update_image_tag_cmd
+  #         >> submit_workload_and_wait_provision
+  #     )
+
+  #     return group
 
 
 @dataclasses.dataclass

@@ -270,7 +270,7 @@ class TestConfig(TestConfigAbstract):
     """Rounds a size up to the nearest multiple of the page size."""
     return int(math.ceil(size / page_size) * page_size)
 
-
+# TODO: duplicated with get_axlearn_tpu_config
 class TestConfigAXLearn(TestConfigAbstract):
   """
   Holds the general configuration for an AXLearn checkpointing test.
