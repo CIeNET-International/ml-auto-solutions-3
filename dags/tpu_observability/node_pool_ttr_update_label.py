@@ -20,6 +20,7 @@ from airflow import models
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
+from dags import composer_env
 from dags.common.vm_resource import Region, Zone
 from dags.tpu_observability.configs.common import MachineConfigMap
 from dags.tpu_observability.utils import node_pool_util as node_pool
@@ -65,8 +66,10 @@ with models.DAG(
     config = machine.value
     node_pool_info = node_pool.Info(
         project_id=models.Variable.get("PROJECT_ID", default_var="cienet-cmcs"),
-        cluster_name=models.Variable.get(
-            "CLUSTER_NAME", default_var="tpu-observability-automation-dev"
+        cluster_name=(
+            composer_env.PROD_COMPOSER_ENV_NAME
+            if composer_env.is_prod_env()
+            else composer_env.DEV_COMPOSER_ENV_NAME
         ),
         node_pool_name=models.Variable.get(
             "NODE_POOL_NAME",
