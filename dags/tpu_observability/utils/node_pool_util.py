@@ -452,6 +452,20 @@ def update_labels(node_pool: Info, node_labels: dict) -> None:
   subprocess.run_exec(command)
 
 
+@task
+def get_nodepool_disk_size_gb(node_pool: Info) -> int:
+  """Returns node pool boot disk size in GB via gcloud."""
+  command = (
+      f"gcloud container node-pools describe {node_pool.node_pool_name} "
+      f"--project={node_pool.project_id} "
+      f"--cluster={node_pool.cluster_name} "
+      f"--location={node_pool.location} "
+      f'--format="value(config.diskSizeGb)"'
+  )
+  result = subprocess.run_exec(command).strip()
+  return int(result)
+
+
 @dataclasses.dataclass
 class NodePoolUpdateSpec:
   # Start with only what you need; extend later.
@@ -471,13 +485,13 @@ class NodePoolUpdater:
     flags: list[str] = []
 
     if spec.disk_size_gb is not None:
-      flags += ["--disk-size", str(int(spec.disk_size_gb))]
+      flags += ["--disk-size", str(spec.disk_size_gb)]
 
     if spec.machine_type is not None:
       flags += ["--machine-type", spec.machine_type]
 
     if spec.num_nodes is not None:
-      flags += ["--num-nodes", str(int(spec.num_nodes))]
+      flags += ["--num-nodes", str(spec.num_nodes)]
 
     # If you later support labels, you’d serialize dict -> "k=v,k2=v2"
     # if spec.labels is not None:

@@ -26,7 +26,7 @@ def wait_for_nodepool_metrics_event(
     start_time: int,
     end_time: int,
 ) -> bool:
-  """ "
+  """
   Polls Cloud Monitoring for node pool recovery metric events.
 
   This sensor queries the Cloud Monitoring API for metric time series that
@@ -59,100 +59,30 @@ def wait_for_nodepool_metrics_event(
 
   if not series:
     logging.info(
-        "[metrics] No matching time series; repoking " "window=%s → %s",
+        "[metrics] No matching time series; repoking window=%s → %s",
         start_timeutil.to_iso_string(),
         end_timeutil.to_iso_string(),
     )
     return False
 
-  first = series[0]
+  # Look for at least one point across all series
+  for time_series in series:
+    if time_series.points:
+      point = time_series.points[0]
+      logging.info(
+          "[metrics] Metric event detected. " "metric.type=%s value=%s @ %s",
+          time_series.metric.type,
+          point.value,
+          point.interval.end_time,
+      )
+      return True
+
   logging.info(
-      "[metrics] Metric detected. series_count=%d, metric.type=%s, resource.labels=%s",
-      len(series),
-      first.metric.type,
-      dict(first.resource.labels),
+      "[metrics] Time series found but no points yet; repoking window=%s → %s",
+      start_timeutil.to_iso_string(),
+      end_timeutil.to_iso_string(),
   )
-  if first.points:
-    p = first.points[0]
-    logging.info(
-        "[metrics] first point: value=%s @ %s",
-        p.value,
-        p.interval.end_time,
-    )
-
-  return True
-
-
-@task
-def check_duration_false_negative(
-    start_time_unixseconds: int,
-    end_time_unixseconds: int,
-    threshold_s: int = 150,
-) -> None:
-  """
-  Logs whether the observed update+recovery window is shorter than a threshold.
-
-  This is an informational check used to indicate potential false negatives
-  when downstream metrics/logs are expected to appear only after a certain
-  minimum restart window.
-
-  Args:
-    start_time_unixseconds: Anchor timestamp (Unix seconds) recorded when the
-      update command started.
-    end_time_unixseconds: Anchor timestamp (Unix seconds) recorded after the
-      node pool returns to RUNNING.
-    threshold_s: Threshold in seconds used for the false-negative heuristic.
-  """
-  duration_s = max(0, int(end_time_unixseconds) - int(start_time_unixseconds))
-  logging.info(
-      "[duration_check] start=%d end=%d duration=%ss threshold=%ss",
-      start_time_unixseconds,
-      end_time_unixseconds,
-      duration_s,
-      threshold_s,
-  )
-
-  if duration_s < threshold_s:
-    logging.info(
-        "Restart shorter than %d seconds. This may cause a false negative.",
-        threshold_s,
-    )
-  else:
-    logging.info(
-        "Restart longer than %d seconds. False negative should not occur.",
-        threshold_s,
-    )
-
-
-@task
-def capture_now() -> int:
-  """Returns the current Unix timestamp in seconds."""
-  return int(datetime.datetime.now())
-
-
-@task
-def get_nodepool_disk_size(node_pool: node_pool.Info) -> int:
-  """
-  Retrieves the current boot disk size (GB) of a GKE node pool.
-
-  This task reads the node pool configuration via the GKE API and extracts
-  the boot disk size from the instance group configuration. It is used to
-  verify both the original size before an update and the updated size after
-  a disk resize operation.
-
-  Args:
-    node_pool: An Info object identifying the GKE node pool.
-
-  Returns:
-    The boot disk size (in GB) of the node pool.
-
-  Raises:
-    RuntimeError: If the disk size cannot be determined from the API response.
-  """
-
-  #
-
-  return int(disk_size)
+  return False
 
 
 @task
@@ -195,37 +125,37 @@ def validate_disk_resize(current_size_gb: int, expected_size_gb: int) -> bool:
   return True
 
 
-for machine in MachineConfigMap:
-  config = machine.value
+with models.DAG(
+    dag_id="nodepool_disk_size_ttr",
+    start_date=datetime(2025, 6, 26),
+    schedule="00 02 * * *",
+    catchup=False,
+    tags=[
+        "cloud-ml-auto-solutions",
+        "nodepool_disk_size_ttr",
+        "tpu_obervability",
+        "time_to_recover",
+    ],
+    description=(
+        "Tests GKE node-pool recovery by resizing disks, waiting ≥150s, "
+        "checking node readiness, and verifying the recovery event through both Cloud Monitoring metrics and Cloud Logging entries. "
+        "Cleans up the node pool afterward."
+    ),
+    doc_md="""
+      # Node-Pool Availability Test (Disk Resize)
 
-  with models.DAG(
-      dag_id="nodepool_disk_size_ttr",
-      start_date=datetime(2025, 6, 26),
-      schedule="00 02 * * *",
-      catchup=False,
-      tags=[
-          "cloud-ml-auto-solutions",
-          "nodepool_disk_size_ttr",
-          "tpu_obervability",
-          "time_to_recover",
-      ],
-      description=(
-          "Tests GKE node-pool recovery by resizing disks, waiting ≥150s, "
-          "checking node readiness, and verifying the recovery event through both Cloud Monitoring metrics and Cloud Logging entries. "
-          "Cleans up the node pool afterward."
-      ),
-      doc_md="""
-        # Node-Pool Availability Test (Disk Resize)
+      ### Purpose
+      This DAG tests whether a GKE node pool remains observable and recovers
+      as expected when a disk resize operation forces node restarts.
 
-        ### Purpose
-        This DAG tests whether a GKE node pool remains observable and recovers
-        as expected when a disk resize operation forces node restarts.
+      ### Expected Outcome
+      - Nodes restart and return to Ready state.
+      - A recovery event is recorded in both Cloud Monitoring and Cloud Logging.
+      """,
+) as dag:
+  for machine in MachineConfigMap:
+    config = machine.value
 
-        ### Expected Outcome
-        - Nodes restart and return to Ready state.
-        - A recovery event is recorded in both Cloud Monitoring and Cloud Logging.
-        """,
-  ) as dag:
     node_pool_info = node_pool.Info(
         project_id="cienet-cmcs",
         cluster_name=Variable.get(
@@ -247,7 +177,12 @@ for machine in MachineConfigMap:
     with TaskGroup(group_id=f"v{config.tpu_version.value}") as v6e_group:
       create_nodepool = node_pool.create(node_pool=node_pool_info)
 
-      original_disk_size = get_nodepool_disk_size(node_pool_info)
+      original_disk_size = node_pool.get_nodepool_disk_size_gb(node_pool_info)
+
+      disk_size_check = validate_disk_resize(
+          current_size_gb=original_disk_size,
+          expected_size_gb=(100),  # default=100
+      )
 
       #
       update_spec = node_pool.NodePoolUpdateSpec(
@@ -262,13 +197,7 @@ for machine in MachineConfigMap:
           node_pool=node_pool_info, status=node_pool.Status.RUNNING
       )
 
-      update_end_time = capture_now()
-
-      duration_check = check_duration_false_negative(
-          update_start_time, update_end_time
-      )
-
-      updated_disk_size = get_nodepool_disk_size(node_pool_info)
+      updated_disk_size = node_pool.get_nodepool_disk_size_gb(node_pool_info)
 
       disk_resize_check = validate_disk_resize(
           current_size_gb=updated_disk_size,
@@ -282,7 +211,8 @@ for machine in MachineConfigMap:
               f'AND resource.labels.cluster_name="{node_pool_info.cluster_name}"'
           ),
           start_time=update_start_time,
-          end_time=update_end_time + QUERY_WINDOW_DURATION_SECONDS,
+          # need to check the format here if this addable
+          end_time=datetime.datetime.now() + QUERY_WINDOW_DURATION_SECONDS,
       )
 
       cleanup_node_pool = node_pool.delete.override(
@@ -294,6 +224,7 @@ for machine in MachineConfigMap:
       (
           create_nodepool
           >> original_disk_size
+          >> disk_size_check
           >> update_start_time  # need to check on the function decorator
           >> wait_for_running
           >> updated_disk_size
