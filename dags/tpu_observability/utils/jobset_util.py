@@ -386,7 +386,7 @@ def run_workload(
     subprocess.run_exec(cmd, env=env)
 
     current_time_utc = datetime.datetime.now(datetime.timezone.utc)
-    return current_time_utc
+    return TimeUtil.from_datetime(current_time_utc)
 
 
 @task
