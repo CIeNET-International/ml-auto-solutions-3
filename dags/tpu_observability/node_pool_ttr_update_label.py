@@ -64,13 +64,11 @@ with models.DAG(
 ) as dag:
   for machine in MachineConfigMap:
     config = machine.value
+    cluster_name = "tpu-observability-automation"
+    cluster_name += "-prod" if composer_env.is_prod_env() else "-dev"
     node_pool_info = node_pool.Info(
         project_id=models.Variable.get("PROJECT_ID", default_var="cienet-cmcs"),
-        cluster_name=(
-            composer_env.PROD_COMPOSER_ENV_NAME
-            if composer_env.is_prod_env()
-            else composer_env.DEV_COMPOSER_ENV_NAME
-        ),
+        cluster_name=cluster_name,
         node_pool_name=models.Variable.get(
             "NODE_POOL_NAME",
             default_var="ttr-update-label-v6e-autotest",
