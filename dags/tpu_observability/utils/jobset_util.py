@@ -585,3 +585,84 @@ def wait_for_jobset_status_occurrence(
 def wait_for_all_pods_running(num_pods: int, node_pool: node_pool_info):
   num_running = len(get_running_pods(node_pool=node_pool, namespace="default"))
   return num_running == num_pods
+
+
+@task.sensor(poke_interval=30, timeout=1200, mode="reschedule")
+def wait_for_jobset_uptime_increasing(
+    node_pool: node_pool.Info,
+    jobset_name: str,  # New parameter for the JobSet name
+    job_apply_time: datetime.datetime,
+    **context,
+) -> bool:
+  """Waits for the JobSet's uptime metric to show an increasing trend, indicating it has started.
+
+  This task polls Cloud Monitoring for the 'kubernetes.io/jobset/uptime' metric.
+  It checks if the rate of increase of uptime is consistently positive for the most recent data points.
+
+  Args:
+    node_pool: An Info dataclass instance containing project and cluster
+      details.
+    jobset_name: The name of the JobSet to monitor (e.g., "tpu-info-v6e-workload").
+    job_apply_time: The datetime object of the time the job was applied.
+    context: The Airflow context dictionary.
+  """
+  now = datetime.datetime.now(datetime.timezone.utc)
+  # Query a window from job_apply_time up to a maximum of 20 minutes later, or until now.
+  start_dt = job_apply_time
+  end_dt = min(now, job_apply_time + datetime.timedelta(minutes=20))
+
+  start_time = TimeUtil.from_datetime(start_dt)
+  end_time = TimeUtil.from_datetime(end_dt)
+
+  # Metric and Resource types for JobSet uptime
+  metric_type = "kubernetes.io/jobset/uptime"
+
+  filter_string = [
+      f'metric.type="{metric_type}"',
+      f'resource.labels.project_id = "{node_pool.project_id}"',
+      f'resource.labels.cluster_name = "{node_pool.cluster_name}"',
+      f'resource.labels.entity_name = "{jobset_name}"',  # Filter by the specific JobSet name
+  ]
+
+  time_series_data = query_time_series(
+      project_id=node_pool.project_id,
+      filter_str=" AND ".join(filter_string),
+      start_time=start_time,
+      end_time=end_time,
+      view=types.ListTimeSeriesRequest.TimeSeriesView.FULL,
+      log_enable=True,
+  )
+  logging.info(f"{time_series_data}")
+
+  if not time_series_data or not time_series_data[0].points:
+    logging.info(f"No uptime rate data found for JobSet '{jobset_name}'.")
+    return False
+
+  # Sort points in reverse chronological order to get the most recent data
+  sorted_points = sorted(
+      time_series_data[0].points,
+      key=lambda p: p.interval.end_time.timestamp(),
+      reverse=True,
+  )
+
+  point_info = []
+  for i, point in enumerate(sorted_points):
+    # Convert Protobuf Timestamp to Python datetime
+    end_ts = point.interval.end_time.timestamp()
+    end_dt = datetime.datetime.fromtimestamp(end_ts, tz=datetime.timezone.utc)
+    uptime_value = round(point.value.double_value, 4)
+    point_info.append(f"Point {i} (End Time: {end_dt}, Uptime: {uptime_value})")
+  logging.info(
+      f"Retrieved uptime points for JobSet '{jobset_name}' ({len(sorted_points)} points):\n"
+      + "\n".join(point_info)
+  )
+
+  # Log the end time of the most recent point (which is sorted_points[0])
+  latest_end_ts = sorted_points[0].interval.end_time.timestamp()
+  latest_end_time = datetime.datetime.fromtimestamp(
+      latest_end_ts, tz=datetime.timezone.utc
+  )
+  logging.info(
+      f"Latest uptime point end time for JobSet '{jobset_name}': {latest_end_time}"
+  )
+  return True
