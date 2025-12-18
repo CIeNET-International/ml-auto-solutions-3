@@ -192,7 +192,7 @@ def create(
 
   if existing_name:
     logging.info(
-      f"Node pool {node_pool.node_pool_name} already exists. Skipping creation."
+        f"Node pool {node_pool.node_pool_name} already exists. Skipping creation."
     )
     return
 
@@ -234,7 +234,7 @@ def delete(node_pool: Info) -> None:
 
   if not existing_name:
     logging.info(
-      f"Node pool {node_pool.node_pool_name} already deleted or does not exist. Skipping."
+        f"Node pool {node_pool.node_pool_name} already deleted or does not exist. Skipping."
     )
     return
 
