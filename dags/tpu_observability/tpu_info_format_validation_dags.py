@@ -34,7 +34,6 @@ from dags import composer_env
 from dags.common import test_owner
 from dags.common.vm_resource import Region
 from dags.common.vm_resource import Zone
-from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.configs.common import MachineConfigMap, TpuConfig
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
@@ -289,7 +288,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     dag_id="tpu_info_format_validation_dag",
     start_date=datetime.datetime(2025, 8, 15),
     default_args={"retries": 0},
-    schedule=constants.Schedule.DAILY_PST_7PM,
+    schedule="0 3 * * *",
     catchup=False,
     tags=["gke", "tpu-observability", "tpu-info", "TPU", "v6e-16"],
     description=(

@@ -26,7 +26,6 @@ from airflow.utils.trigger_rule import TriggerRule
 
 from dags import composer_env
 from dags.common import test_owner
-from dags.map_reproducibility.utils import constants
 from dags.common.vm_resource import Region, Zone
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.configs.common import MachineConfigMap
@@ -37,7 +36,7 @@ from dags.tpu_observability.configs.common import MachineConfigMap
 with models.DAG(  # pylint: disable=unexpected-keyword-arg
     dag_id="multi-host-availability-rollback",
     start_date=datetime.datetime(2025, 8, 10),
-    schedule=constants.Schedule.DAILY_PST_6_30PM,
+    schedule="30 2 * * *",
     catchup=False,
     tags=[
         "cloud-ml-auto-solutions",
