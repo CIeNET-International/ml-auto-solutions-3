@@ -23,6 +23,8 @@ from airflow import models
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
+from dags import composer_env
+from dags.common import test_owner
 from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_PATH
 from dags.tpu_observability.utils import node_pool_util as node_pool
@@ -70,6 +72,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 ) as dag:
   for machine in MachineConfigMap:
     config = machine.value
+    LABELS_TO_UPDATE = (
+        {"env": "prod"} if composer_env.is_prod_env() else {"env": "dev"}
+    )
 
     # Keyword arguments are generated dynamically at runtime (pylint does not
     # know this signature).
@@ -81,12 +86,12 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       )(
           gcs_path=GCS_CONFIG_PATH,
           section_name="multi_host_nodepool_rollback",
-          env="prod",
+          env=LABELS_TO_UPDATE["env"],
           machine_type=config.machine_version.value,
           tpu_topology=config.tpu_topology,
       )
 
-      create_node_pool = node_pool.create(
+      create_node_pool = node_pool.create.override(owner=test_owner.QUINN_M)(
           node_pool=node_pool_info,
       )
 

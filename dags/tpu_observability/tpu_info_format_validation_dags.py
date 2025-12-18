@@ -31,6 +31,8 @@ from airflow.exceptions import AirflowFailException
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
+from dags import composer_env
+from dags.common import test_owner
 from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.configs.common import MachineConfigMap, TpuConfig, GCS_CONFIG_PATH
 from dags.tpu_observability.utils import jobset_util as jobset
@@ -325,6 +327,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 ) as dag:
   for machine in MachineConfigMap:
     config = machine.value
+    LABELS_TO_UPDATE = (
+        {"env": "prod"} if composer_env.is_prod_env() else {"env": "dev"}
+    )
 
     @task
     def generate_second_node_pool_name(
@@ -361,7 +366,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       )(
           gcs_path=GCS_CONFIG_PATH,
           section_name="tpu_info_format_validation_dag",
-          env="prod",
+          env=LABELS_TO_UPDATE["env"],
           machine_type=config.machine_version.value,
           tpu_topology=config.tpu_topology,
       )
