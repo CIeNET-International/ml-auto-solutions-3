@@ -190,8 +190,10 @@ def create(
 
   existing_name = subprocess.run_exec(check_cmd).strip()
 
-  if existing_name :
-    logging.info(f"Node pool {node_pool.node_pool_name} already exists. Skipping creation.")
+  if existing_name:
+    logging.info(
+      f"Node pool {node_pool.node_pool_name} already exists. Skipping creation."
+    )
     return
 
   command = (
@@ -230,8 +232,10 @@ def delete(node_pool: Info) -> None:
 
   existing_name = subprocess.run_exec(check_cmd).strip()
 
-  if not existing_name :
-    logging.info(f"Node pool {node_pool.node_pool_name} already deleted or does not exist. Skipping.")
+  if not existing_name:
+    logging.info(
+      f"Node pool {node_pool.node_pool_name} already deleted or does not exist. Skipping."
+    )
     return
 
   command = (
