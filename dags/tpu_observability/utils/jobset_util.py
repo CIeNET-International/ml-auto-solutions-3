@@ -456,7 +456,7 @@ def get_active_pods(node_pool: node_pool.Info, namespace: str) -> list[str]:
 def wait_for_jobset_started(
     node_pool: node_pool.Info,
     pod_name_list: str,
-    job_apply_time: datetime.datetime,
+    job_apply_time: TimeUtil,
 ) -> bool:
   """
   Waits for the jobset to start by polling Cloud Logging for positive tensorcore
@@ -473,8 +473,8 @@ def wait_for_jobset_started(
     job_apply_time: The datetime object of the time the job was applied.
   """
 
-  end_time_datatime = job_apply_time + datetime.timedelta(minutes=10)
-  start_time = TimeUtil.from_datetime(job_apply_time)
+  end_time_datatime = job_apply_time.to_datetime() + datetime.timedelta(minutes=10)
+  start_time = job_apply_time
   end_time = TimeUtil.from_datetime(end_time_datatime)
 
   if not pod_name_list:
