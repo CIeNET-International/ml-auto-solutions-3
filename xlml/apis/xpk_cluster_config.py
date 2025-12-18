@@ -18,7 +18,7 @@ import dataclasses
 from typing import Union
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=True)
 class XpkClusterConfig:
   """Defines common XPK cluster attributes.
 
