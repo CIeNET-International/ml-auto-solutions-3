@@ -782,7 +782,7 @@ def wait_for_jobset_uptime_increasing(
       log_enable=True,
   )
 
-  if not time_series_data or not time_series_data[0].points:
+  if not time_series_data:
     logging.info(f"No uptime data found for JobSet '{jobset_name}'.")
 
   sorted_points = sorted(

@@ -22,7 +22,6 @@ from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
 from dags.common.vm_resource import Region, Zone
-from dags.map_reproducibility.utils import constants
 from dags.tpu_observability.configs.common import MachineConfigMap
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
@@ -32,10 +31,10 @@ from dags.tpu_observability.utils.jobset_util import JobSet, Workload
 # Keyword arguments are generated dynamically at runtime (pylint does not
 # know this signature).
 with models.DAG(  # pylint: disable=unexpected-keyword-arg
-    dag_id="tpu_v6e_jobset_uptime_dag",
+    dag_id="jobset_uptime_validation",
     start_date=datetime.datetime(2025, 8, 15),
     default_args={"retries": 0},
-    schedule=constants.Schedule.DAILY_PST_7PM,
+    schedule="0 4 * * *",
     catchup=False,
     tags=[
         "cloud-ml-auto-solutions",
@@ -82,7 +81,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             "TFV_CLUSTER_NAME", default_var="tony-test"
         ),
         node_pool_name=models.Variable.get(
-            "TFV_NODE_POOL_NAME", default_var="tpu-v6e-jobset"
+            "TFV_NODE_POOL_NAME", default_var="jobset-uptime-validation-v6e"
         ),
         region=models.Variable.get(
             "TFV_REGION", default_var=Region.US_CENTRAL1.value
@@ -99,7 +98,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     )
 
     jobset_config = JobSet(
-        jobset_name="tpu-info-v6e-workload",
+        jobset_name="uptime-validation-v6e-workload",
         namespace="default",
         max_restarts=5,
         replicated_job_name="tpu-job-slice",
