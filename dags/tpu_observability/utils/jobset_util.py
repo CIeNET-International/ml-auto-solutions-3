@@ -473,7 +473,9 @@ def wait_for_jobset_started(
     job_apply_time: The datetime object of the time the job was applied.
   """
 
-  end_time_datatime = job_apply_time.to_datetime() + datetime.timedelta(minutes=10)
+  end_time_datatime = job_apply_time.to_datetime() + datetime.timedelta(
+      minutes=10
+  )
   start_time = job_apply_time
   end_time = TimeUtil.from_datetime(end_time_datatime)
 
