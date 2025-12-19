@@ -98,7 +98,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       )(
           gcs_path=GCS_CONFIG_PATH,
           dag_name="jobset_rollback_ttr",
-          env=composer_env.is_prod_env(),
+          is_prod=composer_env.is_prod_env(),
           machine_type=config.machine_version.value,
           tpu_topology=config.tpu_topology,
       )
