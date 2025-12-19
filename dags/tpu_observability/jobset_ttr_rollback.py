@@ -74,9 +74,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 
   for machine in MachineConfigMap:
     config = machine.value
-    LABELS_TO_UPDATE = (
-        {"env": "prod"} if composer_env.is_prod_env() else {"env": "dev"}
-    )
 
     jobset_config = JobSet(
         jobset_name="ttr-rollback-v6e-workload",
@@ -103,8 +100,8 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           task_id="build_node_pool_info_from_gcs_yaml"
       )(
           gcs_path=GCS_CONFIG_PATH,
-          section_name="jobset_rollback_ttr",
-          env=LABELS_TO_UPDATE["env"],
+          dag_name="jobset_rollback_ttr",
+          is_prod=composer_env.is_prod_env(),
           machine_type=config.machine_version.value,
           tpu_topology=config.tpu_topology,
       )

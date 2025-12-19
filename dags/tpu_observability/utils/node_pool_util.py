@@ -75,19 +75,19 @@ class Info:
 
 @task
 def build_node_pool_info_from_gcs_yaml(
-    gcs_path: str, section_name: str, env: str = "prod", **overrides
+    gcs_path: str, dag_name: str, is_prod: bool = True, **overrides
 ) -> Info:
   """Builds a node_pool.Info instance by merging configurations.
 
   This task merges values from the 'common' section of the provided dag_config,
-  a DAG-specific section (given by section_name), and any provided overrides.
+  a DAG-specific section (given by dag_name), and any provided overrides.
   Only fields that exist in the node_pool.Info dataclass are included.
 
   Args:
       gcs_path: The GCS path to the DAG configuration YAML file.
-      section_name: The top-level key in the YAML representing the
+      dag_name: The top-level key in the YAML representing the
         specific DAG's configuration (e.g., 'dag_gke_node_pool_label_update').
-      env: The environment name (e.g., 'dev', 'prod') to load
+      is_prod: Boolean indicating whether to load the 'prod' or 'dev' environment
         from the YAML configuration.
       **overrides: Additional key-value pairs to override any settings
         from the YAML.
@@ -95,10 +95,11 @@ def build_node_pool_info_from_gcs_yaml(
   Returns:
       An initialized node_pool.Info dataclass instance.
   """
+  current_env = "prod" if is_prod else "dev"
   config = gcs.load_yaml_from_gcs(gcs_path)
 
-  common_cfg = config.get("env", {}).get(env, {})
-  section_cfg = config.get("dag", {}).get(section_name, {})
+  env_cfg = config.get("env", {}).get(current_env, {})
+  dag_cfg = config.get("dag", {}).get(dag_name, {})
 
   known_fields = {f.name for f in dataclasses.fields(Info)}
 
@@ -107,15 +108,25 @@ def build_node_pool_info_from_gcs_yaml(
     if unknown:
       logging.warning(f"Ignoring unknown fields in {name}: {unknown}")
 
-  warn_unknown("common section in yaml", common_cfg)
-  warn_unknown(f"{section_name} section in yaml", section_cfg)
+  warn_unknown("common section in yaml", env_cfg)
+  warn_unknown(f"{dag_name} section in yaml", dag_cfg)
   warn_unknown("override fields", overrides)
 
-  merged = {k: v for k, v in common_cfg.items() if k in known_fields}
-  for k, v in section_cfg.items():
+  # --- Configuration Merging Logic ---
+  # Priority Order (lowest to highest):
+  # 1. 'env' section: Base defaults for the environment (prod vs dev).
+  # 2. 'dag' section: Overrides specific to a DAG name.
+  # 3. 'overrides' dict: Code-level overrides passed into the task.
+
+  # Initialize with lowest priority: Environment-level defaults
+  merged = {k: v for k, v in env_cfg.items() if k in known_fields}
+
+  # Apply medium priority: DAG-specific config (overwrites env-level values)
+  for k, v in dag_cfg.items():
     if k in known_fields and v is not None:
       merged[k] = v
 
+  # Apply highest priority: Manual task overrides (overwrites both above)
   for k, v in overrides.items():
     if k in known_fields and v is not None:
       merged[k] = v
