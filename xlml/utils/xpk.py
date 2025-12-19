@@ -250,6 +250,32 @@ def _get_workload_job(
   return jobs.items[0]
 
 
+def _log_workload_pod_statuses(workload_id: str, pods) -> None:
+  # Logging the status of each retrieved pod for troubleshoot
+  if pods.items:
+    logging.info(f"{f' Pod Statuses for Workload {workload_id} ':-^80}")
+    for pod in pods.items:
+      logging.info(f"Pod: {pod.metadata.name}, Status: {pod.status.phase}")
+
+      if pod.status.container_statuses:
+        for container_status in pod.status.container_statuses:
+          # Waiting status
+          if container_status.state and container_status.state.waiting:
+            reason = container_status.state.waiting.reason
+            message = container_status.state.waiting.message
+            logging.warning(
+                f"  Container '{container_status.name}' WAITING. Reason: {reason}. Message: {message}"
+            )
+          # Terminated status
+          elif container_status.state and container_status.state.terminated:
+            reason = container_status.state.terminated.reason
+            exit_code = container_status.state.terminated.exit_code
+            logging.error(
+                f"  Container '{container_status.name}' TERMINATED. Reason: {reason}. Exit Code: {exit_code}"
+            )
+    logging.info("-" * 80)
+
+
 @task.sensor(poke_interval=60, timeout=600, mode="reschedule")
 def wait_for_workload_start(
     workload_id: str, project_id: str, region: str, cluster_name: str
@@ -258,32 +284,7 @@ def wait_for_workload_start(
   core_api = _get_core_api_client(project_id, region, cluster_name)
   pods = _list_workload_pods(core_api, workload_id)
 
-  def log_workload_pod_statuses(workload_id: str, pods) -> None:
-    # Logging the status of each retrieved pod for troubleshoot
-    if pods.items:
-      logging.info(f"{f' Pod Statuses for Workload {workload_id} ':-^80}")
-      for pod in pods.items:
-        logging.info(f"Pod: {pod.metadata.name}, Status: {pod.status.phase}")
-
-        if pod.status.container_statuses:
-          for container_status in pod.status.container_statuses:
-            # Waiting status
-            if container_status.state and container_status.state.waiting:
-              reason = container_status.state.waiting.reason
-              message = container_status.state.waiting.message
-              logging.warning(
-                  f"  Container '{container_status.name}' WAITING. Reason: {reason}. Message: {message}"
-              )
-            # Terminated status
-            elif container_status.state and container_status.state.terminated:
-              reason = container_status.state.terminated.reason
-              exit_code = container_status.state.terminated.exit_code
-              logging.error(
-                  f"  Container '{container_status.name}' TERMINATED. Reason: {reason}. Exit Code: {exit_code}"
-              )
-      logging.info("-" * 80)
-
-  log_workload_pod_statuses(workload_id, pods)
+  _log_workload_pod_statuses(workload_id, pods)
   print(f"Found {len(pods.items)} pods for workload {workload_id}")
   return len(pods.items) > 0
 
