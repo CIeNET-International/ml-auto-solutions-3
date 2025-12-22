@@ -162,6 +162,7 @@ def copy_node_pool_info_with_override(info: Info, **overrides) -> Info:
   )
   return replaced_info
 
+
 def _node_pool_exists(node_pool: Info) -> bool:
   check_cmd = (
       f"gcloud container node-pools describe {node_pool.node_pool_name} "
@@ -175,6 +176,7 @@ def _node_pool_exists(node_pool: Info) -> bool:
     return True
   except Exception:
     return False
+
 
 @task
 def create(
