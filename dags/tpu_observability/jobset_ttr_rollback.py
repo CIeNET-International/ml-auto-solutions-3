@@ -69,9 +69,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       timeout, and fail.
       """,
 ) as dag:
-  cluster_name = "tpu-observability-automation"
-  cluster_name += "-prod" if composer_env.is_prod_env() else "-dev"
-
   for machine in MachineConfigMap:
     config = machine.value
 
