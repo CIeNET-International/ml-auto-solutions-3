@@ -167,6 +167,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           jobset_name=jobset_config.jobset_name,
           job_apply_time=datetime.datetime.now(datetime.timezone.utc),
           timeout=300,
+          soft_fail=True,
+          # If no data appears within 5 mins, skip this task
+          # without failing the entire DAG.
       )
 
       cleanup_node_pool = node_pool.delete.override(
