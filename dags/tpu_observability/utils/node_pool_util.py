@@ -195,7 +195,7 @@ def create(
   if _node_pool_exists(node_pool):
     logging.info(
         f"Node pool {node_pool.node_pool_name} already exists. Skipping."
-   )
+    )
     return
 
   command = (
