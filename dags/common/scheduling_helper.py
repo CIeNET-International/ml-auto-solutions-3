@@ -65,25 +65,24 @@ class SchedulingHelper():
 
   @classmethod
   def ArrangeScheduleTime(
-      self,
+      cls,
       cluster: XpkClusterConfig,
       dag_id: str,
       day_of_week: DayOfWeek = DayOfWeek.ALL,
   ) -> str:
     """
     """
-    try:
-      _ = self.registry[cluster].index()
-    except ValueError as e:
-      raise f"{dag_id} is not found in the registry" from e
 
-    anchor = self.DEFAULT_ANCHOR
+    if not any(dag.dag_id == dag_id for dag in cls.registry[cluster]):
+        raise ValueError(f"{dag_id} is not found in the registry")
+
+    anchor = cls.DEFAULT_ANCHOR
     offset = dt.timedelta(0)
-    for dag in self.registry[cluster]:
+    for dag in cls.registry[cluster]:
       if dag_id == dag.dag_id:
         schedule = anchor + offset
         return f"{schedule.minute} {schedule.hour} * * {day_of_week.value}"
 
-      offset += dag.dag_run_timeout + self.DEFAULT_MARGIN
+      offset += dag.dag_run_timeout + cls.DEFAULT_MARGIN
       if offset >= dt.timedelta(hours=24):
         raise ValueError(f"Schedule exceeds 24 hours window; offset={offset}")
