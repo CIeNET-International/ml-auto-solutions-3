@@ -24,13 +24,12 @@ from dags import composer_env
 from dags.common.vm_resource import Region, Zone
 from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_PATH
 from dags.tpu_observability.utils import node_pool_util as node_pool
-from dags.tpu_observability.utils.constants import Schedule
 
 
 with models.DAG(
     dag_id="node_pool_ttr_update_label",
     start_date=datetime.datetime(2025, 9, 30),
-    schedule=Schedule.DAILY_TST_4AM if composer_env.is_prod_env() else None,
+    schedule="0 20 * * *" if composer_env.is_prod_env() else None,
     catchup=False,
     tags=[
         "gke",

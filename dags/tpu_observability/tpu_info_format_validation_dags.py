@@ -33,7 +33,6 @@ from airflow.utils.trigger_rule import TriggerRule
 
 from dags import composer_env
 from dags.common import test_owner
-from dags.tpu_observability.utils.constants import Schedule
 from dags.tpu_observability.configs.common import (
     MachineConfigMap,
     TpuConfig,
@@ -292,7 +291,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     dag_id="tpu_info_format_validation_dag",
     start_date=datetime.datetime(2025, 8, 15),
     default_args={"retries": 0},
-    schedule=Schedule.DAILY_TST_3AM if composer_env.is_prod_env() else None,
+    schedule="0 19 * * *" if composer_env.is_prod_env() else None,
     catchup=False,
     tags=["gke", "tpu-observability", "tpu-info", "TPU", "v6e-16"],
     description=(
