@@ -22,6 +22,9 @@ from dags.common.vm_resource import XpkClusters
 class Dag():
   """
   The metadata of a DAG.
+  Attributes:
+    dag_id: The DAG ID.
+    dag_run_timeout: The maximum allowed runtime of a DAG run.
   """
   dag_id: str
   dag_run_timeout: dt.timedelta
@@ -43,6 +46,12 @@ class DayOfWeek(enum.Enum):
 
 class SchedulingHelper():
   """
+  A helper class to arrange schedule time for XPK cluster DAGs.
+  Attributes:
+    DEFAULT_MARGIN: The default margin time between DAG runs.
+    DEFAULT_ANCHOR: The default anchor time to start scheduling.
+    registry: A mapping from XpkClusterConfig to a list of DAGs associated
+      with the cluster.
   """
 
   DEFAULT_MARGIN = dt.timedelta(minutes=15)
