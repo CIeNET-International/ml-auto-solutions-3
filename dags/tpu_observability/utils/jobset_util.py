@@ -781,9 +781,25 @@ def wait_for_jobset_uptime_increasing(
       view=types.ListTimeSeriesRequest.TimeSeriesView.FULL,
       log_enable=True,
   )
+  logging.info("Uptime time series data: %s", time_series_data)
 
-  if not time_series_data or not time_series_data[0].points:
-    logging.info(f"No uptime data found for JobSet '{jobset_name}'.")
+  if not time_series_data or len(time_series_data) == 0:
+    logging.info(
+        f"Uptime data for '{jobset_name}' is not available yet. Waiting..."
+    )
+    return False
+
+  if not time_series_data[0].points:
+    logging.info(
+        f"Time series exists but has no points yet for '{jobset_name}'. Waiting..."
+    )
+    return False
+
+  if len(time_series_data[0].points) < 2:
+    logging.info(
+        f"Found {len(time_series_data[0].points)} data point(s), need at least 2 to verify trend. Waiting..."
+    )
+    return False
 
   sorted_points = sorted(
       time_series_data[0].points,
