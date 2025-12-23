@@ -305,28 +305,7 @@ def wait_for_workload_completion(
   core_api = _get_core_api_client(project_id, region, cluster_name)
   pods = _list_workload_pods(core_api, workload_id)
 
-  # Logging the status of each retrieved pod for troubleshoot
-  if pods.items:
-    logging.info(f"{f' Pod Statuses for Workload {workload_id} ':-^80}")
-    for pod in pods.items:
-      logging.info(f"Pod: {pod.metadata.name}, Status: {pod.status.phase}")
-      if pod.status.container_statuses:
-        for container_status in pod.status.container_statuses:
-          # Waiting status
-          if container_status.state and container_status.state.waiting:
-            reason = container_status.state.waiting.reason
-            message = container_status.state.waiting.message
-            logging.warning(
-                f"  Container '{container_status.name}' WAITING. Reason: {reason}. Message: {message}"
-            )
-          # Terminated status
-          elif container_status.state and container_status.state.terminated:
-            reason = container_status.state.terminated.reason
-            exit_code = container_status.state.terminated.exit_code
-            logging.error(
-                f"  Container '{container_status.name}' TERMINATED. Reason: {reason}. Exit Code: {exit_code}"
-            )
-    logging.info("-" * 80)
+  _log_workload_pod_statuses(workload_id, pods)
 
   if not pods.items:
     logging.info(f"No pods found for workload selector: {workload_id}.")
