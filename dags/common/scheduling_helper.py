@@ -21,6 +21,7 @@ from dags.common.vm_resource import XpkClusters
 
 class Dag():
   """
+  The metadata of a DAG.
   """
   dag_id: str
   dag_run_timeout: dt.timedelta
@@ -86,3 +87,8 @@ class SchedulingHelper():
       offset += dag.dag_run_timeout + cls.DEFAULT_MARGIN
       if offset >= dt.timedelta(hours=24):
         raise ValueError(f"Schedule exceeds 24 hours window; offset={offset}")
+
+
+if __name__ == "__main__":
+    test_case = SchedulingHelper.ArrangeScheduleTime(XpkClusters.TPU_V5P_128_CLUSTER, "maxtext_regular_save")
+    print(f"Test case schedule: {test_case}")
