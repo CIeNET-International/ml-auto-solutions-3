@@ -251,29 +251,37 @@ def _get_workload_job(
 
 
 def _log_workload_pod_statuses(workload_id: str, pods) -> None:
-  # Logging the status of each retrieved pod for troubleshoot
-  if pods.items:
-    logging.info(f"{f' Pod Statuses for Workload {workload_id} ':-^80}")
-    for pod in pods.items:
-      logging.info(f"Pod: {pod.metadata.name}, Status: {pod.status.phase}")
+  """Logs the status of each retrieved pod and its containers for troubleshooting."""
+  if not pods.items:
+    return
 
-      if pod.status.container_statuses:
-        for container_status in pod.status.container_statuses:
-          # Waiting status
-          if container_status.state and container_status.state.waiting:
-            reason = container_status.state.waiting.reason
-            message = container_status.state.waiting.message
-            logging.warning(
-                f"  Container '{container_status.name}' WAITING. Reason: {reason}. Message: {message}"
-            )
-          # Terminated status
-          elif container_status.state and container_status.state.terminated:
-            reason = container_status.state.terminated.reason
-            exit_code = container_status.state.terminated.exit_code
-            logging.error(
-                f"  Container '{container_status.name}' TERMINATED. Reason: {reason}. Exit Code: {exit_code}"
-            )
-    logging.info("-" * 80)
+  logging.info(f"{f' Pod Statuses for Workload {workload_id} ':-^80}")
+
+  for pod in pods.items:
+    logging.info(f"Pod: {pod.metadata.name}, Status: {pod.status.phase}")
+
+    if not pod.status.container_statuses:
+      continue
+
+    for container_status in pod.status.container_statuses:
+      match container_status.state:
+        # Waiting status
+        case state if state.waiting:
+          w = state.waiting
+          logging.warning(
+              f"  Container '{container_status.name}' WAITING. "
+              f"Reason: {w.reason}. Message: {w.message}"
+          )
+
+        # Terminated status
+        case state if state.terminated:
+          t = state.terminated
+          logging.error(
+              f"  Container '{container_status.name}' TERMINATED. "
+              f"Reason: {t.reason}. Exit Code: {t.exit_code}"
+          )
+
+  logging.info("-" * 80)
 
 
 @task.sensor(poke_interval=60, timeout=600, mode="reschedule")
