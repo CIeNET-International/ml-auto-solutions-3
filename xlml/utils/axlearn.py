@@ -60,6 +60,7 @@ def reset_kube_config() -> None:
   result = hook.run_command([
       "bash",
       "-c",
+      "sudo chown -R airflow:airflow /home/airflow/composer_kube_config",
       (
           f"gcloud container clusters get-credentials {cluster_name} "
           f"--region {region}  --project {project_id}"
@@ -102,11 +103,11 @@ def update_image_tag_cmd(image_name: str, workload_id: str):
 def start_cli_in_kpo(
     start_axlearn_cli_command: str,
     workload_id: str,
+    task_owner: str,
     provisioning_timeout: dt.timedelta,
     workload_run_timeout: dt.timedelta,
     image_full_url: str,
 ) -> DAGNode:
-  # TODO: update doc
   """
   Launch AXLearn CLI in an isolated Kubernetes Pod (via @task.kubernetes) and
   wait until the workload's Pods become Ready (or the wait times out).
@@ -119,17 +120,21 @@ def start_cli_in_kpo(
   Args:
     start_axlearn_cli_command: Full shell command that starts AXLearn (the CLI
       will submit the workload to GKE).
-    provisioning_timeout_in_sec: Maximum seconds to wait for Pods to reach the
-      Ready condition.
     workload_id: Workload/JobSet identifier used to discover Pods (e.g., via a
       label selector).
+    task_owner: The owner of the task, used for Airflow metadata and
+      pod labeling.
+    provisioning_timeout: Timedelta object representing the time reserved for
+      resource provisioning.
+    workload_run_timeout: Timedelta object representing the maximum allowed
+      execution time for the Airflow task.
 
   Returns:
     None. The task completes when readiness is observed.
 
   Raises:
-    Exception: If the AXLearn CLI command fails, or if Pods do not become Ready
-      before the timeout.
+    AirflowFailException: If the AXLearn CLI command fails, or if Pods do not
+      become Ready before the timeout.
   """
 
   airflow_task_timeout = workload_run_timeout.total_seconds()
@@ -141,21 +146,26 @@ def start_cli_in_kpo(
     # clusters get-credentials`) that point to a different GKE cluster.
     # Reset it so kubectl/gcloud—and the KPO we launch—target the Composer
     # cluster and use the correct Workload Identity–backed SA.
-    reset_kube_config = reset_kube_config()
+    reset_kube_config_task = reset_kube_config.override(owner=task_owner)()
 
     kpo = KubernetesPodOperator(
-        name=f"axlearn-kpo-{workload_id}",
+        task_id="run_axlearn-cli",
+        name="axlearn-cli-kpo",
         namespace=_KPO_NAMESPACE,
         config_file="/home/airflow/composer_kube_config",
         image=image_full_url,
         cmds=["bash", "-cx", start_axlearn_cli_command],
-        labels=_KPO_LABEL,
+        labels={
+            **_KPO_LABEL,
+            "workload_id": workload_id,
+            "owner": task_owner,
+        },
         active_deadline_seconds=int(k8s_timeout),
-        execution_timeout=airflow_task_timeout,
+        execution_timeout=workload_run_timeout,
         retries=0,
     )
 
-    _ = reset_kube_config >> kpo
+    _ = reset_kube_config_task >> kpo
 
   return group
 
@@ -173,12 +183,12 @@ def generate_workload_id() -> str:
 def generate_axlearn_cli_command(
     task_id: str,
     project_id: str,
-    cluster_name: str,
     zone: str,
+    cluster_name: str,
+    workload_id: str,
     docker_image_name: str,
     docker_image_repo: str,
     docker_image_full_url: str,
-    workload_id: str,
     accelerator_type: str = "",
     module: str = "",
     model_config: str = "",
