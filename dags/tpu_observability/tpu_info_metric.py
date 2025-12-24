@@ -21,6 +21,7 @@ from google.cloud import monitoring_v3
 from google.cloud.monitoring_v3 import types as monitoring_types
 from airflow.exceptions import AirflowException
 
+from dags.tpu_observability.utils import tpu_info_util as tpu_info
 
 def _calculate_percentiles_from_histogram(
     percentiles: list[float],
@@ -72,32 +73,10 @@ class BaseMetricStrategy(ABC):
   It defines the contract that all concrete metric strategies must follow.
   """
 
-  @property
-  @abstractmethod
-  def metric_name(self) -> str:
-    """The name of the metric as it appears in the Monitoring filter."""
-    pass
-
-  @property
-  @abstractmethod
-  def tpu_info_metric_name(self) -> str:
-    """The name of the metric to be searched from the tpu-info command."""
-    pass
-
-  @property
-  @abstractmethod
-  def dag_id_suffix(self) -> str:
-    """The suffix used to generate the DAG ID, which should be unique."""
-    pass
-
-  @property
-  def tolerance_percent(self) -> float:
-    """The relative tolerance (in percent) to use for this metric's
-    verification.
-
-    Subclasses should override this value to set a custom tolerance.
-    """
-    return 2.0
+  metric_name: str
+  tpu_info_metric_name: str
+  dag_id_suffix: str
+  tolerance_percent: float = 3.0
 
   @abstractmethod
   def parse_from_monitoring(
@@ -108,7 +87,7 @@ class BaseMetricStrategy(ABC):
 
   @abstractmethod
   def parse_from_tpu_info(
-      self, tpu_info_metric_output: list[Any]
+      self, tpu_info_metric_output: list[tpu_info.Table]
   ) -> list[float]:
     """Parses percentile values from the output table of the tpu-info tool.
 
@@ -128,14 +107,7 @@ class _BaseSimplePointStrategy(BaseMetricStrategy):
   Point (int64/double) value from Monitoring.
   """
 
-  @property
-  @abstractmethod
-  def _monitoring_value_type_key(self) -> str:
-    """The name of the attribute to extract from point.value.
-
-    Example: 'int64_value' or 'double_value'
-    """
-    pass
+  _monitoring_value_type_key: str
 
   def _process_value(self, raw_value: Any) -> float:
     """(Optional) Processes the extracted raw value.
@@ -191,32 +163,15 @@ class _BaseDistributionStrategy(BaseMetricStrategy):
   data from Monitoring and calculating percentiles.
   """
 
+  _monitoring_group_by_label: str
+  _tpu_info_table_name: str
+  _tpu_info_group_by_key: str
+
   def __init__(self, percentiles_to_check: list[float]):
     """Generic initializer."""
     if not percentiles_to_check:
       raise ValueError("percentiles_to_check cannot be empty.")
     self.percentiles_to_check = sorted(percentiles_to_check)
-    super().__init__()
-
-  @property
-  @abstractmethod
-  def _monitoring_group_by_label(self) -> str:
-    """The metric label used to group data in Monitoring, e.g., 'buffer_size'."""
-    pass
-
-  @property
-  @abstractmethod
-  def _tpu_info_table_name(self) -> str:
-    """The name of the table to parse from the tpu-info output."""
-    pass
-
-  @property
-  @abstractmethod
-  def _tpu_info_group_by_key(self) -> str:
-    """
-    The column name in the tpu-info table used for grouping e.g., 'Buffer Size'.
-    """
-    pass
 
   def parse_from_monitoring(
       self, time_series_data: list[monitoring_types.TimeSeries]
@@ -254,7 +209,7 @@ class _BaseDistributionStrategy(BaseMetricStrategy):
     return monitoring_values
 
   def parse_from_tpu_info(
-      self, tpu_info_metric_output: list[Any]
+      self, tpu_info_metric_output: list[tpu_info.Table]
   ) -> list[float]:
     """Generic tpu-info percentile parsing logic."""
     parsed_values_by_group: dict[str, dict[float, float]] = {}
@@ -289,31 +244,17 @@ class _BaseDistributionStrategy(BaseMetricStrategy):
 class MemoryUsedStrategy(_BaseSimplePointStrategy):
   """Strategy for verifying Used HBM Memory."""
 
-  @property
-  def metric_name(self) -> str:
-    return "kubernetes.io/container/accelerator/memory_used"
-
-  @property
-  def tpu_info_metric_name(self) -> str:
-    return "hbm_usage"
-
-  @property
-  def dag_id_suffix(self) -> str:
-    return "memory_used"
-
-  @property
-  def tolerance_percent(self) -> float:
-    return 1.0
-
-  @property
-  def _monitoring_value_type_key(self) -> str:
-    return "int64_value"
+  metric_name = "kubernetes.io/container/accelerator/memory_used"
+  tpu_info_metric_name = "hbm_usage"
+  dag_id_suffix = "memory_used"
+  tolerance_percent = 1.0
+  _monitoring_value_type_key = "int64_value"
 
   def _process_value(self, raw_value: Any) -> float:
     return raw_value / (1024**3)
 
   def parse_from_tpu_info(
-      self, tpu_info_metric_output: list[Any]
+      self, tpu_info_metric_output: list[tpu_info.Table]
   ) -> list[float]:
     tpu_info_data_values = []
     for metric_table in tpu_info_metric_output:
@@ -334,31 +275,17 @@ class MemoryUsedStrategy(_BaseSimplePointStrategy):
 class MemoryTotalStrategy(_BaseSimplePointStrategy):
   """Strategy for verifying Total HBM Memory."""
 
-  @property
-  def metric_name(self) -> str:
-    return "kubernetes.io/container/accelerator/memory_total"
-
-  @property
-  def tpu_info_metric_name(self) -> str:
-    return "hbm_usage"
-
-  @property
-  def dag_id_suffix(self) -> str:
-    return "memory_total"
-
-  @property
-  def tolerance_percent(self) -> float:
-    return 0.0
-
-  @property
-  def _monitoring_value_type_key(self) -> str:
-    return "int64_value"
+  metric_name = "kubernetes.io/container/accelerator/memory_total"
+  tpu_info_metric_name = "hbm_usage"
+  dag_id_suffix = "memory_total"
+  tolerance_percent = 0.0
+  _monitoring_value_type_key = "int64_value"
 
   def _process_value(self, raw_value: Any) -> float:
     return raw_value / (1024**3)
 
   def parse_from_tpu_info(
-      self, tpu_info_metric_output: list[Any]
+      self, tpu_info_metric_output: list[tpu_info.Table]
   ) -> list[float]:
     tpu_info_data_values = []
     for metric_table in tpu_info_metric_output:
@@ -380,28 +307,14 @@ class MemoryTotalStrategy(_BaseSimplePointStrategy):
 class DutyCycleStrategy(_BaseSimplePointStrategy):
   """Strategy for verifying Duty Cycle."""
 
-  @property
-  def metric_name(self) -> str:
-    return "kubernetes.io/container/accelerator/duty_cycle"
-
-  @property
-  def tpu_info_metric_name(self) -> str:
-    return "duty_cycle_percent"
-
-  @property
-  def dag_id_suffix(self) -> str:
-    return "duty_cycle"
-
-  @property
-  def tolerance_percent(self) -> float:
-    return 1.0
-
-  @property
-  def _monitoring_value_type_key(self) -> str:
-    return "int64_value"
+  metric_name = "kubernetes.io/container/accelerator/duty_cycle"
+  tpu_info_metric_name = "duty_cycle_percent"
+  dag_id_suffix = "duty_cycle"
+  tolerance_percent = 1.0
+  _monitoring_value_type_key = "int64_value"
 
   def parse_from_tpu_info(
-      self, tpu_info_metric_output: list[Any]
+      self, tpu_info_metric_output: list[tpu_info.Table]
   ) -> list[float]:
     tpu_info_data_values = []
     for metric_table in tpu_info_metric_output:
@@ -417,28 +330,14 @@ class DutyCycleStrategy(_BaseSimplePointStrategy):
 class TensorcoreUtilizationStrategy(_BaseSimplePointStrategy):
   """Strategy for verifying TensorCore Utilization."""
 
-  @property
-  def metric_name(self) -> str:
-    return "kubernetes.io/container/accelerator/tensorcore_utilization"
-
-  @property
-  def tpu_info_metric_name(self) -> str:
-    return "tensorcore_utilization"
-
-  @property
-  def dag_id_suffix(self) -> str:
-    return "tensorcore_utilization"
-
-  @property
-  def tolerance_percent(self) -> float:
-    return 15.0
-
-  @property
-  def _monitoring_value_type_key(self) -> str:
-    return "double_value"
+  metric_name = "kubernetes.io/container/accelerator/tensorcore_utilization"
+  tpu_info_metric_name = "tensorcore_utilization"
+  dag_id_suffix = "tensorcore_utilization"
+  tolerance_percent = 15.0
+  _monitoring_value_type_key = "double_value"
 
   def parse_from_tpu_info(
-      self, tpu_info_metric_output: list[Any]
+      self, tpu_info_metric_output: list[tpu_info.Table]
   ) -> list[float]:
     tpu_info_data_values = []
     for metric_table in tpu_info_metric_output:
@@ -452,65 +351,25 @@ class TensorcoreUtilizationStrategy(_BaseSimplePointStrategy):
 class BufferTransferLatencyStrategy(_BaseDistributionStrategy):
   """Strategy for verifying Buffer Transfer Latency from distribution data."""
 
-  @property
-  def metric_name(self) -> str:
-    return "kubernetes.io/container/multislice/network/dcn_transfer_latencies"
-
-  @property
-  def tpu_info_metric_name(self) -> str:
-    return "buffer_transfer_latency"
-
-  @property
-  def dag_id_suffix(self) -> str:
-    return "buffer_transfer_latency"
-
-  @property
-  def tolerance_percent(self) -> float:
-    return 2.0
-
-  @property
-  def _monitoring_group_by_label(self) -> str:
-    return "buffer_size"
-
-  @property
-  def _tpu_info_table_name(self) -> str:
-    return "TPU Buffer Transfer Latency"
-
-  @property
-  def _tpu_info_group_by_key(self) -> str:
-    return "Buffer Size"
+  metric_name = "kubernetes.io/container/multislice/network/dcn_transfer_latencies"
+  tpu_info_metric_name = "buffer_transfer_latency"
+  dag_id_suffix = "buffer_transfer_latency"
+  tolerance_percent = 3.0
+  _monitoring_group_by_label = "buffer_size"
+  _tpu_info_table_name = "TPU Buffer Transfer Latency"
+  _tpu_info_group_by_key = "Buffer Size"
 
 
 class HostToDeviceTransferLatenciesStrategy(_BaseDistributionStrategy):
   """Strategy for verifying Host to Device Transfer Latency from distribution data."""
 
-  @property
-  def metric_name(self) -> str:
-    return "kubernetes.io/container/multislice/accelerator/host_to_device_transfer_latencies"
-
-  @property
-  def tpu_info_metric_name(self) -> str:
-    return "host_to_device_transfer_latency"
-
-  @property
-  def dag_id_suffix(self) -> str:
-    return "host_to_device_transfer_latency"
-
-  @property
-  def tolerance_percent(self) -> float:
-    return 2.0
-
-  @property
-  def _monitoring_group_by_label(self) -> str:
-    return "buffer_size"
-
-  @property
-  def _tpu_info_table_name(self) -> str:
-    return "TPU Host to Device Transfer Latency"
-
-  @property
-  def _tpu_info_group_by_key(self) -> str:
-    return "Buffer Size"
+  metric_name = "kubernetes.io/container/multislice/accelerator/host_to_device_transfer_latencies"
+  tpu_info_metric_name = "host_to_device_transfer_latency"
+  dag_id_suffix = "host_to_device_transfer_latency"
+  tolerance_percent = 3.0
+  _monitoring_group_by_label = "buffer_size"
+  _tpu_info_table_name = "TPU Host to Device Transfer Latency"
+  _tpu_info_group_by_key = "Buffer Size"
 
 
 class DeviceToHostTransferLatenciesStrategy(_BaseDistributionStrategy):
@@ -518,33 +377,13 @@ class DeviceToHostTransferLatenciesStrategy(_BaseDistributionStrategy):
   Strategy for verifying Device to Host Transfer Latency from distribution data.
   """
 
-  @property
-  def metric_name(self) -> str:
-    return "kubernetes.io/container/multislice/accelerator/device_to_host_transfer_latencies"
-
-  @property
-  def tpu_info_metric_name(self) -> str:
-    return "device_to_host_transfer_latency"
-
-  @property
-  def dag_id_suffix(self) -> str:
-    return "device_to_host_transfer_latency"
-
-  @property
-  def tolerance_percent(self) -> float:
-    return 2.0
-
-  @property
-  def _monitoring_group_by_label(self) -> str:
-    return "buffer_size"
-
-  @property
-  def _tpu_info_table_name(self) -> str:
-    return "TPU Device to Host Transfer Latency"
-
-  @property
-  def _tpu_info_group_by_key(self) -> str:
-    return "Buffer Size"
+  metric_name = "kubernetes.io/container/multislice/accelerator/device_to_host_transfer_latencies"
+  tpu_info_metric_name = "device_to_host_transfer_latency"
+  dag_id_suffix = "device_to_host_transfer_latency"
+  tolerance_percent = 3.0
+  _monitoring_group_by_label = "buffer_size"
+  _tpu_info_table_name = "TPU Device to Host Transfer Latency"
+  _tpu_info_group_by_key = "Buffer Size"
 
 
 class CollectiveEndToEndLatencyLatenciesStrategy(_BaseDistributionStrategy):
@@ -552,37 +391,21 @@ class CollectiveEndToEndLatencyLatenciesStrategy(_BaseDistributionStrategy):
   Strategy for verifying Collective End to End Latency from distribution data.
   """
 
-  @property
-  def metric_name(self) -> str:
-    return "kubernetes.io/container/multislice/network/collective_end_to_end_latencies"
-
-  @property
-  def tpu_info_metric_name(self) -> str:
-    return "collective_e2e_latency"
-
-  @property
-  def dag_id_suffix(self) -> str:
-    return "collective_e2e_latency"
-
-  @property
-  def _monitoring_group_by_label(self) -> str:
-    return "collective_type"
-
-  @property
-  def _tpu_info_table_name(self) -> str:
-    return "TPU Collective End to End Latency"
-
-  @property
-  def _tpu_info_group_by_key(self) -> str:
-    return "Buffer Size"
+  metric_name = "kubernetes.io/container/multislice/network/collective_end_to_end_latencies"
+  tpu_info_metric_name = "collective_e2e_latency"
+  dag_id_suffix = "collective_e2e_latency"
+  tolerance_percent = 3.0
+  _monitoring_group_by_label = "buffer_size"
+  _tpu_info_table_name = "TPU Collective End to End Latency"
+  _tpu_info_group_by_key = "Buffer Size"
 
   def parse_from_tpu_info(
-      self, tpu_info_metric_output: list[Any]
+      self, tpu_info_metric_output: list[tpu_info.Table]
   ) -> list[float]:
     parsed_values_by_buffer: dict[str, dict[float, float]] = {}
 
     for metric_table in tpu_info_metric_output:
-      if metric_table.name == "TPU Collective End to End Latency":
+      if metric_table.name == self._tpu_info_table_name:
         for i, row_dict in enumerate(metric_table.body):
           # The 'Collective Type' column (e.g., ALL_GATHER / ALL_REDUCE) is
           # missing from the tpu-info output table. This prevents us from
@@ -594,7 +417,7 @@ class CollectiveEndToEndLatencyLatenciesStrategy(_BaseDistributionStrategy):
           # TODO: b/454457878 - This logic must be updated to filter on
           # 'Collective Type' as soon as the tpu-info column is added to the
           # table to ensure correctness.
-          buffer_size = row_dict.get("Buffer Size")
+          buffer_size = row_dict.get(self._tpu_info_group_by_key)
           if not buffer_size:
             continue
 
