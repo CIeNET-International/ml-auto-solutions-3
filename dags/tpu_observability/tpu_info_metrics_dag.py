@@ -32,8 +32,8 @@ from airflow.utils.trigger_rule import TriggerRule
 from dags import composer_env
 from dags.common.vm_resource import Zone, Region
 from dags.tpu_observability.configs.common import MachineConfigMap
-from dags.tpu_observability.metric_strategies import ALL_METRIC_STRATEGIES
-from dags.tpu_observability.metric_strategies import BaseMetricStrategy
+from dags.tpu_observability.tpu_info_metric import ALL_METRIC_STRATEGIES
+from dags.tpu_observability.tpu_info_metric import BaseMetricStrategy
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils import subprocess_util as subprocess
@@ -247,34 +247,33 @@ with models.DAG(
 ) as dag:
   for machine in MachineConfigMap:
     config = machine.value
-
+    cluster_name = "tpu-observability-automation"
+    cluster_name += "-prod" if composer_env.is_prod_env() else "-dev"
     cluster_info = node_pool.Info(
         project_id=models.Variable.get(
-            "TFV_PROJECT_ID", default_var="cienet-cmcs"
+            "TIM_PROJECT_ID", default_var="cienet-cmcs"
         ),
-        cluster_name=models.Variable.get(
-            "TFV_CLUSTER_NAME", default_var="tpu-observability-automation"
-        ),
+        cluster_name="yuna-auto-test",
         node_pool_name=models.Variable.get(
-            "TFV_NODE_POOL_NAME", default_var="tpu-info-fromat-test-v6e-1"
+            "TIM_NODE_POOL_NAME", default_var="tpu-info-fromat-test-v6e-1"
         ),
         region=models.Variable.get(
-            "TFV_REGION", default_var=Region.US_CENTRAL1.value
+            "TIM_REGION", default_var=Region.US_CENTRAL1.value
         ),
         location=models.Variable.get(
-            "TFV_LOCATION", default_var=Region.US_CENTRAL1.value
+            "TIM_LOCATION", default_var=Region.US_CENTRAL1.value
         ),
         node_locations=models.Variable.get(
-            "TFV_NODE_LOCATIONS", default_var=Zone.US_CENTRAL1_B.value
+            "TIM_NODE_LOCATIONS", default_var=Zone.US_CENTRAL1_B.value
         ),
-        num_nodes=models.Variable.get("TFV_NUM_NODES", default_var=4),
+        num_nodes=models.Variable.get("TIM_NUM_NODES", default_var=4),
         machine_type=config.machine_version.value,
         tpu_topology=config.tpu_topology,
     )
     cluster_info_2 = replace(
         cluster_info,
         node_pool_name=models.Variable.get(
-            "TFV_NODE_POOL_NAME", default_var="tpu-info-format-test-v6e-2"
+            "TIM_NODE_POOL_NAME", default_var="tpu-info-format-test-v6e-2"
         ),
     )
 
