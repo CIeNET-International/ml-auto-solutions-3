@@ -24,7 +24,6 @@ from airflow import models
 from dags import composer_env
 from dags.common import test_owner
 from dags.common.vm_resource import TpuVersion, Zone
-from dags.orbax.configs.axlearn_config import get_axlearn_tpu_config
 from dags.orbax.util import test_config_util, validation_util
 from xlml.utils.gke import zone_to_region
 from xlml.utils import axlearn
@@ -105,15 +104,12 @@ with models.DAG(
       test_config_util.TestConfigAXLearn(
           # cluster=XpkClusters.TPU_V5P_128_CLUSTER,
           cluster=DEV_CLUSTER,  # TODO: dev only
-          run_name="gke_tpu_single",  # not used?
-          slices=[2],  # not used?
-          instance_type="tpu-v5p-128",  # not used?
-          mesh_type="tpu-v5p-128",  # not used?
-          short_id=f"axlearn-{checkpointing.name}-sav",  # not used?
+          slices=[2],
+          short_id=f"axlearn-{checkpointing.name}-sav",
           module="text.gpt.c4_trainer",
           label="tpu-v5p",
           model_name="fuji-7B-v2-flash",
-          steps=200,  # not used?
+          steps=200,
           trainer_dir=test_config_util.DEFAULT_BUCKET_AXLEARN,
           data_dir="gs://axlearn-public/tensorflow_datasets",
           trace_steps=[40, 90, 140, 190],
@@ -130,21 +126,20 @@ with models.DAG(
 
         # AXLearn head against JAX 0.5.3
         # Runs Fuji training on v5p-128 in the provided GCP Project
-        run = get_axlearn_tpu_config(
-            test_name=f"{axlearn_config.short_id}-reg",
+        run = axlearn_config.generate_axlearn_tpu_config(
+            test_suffix="reg",
             test_owner=test_owner.CAMILO_Q,
-            docker_image_full_url=image.value,
-            docker_image_name=image_name,
-            docker_image_repo=image_repo,
-            cluster=axlearn_config.cluster,
             workload_provision_timeout=RESERVE_TIME_FOR_PRE_WORKLOAD,
             workload_run_timeout=RESERVE_TIME_FOR_WORKLOAD,
             workload_post_test_timeout=RESERVE_TIME_FOR_POST_WORKLOAD,
+            docker_image_name=image_name,
+            docker_image_repo=image_repo,
+            docker_image_full_url=image.value,
             num_slices=slice_num,
         ).run(
             workload_id=workload_id,
             module=axlearn_config.module,
-            model_name=axlearn_config.model_name,
+            model_name=axlearn_config.model_config,
             trainer_dir=axlearn_config.trainer_dir,
             trace_steps=axlearn_config.trace_steps,
             label=axlearn_config.label,
@@ -155,13 +150,13 @@ with models.DAG(
         validate_steps = (
             validation_util.validate_checkpoints_save_regular_axlearn(
                 project_id=axlearn_config.cluster.project,
+                run_name=workload_id,
                 location=zone_to_region(axlearn_config.cluster.zone),
                 cluster_name=axlearn_config.cluster.name,
-                run_name=workload_id,
+                steps_to_validate=axlearn_config.generate_step_to_validate(),
                 pod_pattern=".*-0",
                 start_time=start_time,
                 end_time=end_time,
-                steps_to_validate=axlearn_config.generate_step_to_validate(),
             )
         )
 

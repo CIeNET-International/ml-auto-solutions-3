@@ -1,18 +1,20 @@
 """Test Configuration Class utility for orbax testcases"""
 
-import posixpath
-from dataclasses import dataclass
 from abc import ABC, abstractmethod
 from absl import logging
+from dataclasses import dataclass
+import datetime
 import math
+import posixpath
 import re
 
 from airflow.exceptions import AirflowFailException
 
 from dags import gcs_bucket
-from dags.common.vm_resource import XpkClusters, DockerImage
+from dags.common.vm_resource import XpkClusters, DockerImage, Project
 from dags.orbax.util import checkpoint_util
 from dags.multipod.configs.common import SetupMode
+from xlml.apis import gcp_config, metric_config, task, test_config
 from xlml.utils.gke import zone_to_region
 
 
@@ -292,10 +294,7 @@ class TestConfigAXLearn(TestConfigAbstract):
   def __init__(
       self,
       cluster: XpkClusters,
-      run_name: str,
       slices: list[int],
-      instance_type: str,
-      mesh_type: str,
       module: str,
       short_id: str,
       steps: int,
@@ -323,10 +322,7 @@ class TestConfigAXLearn(TestConfigAbstract):
     """
 
     self.cluster = cluster
-    self.run_name = run_name
     self.slices = slices
-    self.instance_type = instance_type
-    self.mesh_type = mesh_type
     self.module = module
     self.label = label
     self.short_id = short_id
@@ -355,6 +351,47 @@ class TestConfigAXLearn(TestConfigAbstract):
     for key, value in attributes.items():
       output.append(f"  **{key.ljust(18)}**: {value}")
     return "\n".join(output)
+
+  def generate_axlearn_tpu_config(
+      self,
+      test_suffix: str,
+      test_owner: str,
+      workload_provision_timeout: datetime.timedelta,
+      workload_run_timeout: datetime.timedelta,
+      workload_post_test_timeout: datetime.timedelta,
+      docker_image_name: str,
+      docker_image_repo: str,
+      docker_image_full_url: str,
+      num_slices: int,
+      dataset_name: metric_config.DatasetOption = metric_config.DatasetOption.XLML_DATASET,
+      dataset_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
+      composer_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
+  ):
+    return task.AXLearnTask(
+      test_cfg=test_config.TpuGkeTest(
+          accelerator=test_config.Tpu(
+              version=self.cluster.device_version,
+              cores=self.cluster.core_count,
+          ),
+          test_name=f"{self.short_id}-{test_suffix}",
+          cluster_name=self.cluster.name,
+          num_slices=num_slices,
+          task_owner=test_owner,
+      ),
+      gcp_cfg=gcp_config.GCPConfig(
+          project_name=self.cluster.project,
+          zone=self.cluster.zone,
+          dataset_name=dataset_name,
+          dataset_project=dataset_project,
+          composer_project=composer_project,
+      ),
+      workload_provision_timeout=workload_provision_timeout,
+      workload_run_timeout=workload_run_timeout,
+      workload_post_test_timeout=workload_post_test_timeout,
+      image_name=docker_image_name,
+      image_repo=docker_image_repo,
+      image_full_url=docker_image_full_url,
+    )
 
   def generate_step_to_validate(self) -> list[int]:
     """Calculates and returns a list of step numbers to be validated."""

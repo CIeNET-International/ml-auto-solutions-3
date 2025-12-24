@@ -23,6 +23,7 @@ from typing import Optional, Tuple, Union
 import airflow
 from airflow.models.taskmixin import DAGNode
 from airflow.utils.task_group import TaskGroup
+from airflow.utils.trigger_rule import TriggerRule
 from airflow.decorators import task
 from airflow.operators.empty import EmptyOperator
 
@@ -163,10 +164,17 @@ class AXLearnTask(BaseTask):
 
   TODO:
   Attributes:
-    task_test_config: Test configs to run on this TPU/GPU.
-    task_gcp_config: Runtime TPU/GPU creation parameters.
-    task_metric_config: Metric configs to process metrics.
-    workload_provision_timeout: Time allowed for provisioning a workload.
+    test_cfg: Test configs to run on this TPU/GPU.
+    gcp_cfg: Runtime TPU/GPU creation parameters.
+    workload_provision_timeout: Timedelta object allowed for
+      provisioning a workload.
+    workload_run_timeout: Timedelta object allowed for the actual
+      workload execution.
+    workload_post_test_timeout: Timedelta object allowed for cleanup tasks
+      after execution.
+    image_name: The name of the Docker image.
+    image_repo: The repository path of the Docker image.
+    image_full_url: The full URL of the Docker image.
   """
 
   test_cfg: Union[
@@ -203,25 +211,29 @@ class AXLearnTask(BaseTask):
       A task group with the following task : run_model.
     """
     with TaskGroup(group_id=self.test_cfg.benchmark_id) as group:
-      update_image_tag_cmd = axlearn.update_image_tag_cmd(
+      update_image_tag_cmd = axlearn.update_image_tag_cmd.override(
+          owner=self.test_cfg.task_owner
+      )(
           image_name=self.image_full_url,
           workload_id=workload_id,
       )
 
-      gen_cmds = axlearn.generate_axlearn_cli_command(
+      gen_cmds = axlearn.generate_axlearn_cli_command.override(
+          owner=self.test_cfg.task_owner
+      )(
           task_id="run_workload",
-          workload_id=workload_id,
           project_id=self.gcp_cfg.project_name,
           zone=self.gcp_cfg.zone,
           cluster_name=self.test_cfg.cluster_name,
+          workload_id=workload_id,
           docker_image_name=self.image_name,
           docker_image_repo=self.image_repo,
           docker_image_full_url=self.image_full_url,
           accelerator_type=f"tpu-{self.test_cfg.accelerator.name}",
-          num_slices=self.test_cfg.num_slices,
           module=module,
           model_config=model_name,
           trainer_dir=trainer_dir,
+          num_slices=self.test_cfg.num_slices,
           trace_steps=trace_steps,
           label=label,
       )
@@ -229,13 +241,15 @@ class AXLearnTask(BaseTask):
       run_workload = axlearn.start_cli_in_kpo(
           start_axlearn_cli_command=gen_cmds,
           workload_id=workload_id,
-          provisioning_timeout_in_sec=self.workload_provision_timeout,
-          workload_run_timeout_in_sec=self.workload_run_timeout,
-          image=self.image_full_url,
+          task_owner=self.test_cfg.task_owner,
+          provisioning_timeout=self.workload_provision_timeout,
+          workload_run_timeout=self.workload_run_timeout,
+          image_full_url=self.image_full_url,
       )
 
       wait_for_workload_start = xpk.wait_for_workload_start.override(
           timeout=self.workload_provision_timeout.total_seconds(),
+          owner=self.test_cfg.task_owner,
       )(
           workload_id=workload_id,
           project_id=self.gcp_cfg.project_name,
@@ -245,6 +259,7 @@ class AXLearnTask(BaseTask):
 
       wait_for_workload_completion = xpk.wait_for_workload_completion.override(
           timeout=int(self.workload_run_timeout.total_seconds()),
+          owner=self.test_cfg.task_owner,
       )(
           workload_id=workload_id,
           project_id=self.gcp_cfg.project_name,
@@ -253,7 +268,9 @@ class AXLearnTask(BaseTask):
       )
 
       cleanup = xpk.clean_up_workload.override(
-          timeout=int(self.workload_post_test_timeout.total_seconds()),
+          trigger_rule=TriggerRule.ALL_DONE,
+          execution_timeout=self.workload_post_test_timeout,
+          owner=self.test_cfg.task_owner,
       )(
           workload_id=workload_id,
           project_id=self.gcp_cfg.project_name,
@@ -269,7 +286,6 @@ class AXLearnTask(BaseTask):
           update_image_tag_cmd
           >> gen_cmds
           >> [flow1, flow2]
-          >> cleanup
       )
 
     return group
