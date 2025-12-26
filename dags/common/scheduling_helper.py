@@ -19,20 +19,21 @@ from xlml.apis.xpk_cluster_config import XpkClusterConfig
 from dags.common.vm_resource import XpkClusters
 
 
-class Dag():
+class Dag:
   """
   The metadata of a DAG.
   Attributes:
     dag_id: The DAG ID.
     dag_run_timeout: The maximum allowed runtime of a DAG run.
   """
+
   dag_id: str
   dag_run_timeout: dt.timedelta
 
   def __init__(
       self,
       dag_id: str,
-      dag_run_timeout: dt.timedelta=dt.timedelta(minutes=60)
+      dag_run_timeout: dt.timedelta = dt.timedelta(minutes=60),
   ):
     self.dag_id = dag_id
     self.dag_run_timeout = dag_run_timeout
@@ -44,7 +45,7 @@ class DayOfWeek(enum.Enum):
   WEEKEND = "0,6"
 
 
-class SchedulingHelper():
+class SchedulingHelper:
   """
   A helper class to arrange schedule time for XPK cluster DAGs.
   Attributes:
@@ -80,11 +81,12 @@ class SchedulingHelper():
       dag_id: str,
       day_of_week: DayOfWeek = DayOfWeek.ALL,
   ) -> str:
-    """
-    """
+    """ """
+    if cluster not in cls.registry:
+      raise ValueError(f"{cluster.name} is not found in the registry")
 
     if not any(dag.dag_id == dag_id for dag in cls.registry[cluster]):
-        raise ValueError(f"{dag_id} is not found in the registry")
+      raise ValueError(f"{dag_id} is not found in the registry")
 
     anchor = cls.DEFAULT_ANCHOR
     offset = dt.timedelta(0)
@@ -99,5 +101,8 @@ class SchedulingHelper():
 
 
 if __name__ == "__main__":
-    test_case = SchedulingHelper.ArrangeScheduleTime(XpkClusters.TPU_V5P_128_CLUSTER, "maxtext_regular_save")
-    print(f"Test case schedule: {test_case}")
+  test_case = SchedulingHelper.ArrangeScheduleTime(
+      XpkClusters.TPU_V5P_128_CLUSTER,
+      "maxtext_regular_save",
+  )
+  print(f"Test case schedule: {test_case}")

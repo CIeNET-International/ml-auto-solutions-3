@@ -1,3 +1,4 @@
+
 from airflow import DAG
 from airflow.decorators import task
 from datetime import datetime, timedelta
@@ -5,7 +6,8 @@ import time
 from dags.common.vm_resource import XpkClusters
 from dags.schedulinghelper_test.scheduling_helper import SchedulingHelper
 
-DAG_ID = "test1"
+
+DAG_ID = "test2"
 
 SCHEDULE = SchedulingHelper.ArrangeScheduleTime(
     XpkClusters.TPU_V5P_128_CLUSTER,
@@ -23,9 +25,10 @@ with DAG(
 
   @task
   def sleep_121_minutes():
+
     print(
-        f"schedule: {SCHEDULE}",
-        f"Task: {DAG_ID} started, sleeping for 121 minutes...",
+      f"schedule: {SCHEDULE}",
+      f"Task: {DAG_ID} started, sleeping for 121 minutes...",
     )
     time.sleep(121 * 60)
     print("Task finished!")
