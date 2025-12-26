@@ -420,7 +420,7 @@ def end_workload(node_pool: node_pool_info, jobset_name: str, namespace: str):
 
 
 @task
-def get_active_pods(node_pool: node_pool_info, namespace: str) -> list[str]:
+def list_pod_names(node_pool: node_pool_info, namespace: str) -> list[str]:
   """
   Retrieves a list of active pod names from a specific GKE cluster namespace.
 
