@@ -12,16 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from absl import logging
 import datetime
+import os
 import random
+import regex
 import string
 import time
-from absl import logging
 
 from airflow import models
+from airflow.models.dagrun import DagRun
+from airflow.models.taskinstance import TaskInstance
 from airflow.decorators import task
 from airflow.exceptions import AirflowException
 from airflow.hooks.subprocess import SubprocessHook
+from airflow.utils.context import get_current_context
 from airflow.utils.trigger_rule import TriggerRule
 
 from airflow.providers.google.cloud.operators.kubernetes_engine import GKEStartPodOperator
@@ -32,7 +37,9 @@ from dags.common import test_owner
 from dags.maxtext_pathways.configs import commands as cmds
 from dags.maxtext_pathways.configs import parameters as ui_params
 from dags.maxtext_pathways.configs import recipe_config as recipe_cfg
+from xlml.apis import gcp
 from xlml.utils import xpk, gke
+from xlml.utils.time import TimeUtil
 
 # based on maxtext_dependencies.Dockerfile, and apply PR2715 in addition
 IMAGE = "gcr.io/cienet-cmcs/cnt_pathway:latest"
@@ -54,11 +61,6 @@ def generate_derived_parameters(dag_params: dict) -> dict:
   Generates new parameters based on the initial DAG parameters.
   """
   derived_params = {}
-
-  # Generate recipe workload_id and temp_key.
-  name, temp_post_fix = generate_recipe_workload_id(dag_params)
-  derived_params["temp_key"] = temp_post_fix
-  derived_params["recipe_workload_id"] = name
 
   # Generate region by zone
   derived_params["region"] = gke.zone_to_region(dag_params["zone"])
@@ -141,40 +143,53 @@ def generate_install_dependencies_commands(service_account: str | None) -> str:
   return env_cmds
 
 
-# TODO(b/455415420): Extract workload_id from start_recipe log to avoid being out of sync with the MaxText repo.
-def generate_recipe_workload_id(params: dict) -> tuple[str, str]:
-  """
-  Generate a random value in advance to fix the workload_id so that the workload can be deleted later.
-  Please refer to the `generate_xpk_workload_cmd` function in the `/maxtext/benchmarks/maxtext_xpk_runner.py` file.
-  """
-  # Confirm whether to use customized_model_name.
-  params = params.copy()
-  if params["selected_model_names"] == "customized_model_name":
-    params["selected_model_names"] = params["customized_model_name"]
+# TODO(b/455415420): Enhance MaxText benchmark code to allow specifying the
+# workload id
+@task
+def find_work_id(start_recipe_task_id: str) -> str:
+  ctx = get_current_context()
+  dag: models.DAG = ctx["dag"]
+  dag_run: DagRun = ctx["dag_run"]
+  task_instance: TaskInstance = dag_run.get_task_instance(
+      task_id=start_recipe_task_id
+  )
+  if not task_instance:
+      raise AirflowException(f"No TaskInstance found")
 
-  time.localtime()
-  length_of_random_str = 3
-  temp_post_fix = "".join(
-      random.choice(string.ascii_lowercase + string.digits)
-      for _ in range(length_of_random_str)
+  composer_name = os.environ["COMPOSER_GKE_NAME"]
+  project_id = os.environ["GCP_PROJECT"]
+  region = os.environ["COMPOSER_LOCATION"]
+
+  worker = f"projects/{project_id}/logs/airflow-worker"
+  k8s_worker = f"projects/{project_id}/logs/airflow-k8s-worker"
+
+  expr = (
+      r"^\[base\] Task: `([a-z0-9-]+)` is implemented by "
+      r"`python3 ~/xpk/xpk.py workload create-pathways.*"
   )
 
-  truncate_model_name = 10
-  truncate_prefix = 3
-  post_fix = f'-{params["num_slices_list"]}-{time.strftime("%m%d%H", time.localtime())}-{temp_post_fix}'
-  common_prefix = params["user"]
+  log_entries = gcp.query_log_entries(
+      project_id=project_id,
+      filter_str=(
+          f"logName=('{worker}' OR '{k8s_worker}') "
+          "resource.type='cloud_composer_environment' "
+          f"resource.labels.project_id='{project_id}' "
+          f"resource.labels.environment_name='{composer_name}' "
+          f"resource.labels.location='{region}' "
+          f"labels.task-id='{start_recipe_task_id}' "
+          f"labels.workflow='{dag.dag_id}' "
+          fr"textPayload=~'{expr}' "
+      ),
+      start_time=TimeUtil.from_datetime(task_instance.start_date),
+      end_time=TimeUtil.from_datetime(task_instance.end_date),
+  )
 
-  pw_prefix = "pw-"
+  for entry in log_entries:
+    m = regex.match(expr, entry.text_payload)
+    if m:
+      return m.group(1)
 
-  if params["selected_model_framework"] == "pathways":
-    post_fix = f'-{params["num_slices_list"]}-{temp_post_fix}'
-    name = f'{pw_prefix}{params["selected_model_names"].replace("_", "-")[:truncate_model_name - len(pw_prefix)]}'
-  else:
-    name = f'{params["selected_model_names"].replace("_", "-")[:truncate_model_name]}'
-
-  name = f"{common_prefix[:truncate_prefix]}-{name}{post_fix}"
-
-  return name, temp_post_fix
+  raise AirflowException("Failed to find the workload id from log")
 
 
 @task
@@ -312,8 +327,9 @@ with models.DAG(
   derived_params = generate_derived_parameters(dag_params)
   commands = generate_commands(dag_params, derived_params, RECIPE_INSTANCE)
 
+  start_recipe_task_id = "start_recipe"
   start_recipe = GKEStartPodOperator(
-      task_id="start_recipe",
+      task_id=start_recipe_task_id,
       name=RECIPE_NAME.replace("_", "-"),
       project_id=dag_params["project"],
       cluster_name=dag_params["cluster_name"],
@@ -331,6 +347,8 @@ with models.DAG(
       owner=test_owner.DORA_H,
   )
 
+  workload_id = find_work_id(start_recipe_task_id=start_recipe_task_id)
+
   # TODO(b/452777428): Remove this once the "apache-airflow-providers-google" in prod
   # composer is upgraded to "16.0.0".
   # Explicitly clean up the pod since the `on_finish_action` of
@@ -347,7 +365,7 @@ with models.DAG(
   check_recipe_log = wait_workload_complete.override(
       task_id="check_recipe_log",
   )(
-      workload_id=derived_params["recipe_workload_id"],
+      workload_id=workload_id,
       project_id=dag_params["project"],
       region=derived_params["region"],
       cluster_name=dag_params["cluster_name"],
@@ -359,7 +377,7 @@ with models.DAG(
   clean_up_recipe = xpk.clean_up_workload.override(
       task_id="clean_up_recipe", trigger_rule=TriggerRule.ALL_DONE
   )(
-      workload_id=derived_params["recipe_workload_id"],
+      workload_id=workload_id,
       project_id=dag_params["project"],
       zone=dag_params["zone"],
       cluster_name=dag_params["cluster_name"],
@@ -372,6 +390,7 @@ with models.DAG(
       >> derived_params
       >> commands
       >> start_recipe
+      >> workload_id
       >> check_recipe_log
       >> clean_up_recipe
   )

@@ -32,9 +32,9 @@ import kubernetes
 
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils import subprocess_util as subprocess
-from dags.tpu_observability.utils.gcp_util import query_time_series
-from dags.tpu_observability.utils.time_util import TimeUtil
+from xlml.apis.gcp import query_time_series
 from xlml.utils import gke
+from xlml.utils.time import TimeUtil
 
 
 class Workload:

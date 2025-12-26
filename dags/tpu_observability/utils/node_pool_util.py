@@ -26,11 +26,11 @@ from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from google.cloud import monitoring_v3
 
-from dags.tpu_observability.utils.time_util import TimeUtil
-from dags.tpu_observability.utils.gcp_util import query_time_series
 from dags.tpu_observability.utils import subprocess_util as subprocess
 from xlml.apis import gcs
+from xlml.apis.gcp import query_time_series
 from xlml.utils import composer
+from xlml.utils.time import TimeUtil
 
 
 class Status(enum.Enum):

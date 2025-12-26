@@ -23,7 +23,7 @@ from google.cloud.monitoring_v3 import types as monitoring_types
 from google.api_core.exceptions import ResourceExhausted
 from google.api.error_reason_pb2 import ErrorReason
 
-from dags.tpu_observability.utils.time_util import TimeUtil
+from xlml.utils.time import TimeUtil
 
 
 READ_QUOTA_EXCEED_ERROR = ErrorReason.Name(ErrorReason.RATE_LIMIT_EXCEEDED)
@@ -55,11 +55,12 @@ def query_time_series(
     start_time: TimeUtil,
     end_time: TimeUtil,
     aggregation: monitoring_types.Aggregation | None = None,
-    view: monitoring_types.ListTimeSeriesRequest.TimeSeriesView = monitoring_types.ListTimeSeriesRequest.TimeSeriesView.FULL,
+    view: monitoring_types.ListTimeSeriesRequest.TimeSeriesView | None = None,
     page_size: int | None = 500,
     log_enable: bool = False,
 ) -> list[monitoring_types.TimeSeries]:
-  """A utility that queries metrics (time series data) from Google Cloud Monitoring API.
+  """An utility that queries metrics (time series data) from Google Cloud
+  Monitoring API.
 
   This function provides a flexible interface to the list_time_series API,
   with robust error handling and convenient parameter types.
@@ -75,10 +76,10 @@ def query_time_series(
     aggregation: An Aggregation object that specifies how to align and combine
       time series. Defaults to None (raw data).
     view: The level of detail to return. Can be the TimeSeriesView enum (e.g.,
-      TimeSeriesView.FULL) or a string ("FULL", "HEADERS"). Defaults to FULL.
+      TimeSeriesView.FULL) or a string ("FULL", "HEADERS").
     page_size: The maximum number of results to return per page.
-      The API's default is 50, we use 500 to decrease the total number of requests
-      to avoid the quota issue.
+      The API's default is 50, we use 500 to decrease the total number of
+      requests to avoid the quota issue.
     log_enable: Whether to enable logging. Defaults to False.
 
   Returns:
@@ -100,8 +101,11 @@ def query_time_series(
           end_time=end_time.to_timestamp_pb2(),
       ),
       page_size=page_size,
-      view=view,
+      view=monitoring_types.ListTimeSeriesRequest.TimeSeriesView.FULL,
   )
+
+  if view:
+    request.view = view
 
   if aggregation:
     request.aggregation = aggregation
@@ -142,8 +146,8 @@ def query_log_entries(
       Defaults to descending timestamp.
     max_results: Optional. The maximum number of results to return overall.
     page_size: The maximum number of results to return per page.
-      The API's default is 50, we use 500 to decrease the total number of requests
-      to avoid the quota issue.
+      The API's default is 50, we use 500 to decrease the total number of
+      requests to avoid the quota issue.
     log_enable: Whether to enable logging. Defaults to False.
 
   Returns:
