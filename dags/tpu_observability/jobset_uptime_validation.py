@@ -150,33 +150,30 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           job_apply_time=apply_time,
       )
 
-      # clean_up_workload = jobset.end_workload.override(
-      #     task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
-      # )(
-      #     node_pool=cluster_info,
-      #     jobset_name=jobset_config.jobset_name,
-      #     namespace=jobset_config.namespace,
-      # ).as_teardown(
-      #     setups=apply_time
-      # )
+      clean_up_workload = jobset.end_workload.override(
+          task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
+      )(
+          node_pool=cluster_info,
+          jobset_name=jobset_config.jobset_name,
+          namespace=jobset_config.namespace,
+      ).as_teardown(
+          setups=apply_time
+      )
 
-      wait_for_uptime_fail = jobset.wait_for_jobset_uptime_increasing.override(
-          task_id="wait_for_uptime_fail"
+      check_no_uptime = jobset.wait_for_jobset_uptime_increasing.override(
+          task_id="check_no_uptime"
       )(
           node_pool=cluster_info,
           jobset_name=jobset_config.jobset_name,
           job_apply_time=datetime.datetime.now(datetime.timezone.utc),
-          timeout=300,
-          soft_fail=True,
-          # If no data appears within 5 mins, skip this task
-          # without failing the entire DAG.
+          expect_no_data=True,
       )
 
-      # cleanup_node_pool = node_pool.delete.override(
-      #     task_id="cleanup_node_pool", trigger_rule=TriggerRule.ALL_DONE
-      # )(node_pool=cluster_info).as_teardown(
-      #     setups=create_node_pool,
-      # )
+      cleanup_node_pool = node_pool.delete.override(
+          task_id="cleanup_node_pool", trigger_rule=TriggerRule.ALL_DONE
+      )(node_pool=cluster_info).as_teardown(
+          setups=create_node_pool,
+      )
 
       # Airflow uses >> for task chaining, which is pointless for pylint.
       # pylint: disable=pointless-statement
@@ -186,8 +183,8 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           >> active_pods
           >> wait_for_job_start
           >> wait_for_uptime
-          # >> clean_up_workload
-          >> wait_for_uptime_fail
-          # >> cleanup_node_pool
+          >> clean_up_workload
+          >> check_no_uptime
+          >> cleanup_node_pool
       )
       # pylint: enable=pointless-statement
