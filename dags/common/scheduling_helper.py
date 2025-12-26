@@ -81,7 +81,18 @@ class SchedulingHelper:
       dag_id: str,
       day_of_week: DayOfWeek = DayOfWeek.ALL,
   ) -> str:
-    """ """
+    """
+    Arranges the schedule time for a given DAG in a cluster.
+    Args:
+      cluster: The XPK cluster configuration.
+      dag_id: The DAG ID.
+      day_of_week: The days of the week to schedule the DAG.
+    Returns:
+      A cron expression string representing the schedule time.
+    Raises:
+      ValueError: If the cluster or DAG ID is not found in the registry, or if
+        the schedule exceeds a 24-hour window.
+    """
     if cluster not in cls.registry:
       raise ValueError(f"{cluster.name} is not found in the registry")
 
