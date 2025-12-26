@@ -592,16 +592,16 @@ def wait_for_jobset_uptime_increasing(
     node_pool: node_pool.Info,
     jobset_name: str,
     job_apply_time: datetime.datetime,
+    expect_no_data: bool = False,
     **context,
 ):
   """Waits for the JobSet's uptime metric to show an increasing trend."""
 
-  current_task_timeout = context["ti"].task.timeout
   now = datetime.datetime.now(datetime.timezone.utc)
   start_dt = job_apply_time
   end_dt = min(
       now,
-      job_apply_time + datetime.timedelta(minutes=current_task_timeout / 60),
+      job_apply_time + datetime.timedelta(minutes=60),
   )
 
   metric_type = "kubernetes.io/jobset/uptime"
@@ -626,6 +626,11 @@ def wait_for_jobset_uptime_increasing(
     logging.info(
         f"Uptime data for '{jobset_name}' is not available yet. Waiting..."
     )
+    if expect_no_data:
+      logging.info(
+          f"Expected no uptime data for '{jobset_name}', and none was found. Returning True."
+      )
+      return True
     return False
 
   if not time_series_data[0].points:
@@ -649,13 +654,19 @@ def wait_for_jobset_uptime_increasing(
   if len(sorted_points) >= 2:
     latest_val = sorted_points[0].value.double_value
     prev_val = sorted_points[1].value.double_value
+
     if latest_val > prev_val:
       logging.info(
           f"Trend Verified: Uptime increased from {prev_val} to {latest_val}"
       )
+      return True
     else:
       logging.info(
           f"Uptime plateaued at {latest_val}, waiting for next point..."
       )
-
-  logging.info("Only one data point found, waiting for more to verify trend.")
+      return False
+  else:
+    logging.info(
+        f"Found {len(sorted_points)} data point(s), need 2 to verify trend."
+    )
+    return False
