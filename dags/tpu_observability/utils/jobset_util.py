@@ -392,9 +392,7 @@ def run_workload(
 
 
 @task
-def end_workload(
-    node_pool: node_pool_info, jobset_name: str, namespace: str
-):
+def end_workload(node_pool: node_pool_info, jobset_name: str, namespace: str):
   """
   Deletes all JobSets from the GKE cluster to clean up resources.
 
@@ -422,9 +420,7 @@ def end_workload(
 
 
 @task
-def get_active_pods(
-    node_pool: node_pool_info, namespace: str
-) -> list[str]:
+def get_active_pods(node_pool: node_pool_info, namespace: str) -> list[str]:
   """
   Deletes all JobSets from the GKE cluster to clean up resources.
 
