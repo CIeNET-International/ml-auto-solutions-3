@@ -577,3 +577,88 @@ def wait_for_jobset_status_occurrence(
 def wait_for_all_pods_running(num_pods: int, node_pool: node_pool.Info):
   num_running = len(get_running_pods(node_pool=node_pool, namespace="default"))
   return num_running == num_pods
+
+
+@task.sensor(poke_interval=30, timeout=3600, mode="reschedule")
+def wait_for_jobset_uptime_increasing(
+    node_pool: node_pool.Info,
+    jobset_name: str,
+    job_apply_time: datetime.datetime,
+    expect_no_data: bool = False,
+    **context,
+):
+  """Waits for the JobSet's uptime metric to show an increasing trend."""
+
+  now = datetime.datetime.now(datetime.timezone.utc)
+  start_dt = job_apply_time
+  end_dt = min(
+      now,
+      job_apply_time + datetime.timedelta(minutes=60),
+  )
+
+  metric_type = "kubernetes.io/jobset/uptime"
+  filter_string = [
+      f'metric.type="{metric_type}"',
+      f'resource.labels.project_id = "{node_pool.project_id}"',
+      f'resource.labels.cluster_name = "{node_pool.cluster_name}"',
+      f'resource.labels.entity_name = "{jobset_name}"',
+  ]
+
+  time_series_data = query_time_series(
+      project_id=node_pool.project_id,
+      filter_str=" AND ".join(filter_string),
+      start_time=TimeUtil.from_datetime(start_dt),
+      end_time=TimeUtil.from_datetime(end_dt),
+      view=types.ListTimeSeriesRequest.TimeSeriesView.FULL,
+      log_enable=True,
+  )
+  logging.info("Uptime time series data: %s", time_series_data)
+
+  if not time_series_data or len(time_series_data) == 0:
+    logging.info(
+        f"Uptime data for '{jobset_name}' is not available yet. Waiting..."
+    )
+    if expect_no_data:
+      logging.info(
+          f"Expected no uptime data for '{jobset_name}', and none was found. Returning True."
+      )
+      return True
+    return False
+
+  if not time_series_data[0].points:
+    logging.info(
+        f"Time series exists but has no points yet for '{jobset_name}'. Waiting..."
+    )
+    return False
+
+  if len(time_series_data[0].points) < 2:
+    logging.info(
+        f"Found {len(time_series_data[0].points)} data point(s), need at least 2 to verify trend. Waiting..."
+    )
+    return False
+
+  sorted_points = sorted(
+      time_series_data[0].points,
+      key=lambda p: p.interval.end_time.timestamp(),
+      reverse=True,
+  )
+
+  if len(sorted_points) >= 2:
+    latest_val = sorted_points[0].value.double_value
+    prev_val = sorted_points[1].value.double_value
+
+    if latest_val > prev_val:
+      logging.info(
+          f"Trend Verified: Uptime increased from {prev_val} to {latest_val}"
+      )
+      return True
+    else:
+      logging.info(
+          f"Uptime plateaued at {latest_val}, waiting for next point..."
+      )
+      return False
+  else:
+    logging.info(
+        f"Found {len(sorted_points)} data point(s), need 2 to verify trend."
+    )
+    return False
