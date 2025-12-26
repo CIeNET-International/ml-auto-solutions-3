@@ -108,7 +108,12 @@ class SchedulingHelper:
 
       offset += dag.dag_run_timeout + cls.DEFAULT_MARGIN
       if offset >= dt.timedelta(hours=24):
-        raise ValueError(f"Schedule exceeds 24 hours window; offset={offset}")
+        raise ValueError(
+            f"Schedule exceeds 24 hours window; "
+            f"offset={offset}; "
+            f"dag_id={dag.dag_id}; "
+            "adjust the DEFAULT_MARGIN or dag_run_timeout accordingly."
+        )
 
 
 if __name__ == "__main__":
