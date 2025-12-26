@@ -14,15 +14,14 @@
 
 """A DAG to test jobset uptime metric."""
 
-from dataclasses import replace
 import datetime
 
 from airflow import models
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
-from dags.common.vm_resource import Region, Zone
-from dags.tpu_observability.configs.common import MachineConfigMap
+from dags import composer_env
+from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_PATH
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils.jobset_util import JobSet, Workload
@@ -73,29 +72,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 ) as dag:
   for machine in MachineConfigMap:
     config = machine.value
-    cluster_info = node_pool.Info(
-        project_id=models.Variable.get(
-            "TFV_PROJECT_ID", default_var="cienet-cmcs"
-        ),
-        cluster_name=models.Variable.get(
-            "TFV_CLUSTER_NAME", default_var="tony-test"
-        ),
-        node_pool_name=models.Variable.get(
-            "TFV_NODE_POOL_NAME", default_var="jobset-uptime-validation-v6e"
-        ),
-        region=models.Variable.get(
-            "TFV_REGION", default_var=Region.US_CENTRAL1.value
-        ),
-        location=models.Variable.get(
-            "TFV_LOCATION", default_var=Region.US_CENTRAL1.value
-        ),
-        node_locations=models.Variable.get(
-            "TFV_NODE_LOCATIONS", default_var=Zone.US_CENTRAL1_B.value
-        ),
-        num_nodes=models.Variable.get("TFV_NUM_NODES", default_var=4),
-        machine_type=config.machine_version.value,
-        tpu_topology=config.tpu_topology,
-    )
 
     jobset_config = JobSet(
         jobset_name="uptime-validation-v6e-workload",
@@ -120,9 +96,18 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     with TaskGroup(  # pylint: disable=unexpected-keyword-arg
         group_id=f"v{config.tpu_version.value}"
     ):
+      cluster_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
+          task_id="build_node_pool_info_from_gcs_yaml"
+      )(
+          gcs_path=GCS_CONFIG_PATH,
+          dag_name="jobset_uptime_validation",
+          is_prod=composer_env.is_prod_env(),
+          machine_type=config.machine_version.value,
+          tpu_topology=config.tpu_topology,
+      )
+
       create_node_pool = node_pool.create(
           node_pool=cluster_info,
-          reservation="cloudtpu-20251107233000-1246578561",
       )
 
       apply_time = jobset.run_workload(
@@ -178,7 +163,8 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       # Airflow uses >> for task chaining, which is pointless for pylint.
       # pylint: disable=pointless-statement
       (
-          create_node_pool
+          cluster_info
+          >> create_node_pool
           >> apply_time
           >> active_pods
           >> wait_for_job_start
