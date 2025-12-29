@@ -451,13 +451,17 @@ def wait_for_status(
       node_pool.node_pool_name,
       status.name,
       elapsed_str,
-      ti.try_number
+      ti.try_number,
   )
 
   latest_status = _query_status_metric(node_pool)
   if latest_status == status:
-      logging.info("Success! Node pool reached status '%s' in %s.", status.name, elapsed_str)
-      return True
+    logging.info(
+        "Success! Node pool reached status '%s' in %s.",
+        status.name,
+        elapsed_str,
+    )
+    return True
   logging.info("Still in status '%s'. Rescheduling...", latest_status.name)
   return False
 
@@ -556,7 +560,7 @@ def wait_for_availability(
         "Checking availability for '%s' | No records yet | Elapsed: %s | Attempt: %s",
         node_pool.node_pool_name,
         elapsed_str,
-        ti.try_number
+        ti.try_number,
     )
     return False
 
@@ -569,10 +573,14 @@ def wait_for_availability(
       availability,
       state,
       elapsed_str,
-      ti.try_number
+      ti.try_number,
   )
   if availability == state:
-    logging.info("Success! Node pool availability reached '%s' in %s.", state, elapsed_str)
+    logging.info(
+        "Success! Node pool availability reached '%s' in %s.",
+        state,
+        elapsed_str,
+    )
     return True
 
   return False

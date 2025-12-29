@@ -480,7 +480,11 @@ def wait_for_jobset_started(
   duration = datetime.datetime.now(datetime.timezone.utc) - dag_run.start_date
   elapsed_str = f"{int(duration.total_seconds() // 60)}m {int(duration.total_seconds() % 60)}s"
 
-  logging.info("Checking TPU utilization for job start | Elapsed: %s | Attempt: %s", elapsed_str, ti.try_number)
+  logging.info(
+      "Checking TPU utilization for job start | Elapsed: %s | Attempt: %s",
+      elapsed_str,
+      ti.try_number,
+  )
 
   end_time_datatime = job_apply_time.to_datetime() + datetime.timedelta(
       minutes=10
@@ -529,7 +533,9 @@ def wait_for_jobset_started(
 
 
 @task.sensor(poke_interval=60, timeout=3600, mode="reschedule")
-def wait_for_jobset_ttr_to_be_found(node_pool: node_pool_info, **context) -> bool:
+def wait_for_jobset_ttr_to_be_found(
+    node_pool: node_pool_info, **context
+) -> bool:
   """
   Polls the jobset time_between_interruptions metric.
 
@@ -549,7 +555,11 @@ def wait_for_jobset_ttr_to_be_found(node_pool: node_pool_info, **context) -> boo
   duration = datetime.datetime.now(datetime.timezone.utc) - dag_run.start_date
   elapsed_str = f"{int(duration.total_seconds() // 60)}m {int(duration.total_seconds() % 60)}s"
 
-  logging.info("Polling JobSet TTR metric | Elapsed: %s | Attempt: %s", elapsed_str, ti.try_number)
+  logging.info(
+      "Polling JobSet TTR metric | Elapsed: %s | Attempt: %s",
+      elapsed_str,
+      ti.try_number,
+  )
 
   now = datetime.datetime.now()
 
@@ -571,7 +581,10 @@ def wait_for_jobset_ttr_to_be_found(node_pool: node_pool_info, **context) -> boo
 
 @task.sensor(poke_interval=30, timeout=600, mode="reschedule")
 def wait_for_jobset_status_occurrence(
-    replica_type: str, job_name: str, node_pool: node_pool_info, **context,
+    replica_type: str,
+    job_name: str,
+    node_pool: node_pool_info,
+    **context,
 ):
   """
   A sensor which checks if are any jobset replicas in a status type.
@@ -590,7 +603,9 @@ def wait_for_jobset_status_occurrence(
 
   logging.info(
       "Checking for number of replicas of type: %s | Elapsed: %s | Attempt: %s",
-      replica_type, elapsed_str, ti.try_number
+      replica_type,
+      elapsed_str,
+      ti.try_number,
   )
   ready_replicas = get_replica_num(
       replica_type=replica_type,
@@ -601,12 +616,16 @@ def wait_for_jobset_status_occurrence(
 
 
 @task.sensor(poke_interval=30, timeout=600, mode="reschedule")
-def wait_for_all_pods_running(num_pods: int, node_pool: node_pool_info, **context):
+def wait_for_all_pods_running(
+    num_pods: int, node_pool: node_pool_info, **context
+):
   ti = context["ti"]
   dag_run = context["dag_run"]
   duration = datetime.datetime.now(datetime.timezone.utc) - dag_run.start_date
   elapsed_str = f"{int(duration.total_seconds() // 60)}m {int(duration.total_seconds() % 60)}s"
 
-  logging.info("Waiting for %s pods to be Running | Elapsed: %s", num_pods, elapsed_str)
+  logging.info(
+      "Waiting for %s pods to be Running | Elapsed: %s", num_pods, elapsed_str
+  )
   num_running = len(get_running_pods(node_pool=node_pool, namespace="default"))
   return num_running == num_pods
