@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""SchedulingHelper module for arranging DAG schedules in XPK clusters."""
+
 import datetime as dt
 import enum
 
