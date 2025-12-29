@@ -433,17 +433,33 @@ def wait_for_status(
   Returns:
       A boolean indicating whether the node pool has reached the target status.
   """
-  timeout = context["task"].timeout
+  ti = context["ti"]
+  dag_run = context["dag_run"]
+
+  first_start_time = dag_run.start_date
+
+  now_utc = datetime.datetime.now(datetime.timezone.utc)
+
+  duration = now_utc - first_start_time
+
+  total_seconds = int(duration.total_seconds())
+  mins, secs = divmod(total_seconds, 60)
+  elapsed_str = f"{mins}m {secs}s"
+
   logging.info(
-      "Waiting for node pool '%s' status to become '%s' within %s"
-      " seconds...",
+      "Checking node pool '%s' | Target: '%s' | Elapsed: %s | Attempt: %s",
       node_pool.node_pool_name,
       status.name,
-      timeout,
+      elapsed_str,
+      ti.try_number
   )
 
   latest_status = _query_status_metric(node_pool)
-  return latest_status == status
+  if latest_status == status:
+      logging.info("Success! Node pool reached status '%s' in %s.", status.name, elapsed_str)
+      return True
+  logging.info("Still in status '%s'. Rescheduling...", latest_status.name)
+  return False
 
 
 @task
@@ -489,6 +505,16 @@ def wait_for_availability(
       context: The Airflow context dictionary, which includes task metadata.
 
   """
+  ti = context["ti"]
+  dag_run = context["dag_run"]
+  first_start_time = dag_run.start_date
+  now_utc = datetime.datetime.now(datetime.timezone.utc)
+  duration = now_utc - first_start_time
+
+  total_seconds = int(duration.total_seconds())
+  mins, secs = divmod(total_seconds, 60)
+  elapsed_str = f"{mins}m {secs}s"
+
   now = datetime.datetime.now()
   # Metrics are sampled every 60s and stored in the GCP backend,
   # but it may take up to 2 minute for the metric data to become
@@ -526,19 +552,30 @@ def wait_for_availability(
         records.append((end_ts_dt, point.value.bool_value))
 
   if not records:
-    logging.info("No records returned")
+    logging.info(
+        "Checking availability for '%s' | No records yet | Elapsed: %s | Attempt: %s",
+        node_pool.node_pool_name,
+        elapsed_str,
+        ti.try_number
+    )
     return False
 
   _, state = max(records, key=lambda x: x[0])
 
   timeout = context["task"].timeout
   logging.info(
-      "Waiting for node pool '%s' to become '%s' within %s seconds...",
+      "Checking availability for '%s' | Expected: %s | Current: %s | Elapsed: %s | Attempt: %s",
       node_pool.node_pool_name,
       availability,
-      timeout,
+      state,
+      elapsed_str,
+      ti.try_number
   )
-  return availability == state
+  if availability == state:
+    logging.info("Success! Node pool availability reached '%s' in %s.", state, elapsed_str)
+    return True
+
+  return False
 
 
 @task.sensor(poke_interval=30, timeout=3600, mode="reschedule")
