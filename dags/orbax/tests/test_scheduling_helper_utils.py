@@ -8,6 +8,7 @@ from absl.testing import absltest
 from dags.orbax.tests.temp_scheduling_helper import TempSchedulingHelper
 from dags.common.vm_resource import XpkClusters
 
+
 class TestSampleSchedulingHelper(absltest.TestCase):
   """
   Test cases for the SchedulingHelper class.
@@ -36,8 +37,8 @@ class TestSampleSchedulingHelper(absltest.TestCase):
       )
 
     self.assertIn(
-      f"{XpkClusters.TPU_V5E_256_CLUSTER.name} is not found in the registry",
-      str(ctx.exception),
+        f"{XpkClusters.TPU_V5E_256_CLUSTER.name} is not found in the registry",
+        str(ctx.exception),
     )
 
   def test_scheduling_helper_with_unregistered_dag_id(self):
@@ -51,8 +52,8 @@ class TestSampleSchedulingHelper(absltest.TestCase):
       )
 
     self.assertIn(
-      "nonexistent_dag_id is not found in the registry",
-      str(ctx.exception),
+        "nonexistent_dag_id is not found in the registry",
+        str(ctx.exception),
     )
 
   def test_scheduling_helper_with_overtime_dag(self):
