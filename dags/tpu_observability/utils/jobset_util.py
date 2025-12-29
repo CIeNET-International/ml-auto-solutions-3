@@ -23,7 +23,6 @@ import random
 import string
 import tempfile
 import textwrap
-import time
 from typing import Final
 
 from airflow.decorators import task
@@ -621,6 +620,7 @@ def wait_for_jobset_uptime(
     jobset_name: str,
     job_apply_time: TimeUtil = None,
     expect_no_data: bool = False,
+    **context,
 ):
   """
   Waits for the JobSet's uptime metric.
@@ -632,24 +632,27 @@ def wait_for_jobset_uptime(
     expect_no_data: If True, the sensor checks for the absence of uptime data
       instead of its presence.
   """
-  # CASE 1: Verify NO data exists for a period
-  if expect_no_data:
-    execution_time = datetime.datetime.now(datetime.timezone.utc)
-    time.sleep(300)
-    data = query_uptime_metrics(
-        node_pool,
-        jobset_name,
-        execution_time,
-        datetime.datetime.now(datetime.timezone.utc),
-    )
+  ti = context["ti"]
+  now = datetime.datetime.now(datetime.timezone.utc)
 
-    if not data or len(data) == 0:
-      logging.info(f"Verified: No uptime data for '{jobset_name}' found.")
+  # CASE 1: Verify NO data exists after a stability period
+  if expect_no_data:
+    observation_start = ti.start_date
+    elapsed_seconds = (now - observation_start).total_seconds()
+    data = query_uptime_metrics(node_pool, jobset_name, observation_start, now)
+    has_data = data and len(data) > 0
+
+    if not has_data:
+      logging.info(f"Verified: No data found for '{jobset_name}'. Success.")
       return True
-    logging.error(
-        f"Failure: Data found for '{jobset_name}' despite expecting none."
-    )
-    return False
+
+    if elapsed_seconds < 300:
+      logging.info("Data still exists within 300s grace period. Retrying...")
+      return False
+    else:
+      raise AirflowFailException(
+          f"Failure: Data for '{jobset_name}' persisted for more than 300 seconds."
+      )
 
   # CASE 2: Wait until data appears
   else:
