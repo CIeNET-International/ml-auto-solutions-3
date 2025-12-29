@@ -1,8 +1,8 @@
 # This test file should be run from the project root directory using:
-# python -m unittest discover dags/orbax/tests -p "test_scheduling_helper_utils.py"
+# python -m unittest discover dags/orbax/tests -p "scheduling_helper_utils_test.py"
 #
 # Other methods that might work:
-# 1. Specific test: python -m unittest dags.orbax.tests.test_scheduling_helper_utils.TestSampleSchedulingHelper.test_scheduling_helper_success
+# 1. Specific test: python -m unittest dags.orbax.tests.scheduling_helper_utils_test.TestSampleSchedulingHelper.test_scheduling_helper_success
 
 from absl.testing import absltest
 from dags.orbax.tests.temp_scheduling_helper import TempSchedulingHelper
