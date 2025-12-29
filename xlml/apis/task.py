@@ -282,11 +282,7 @@ class AXLearnTask(BaseTask):
       flow1 = run_workload
       flow2 = wait_for_workload_start >> wait_for_workload_completion >> cleanup
 
-      _ = (
-          update_image_tag_cmd
-          >> gen_cmds
-          >> [flow1, flow2]
-      )
+      _ = update_image_tag_cmd >> gen_cmds >> [flow1, flow2]
 
     return group
 

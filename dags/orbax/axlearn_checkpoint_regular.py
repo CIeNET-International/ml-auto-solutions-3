@@ -160,10 +160,4 @@ with models.DAG(
             )
         )
 
-        _ = (
-            workload_id
-            >> start_time
-            >> run
-            >> end_time
-            >> validate_steps
-        )
+        _ = workload_id >> start_time >> run >> end_time >> validate_steps

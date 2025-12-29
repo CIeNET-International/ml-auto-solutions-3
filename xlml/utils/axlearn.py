@@ -277,4 +277,3 @@ def generate_axlearn_cli_command(
       axlearn_cli,
   ])
   # fmt: on
-

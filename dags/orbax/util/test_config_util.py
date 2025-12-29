@@ -272,7 +272,7 @@ class TestConfig(TestConfigAbstract):
     """Rounds a size up to the nearest multiple of the page size."""
     return int(math.ceil(size / page_size) * page_size)
 
-# TODO: duplicated with get_axlearn_tpu_config
+
 class TestConfigAXLearn(TestConfigAbstract):
   """
   Holds the general configuration for an AXLearn checkpointing test.
@@ -368,29 +368,32 @@ class TestConfigAXLearn(TestConfigAbstract):
       composer_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
   ):
     return task.AXLearnTask(
-      test_cfg=test_config.TpuGkeTest(
-          accelerator=test_config.Tpu(
-              version=self.cluster.device_version,
-              cores=self.cluster.core_count,
-          ),
-          test_name=f"{self.short_id}-{test_suffix}",
-          cluster_name=self.cluster.name,
-          num_slices=num_slices,
-          task_owner=test_owner,
-      ),
-      gcp_cfg=gcp_config.GCPConfig(
-          project_name=self.cluster.project,
-          zone=self.cluster.zone,
-          dataset_name=dataset_name,
-          dataset_project=dataset_project,
-          composer_project=composer_project,
-      ),
-      workload_provision_timeout=workload_provision_timeout,
-      workload_run_timeout=workload_run_timeout,
-      workload_post_test_timeout=workload_post_test_timeout,
-      image_name=docker_image_name,
-      image_repo=docker_image_repo,
-      image_full_url=docker_image_full_url,
+        test_cfg=test_config.TpuGkeTest(
+            accelerator=test_config.Tpu(
+                version=self.cluster.device_version,
+                cores=self.cluster.core_count,
+            ),
+            test_name=f"{self.short_id}-{test_suffix}",
+            cluster_name=self.cluster.name,
+            docker_image=docker_image_full_url,
+            set_up_cmds=None,
+            run_model_cmds=None,
+            num_slices=num_slices,
+            task_owner=test_owner,
+        ),
+        gcp_cfg=gcp_config.GCPConfig(
+            project_name=self.cluster.project,
+            zone=self.cluster.zone,
+            dataset_name=dataset_name,
+            dataset_project=dataset_project,
+            composer_project=composer_project,
+        ),
+        workload_provision_timeout=workload_provision_timeout,
+        workload_run_timeout=workload_run_timeout,
+        workload_post_test_timeout=workload_post_test_timeout,
+        image_name=docker_image_name,
+        image_repo=docker_image_repo,
+        image_full_url=docker_image_full_url,
     )
 
   def generate_step_to_validate(self) -> list[int]:
