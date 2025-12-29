@@ -45,14 +45,15 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     ],
     description=(
         "This DAG tests the jobset uptime metric by deploying a workload on a "
-        "TPU v6e-16 node pool and verifying that the metric increases as expected."
+        "TPU v6e-16 node pool and verifying that "
+        "the metric behaves as expected."
     ),
     doc_md="""
       # JobSet Uptime Metric Test Using TPU v6e-16 Node Pool
 
       ### Description
       This DAG automates the process of creating a TPU v6e-16 node pool, launching
-      a jobset, and monitoring the jobset uptime metric to ensure it increments
+      a jobset, and monitoring the jobset uptime metric to ensure it behaves
       correctly. It also includes a negative test case to verify metric behavior
       over invalid time ranges. Finally, the DAG cleans up all created resources.
 
@@ -62,34 +63,34 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       ### Procedures
       1. **Provisioning**: Creates a TPU v6e-16 node pool with a specified reservation.
       2. **Deployment**: Applies a JobSet workload and waits for Pods to become active.
-      3. **Metric Validation**: Polls the jobset uptime metric to confirm it is
-         increasing from the point of job application.
+      3. **Metric Validation**: Polls the jobset uptime metric to confirm
+         it behaves as expected.
       4. **Negative Testing**: Attempts to verify uptime against a current (future)
          timestamp to ensure the sensor correctly handles out-of-bounds queries.
       5. **Cleanup**: Deletes both the JobSet workload and the node pool to prevent
          resource leakage.
       """,
 ) as dag:
+  jobset_config = JobSet(
+      jobset_name="uptime-validation-v6e-workload",
+      namespace="default",
+      max_restarts=5,
+      replicated_job_name="tpu-job-slice",
+      replicas=1,
+      backoff_limit=0,
+      completions=4,
+      parallelism=4,
+      tpu_accelerator_type="tpu-v6e-slice",
+      tpu_topology="4x4",
+      container_name="jax-tpu-worker",
+      image="asia-northeast1-docker.pkg.dev/cienet-cmcs/"
+      "yuna-docker/tpu-info:v0.5.1",
+      tpu_cores_per_pod=4,
+  )
+  workload_script = Workload.JAX_TPU_BENCHMARK
+
   for machine in MachineConfigMap:
     config = machine.value
-
-    jobset_config = JobSet(
-        jobset_name="uptime-validation-v6e-workload",
-        namespace="default",
-        max_restarts=5,
-        replicated_job_name="tpu-job-slice",
-        replicas=1,
-        backoff_limit=0,
-        completions=4,
-        parallelism=4,
-        tpu_accelerator_type="tpu-v6e-slice",
-        tpu_topology="4x4",
-        container_name="jax-tpu-worker",
-        image="asia-northeast1-docker.pkg.dev/cienet-cmcs/yuna-docker/tpu-info:v0.5.1",
-        tpu_cores_per_pod=4,
-    )
-
-    workload_script = Workload.JAX_TPU_BENCHMARK
 
     # Keyword arguments are generated dynamically at runtime (pylint does not
     # know this signature).
@@ -150,7 +151,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       )(
           node_pool=cluster_info,
           jobset_name=jobset_config.jobset_name,
-          job_apply_time=datetime.datetime.now(datetime.timezone.utc),
           expect_no_data=True,
       )
 

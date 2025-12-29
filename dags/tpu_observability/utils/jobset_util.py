@@ -24,6 +24,7 @@ import random
 import string
 import tempfile
 import textwrap
+import time
 from typing import Final
 
 from airflow.decorators import task
@@ -748,28 +749,24 @@ def wait_for_all_pods_running(node_pool: node_pool_info, jobset_config: JobSet):
   return num_running == num_pods
 
 
-@task.sensor(poke_interval=30, timeout=3600, mode="reschedule")
-def wait_for_jobset_uptime(
-    node_pool: node_pool.Info,
+def query_uptime_metrics(
+    node_pool: node_pool_info,
     jobset_name: str,
-    job_apply_time: datetime.datetime,
-    expect_no_data: bool = False,
+    start_time: datetime.datetime,
+    end_time: datetime.datetime,
 ):
-  """Waits for the JobSet's uptime metric."""
+  """Queries the JobSet's uptime metric from Cloud Monitoring."""
+  start_time = TimeUtil.from_datetime(start_time)
+  end_time = TimeUtil.from_datetime(end_time)
 
-  end_time_datatime = job_apply_time + datetime.timedelta(minutes=10)
-  start_time = TimeUtil.from_datetime(job_apply_time)
-  end_time = TimeUtil.from_datetime(end_time_datatime)
-
-  metric_type = "kubernetes.io/jobset/uptime"
   filter_string = [
-      f'metric.type="{metric_type}"',
+      'metric.type="kubernetes.io/jobset/uptime"',
       f'resource.labels.project_id = "{node_pool.project_id}"',
       f'resource.labels.cluster_name = "{node_pool.cluster_name}"',
       f'resource.labels.entity_name = "{jobset_name}"',
   ]
 
-  time_series_data = query_time_series(
+  return query_time_series(
       project_id=node_pool.project_id,
       filter_str=" AND ".join(filter_string),
       start_time=start_time,
@@ -777,15 +774,54 @@ def wait_for_jobset_uptime(
       view=types.ListTimeSeriesRequest.TimeSeriesView.FULL,
       log_enable=True,
   )
-  logging.info("Uptime time series data: %s", time_series_data)
 
-  if not time_series_data or len(time_series_data) == 0:
-    logging.info(
-        f"Uptime data for '{jobset_name}' is not available yet. Waiting..."
+
+@task.sensor(poke_interval=30, timeout=3600, mode="reschedule")
+def wait_for_jobset_uptime(
+    node_pool: node_pool_info,
+    jobset_name: str,
+    job_apply_time: TimeUtil = None,
+    expect_no_data: bool = False,
+):
+  """
+  Waits for the JobSet's uptime metric.
+  Args:
+    node_pool: An Info dataclass instance containing project and cluster
+      details.
+    jobset_name: The name of the JobSet whose uptime metric is being monitored.
+    job_apply_time: The datetime object of the time the job was applied.
+    expect_no_data: If True, the sensor checks for the absence of uptime data
+      instead of its presence.
+  """
+  # CASE 1: Verify NO data exists for a period
+  if expect_no_data:
+    execution_time = datetime.datetime.now(datetime.timezone.utc)
+    time.sleep(300)
+    data = query_uptime_metrics(
+        node_pool,
+        jobset_name,
+        execution_time,
+        datetime.datetime.now(datetime.timezone.utc),
     )
-    if expect_no_data:
-      logging.info(
-          f"Expected no uptime data for '{jobset_name}', and none was found."
-      )
+
+    if not data or len(data) == 0:
+      logging.info(f"Verified: No uptime data for '{jobset_name}' found.")
       return True
+    logging.error(
+        f"Failure: Data found for '{jobset_name}' despite expecting none."
+    )
+    return False
+
+  # CASE 2: Wait until data appears
+  else:
+    start_time = job_apply_time.to_datetime()
+    end_time = start_time + datetime.timedelta(minutes=60)
+    data = query_uptime_metrics(node_pool, jobset_name, start_time, end_time)
+
+    if data and len(data) > 0:
+      logging.info(f"Success: Uptime data for '{jobset_name}' detected.")
+      return True
+    logging.info(
+        f"Data not available yet for '{jobset_name}'. Poking again later..."
+    )
     return False
