@@ -145,8 +145,8 @@ def start_cli_in_kpo(
 
   with TaskGroup(group_id="start_cli_in_kpo") as group:
     # The default worker pod's kube_config may contain leftover
-    # contexts/configs from previous DAGs (e.g., after `gcloud container
-    # clusters get-credentials`) that point to a different GKE cluster.
+    # contexts/configs from other tasks (e.g., after `gcloud container clusters
+    # get-credentials`) that point to a different GKE cluster.
     # Reset it so kubectl/gcloud—and the KPO we launch—target the Composer
     # cluster and use the correct Workload Identity–backed SA.
     reset_kube_config_task = reset_kube_config.override(owner=task_owner)()
@@ -236,7 +236,6 @@ def generate_axlearn_cli_command(
   axlearn_cli = (
       f"axlearn gcp launch run --cluster={cluster_name} "
       f"--runner_name gke_tpu_single "
-      # f"--user_id=axlearn_cli_kpo"
       f"--name={workload_id} "
       f"--instance_type={accelerator_type} "
       f"--max_tries=10 "
@@ -244,7 +243,6 @@ def generate_axlearn_cli_command(
       f"--bundler_spec=allow_dirty=True "
       f"--bundler_type=artifactregistry "
       f"--bundler_spec=image={docker_image_name} "
-      f"--bundler_spec=skip_bundle=True "  # TODO (only for test)
       f'-- "'
       f"ulimit -n 1048576; ulimit -c 0; "
       f"python3 -c 'import jax; jax.devices()'; "

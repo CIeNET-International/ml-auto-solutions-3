@@ -16,4 +16,4 @@ export PYTHONPATH=$PWD
 export XLMLTEST_CONFIGS=$PWD/dags/jsonnet/
 export CORES="$(nproc)"
 
-find dags -name 'axlearn_checkpoint_regular.py' |  xargs -n 1 -t python
+find dags -name '*.py' -print0 | xargs -0 -n 1 -P "${CORES}" -t python
