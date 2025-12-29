@@ -39,7 +39,7 @@ See: https://cloud.google.com/composer/docs/composer-2/use-kubernetes-pod-operat
 """
 # pylint: enable=line-too-long
 
-COMPOSER_KUBECONFIG_PATH = "/home/airflow/composer_kube_config"
+_COMPOSER_KUBECONFIG_PATH = "/home/airflow/composer_kube_config"
 
 
 @task(
@@ -62,7 +62,7 @@ def reset_kube_config() -> None:
   result = hook.run_command([
       "bash",
       "-c",
-      f"sudo chown -R airflow:airflow {COMPOSER_KUBECONFIG_PATH}",
+      f"sudo chown -R airflow:airflow {_COMPOSER_KUBECONFIG_PATH}",
       (
           f"gcloud container clusters get-credentials {cluster_name} "
           f"--region {region}  --project {project_id}"
@@ -155,7 +155,7 @@ def start_cli_in_kpo(
         task_id="run_axlearn-cli",
         name="axlearn-cli-kpo",
         namespace=_KPO_NAMESPACE,
-        config_file="/home/airflow/composer_kube_config",
+        config_file=_COMPOSER_KUBECONFIG_PATH,
         image=image_full_url,
         cmds=["bash", "-cx", start_axlearn_cli_command],
         labels={
