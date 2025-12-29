@@ -6,6 +6,7 @@ from dags.common.scheduling_helper import Dag
 from dags.common.scheduling_helper import XpkClusterConfig
 import datetime as dt
 
+
 class TempSchedulingHelper(SchedulingHelper):
   """
   A temporary SchedulingHelper class containing errors for testing purposes.
@@ -20,5 +21,3 @@ class TempSchedulingHelper(SchedulingHelper):
           Dag("test_dag_5", dt.timedelta(minutes=360)),
       ],
   }
-
-
