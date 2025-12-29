@@ -113,6 +113,9 @@ with models.DAG(
           trainer_dir=test_config_util.DEFAULT_BUCKET_AXLEARN,
           data_dir="gs://axlearn-public/tensorflow_datasets",
           trace_steps=[40, 90, 140, 190],
+          workload_provision_timeout=RESERVE_TIME_FOR_PRE_WORKLOAD,
+          workload_run_timeout=RESERVE_TIME_FOR_WORKLOAD,
+          workload_post_test_timeout=RESERVE_TIME_FOR_POST_WORKLOAD,
       ),
   ]
   for mode, image in test_config_util.DOCKER_IMAGES_AXLEARN:
@@ -129,20 +132,12 @@ with models.DAG(
         run = axlearn_config.generate_axlearn_tpu_config(
             test_suffix="reg",
             test_owner=test_owner.CAMILO_Q,
-            workload_provision_timeout=RESERVE_TIME_FOR_PRE_WORKLOAD,
-            workload_run_timeout=RESERVE_TIME_FOR_WORKLOAD,
-            workload_post_test_timeout=RESERVE_TIME_FOR_POST_WORKLOAD,
             docker_image_name=image_name,
             docker_image_repo=image_repo,
             docker_image_full_url=image.value,
             num_slices=slice_num,
         ).run(
             workload_id=workload_id,
-            module=axlearn_config.module,
-            model_name=axlearn_config.model_config,
-            trainer_dir=axlearn_config.trainer_dir,
-            trace_steps=axlearn_config.trace_steps,
-            label=axlearn_config.label,
         )
 
         end_time = validation_util.generate_timestamp()

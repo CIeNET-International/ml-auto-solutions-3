@@ -39,6 +39,8 @@ See: https://cloud.google.com/composer/docs/composer-2/use-kubernetes-pod-operat
 """
 # pylint: enable=line-too-long
 
+COMPOSER_KUBECONFIG_PATH = "/home/airflow/composer_kube_config"
+
 
 @task(
     retry_delay=dt.timedelta(seconds=15),
@@ -60,7 +62,7 @@ def reset_kube_config() -> None:
   result = hook.run_command([
       "bash",
       "-c",
-      "sudo chown -R airflow:airflow /home/airflow/composer_kube_config",
+      f"sudo chown -R airflow:airflow {COMPOSER_KUBECONFIG_PATH}",
       (
           f"gcloud container clusters get-credentials {cluster_name} "
           f"--region {region}  --project {project_id}"
@@ -128,6 +130,7 @@ def start_cli_in_kpo(
       resource provisioning.
     workload_run_timeout: Timedelta object representing the maximum allowed
       execution time for the Airflow task.
+    image_full_url: The full URL of the Docker image.
 
   Returns:
     None. The task completes when readiness is observed.

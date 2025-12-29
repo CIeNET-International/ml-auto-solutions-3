@@ -162,7 +162,6 @@ class AXLearnTask(BaseTask):
   """
   This is a class to set up tasks for TPU/GPU AXLearn.
 
-  TODO:
   Attributes:
     test_cfg: Test configs to run on this TPU/GPU.
     gcp_cfg: Runtime TPU/GPU creation parameters.
@@ -175,6 +174,12 @@ class AXLearnTask(BaseTask):
     image_name: The name of the Docker image.
     image_repo: The repository path of the Docker image.
     image_full_url: The full URL of the Docker image.
+    module: The specific AXLearn module being tested.
+    model_name: The configuration file or string for the model.
+    trainer_dir: The base directory for trainer output.
+    trace_steps: A list of steps where XLA compiler will trace it.
+    label: A string used to categorize the workload, often indicating the
+      accelerator type (e.g., 'tpu-v5p') or test category.
   """
 
   test_cfg: Union[
@@ -190,20 +195,20 @@ class AXLearnTask(BaseTask):
   image_repo: str
   image_full_url: str
 
+  module: str
+  model_name: str
+  trainer_dir: str
+  trace_steps: str
+  label: str
+
   def run(
       self,
       workload_id: airflow.XComArg,
-      module: str,
-      model_name: str,
-      trainer_dir: str,
-      trace_steps: list[int],
-      label: str,
   ) -> DAGNode:
     """
     Run a test job within a docker image.
 
     Attributes:
-      test_configs: Configuration object containing parameters for the test.
       workload_id: A descriptive name for the test run, which is used to
         generate the unique workload ID.
 
@@ -230,12 +235,12 @@ class AXLearnTask(BaseTask):
           docker_image_repo=self.image_repo,
           docker_image_full_url=self.image_full_url,
           accelerator_type=f"tpu-{self.test_cfg.accelerator.name}",
-          module=module,
-          model_config=model_name,
-          trainer_dir=trainer_dir,
+          module=self.module,
+          model_config=self.model_name,
+          trainer_dir=self.trainer_dir,
           num_slices=self.test_cfg.num_slices,
-          trace_steps=trace_steps,
-          label=label,
+          trace_steps=self.trace_steps,
+          label=self.label,
       )
 
       run_workload = axlearn.start_cli_in_kpo(

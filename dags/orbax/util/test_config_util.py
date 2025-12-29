@@ -303,6 +303,9 @@ class TestConfigAXLearn(TestConfigAbstract):
       trainer_dir: str,
       data_dir: str,
       trace_steps: list[int],
+      workload_provision_timeout: datetime.timedelta,
+      workload_run_timeout: datetime.timedelta,
+      workload_post_test_timeout: datetime.timedelta,
   ):
     """Initializes the AXLearn test configurations.
 
@@ -319,6 +322,9 @@ class TestConfigAXLearn(TestConfigAbstract):
       trainer_dir: The base directory for trainer output.
       data_dir: The directory containing the training data.
       trace_steps: A list of steps where XLA compiler will trace it.
+      workload_provision_timeout: Timedelta object allowed for provisioning a workload.
+      workload_run_timeout: Timedelta object allowed for the actual workload execution.
+      workload_post_test_timeout: Timedelta object allowed for cleanup tasks after execution.
     """
 
     self.cluster = cluster
@@ -331,6 +337,9 @@ class TestConfigAXLearn(TestConfigAbstract):
     self.trainer_dir = trainer_dir
     self.data_dir = data_dir
     self.trace_steps = trace_steps
+    self.workload_provision_timeout = workload_provision_timeout
+    self.workload_run_timeout = workload_run_timeout
+    self.workload_post_test_timeout = workload_post_test_timeout
 
   def __str__(self) -> str:
     """Prints the attributes of the configuration object."""
@@ -356,16 +365,11 @@ class TestConfigAXLearn(TestConfigAbstract):
       self,
       test_suffix: str,
       test_owner: str,
-      workload_provision_timeout: datetime.timedelta,
-      workload_run_timeout: datetime.timedelta,
-      workload_post_test_timeout: datetime.timedelta,
       docker_image_name: str,
       docker_image_repo: str,
       docker_image_full_url: str,
       num_slices: int,
       dataset_name: metric_config.DatasetOption = metric_config.DatasetOption.XLML_DATASET,
-      dataset_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
-      composer_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
   ):
     return task.AXLearnTask(
         test_cfg=test_config.TpuGkeTest(
@@ -385,15 +389,18 @@ class TestConfigAXLearn(TestConfigAbstract):
             project_name=self.cluster.project,
             zone=self.cluster.zone,
             dataset_name=dataset_name,
-            dataset_project=dataset_project,
-            composer_project=composer_project,
         ),
-        workload_provision_timeout=workload_provision_timeout,
-        workload_run_timeout=workload_run_timeout,
-        workload_post_test_timeout=workload_post_test_timeout,
+        workload_provision_timeout=self.workload_provision_timeout,
+        workload_run_timeout=self.workload_run_timeout,
+        workload_post_test_timeout=self.workload_post_test_timeout,
         image_name=docker_image_name,
         image_repo=docker_image_repo,
         image_full_url=docker_image_full_url,
+        module=self.module,
+        model_name=self.model_config,
+        trainer_dir=self.trainer_dir,
+        trace_steps=self.trace_steps,
+        label=self.label,
     )
 
   def generate_step_to_validate(self) -> list[int]:
