@@ -31,7 +31,7 @@ from airflow.utils.trigger_rule import TriggerRule
 
 from dags import composer_env
 from dags.common.vm_resource import Zone, Region
-from dags.tpu_observability.configs.common import MachineConfigMap
+from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_PATH
 from dags.tpu_observability.tpu_info_metric import ALL_METRIC_STRATEGIES
 from dags.tpu_observability.tpu_info_metric import BaseMetricStrategy
 from dags.tpu_observability.utils import jobset_util as jobset
@@ -234,6 +234,8 @@ def summarize_results(
   )
 
 
+# Keyword arguments are generated dynamically at runtime (pylint does not
+# know this signature).
 with models.DAG(
     dag_id="tpu_info_metrics_verification",
     start_date=datetime.datetime(2025, 8, 15),
@@ -247,35 +249,13 @@ with models.DAG(
 ) as dag:
   for machine in MachineConfigMap:
     config = machine.value
-    cluster_name = "tpu-observability-automation"
-    cluster_name += "-prod" if composer_env.is_prod_env() else "-dev"
-    cluster_info = node_pool.Info(
-        project_id=models.Variable.get(
-            "TIM_PROJECT_ID", default_var="cienet-cmcs"
-        ),
-        cluster_name="yuna-auto-test",
-        node_pool_name=models.Variable.get(
-            "TIM_NODE_POOL_NAME", default_var="tpu-info-fromat-test-v6e-1"
-        ),
-        region=models.Variable.get(
-            "TIM_REGION", default_var=Region.US_CENTRAL1.value
-        ),
-        location=models.Variable.get(
-            "TIM_LOCATION", default_var=Region.US_CENTRAL1.value
-        ),
-        node_locations=models.Variable.get(
-            "TIM_NODE_LOCATIONS", default_var=Zone.US_CENTRAL1_B.value
-        ),
-        num_nodes=models.Variable.get("TIM_NUM_NODES", default_var=4),
-        machine_type=config.machine_version.value,
-        tpu_topology=config.tpu_topology,
-    )
-    cluster_info_2 = replace(
-        cluster_info,
-        node_pool_name=models.Variable.get(
-            "TIM_NODE_POOL_NAME", default_var="tpu-info-format-test-v6e-2"
-        ),
-    )
+
+    @task
+    def generate_second_node_pool_name(
+        node_pool_info: node_pool.Info,
+    ) -> str:
+      """Generates a second node pool name."""
+      return f"{node_pool_info.node_pool_name}-2"
 
     jobset_config = jobset.JobSet(
         jobset_name="tpu-info-v6e-workload",
@@ -296,13 +276,28 @@ with models.DAG(
     workload_script = jobset.Workload.JAX_TPU_BENCHMARK
 
     with TaskGroup(group_id=f"v{config.tpu_version.value}"):
+
+      cluster_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
+          task_id="build_node_pool_info_from_gcs_yaml"
+      )(
+          gcs_path=GCS_CONFIG_PATH,
+          dag_name="tpu_info_format_validation_dag",
+          is_prod=composer_env.is_prod_env(),
+          machine_type=config.machine_version.value,
+          tpu_topology=config.tpu_topology,
+      )
+
+      cluster_info_2 = node_pool.copy_node_pool_info_with_override(
+          info=cluster_info,
+          node_pool_name=generate_second_node_pool_name(cluster_info),
+      )
+
       with TaskGroup(group_id="create_node_pool") as create_node_pool:
         create_first_node_pool = node_pool.create.override(
             task_id="node_pool_1",
             retries=2,
         )(
             node_pool=cluster_info,
-            reservation="cloudtpu-20251107233000-1246578561",
         )
 
         create_second_node_pool = node_pool.create.override(
@@ -310,7 +305,6 @@ with models.DAG(
             retries=2,
         )(
             node_pool=cluster_info_2,
-            reservation="cloudtpu-20251107233000-1246578561",
         )
       apply_time = jobset.run_workload(
           node_pool=cluster_info,
@@ -412,8 +406,8 @@ with models.DAG(
       (
           create_node_pool
           >> apply_time
-          >> active_pods
           >> wait_for_job_start
+          >> active_pods
           >> all_verification_groups
           >> summary
           >> clean_up_workload
