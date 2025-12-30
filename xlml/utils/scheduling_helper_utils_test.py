@@ -5,7 +5,7 @@
 # 1. Specific test: python -m unittest dags.orbax.tests.scheduling_helper_utils_test.TestSampleSchedulingHelper.test_scheduling_helper_success
 
 from absl.testing import absltest
-from dags.orbax.tests.temp_scheduling_helper import TempSchedulingHelper
+from xlml.utils.temp_scheduling_helper import TempSchedulingHelper
 from dags.common.vm_resource import XpkClusters
 
 
