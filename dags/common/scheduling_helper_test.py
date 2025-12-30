@@ -46,7 +46,6 @@ def ExtractDagIds(file_path: str) -> list[str]:
               isinstance(func, ast.Attribute) and func.attr == "DAG"
           ):
             for kw in code_node.keywords:
-
               if kw.arg == "dag_id":
                 if isinstance(kw.value, ast.Constant):
                   dag_ids.append(str(kw.value.value))
@@ -54,7 +53,6 @@ def ExtractDagIds(file_path: str) -> list[str]:
                   dag_ids.append(constants.get(kw.value.id))
 
   return dag_ids
-
 
 
 def CollectConstants(tree) -> dict[str, str]:
@@ -165,10 +163,9 @@ class TestSampleSchedulingHelper(absltest.TestCase):
     Test ArrangeScheduleTime raises ValueError if total DAG schedule
     exceeds 24 hours.
     """
-    fake_dags =[
+    fake_dags = [
         Dag(f"fake_dag_{i}", dt.timedelta(minutes=145)) for i in range(10)
     ]
-
 
     new_registry = SchedulingHelper.registry.copy()
     cluster = XpkClusters.TPU_V5P_128_CLUSTER

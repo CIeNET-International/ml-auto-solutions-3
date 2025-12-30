@@ -46,7 +46,6 @@ def ExtractDagIds(file_path: str) -> list[str]:
               isinstance(func, ast.Attribute) and func.attr == "DAG"
           ):
             for kw in code_node.keywords:
-
               if kw.arg == "dag_id":
                 if isinstance(kw.value, ast.Constant):
                   dag_ids.append(str(kw.value.value))
@@ -62,8 +61,9 @@ def CollectConstants(tree) -> dict[str, str]:
   for node in tree.body:
     if isinstance(node, ast.Assign):
       if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-        if (isinstance(node.value, ast.Constant) and
-            isinstance(node.value.value, str)):
+        if isinstance(node.value, ast.Constant) and isinstance(
+            node.value.value, str
+        ):
           constants[node.targets[0].id] = node.value.value
   return constants
 
@@ -78,6 +78,7 @@ def GetAllDag(folder_path: str) -> list[str]:
       dag_ids.extend(ExtractDagIds(file_path))
 
   return dag_ids
+
 
 class TestSampleSchedulingHelper(absltest.TestCase):
   """
@@ -166,7 +167,6 @@ class TestSampleSchedulingHelper(absltest.TestCase):
     fake_dags = [
         Dag(f"fake_dag_{i}", dt.timedelta(minutes=145)) for i in range(10)
     ]
-
 
     new_registry = SchedulingHelper.registry.copy()
     cluster = XpkClusters.TPU_V5P_128_CLUSTER
