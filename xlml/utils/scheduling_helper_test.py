@@ -56,7 +56,7 @@ def ExtractDagIds(file_path: str) -> list[str]:
   return dag_ids
 
 
-def CollectConstants(tree)-> dict[str, str]:
+def CollectConstants(tree) -> dict[str, str]:
   """Collect all string constants from the AST tree."""
   constants = {}
   for node in tree.body:
@@ -94,9 +94,10 @@ class TestSampleSchedulingHelper(absltest.TestCase):
         "maxtext_mtc_resume_from_gcs",
     )
 
-    registered_cluster = (
-        SchedulingHelper.registry[XpkClusters.TPU_V5P_128_CLUSTER]
-    )
+    registered_cluster = SchedulingHelper.registry[
+        XpkClusters.TPU_V5P_128_CLUSTER
+    ]
+
     default_margin = SchedulingHelper.DEFAULT_MARGIN
     anchor = SchedulingHelper.DEFAULT_ANCHOR
     offset = dt.timedelta(0)
@@ -163,7 +164,7 @@ class TestSampleSchedulingHelper(absltest.TestCase):
     exceeds 24 hours.
     """
     fake_dags = [
-      Dag(f"fake_dag_{i}", dt.timedelta(minutes=145)) for i in range(10)
+        Dag(f"fake_dag_{i}", dt.timedelta(minutes=145)) for i in range(10)
     ]
 
 
