@@ -1,8 +1,8 @@
 # This test file should be run from the project root directory using:
-# python -m unittest discover xlml/utils -p "scheduling_helper_test.py"
+# python -m unittest discover dags/common -p "scheduling_helper_test.py"
 #
 # Other methods that might work:
-# 1. Specific test: python -m unittest xlml.utils.scheduling_helper_test.TestSampleSchedulingHelper.test_schedule_success
+# 1. Specific test: python -m unittest dags.common.scheduling_helper_test.TestSampleSchedulingHelper.test_schedule_success
 
 from absl.testing import absltest
 from dags.common.scheduling_helper import SchedulingHelper
@@ -177,7 +177,6 @@ class TestSampleSchedulingHelper(absltest.TestCase):
         )
 
     self.assertIn("Schedule exceeds 24 hours window", str(ctx.exception))
-
 
 if __name__ == "__main__":
   absltest.main()
