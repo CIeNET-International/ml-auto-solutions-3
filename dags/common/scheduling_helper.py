@@ -116,11 +116,3 @@ class SchedulingHelper:
             f"dag_id={dag.dag_id}; "
             "adjust the DEFAULT_MARGIN or dag_run_timeout accordingly."
         )
-
-
-if __name__ == "__main__":
-  test_case = SchedulingHelper.ArrangeScheduleTime(
-      XpkClusters.TPU_V5P_128_CLUSTER,
-      "maxtext_regular_save",
-  )
-  print(f"Test case schedule: {test_case}")
