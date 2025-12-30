@@ -8,7 +8,6 @@ from absl.testing import absltest
 from xlml.utils.temp_scheduling_helper import TempSchedulingHelper
 from dags.common.vm_resource import XpkClusters
 
-
 class TestSampleSchedulingHelper(absltest.TestCase):
   """
   Test cases for the SchedulingHelper class.
