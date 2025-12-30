@@ -13,6 +13,7 @@ import os
 import datetime as dt
 from dags.common.vm_resource import XpkClusters
 
+
 def ExtractDagIds(file_path: str) -> list[str]:
   """Extract all DAG IDs from a Python file."""
   with open(file_path, "r", encoding="utf-8") as f:
@@ -41,8 +42,9 @@ def ExtractDagIds(file_path: str) -> list[str]:
         code_node = item.context_expr
         if isinstance(code_node, ast.Call):
           func = code_node.func
-          if (isinstance(func, ast.Name) and func.id == "DAG") or \
-            (isinstance(func, ast.Attribute) and func.attr == "DAG"):
+          if (isinstance(func, ast.Name) and func.id == "DAG") or (
+              isinstance(func, ast.Attribute) and func.attr == "DAG"
+          ):
             for kw in code_node.keywords:
 
               if kw.arg == "dag_id":
@@ -108,7 +110,6 @@ class TestSampleSchedulingHelper(absltest.TestCase):
       offset += default_margin + dag.dag_run_timeout
     self.assertEqual(schedule, ans)
 
-
   def test_all_dags_scheduled(self):
     """
     Test all DAGs in the registry are scheduled.
@@ -116,7 +117,7 @@ class TestSampleSchedulingHelper(absltest.TestCase):
     is_all_scheduled = True
     dags_list = GetAllDag("dags/orbax")
     for dag_id in dags_list:
-      try :
+      try:
         SchedulingHelper.ArrangeScheduleTime(
             XpkClusters.TPU_V5P_128_CLUSTER,
             dag_id,
@@ -161,9 +162,10 @@ class TestSampleSchedulingHelper(absltest.TestCase):
     Test ArrangeScheduleTime raises ValueError if total DAG schedule
     exceeds 24 hours.
     """
-    fake_dags = (
-      [Dag(f"fake_dag_{i}", dt.timedelta(minutes=145)) for i in range(10)]
-    )
+    fake_dags = [
+      Dag(f"fake_dag_{i}", dt.timedelta(minutes=145)) for i in range(10)
+    ]
+
 
     new_registry = SchedulingHelper.registry.copy()
     cluster = XpkClusters.TPU_V5P_128_CLUSTER
