@@ -57,14 +57,14 @@ def ExtractDagIds(file_path: str) -> list[str]:
 
 
 
-def CollectConstants(tree)-> dict[str, str]:
+def CollectConstants(tree) -> dict[str, str]:
   """Collect all string constants from the AST tree."""
   constants = {}
   for node in tree.body:
     if isinstance(node, ast.Assign):
       if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
         if isinstance(node.value, ast.Constant) and isinstance(
-          node.value.value, str
+            node.value.value, str
         ):
           constants[node.targets[0].id] = node.value.value
   return constants
@@ -166,7 +166,7 @@ class TestSampleSchedulingHelper(absltest.TestCase):
     exceeds 24 hours.
     """
     fake_dags =[
-      Dag(f"fake_dag_{i}", dt.timedelta(minutes=145)) for i in range(10)
+        Dag(f"fake_dag_{i}", dt.timedelta(minutes=145)) for i in range(10)
     ]
 
 
