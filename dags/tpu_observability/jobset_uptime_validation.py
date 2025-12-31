@@ -128,12 +128,11 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           task_id="wait_for_job_start"
       )(cluster_info, pod_name_list=active_pods, job_apply_time=apply_time)
 
-      wait_for_uptime = jobset.wait_for_jobset_uptime.override(
-          task_id="wait_for_uptime"
+      wait_for_jobset_uptime_data = jobset.wait_for_jobset_uptime_data.override(
+          task_id="wait_for_jobset_uptime_data"
       )(
           node_pool=cluster_info,
           jobset_name=jobset_config.jobset_name,
-          job_apply_time=apply_time,
       )
 
       clean_up_workload = jobset.end_workload.override(
@@ -146,12 +145,11 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           setups=apply_time
       )
 
-      check_no_uptime = jobset.wait_for_jobset_uptime.override(
-          task_id="check_no_uptime"
+      verify_no_jobset_data = jobset.verify_no_jobset_data.override(
+          task_id="verify_no_jobset_data"
       )(
           node_pool=cluster_info,
           jobset_name=jobset_config.jobset_name,
-          expect_no_data=True,
       )
 
       cleanup_node_pool = node_pool.delete.override(
@@ -168,9 +166,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           >> apply_time
           >> active_pods
           >> wait_for_job_start
-          >> wait_for_uptime
+          >> wait_for_jobset_uptime_data
           >> clean_up_workload
-          >> check_no_uptime
+          >> verify_no_jobset_data
           >> cleanup_node_pool
       )
       # pylint: enable=pointless-statement
