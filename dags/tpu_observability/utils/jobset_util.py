@@ -454,7 +454,7 @@ def get_active_pods(node_pool: node_pool_info, namespace: str) -> list[str]:
     return pod_list
 
 
-@task.sensor(poke_interval=30, timeout=900, mode="reschedule")
+@task.sensor(poke_interval=30, timeout=900, mode="poke")
 def wait_for_jobset_started(
     node_pool: node_pool_info,
     pod_name_list: str,
@@ -521,7 +521,7 @@ def wait_for_jobset_started(
   return all(p > threshold_value for p in last_n_data_points)
 
 
-@task.sensor(poke_interval=60, timeout=3600, mode="reschedule")
+@task.sensor(poke_interval=60, timeout=3600, mode="poke")
 def wait_for_jobset_ttr_to_be_found(node_pool: node_pool_info) -> bool:
   """
   Polls the jobset time_between_interruptions metric.
@@ -555,7 +555,7 @@ def wait_for_jobset_ttr_to_be_found(node_pool: node_pool_info) -> bool:
   return len(time_series) > 0
 
 
-@task.sensor(poke_interval=30, timeout=600, mode="reschedule")
+@task.sensor(poke_interval=30, timeout=600, mode="poke")
 def wait_for_jobset_status_occurrence(
     replica_type: str, job_name: str, node_pool: node_pool_info
 ):
@@ -577,7 +577,7 @@ def wait_for_jobset_status_occurrence(
   return ready_replicas > 0
 
 
-@task.sensor(poke_interval=30, timeout=600, mode="reschedule")
+@task.sensor(poke_interval=30, timeout=600, mode="poke")
 def wait_for_all_pods_running(num_pods: int, node_pool: node_pool_info):
   num_running = len(get_running_pods(node_pool=node_pool, namespace="default"))
   return num_running == num_pods
