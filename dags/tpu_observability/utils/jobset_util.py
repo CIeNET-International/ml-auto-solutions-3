@@ -25,6 +25,7 @@ import tempfile
 import textwrap
 from typing import Final
 
+
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from google.cloud.monitoring_v3 import types
@@ -615,55 +616,39 @@ def query_uptime_metrics(
 
 
 @task.sensor(poke_interval=30, timeout=3600, mode="reschedule")
-def wait_for_jobset_uptime(
+def wait_for_jobset_uptime_data(
     node_pool: node_pool_info,
     jobset_name: str,
-    job_apply_time: TimeUtil = None,
-    expect_no_data: bool = False,
-    **context,
 ):
-  """
-  Waits for the JobSet's uptime metric.
-  Args:
-    node_pool: An Info dataclass instance containing project and cluster
-      details.
-    jobset_name: The name of the JobSet whose uptime metric is being monitored.
-    job_apply_time: The datetime object of the time the job was applied.
-    expect_no_data: If True, the sensor checks for the absence of uptime data
-      instead of its presence.
-  """
-  ti = context["ti"]
-  now = datetime.datetime.now(datetime.timezone.utc)
+  """Verify uptime data exists after jobset application."""
+  end_time = datetime.datetime.now(datetime.timezone.utc)
+  start_time = end_time - datetime.timedelta(seconds=3600)
+  data = query_uptime_metrics(node_pool, jobset_name, start_time, end_time)
 
-  # CASE 1: Verify NO data exists after a stability period
-  if expect_no_data:
-    observation_start = ti.start_date
-    elapsed_seconds = (now - observation_start).total_seconds()
-    data = query_uptime_metrics(node_pool, jobset_name, observation_start, now)
-    has_data = data and len(data) > 0
+  logging.info(f"Uptime data query result: {data}")
+  if data and len(data) > 0:
+    logging.info(f"Success: Uptime data for '{jobset_name}' detected.")
+    return True
+  logging.info(f"Data not available yet for '{jobset_name}'. Poking...")
+  return False
 
-    if not has_data:
-      logging.info(f"Verified: No data found for '{jobset_name}'. Success.")
-      return True
 
-    if elapsed_seconds < 300:
-      logging.info("Data still exists within 300s grace period. Retrying...")
-      return False
-    else:
-      raise AirflowFailException(
-          f"Failure: Data for '{jobset_name}' persisted for more than 300 seconds."
-      )
+@task.sensor(poke_interval=30, timeout=300, mode="reschedule")
+def verify_no_jobset_data(
+    node_pool: node_pool_info,
+    jobset_name: str,
+):
+  """Verify NO uptime data exists after a stability period."""
+  end_time = datetime.datetime.now(datetime.timezone.utc)
+  start_time = end_time - datetime.timedelta(seconds=10)
+  data = query_uptime_metrics(node_pool, jobset_name, start_time, end_time)
 
-  # CASE 2: Wait until data appears
+  logging.info(f"Uptime data query result: {data}")
+  if not data or len(data) == 0:
+    logging.info(f"Verified: No data found for '{jobset_name}'. Success.")
+    return True
   else:
-    start_time = job_apply_time.to_datetime()
-    end_time = start_time + datetime.timedelta(minutes=60)
-    data = query_uptime_metrics(node_pool, jobset_name, start_time, end_time)
-
-    if data and len(data) > 0:
-      logging.info(f"Success: Uptime data for '{jobset_name}' detected.")
-      return True
-    logging.info(
-        f"Data not available yet for '{jobset_name}'. Poking again later..."
+    logging.warning(
+        f"Uptime data for '{jobset_name}' was found when none was expected."
     )
     return False
