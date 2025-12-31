@@ -7,6 +7,7 @@
 from absl.testing import absltest
 from dags.common.scheduling_helper import SchedulingHelper
 from dags.common.scheduling_helper import Dag
+from airflow.models import DagBag
 from unittest.mock import patch
 import ast
 import os
@@ -14,70 +15,17 @@ import datetime as dt
 from dags.common.vm_resource import XpkClusters
 
 
-def ExtractDagIds(file_path: str) -> list[str]:
-  """Extract all DAG IDs from a Python file."""
-  with open(file_path, "r", encoding="utf-8") as f:
-    tree = ast.parse(f.read(), filename=file_path)
-
-  dag_ids = []
-  constants = CollectConstants(tree)
-
-  # Module
-  # └─ body[0]: With
-  #    ├─ items[0]: withitem
-  #    │  └─ context_expr: Call
-  #    │     ├─ func: Attribute
-  #    │     │  ├─ value: Name(id='models')
-  #    │     │  └─ attr: 'DAG'
-  #    │     ├─ args: []
-  #    │     └─ keywords: [
-  #    │        └─ keyword
-  #    │           ├─ arg: 'dag_id'
-  #    │           └─ value: Name(varialbe name) or String
-  #    └─ body: []
-
-  for node in ast.walk(tree):
-    if isinstance(node, ast.With):
-      for item in node.items:
-        code_node = item.context_expr
-        if isinstance(code_node, ast.Call):
-          func = code_node.func
-          if (isinstance(func, ast.Name) and func.id == "DAG") or (
-              isinstance(func, ast.Attribute) and func.attr == "DAG"
-          ):
-            for kw in code_node.keywords:
-              if kw.arg == "dag_id":
-                if isinstance(kw.value, ast.Constant):
-                  dag_ids.append(str(kw.value.value))
-                elif isinstance(kw.value, ast.Name):
-                  dag_ids.append(constants.get(kw.value.id))
-
-  return dag_ids
-
-
-def CollectConstants(tree) -> dict[str, str]:
-  """Collect all string constants from the AST tree."""
-  constants = {}
-  for node in tree.body:
-    if isinstance(node, ast.Assign):
-      if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-        if isinstance(node.value, ast.Constant) and isinstance(
-            node.value.value, str
-        ):
-          constants[node.targets[0].id] = node.value.value
-  return constants
-
-
 def GetAllDag(folder_path: str) -> list[str]:
   """Get all DAG id from all Python files under target folder."""
+  if not folder_path.endswith("/"):
+    raise ValueError("folder_path must end with '/'")
 
-  dag_ids = []
-  for filename in os.listdir(folder_path):
-    if filename.endswith(".py"):
-      file_path = os.path.join(folder_path, filename)
-      dag_ids.extend(ExtractDagIds(file_path))
+  dagbags = DagBag(
+      dag_folder=folder_path,
+      include_examples=False,
+  )
 
-  return dag_ids
+  return dagbags.dag_ids
 
 
 class TestSampleSchedulingHelper(absltest.TestCase):
@@ -98,7 +46,6 @@ class TestSampleSchedulingHelper(absltest.TestCase):
     registered_cluster = SchedulingHelper.registry[
         XpkClusters.TPU_V5P_128_CLUSTER
     ]
-
     default_margin = SchedulingHelper.DEFAULT_MARGIN
     anchor = SchedulingHelper.DEFAULT_ANCHOR
     offset = dt.timedelta(0)
@@ -117,7 +64,7 @@ class TestSampleSchedulingHelper(absltest.TestCase):
     Test all DAGs in the registry are scheduled.
     """
     is_all_scheduled = True
-    dags_list = GetAllDag("dags/orbax")
+    dags_list = GetAllDag("dags/orbax/")
     for dag_id in dags_list:
       try:
         SchedulingHelper.ArrangeScheduleTime(
