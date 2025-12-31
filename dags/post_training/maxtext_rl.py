@@ -107,11 +107,13 @@ with models.DAG(
             task_id=f"start_time_{mode.value}_{loss_algo}_{slice_num}"
         )()
 
+        test_name = f"{training_config.short_id[:3]}{loss_algo[:3]}"
+
         training_task = gke_config.get_gke_config(
             num_slices=slice_num,
             cluster=training_config.cluster,
             time_out_in_min=30,
-            test_name=f"{training_config.short_id[:3]}{loss_algo[:3]}",
+            test_name=test_name,
             run_model_cmds=rl_training_command,
             docker_image=image.value,
             test_owner=test_owner.JACKY_F,
@@ -131,10 +133,10 @@ with models.DAG(
             project_id=training_config.cluster.project,
             location=zone_to_region(training_config.cluster.zone),
             cluster_name=training_config.cluster.name,
-            text_filter=f"Config param loss_algo: {loss_algo}",
+            text_filter=f'"Config param loss_algo: {loss_algo}"',
             namespace="default",
             container_name="jax-tpu",
-            pod_pattern=f"{training_config.short_id}-{loss_algo}.*",
+            pod_pattern=f"{test_name}.*",
             start_time=start_time,
             end_time=end_time,
         )
@@ -145,10 +147,10 @@ with models.DAG(
             project_id=training_config.cluster.project,
             location=zone_to_region(training_config.cluster.zone),
             cluster_name=training_config.cluster.name,
-            text_filter="Post RL Training",
+            text_filter='"Post RL Training"',
             namespace="default",
             container_name="jax-tpu",
-            pod_pattern=f"{training_config.short_id}-{loss_algo}.*",
+            pod_pattern=f"{test_name}.*",
             start_time=start_time,
             end_time=end_time,
         )

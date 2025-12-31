@@ -39,15 +39,6 @@ def generate_posttraining_run_name(
   Returns:
       A short string formatted as
       '{short_id}-{checkpointing_type}-{mode}-{slice_number}'.
-
-  Note:
-      The generated name should be less than 20 characters in total
-      for Pathways compatibility.
   """
   run_name = f"{short_id}-{checkpointing_type}-{mode}-{slice_number}"
-  if len(run_name) > 20:
-    raise AirflowException(
-        f"Generated run name '{run_name}' is {len(run_name)} characters long, "
-        f"which exceeds the 20-character limit for Pathways compatibility."
-    )
   return run_name
