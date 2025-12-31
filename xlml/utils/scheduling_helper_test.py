@@ -5,14 +5,12 @@
 # 1. Specific test: python -m unittest xlml.utils.scheduling_helper_test.TestSampleSchedulingHelper.test_schedule_success
 
 from absl.testing import absltest
+from dags.common.vm_resource import XpkClusters
 from dags.common.scheduling_helper import SchedulingHelper
 from dags.common.scheduling_helper import Dag
 from airflow.models import DagBag
 from unittest.mock import patch
-import ast
-import os
 import datetime as dt
-from dags.common.vm_resource import XpkClusters
 
 
 def GetAllDag(folder_path: str) -> list[str]:
