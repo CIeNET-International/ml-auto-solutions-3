@@ -1,6 +1,7 @@
 """Test Configuration Class utility for post training testcases."""
 
 from dataclasses import dataclass
+from enum import Enum
 
 from dags import gcs_bucket
 from dags.common.vm_resource import XpkClusters, DockerImage
@@ -14,6 +15,13 @@ POST_TRAINING_DOCKER_IMAGES = [
     (SetupMode.STABLE, DockerImage.MAXTEXT_POST_TRAINING_STABLE),
     (SetupMode.NIGHTLY, DockerImage.MAXTEXT_POST_TRAINING_NIGHTLY),
 ]
+
+
+class LossAlgo(Enum):
+  """Enum for RL loss algorithms."""
+
+  GRPO = "grpo"
+  GSPO = "gspo"
 
 
 @dataclass
@@ -36,7 +44,7 @@ class RLTestConfig:
         path or local path).
     load_parameters_path: GCS path to load model parameters
         from.
-    loss_algos: List of loss algorithms to test (e.g., ["grpo", "gspo"]).
+    loss_algos: List of loss algorithms to test (e.g., [LossAlgo.GRPO]).
     rl_config_path: Path to the RL configuration YAML file
         (relative to MaxText root).
   """
@@ -49,7 +57,7 @@ class RLTestConfig:
   base_dir: str
   tokenizer_path: str
   load_parameters_path: str
-  loss_algos: list[str]
+  loss_algos: list[LossAlgo]
   rl_config_path: str = "src/MaxText/configs/rl.yml"
 
   def __init__(
@@ -62,7 +70,7 @@ class RLTestConfig:
       base_dir: str,
       tokenizer_path: str,
       load_parameters_path: str,
-      loss_algos: list[str],
+      loss_algos: list[LossAlgo],
       rl_config_path: str = "src/MaxText/configs/rl.yml",
   ):
     """Initializes the RL test configurations.
@@ -96,12 +104,12 @@ class RLTestConfig:
     self.rl_config_path = rl_config_path
 
   def generate_rl_training_command(
-      self, loss_algo: str, run_name: str, hf_token: str
+      self, loss_algo: LossAlgo, run_name: str, hf_token: str
   ) -> tuple[str]:
     """Generates the RL training command as a tuple for GKE compatibility.
 
     Args:
-      loss_algo: The loss algorithm to use (e.g., 'grpo', 'gspo').
+      loss_algo: The loss algorithm to use (e.g., LossAlgo.GRPO).
       run_name: The run name for the training job.
       hf_token: The HuggingFace token for authentication.
 
@@ -124,8 +132,8 @@ class RLTestConfig:
         f"base_output_directory={self.base_dir}"
     )
 
-    if loss_algo == "gspo":
-      command += f" loss_algo={loss_algo}-token"
+    if loss_algo == LossAlgo.GSPO:
+      command += f" loss_algo={loss_algo.value}-token"
 
     # Return as tuple for k8s yaml compatibility.
     return (command,)

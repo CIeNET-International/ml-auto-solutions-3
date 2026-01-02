@@ -78,7 +78,10 @@ with models.DAG(
           "scanned-pathways/0/items/"
       ),
       rl_config_path="src/MaxText/configs/rl.yml",
-      loss_algos=["grpo", "gspo"],
+      loss_algos=[
+          test_config_util.LossAlgo.GRPO,
+          test_config_util.LossAlgo.GSPO,
+      ],
   )
   # HF token retrieved from Airflow Variables for secure credential management
   HF_TOKEN_LLAMA3_1 = models.Variable.get("HF_TOKEN_LLAMA3_1", None)
@@ -91,23 +94,25 @@ with models.DAG(
     for loss_algo in training_config.loss_algos:
       for slice_num in training_config.slices:
         run_name = validation_util.generate_posttraining_run_name.override(
-            task_id=f"run_name_{mode.value}_{loss_algo}_{slice_num}"
+            task_id=f"run_name_{mode.value}_{loss_algo.value}_{slice_num}"
         )(
             short_id=training_config.short_id,
-            checkpointing_type=loss_algo,
+            checkpointing_type=loss_algo.value,
             slice_number=slice_num,
             mode=mode.value,
         )
 
         rl_training_command = training_config.generate_rl_training_command(
-            loss_algo, run_name, HF_TOKEN_LLAMA3_1
+            loss_algo=loss_algo,
+            run_name=run_name,
+            hf_token=HF_TOKEN_LLAMA3_1,
         )
 
         start_time = validation_util.generate_timestamp.override(
-            task_id=f"start_time_{mode.value}_{loss_algo}_{slice_num}"
+            task_id=f"start_time_{mode.value}_{loss_algo.value}_{slice_num}"
         )()
 
-        test_name = f"{training_config.short_id[:3]}{loss_algo[:3]}"
+        test_name = f"{training_config.short_id[:3]}{loss_algo.value[:3]}"
 
         training_task = gke_config.get_gke_config(
             num_slices=slice_num,
@@ -124,16 +129,16 @@ with models.DAG(
         )
 
         end_time = validation_util.generate_timestamp.override(
-            task_id=f"end_time_{mode.value}_{loss_algo}_{slice_num}"
+            task_id=f"end_time_{mode.value}_{loss_algo.value}_{slice_num}"
         )()
 
         validate_loss_algo = validation_util.validate_log_exist.override(
-            task_id=f"validate_loss_{mode.value}_{loss_algo}_{slice_num}"
+            task_id=f"validate_loss_{mode.value}_{loss_algo.value}_{slice_num}"
         )(
             project_id=training_config.cluster.project,
             location=zone_to_region(training_config.cluster.zone),
             cluster_name=training_config.cluster.name,
-            text_filter=f'"Config param loss_algo: {loss_algo}"',
+            text_filter=f'"Config param loss_algo: {loss_algo.value}"',
             namespace="default",
             container_name="jax-tpu",
             pod_pattern=f"{test_name}.*",
@@ -142,7 +147,7 @@ with models.DAG(
         )
 
         validate_training = validation_util.validate_log_exist.override(
-            task_id=f"validate_training_{mode.value}_{loss_algo}_{slice_num}"
+            task_id=f"validate_training_{mode.value}_{loss_algo.value}_{slice_num}"
         )(
             project_id=training_config.cluster.project,
             location=zone_to_region(training_config.cluster.zone),
