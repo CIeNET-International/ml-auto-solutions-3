@@ -629,22 +629,33 @@ def wait_for_jobset_uptime_data(
 
   logging.info(f"Uptime data query result: {data}")
   if data and len(data) > 0:
-    clear_time = datetime.datetime.now(datetime.timezone.utc)
-    return PokeReturnValue(
-        is_done=True, xcom_value=TimeUtil.from_datetime(clear_time)
-    )
+    return True
+  return False
 
 
-@task.sensor(poke_interval=30, timeout=300, mode="reschedule")
+@task.sensor(poke_interval=30, timeout=360, mode="reschedule")
 def ensure_no_jobset_uptime_data(
     node_pool: node_pool_info,
     jobset_name: str,
     jobset_clear_time: TimeUtil,
 ):
-  """Verify NO uptime data exists after a stability period."""
-  end_time = datetime.datetime.now(datetime.timezone.utc)
   start_time = jobset_clear_time.to_datetime()
-  data = query_uptime_metrics(node_pool, jobset_name, start_time, end_time)
+  current_time = datetime.datetime.now(datetime.timezone.utc)
+  data = query_uptime_metrics(node_pool, jobset_name, start_time, current_time)
 
-  if not data or len(data) == 0:
+  logging.info(f"Uptime data query result: {data}")
+  if data and len(data) > 0:
+    raise AirflowFailException(f"Data detected: {data}")
+
+  stability_duration = datetime.timedelta(seconds=300)
+  if current_time - start_time >= stability_duration:
+    logging.info("Stability period passed with no data detected.")
     return True
+  return False
+
+
+@task
+def get_current_time() -> TimeUtil:
+  """Get the current time in UTC."""
+  current_time_utc = datetime.datetime.now(datetime.timezone.utc)
+  return TimeUtil.from_datetime(current_time_utc)

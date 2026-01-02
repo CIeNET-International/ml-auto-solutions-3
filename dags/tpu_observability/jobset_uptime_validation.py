@@ -128,7 +128,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           task_id="wait_for_job_start"
       )(cluster_info, pod_name_list=active_pods, job_apply_time=apply_time)
 
-      jobset_uptime = jobset.wait_for_jobset_uptime_data.override(
+      wait_for_jobset_uptime_data = jobset.wait_for_jobset_uptime_data.override(
           task_id="wait_for_jobset_uptime_data"
       )(
           node_pool=cluster_info,
@@ -146,13 +146,17 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           setups=apply_time
       )
 
+      jobset_clear_time = jobset.get_current_time.override(
+          task_id="get_current_time"
+      )()
+
       ensure_no_jobset_uptime_data = (
           jobset.ensure_no_jobset_uptime_data.override(
               task_id="ensure_no_jobset_uptime_data"
           )(
               node_pool=cluster_info,
               jobset_name=jobset_config.jobset_name,
-              jobset_clear_time=jobset_uptime,
+              jobset_clear_time=jobset_clear_time,
           )
       )
 
@@ -170,8 +174,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           >> apply_time
           >> active_pods
           >> wait_for_job_start
-          >> jobset_uptime
+          >> wait_for_jobset_uptime_data
           >> clean_up_workload
+          >> jobset_clear_time
           >> ensure_no_jobset_uptime_data
           >> cleanup_node_pool
       )
