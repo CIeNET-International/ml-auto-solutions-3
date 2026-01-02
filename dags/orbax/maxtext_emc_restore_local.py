@@ -21,6 +21,7 @@ SCHEDULE = "45 10 * * *" if composer_env.is_prod_env() else None
 with models.DAG(
     dag_id=DAG_TEST_NAME,
     start_date=datetime.datetime(2025, 6, 30),
+    dagrun_timeout=datetime.timedelta(hours=1),
     schedule_interval=SCHEDULE,
     catchup=False,
     tags=[

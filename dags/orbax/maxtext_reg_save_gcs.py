@@ -24,6 +24,7 @@ DAG_TEST_NAME = "maxtext_regular_save"
 with models.DAG(
     dag_id=DAG_TEST_NAME,
     start_date=datetime.datetime(2025, 9, 17),
+    dagrun_timeout=datetime.timedelta(hours=1),
     schedule_interval=SCHEDULE,
     catchup=False,
     tags=[

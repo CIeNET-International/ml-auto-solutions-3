@@ -25,6 +25,7 @@ DAG_TEST_NAME = "maxtext_regular_restore_with_resumed_workload"
 with models.DAG(
     dag_id=DAG_TEST_NAME,
     start_date=datetime.datetime(2025, 10, 24),
+    dagrun_timeout=datetime.timedelta(hours=1),
     schedule_interval=SCHEDULE,
     catchup=False,
     tags=[
