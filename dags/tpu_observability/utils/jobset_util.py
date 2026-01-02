@@ -29,6 +29,9 @@ from typing import Final
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
+from airflow.sensors.base import PokeReturnValue
+from google.cloud.monitoring_v3 import types
+import kubernetes
 
 from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.tpu_observability.utils.gcp_util import query_time_series
@@ -780,36 +783,31 @@ def query_uptime_metrics(
 def wait_for_jobset_uptime_data(
     node_pool: node_pool_info,
     jobset_name: str,
+    jobset_apply_time: TimeUtil,
 ):
   """Verify uptime data exists after jobset application."""
-  end_time = datetime.datetime.now(datetime.timezone.utc)
-  start_time = end_time - datetime.timedelta(seconds=3600)
+  start_time = jobset_apply_time.to_datetime()
+  end_time = start_time + datetime.timedelta(minutes=60)
   data = query_uptime_metrics(node_pool, jobset_name, start_time, end_time)
 
   logging.info(f"Uptime data query result: {data}")
   if data and len(data) > 0:
-    logging.info(f"Success: Uptime data for '{jobset_name}' detected.")
-    return True
-  logging.info(f"Data not available yet for '{jobset_name}'. Poking...")
-  return False
+    clear_time = datetime.datetime.now(datetime.timezone.utc)
+    return PokeReturnValue(
+        is_done=True, xcom_value=TimeUtil.from_datetime(clear_time)
+    )
 
 
 @task.sensor(poke_interval=30, timeout=300, mode="reschedule")
-def verify_no_jobset_data(
+def ensure_no_jobset_uptime_data(
     node_pool: node_pool_info,
     jobset_name: str,
+    jobset_clear_time: TimeUtil,
 ):
   """Verify NO uptime data exists after a stability period."""
   end_time = datetime.datetime.now(datetime.timezone.utc)
-  start_time = end_time - datetime.timedelta(seconds=10)
+  start_time = jobset_clear_time.to_datetime()
   data = query_uptime_metrics(node_pool, jobset_name, start_time, end_time)
 
-  logging.info(f"Uptime data query result: {data}")
   if not data or len(data) == 0:
-    logging.info(f"Verified: No data found for '{jobset_name}'. Success.")
     return True
-  else:
-    logging.warning(
-        f"Uptime data for '{jobset_name}' was found when none was expected."
-    )
-    return False
