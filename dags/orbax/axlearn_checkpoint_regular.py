@@ -23,7 +23,7 @@ from airflow import models
 
 from dags import composer_env
 from dags.common import test_owner
-from dags.common.vm_resource import TpuVersion, Zone
+from dags.common.vm_resource import XpkClusters
 from dags.orbax.util import test_config_util, validation_util
 from xlml.utils.gke import zone_to_region
 from xlml.utils import axlearn
@@ -43,16 +43,6 @@ DAG_TIMEOUT = (
     + RESERVE_TIME_FOR_WORKLOAD
     + RESERVE_TIME_FOR_POST_WORKLOAD
 )
-
-# TODO: dev only
-DEV_CLUSTER = XpkClusterConfig(
-    name="depp-orbax-v5p128",
-    device_version=TpuVersion.V5P,
-    core_count=128,
-    project="cloud-tpu-multipod-dev",
-    zone=Zone.US_EAST5_B.value,
-)
-
 
 with models.DAG(
     dag_id=DAG_TEST_NAME,
@@ -102,8 +92,7 @@ with models.DAG(
   )
   axlearn_configs = [
       test_config_util.TestConfigAXLearn(
-          # cluster=XpkClusters.TPU_V5P_128_CLUSTER,
-          cluster=DEV_CLUSTER,  # TODO: dev only
+          cluster=XpkClusters.TPU_V5P_128_CLUSTER,
           slices=[2],
           short_id=f"axlearn-{checkpointing.name}-sav",
           module="text.gpt.c4_trainer",

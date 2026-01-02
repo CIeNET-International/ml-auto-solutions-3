@@ -62,12 +62,11 @@ def reset_kube_config() -> None:
   result = hook.run_command([
       "bash",
       "-c",
-      f"sudo chown -R airflow:airflow {_COMPOSER_KUBECONFIG_PATH}",
-      (
-          f"gcloud container clusters get-credentials {cluster_name} "
-          f"--region {region}  --project {project_id}"
-      ),
+      f"sudo chown -R airflow:airflow {_COMPOSER_KUBECONFIG_PATH} && "
+      f"gcloud container clusters get-credentials {cluster_name} "
+      f"--region {region} --project {project_id}",
   ])
+
   assert (
       result.exit_code == 0
   ), f"XPK clean-up failed with code {result.exit_code}"
