@@ -27,6 +27,7 @@ DAG_TEST_NAME = "maxtext_emc_resume_from_gcs"
 with models.DAG(
     dag_id=DAG_TEST_NAME,
     start_date=datetime.datetime(2025, 6, 12),
+    dagrun_timeout=datetime.timedelta(hours=18),
     schedule_interval=SCHEDULE,
     catchup=False,
     tags=[
