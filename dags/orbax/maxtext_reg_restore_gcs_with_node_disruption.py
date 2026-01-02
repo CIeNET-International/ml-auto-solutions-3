@@ -31,6 +31,7 @@ def generate_workload_checkpoints_location(gcs_ckpt_location: str) -> str:
 with models.DAG(
     dag_id=DAG_TEST_NAME,
     start_date=datetime.datetime(2025, 10, 21),
+    dagrun_timeout=datetime.timedelta(hours=1),
     schedule_interval=SCHEDULE,
     catchup=False,
     tags=[
