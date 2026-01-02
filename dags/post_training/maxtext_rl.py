@@ -10,6 +10,7 @@ completion through comprehensive log monitoring of training signals.
 import datetime
 
 from airflow import models
+from airflow.models.baseoperator import chain
 
 from dags import composer_env
 from dags.common import test_owner
@@ -93,8 +94,9 @@ with models.DAG(
 
     for loss_algo in training_config.loss_algos:
       for slice_num in training_config.slices:
+        task_suffix = f"{mode.value}_{loss_algo.value}_{slice_num}"
         run_name = validation_util.generate_posttraining_run_name.override(
-            task_id=f"run_name_{mode.value}_{loss_algo.value}_{slice_num}"
+            task_id=f"run_name_{task_suffix}"
         )(
             short_id=training_config.short_id,
             checkpointing_type=loss_algo.value,
@@ -109,7 +111,7 @@ with models.DAG(
         )
 
         start_time = validation_util.generate_timestamp.override(
-            task_id=f"start_time_{mode.value}_{loss_algo.value}_{slice_num}"
+            task_id=f"start_time_{task_suffix}"
         )()
 
         test_name = f"{training_config.short_id[:3]}{loss_algo.value[:3]}"
@@ -129,11 +131,11 @@ with models.DAG(
         )
 
         end_time = validation_util.generate_timestamp.override(
-            task_id=f"end_time_{mode.value}_{loss_algo.value}_{slice_num}"
+            task_id=f"end_time_{task_suffix}"
         )()
 
         validate_loss_algo = validation_util.validate_log_exist.override(
-            task_id=f"validate_loss_{mode.value}_{loss_algo.value}_{slice_num}"
+            task_id=f"validate_loss_{task_suffix}"
         )(
             project_id=training_config.cluster.project,
             location=zone_to_region(training_config.cluster.zone),
@@ -147,7 +149,7 @@ with models.DAG(
         )
 
         validate_training = validation_util.validate_log_exist.override(
-            task_id=f"validate_training_{mode.value}_{loss_algo.value}_{slice_num}"
+            task_id=f"validate_training_{task_suffix}"
         )(
             project_id=training_config.cluster.project,
             location=zone_to_region(training_config.cluster.zone),
@@ -160,11 +162,11 @@ with models.DAG(
             end_time=end_time,
         )
 
-        (
-            run_name
-            >> start_time
-            >> training_task
-            >> end_time
-            >> validate_loss_algo
-            >> validate_training
+        chain(
+            run_name,
+            start_time,
+            training_task,
+            end_time,
+            validate_loss_algo,
+            validate_training,
         )
