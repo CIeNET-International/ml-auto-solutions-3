@@ -156,8 +156,8 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           node_pool=cluster_info,
           jobset_name=jobset_config.jobset_name,
           jobset_clear_time=jobset_clear_time,
-          wait_time=300,
-          # Ensure no data is detected throughout this duration
+          # Wait 5 minutes to confirm no data has been detected.
+          wait_time_seconds=300,
       )
 
       cleanup_node_pool = node_pool.delete.override(
