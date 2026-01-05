@@ -787,11 +787,11 @@ def wait_for_jobset_uptime_data(
 ):
   """Verify uptime data exists after jobset application."""
   start_time = jobset_apply_time.to_datetime()
-  end_time = start_time + datetime.timedelta(minutes=60)
+  end_time = datetime.datetime.now(datetime.timezone.utc)
   data = query_uptime_metrics(node_pool, jobset_name, start_time, end_time)
 
   logging.info(f"Uptime data query result: {data}")
-  if data and len(data) > 0:
+  if len(data) > 0:
     return True
   return False
 
@@ -801,17 +801,17 @@ def ensure_no_jobset_uptime_data(
     node_pool: node_pool_info,
     jobset_name: str,
     jobset_clear_time: TimeUtil,
+    wait_time: int,
 ):
   start_time = jobset_clear_time.to_datetime()
-  current_time = datetime.datetime.now(datetime.timezone.utc)
-  data = query_uptime_metrics(node_pool, jobset_name, start_time, current_time)
+  now = datetime.datetime.now(datetime.timezone.utc)
+  data = query_uptime_metrics(node_pool, jobset_name, start_time, now)
 
   logging.info(f"Uptime data query result: {data}")
-  if data and len(data) > 0:
+  if len(data) > 0:
     raise AirflowFailException(f"Data detected: {data}")
 
-  stability_duration = datetime.timedelta(seconds=300)
-  if current_time - start_time >= stability_duration:
+  if now - start_time >= datetime.timedelta(seconds=wait_time):
     logging.info("Stability period passed with no data detected.")
     return True
   return False
