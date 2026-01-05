@@ -25,10 +25,8 @@ import tempfile
 import textwrap
 from typing import Final
 
-
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
-from airflow.sensors.base import PokeReturnValue
 from google.cloud.monitoring_v3 import types
 import kubernetes
 
@@ -638,8 +636,9 @@ def ensure_no_jobset_uptime_data(
     node_pool: node_pool_info,
     jobset_name: str,
     jobset_clear_time: TimeUtil,
-    wait_time: int,
+    wait_time_seconds: int,
 ):
+  """Ensure no uptime data is recorded after jobset deletion."""
   start_time = jobset_clear_time.to_datetime()
   now = datetime.datetime.now(datetime.timezone.utc)
   data = query_uptime_metrics(node_pool, jobset_name, start_time, now)
@@ -648,7 +647,7 @@ def ensure_no_jobset_uptime_data(
   if len(data) > 0:
     raise AirflowFailException(f"Data detected: {data}")
 
-  if now - start_time >= datetime.timedelta(seconds=wait_time):
+  if now - start_time >= datetime.timedelta(seconds=wait_time_seconds):
     logging.info("Stability period passed with no data detected.")
     return True
   return False
