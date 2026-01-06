@@ -22,6 +22,7 @@ from airflow.models.dagbag import DagBag
 from xlml.apis.xpk_cluster_config import XpkClusterConfig
 from dags.common.vm_resource import XpkClusters
 
+
 @dataclass
 class Project:
   """
@@ -30,8 +31,10 @@ class Project:
     project_id: The GCP project ID.
     cluster: The XPK cluster configuration.
   """
+
   project_path: str
   cluster: XpkClusterConfig
+
 
 @dataclass
 class Dag:
@@ -41,9 +44,9 @@ class Dag:
     dag_id: The DAG ID.
     last_scheduled_time: The last scheduled time of the DAG.
   """
+
   dag_id: str
   dagrun_timeout: dt.datetime
-
 
 
 class DayOfWeek(enum.Enum):
@@ -65,11 +68,8 @@ class SchedulingHelper:
   DEFAULT_MARGIN = dt.timedelta(minutes=15)
   DEFAULT_ANCHOR = dt.datetime(2000, 1, 1, 13, 0, 0, tzinfo=dt.timezone.utc)
 
-  registry : dict[str, Project] = {
-      "orbax" : Project(
-          "dags/orbax/",
-          XpkClusters.TPU_V5P_128_CLUSTER
-      ),
+  registry: dict[str, Project] = {
+      "orbax": Project("dags/orbax/", XpkClusters.TPU_V5P_128_CLUSTER),
   }
 
   @classmethod
@@ -82,7 +82,7 @@ class SchedulingHelper:
         dag_folder=project.project_path,
         include_examples=False,
     )
-    if len(dagbags.dags.keys()) == 0 :
+    if len(dagbags.dags.keys()) == 0:
       raise ValueError(f"{project.project_path} doesn't exist or has no dag.")
 
     dag_list: list[Dag] = []
@@ -128,7 +128,7 @@ class SchedulingHelper:
         f"{'Accumulation time':<15}"
     ]
 
-    for dag in dag_list :
+    for dag in dag_list:
       # 1. return "start time" of target dag
       # 2. make sure "end time" of target dag wouldn't be over 24 hours
       if dag.dag_id == dag_id:
@@ -157,23 +157,19 @@ class SchedulingHelper:
           f"{str(offset):<15}"
       )
       if offset >= dt.timedelta(hours=24):
-        print(
-            "\n".join(fail_log_lines) +
-            "\n"
-        )
+        print("\n".join(fail_log_lines) + "\n")
 
         raise ValueError(
-            "Schedule exceeds 24 hours window;"
+            "Schedule exceeds 24 hours  window;"
             "adjust the DEFAULT_MARGIN or dagrun_timeout accordingly. "
             f"dag: {dag.dag_id}, accumulation time: {offset}"
         )
 
-
     raise ValueError("Dag doesn't exist")
 
 
-if __name__ == "__main__" :
+if __name__ == "__main__":
   s = SchedulingHelper.ArrangeScheduleTime(
       SchedulingHelper.registry["orbax"],
-      "maxtext_regular_restore_with_node_disruption"
+      "maxtext_regular_restore_with_node_disruption",
   )

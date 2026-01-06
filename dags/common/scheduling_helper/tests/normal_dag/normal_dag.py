@@ -2,8 +2,10 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator
 import datetime as dt
 
+
 def task_fn(name):
   print(f"Running {name}")
+
 
 with DAG(
     dag_id="normal_dag_1",
