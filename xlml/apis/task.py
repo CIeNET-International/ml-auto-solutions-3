@@ -295,6 +295,125 @@ class AXLearnTask(BaseTask):
 
     return group
 
+  def run_axlearn_with_node_interruption(
+      self,
+      workload_id: airflow.XComArg,
+      expect_reach_to_step: int,
+  ) -> DAGNode:
+    """
+    Run a test job with interruption of a node.
+
+    Attributes:
+      workload_id: A descriptive name for the test run, which is used to
+        generate the unique workload ID.
+
+    Returns:
+      A task group with the following task : run_model.
+    """
+    with TaskGroup(group_id=self.test_cfg.benchmark_id) as group:
+      update_image_tag_cmd = axlearn.update_image_tag_cmd.override(
+          owner=self.test_cfg.task_owner
+      )(
+          image_name=self.image_full_url,
+          workload_id=workload_id,
+      )
+
+      gen_cmds = axlearn.generate_axlearn_cli_command.override(
+          owner=self.test_cfg.task_owner
+      )(
+          task_id="run_workload",
+          project_id=self.gcp_cfg.project_name,
+          zone=self.gcp_cfg.zone,
+          cluster_name=self.test_cfg.cluster_name,
+          workload_id=workload_id,
+          docker_image_name=self.image_name,
+          docker_image_repo=self.image_repo,
+          docker_image_full_url=self.image_full_url,
+          accelerator_type=f"tpu-{self.test_cfg.accelerator.name}",
+          module=self.module,
+          model_config=self.model_name,
+          trainer_dir=self.trainer_dir,
+          num_slices=self.test_cfg.num_slices,
+          trace_steps=self.trace_steps,
+          label=self.label,
+      )
+
+      run_workload = axlearn.start_cli_in_kpo(
+          start_axlearn_cli_command=gen_cmds,
+          workload_id=workload_id,
+          task_owner=self.test_cfg.task_owner,
+          provisioning_timeout=self.workload_provision_timeout,
+          workload_run_timeout=self.workload_run_timeout,
+          image_full_url=self.image_full_url,
+      )
+
+      wait_for_workload_start = xpk.wait_for_workload_start.override(
+          timeout=self.workload_provision_timeout.total_seconds(),
+          owner=self.test_cfg.task_owner,
+      )(
+          workload_id=workload_id,
+          project_id=self.gcp_cfg.project_name,
+          region=gke.zone_to_region(self.gcp_cfg.zone),
+          cluster_name=self.test_cfg.cluster_name,
+      )
+
+      wait_for_workload_to_reach_step = (
+          xpk.wait_for_workload_reach_step.override(
+              task_id="wait_for_workload_reach_step_axlearn"
+          )(
+              workload_id=workload_id,
+              project_id=self.gcp_cfg.project_name,
+              region=gke.zone_to_region(self.gcp_cfg.zone),
+              cluster_name=self.test_cfg.cluster_name,
+              log_pattern=r"gpt_trainer process\s+(\d+) step\s+(\d+)",
+              expect_reach_to_step=str(expect_reach_to_step),
+              is_axlearn = True,
+          )
+      )
+
+      run_node_interruption = xpk.delete_node.override(
+          owner=self.test_cfg.task_owner, trigger_rule="none_failed"
+      )(
+          project=self.gcp_cfg.project_name,
+          zone=self.gcp_cfg.zone,
+          cluster_name=self.test_cfg.cluster_name,
+          workload_id=workload_id,
+          dry_run=False,
+          last_node=True,
+      )
+
+      wait_for_workload_completion = xpk.wait_for_workload_completion.override(
+          timeout=int(self.workload_run_timeout.total_seconds()),
+          owner=self.test_cfg.task_owner,
+      )(
+          workload_id=workload_id,
+          project_id=self.gcp_cfg.project_name,
+          region=gke.zone_to_region(self.gcp_cfg.zone),
+          cluster_name=self.test_cfg.cluster_name,
+      )
+
+      cleanup = xpk.clean_up_workload.override(
+          trigger_rule=TriggerRule.ALL_DONE,
+          execution_timeout=self.workload_post_test_timeout,
+          owner=self.test_cfg.task_owner,
+      )(
+          workload_id=workload_id,
+          project_id=self.gcp_cfg.project_name,
+          zone=self.gcp_cfg.zone,
+          cluster_name=self.test_cfg.cluster_name,
+          xpk_branch=xpk.MAIN_BRANCH,
+      )
+
+      # flow1: The launcher task (Kubernetes Pod) that runs the workload.
+      # flow2: The monitoring sidecar that tracks status and handles cleanup.
+      # We run them in parallel because flow1 blocks until completion;
+      # flow2 must run concurrently to monitor progress and ensure cleanup.
+      flow1 = run_workload
+      flow2 = wait_for_workload_start >> wait_for_workload_to_reach_step >> run_node_interruption>> wait_for_workload_completion >> cleanup
+
+      _ = update_image_tag_cmd >> gen_cmds >> [flow1, flow2]
+
+    return group
 
 @dataclasses.dataclass
 class XpkTask(BaseTask):
@@ -563,6 +682,7 @@ class XpkTask(BaseTask):
               workload_id=workload_id,
               project_id=self.task_gcp_config.project_name,
               region=gke.zone_to_region(self.task_gcp_config.zone),
+              log_pattern=r"completed step: (\d+)",
               cluster_name=self.task_test_config.cluster_name,
               expect_reach_to_step=str(expect_reach_to_step),
           )
