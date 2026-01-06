@@ -1,3 +1,5 @@
+"""Test Dag."""
+
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 import datetime as dt

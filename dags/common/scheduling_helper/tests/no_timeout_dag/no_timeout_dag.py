@@ -1,10 +1,12 @@
+"""Test Dag."""
+
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 import datetime as dt
 
 
 def task_fn():
-  print(f"Running")
+  print("Running")
 
 
 with DAG(

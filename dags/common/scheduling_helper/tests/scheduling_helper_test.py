@@ -4,14 +4,12 @@
 # Other methods that might work:
 # 1. Specific test: python -m unittest dags.common.scheduling_helper.tests.scheduling_helper_test.TestSampleSchedulingHelper.test_arrangescheduletime_is_correct
 
+"""The test file of scheduling helper"""
+
 from absl.testing import absltest
 from dags.common.vm_resource import XpkClusters
 from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper
-from dags.common.scheduling_helper.scheduling_helper import Dag
 from dags.common.scheduling_helper.scheduling_helper import Project
-from airflow.models import DagBag
-from unittest.mock import patch
-import datetime as dt
 
 
 class MockSchedulingHelper(SchedulingHelper):
