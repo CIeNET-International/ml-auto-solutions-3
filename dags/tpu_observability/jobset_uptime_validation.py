@@ -33,7 +33,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     dag_id="jobset_uptime_validation",
     start_date=datetime.datetime(2025, 8, 15),
     default_args={"retries": 0},
-    schedule="0 4 * * *",
+    schedule="0 4 * * *" if composer_env.is_prod_env() else None,
     catchup=False,
     tags=[
         "cloud-ml-auto-solutions",
@@ -119,14 +119,14 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           namespace=jobset_config.namespace,
       )
 
-      active_pods = jobset.get_active_pods.override(task_id="get_active_pod")(
+      pod_names = jobset.list_pod_names.override(task_id="list_pod_names")(
           node_pool=cluster_info,
           namespace=jobset_config.namespace,
       )
 
       wait_for_job_start = jobset.wait_for_jobset_started.override(
           task_id="wait_for_job_start"
-      )(cluster_info, pod_name_list=active_pods, job_apply_time=apply_time)
+      )(cluster_info, pod_name_list=pod_names, job_apply_time=apply_time)
 
       wait_for_jobset_uptime_data = jobset.wait_for_jobset_uptime_data.override(
           task_id="wait_for_jobset_uptime_data"
@@ -172,7 +172,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           cluster_info
           >> create_node_pool
           >> apply_time
-          >> active_pods
+          >> pod_names
           >> wait_for_job_start
           >> wait_for_jobset_uptime_data
           >> clean_up_workload
