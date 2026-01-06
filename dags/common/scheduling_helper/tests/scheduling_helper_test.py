@@ -13,11 +13,13 @@ from airflow.models import DagBag
 from unittest.mock import patch
 import datetime as dt
 
-class MockSchedulingHelper(SchedulingHelper) :
+
+class MockSchedulingHelper(SchedulingHelper):
   """
   Mock class of SchedulingHelper with fake registry
   """
-  registry : dict[str, Project] = {
+
+  registry: dict[str, Project] = {
       "normal_dag": Project(
           "dags/common/scheduling_helper/tests/normal_dag/",
           XpkClusters.TPU_V5P_128_CLUSTER,
@@ -32,23 +34,24 @@ class MockSchedulingHelper(SchedulingHelper) :
       ),
   }
 
+
 class TestSampleSchedulingHelper(absltest.TestCase):
-  """ Test cases for the SchedulingHelper class. """
+  """Test cases for the SchedulingHelper class."""
+
   # unit test
   def test_arrangescheduletime_is_correct(self):
     expected_result = "0 13 * * *"
-    try :
+    try:
       schedule = MockSchedulingHelper.ArrangeScheduleTime(
-        MockSchedulingHelper.registry["normal_dag"],
-        "normal_dag_1"
+          MockSchedulingHelper.registry["normal_dag"], "normal_dag_1"
       )
-    except ValueError :
+    except ValueError:
       schedule = None
 
     self.assertEqual(
         schedule,
         expected_result,
-        msg="test_arrangescheduletime_is_correct faild"
+        msg="test_arrangescheduletime_is_correct faild",
     )
 
   def test_nonexist_dag(self):
@@ -62,13 +65,12 @@ class TestSampleSchedulingHelper(absltest.TestCase):
   def test_overtime_dag(self):
     with self.assertRaises(ValueError) as ctx:
       MockSchedulingHelper.ArrangeScheduleTime(
-          MockSchedulingHelper.registry["overtime_dag"],
-          "overtime_dag_2"
+          MockSchedulingHelper.registry["overtime_dag"], "overtime_dag_2"
       )
     self.assertIn(
         "Schedule exceeds 24 hours window;adjust the DEFAULT_MARGIN "
         "or dagrun_timeout accordingly.",
-        str(ctx.exception)
+        str(ctx.exception),
     )
 
   def test_dag_without_timeout(self):
@@ -78,8 +80,7 @@ class TestSampleSchedulingHelper(absltest.TestCase):
           "no_timeout_dag",
       )
     self.assertIn(
-        "Dag rundag_timeout parameter is necessary",
-        str(ctx.exception)
+        "Dag rundag_timeout parameter is necessary", str(ctx.exception)
     )
 
   # CI test
@@ -91,7 +92,7 @@ class TestSampleSchedulingHelper(absltest.TestCase):
     dag_ids = ["normal_dag_1", "normal_dag_2"]
     expected_results = ["0 13 * * *", "15 14 * * *"]
 
-    for dag_id, expected_result in zip(dag_ids, expected_results) :
+    for dag_id, expected_result in zip(dag_ids, expected_results):
       try:
         schedule = MockSchedulingHelper.ArrangeScheduleTime(
             MockSchedulingHelper.registry["normal_dag"],
@@ -123,9 +124,8 @@ class TestSampleSchedulingHelper(absltest.TestCase):
 
     self.assertIsNone(
         first_duplicate,
-        f"Duplicate cluster found in registry: {first_duplicate}. "
+        f"Duplicate cluster found in registry: {first_duplicate}. ",
     )
-
 
 
 if __name__ == "__main__":
