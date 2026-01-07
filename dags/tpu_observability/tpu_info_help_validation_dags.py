@@ -85,6 +85,7 @@ def _get_tpu_version_output(info: node_pool.Info, pod_name: str) -> str:
   with tempfile.NamedTemporaryFile() as temp_config_file:
     env = os.environ.copy()
     env["KUBECONFIG"] = temp_config_file.name
+
     cmd = " && ".join([
         jobset.Command.get_credentials_command(info),
         f"kubectl exec {pod_name} -n default -- tpu-info --version",
@@ -121,8 +122,9 @@ def _get_tpu_process_output(info: node_pool.Info, pod_name: str) -> str:
   with tempfile.NamedTemporaryFile() as temp_config_file:
     env = os.environ.copy()
     env["KUBECONFIG"] = temp_config_file.name
+
     cmd = " && ".join([
-        jobset.append_credentials_command(info),
+        jobset.Command.get_credentials_command(info),
         f"kubectl exec {pod_name} -n default -- tpu-info --process",
     ])
     return subprocess.run_exec(cmd, env=env)
@@ -243,17 +245,22 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           task_id="wait_for_job_start", timeout=1200
       )(cluster_info, pod_name_list=pod_names, job_apply_time=apply_time)
 
-      validate_help = validate_tpu_info_help.partial(info=cluster_info).expand(
-          pod_name=pod_names
-      )
+      # Keyword arguments are generated dynamically at runtime (pylint does not
+      # know this signature).
+      with TaskGroup(  # pylint: disable=unexpected-keyword-arg
+          group_id="verification_group"
+      ) as verification_group:
+        validate_help = validate_tpu_info_help.partial(
+            info=cluster_info
+        ).expand(pod_name=pod_names)
 
-      validate_version = validate_tpu_info_version.partial(
-          info=cluster_info
-      ).expand(pod_name=pod_names)
+        validate_version = validate_tpu_info_version.partial(
+            info=cluster_info
+        ).expand(pod_name=pod_names)
 
-      validate_process = validate_tpu_info_process.partial(
-          info=cluster_info
-      ).expand(pod_name=pod_names)
+        validate_process = validate_tpu_info_process.partial(
+            info=cluster_info
+        ).expand(pod_name=pod_names)
 
       cleanup_workload = jobset.end_workload.override(
           task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
@@ -279,9 +286,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           >> apply_time
           >> pod_names
           >> wait_for_job_start
-          >> validate_help
-          >> validate_process
-          >> validate_version
+          >> verification_group
           >> cleanup_workload
           >> cleanup_node_pool
       )
