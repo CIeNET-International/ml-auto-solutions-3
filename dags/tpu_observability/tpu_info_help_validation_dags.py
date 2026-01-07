@@ -13,7 +13,8 @@
 # limitations under the License.
 
 """
-A DAG to validate the `tpu-info -help` command execution inside TPU worker pods.
+A DAG to validate the `tpu-info` CLI tool, ensuring help documentation,
+version metadata, and process monitoring are functional inside TPU worker pods.
 """
 
 import datetime
@@ -168,14 +169,22 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
         "v6e-16",
     ],
     description=(
-        "This DAG validates the `tpu-info -help` command "
-        "execution inside TPU worker pods "
+        "Validates tpu-info CLI tool: help documentation, version metadata, "
+        "and process monitoring capabilities inside TPU worker pods."
     ),
     doc_md="""
         ### Description
-        This DAG validates the `tpu-info -help` command execution inside TPU worker pods
-        across different TPU versions and machine configurations.
-        It ensures that the command runs successfully and returns the expected help information.
+        This DAG performs an end-to-end validation of the `tpu-info` observability tool
+        within TPU worker pods. It ensures the CLI tool is correctly installed and
+        functional across different TPU configurations.
+
+        ### Validation Steps:
+        1. **Help Menu Validation**: Verifies `tpu-info -help` displays all required
+           options (streaming, rate, etc.) and specific usage instructions.
+        2. **Process Table Validation**: Confirms `tpu-info --process` can successfully
+           map PIDs to TPU chips.
+        3. **Version Validation**: Ensures `tpu-info --version` correctly reports
+           the tool version, libtpu version, and accelerator type.
       """,
 ) as dag:
   for machine in MachineConfigMap:
