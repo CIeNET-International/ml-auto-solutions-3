@@ -212,7 +212,7 @@ def create(
   )
 
   if node_pool.reservation:
-    command += "--spot "
+    command += f" --reservation-affinity=specific --reservation={node_pool.reservation}"
 
   if ignore_failure:
     command += "2>&1 || true "
