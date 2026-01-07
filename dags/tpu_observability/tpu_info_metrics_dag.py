@@ -99,7 +99,7 @@ def compare_metric_values(
   if not all_passed:
     raise AirflowException(
         f"Overall Result for Pod {pod_name} ({metric_display_name}): FAIL - "
-        "Values do not match within {tolerance_percent}% tolerance."
+        f"Values do not match within {tolerance_percent}% tolerance."
     )
   logging.info(
       "Overall Result for Pod %s (%s): PASS", pod_name, metric_display_name
@@ -165,7 +165,7 @@ def run_metric_verification(
   )
 
   monitoring_values = metric_strategy.parse_from_monitoring(time_series_data)
-  util_values = metric_strategy.parse_from_tpu_info(tpu_info_output)
+  cmd_values = metric_strategy.parse_from_tpu_info(tpu_info_output)
 
   tolerance_for_metric = metric_strategy.tolerance_percent
   logging.info(
@@ -175,7 +175,7 @@ def run_metric_verification(
   )
 
   compare_metric_values(
-      util_values,
+      cmd_values,
       monitoring_values,
       pod_name,
       metric_display_name=metric_strategy.dag_id_suffix,
@@ -276,7 +276,6 @@ with models.DAG(
     workload_script = jobset.Workload.JAX_TPU_BENCHMARK
 
     with TaskGroup(group_id=f"v{config.tpu_version.value}"):
-
       cluster_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
           task_id="build_node_pool_info_from_gcs_yaml"
       )(
@@ -406,8 +405,8 @@ with models.DAG(
       (
           create_node_pool
           >> apply_time
-          >> wait_for_job_start
           >> active_pods
+          >> wait_for_job_start
           >> all_verification_groups
           >> summary
           >> clean_up_workload

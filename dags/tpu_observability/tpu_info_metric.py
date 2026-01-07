@@ -14,6 +14,7 @@
 """Metric verification strategies for the tpu-info CLI tool."""
 
 from abc import ABC, abstractmethod
+import enum
 import re
 from typing import Any
 
@@ -22,6 +23,14 @@ from google.cloud.monitoring_v3 import types as monitoring_types
 from airflow.exceptions import AirflowException
 
 from dags.tpu_observability.utils import tpu_info_util as tpu_info
+
+
+class _Percentiles(enum.Enum):
+  P50 = 50
+  P90 = 90
+  P95 = 95
+  P999 = 99.9
+
 
 def _calculate_percentiles_from_histogram(
     percentiles: list[float],
@@ -102,14 +111,15 @@ class BaseMetricStrategy(ABC):
 
 
 class _BaseSimplePointStrategy(BaseMetricStrategy):
-  """Template class: Handles the common logic for parsing a single.
+  """Base strategy for parsing single numeric data points from Cloud Monitoring.
 
-  Point (int64/double) value from Monitoring.
+  This abstract base class encapsulates the common logic for processing metrics
+  that consist of scalar values (int64 or double). It handles iterating through
+  time series, extracting the value from the first point, type checking,
+  and formatting the final output.
   """
 
-  _monitoring_value_type_key: str
-
-  def _process_value(self, raw_value: Any) -> float:
+  def _process_value(self, raw_value: int | float) -> float:
     """(Optional) Processes the extracted raw value.
 
     Default behavior: Simply converts it to float.
@@ -125,9 +135,30 @@ class _BaseSimplePointStrategy(BaseMetricStrategy):
   def parse_from_monitoring(
       self, time_series_data: list[monitoring_types.TimeSeries]
   ) -> list[float]:
-    """Generic parsing logic."""
+    """Parses raw time series data into a sorted list of float values.
+
+    This method iterates through the provided time series, extracts the most
+    recent data point (assuming index 0), and handles type conversion for
+    both `int64` and `double` value types.
+
+    The results are collected into a map keyed by 'accelerator_id' and then
+    returned as a list, sorted by the numeric suffix of the accelerator ID
+    (e.g., ensuring 'chip-10' comes after 'chip-2').
+
+    Args:
+      time_series_data: A list of TimeSeries objects returned from the
+        Cloud Monitoring API.
+
+    Returns:
+      A list of processed metric values (floats rounded to 2 decimal places),
+      ordered by the accelerator ID.
+
+    Raises:
+      AirflowException: If the metric value type is neither 'int64_value' nor
+        'double_value'.
+    """
     metric_values = {}
-    key_to_extract = self._monitoring_value_type_key
+    raw_value: int | float
 
     for ts in time_series_data:
       if not ts.points:
@@ -136,18 +167,17 @@ class _BaseSimplePointStrategy(BaseMetricStrategy):
       accelerator_id = ts.metric.labels["accelerator_id"]
       point = ts.points[0]
 
-      if (
-          monitoring_v3.TypedValue.pb(point.value).WhichOneof("value")
-          == key_to_extract
-      ):
-        raw_value = getattr(point.value, key_to_extract)
-        processed_value = self._process_value(raw_value)
-        metric_values[accelerator_id] = round(processed_value, 2)
-      else:
-        raise AirflowException(
-            "Could not retrieve valid monitoring data for metric"
-            f" {self.metric_name}."
-        )
+      match monitoring_v3.TypedValue.pb(point.value).WhichOneof("value"):
+        case "int64_value":
+          raw_value = point.value.int64_value
+        case "double_value":
+          raw_value = point.value.double_value
+        case _:
+          raise AirflowException(
+              f"Unexpected metric value type of {self.metric_name}"
+          )
+      processed_value = self._process_value(raw_value)
+      metric_values[accelerator_id] = round(processed_value, 2)
 
     return [
         metric_values[key]
@@ -158,26 +188,38 @@ class _BaseSimplePointStrategy(BaseMetricStrategy):
 
 
 class _BaseDistributionStrategy(BaseMetricStrategy):
-  """
-  Template class: Handles the common logic for parsing Distribution (histogram)
-  data from Monitoring and calculating percentiles.
+  """Base strategy for parsing distribution (histogram) data and calculating percentiles.
+
+  This abstract base class handles the common logic for processing metrics represented
+  as distributions in Cloud Monitoring. It calculates specific percentiles (e.g., P50, P99)
+  from the raw histogram data and parses corresponding percentile values from
+  `tpu-info` command output tables.
   """
 
   _monitoring_group_by_label: str
   _tpu_info_table_name: str
   _tpu_info_group_by_key: str
-
-  def __init__(self, percentiles_to_check: list[float]):
-    """Generic initializer."""
-    if not percentiles_to_check:
-      raise ValueError("percentiles_to_check cannot be empty.")
-    self.percentiles_to_check = sorted(percentiles_to_check)
+  percentiles_to_check = list(_Percentiles)
 
   def parse_from_monitoring(
       self, time_series_data: list[monitoring_types.TimeSeries]
   ) -> list[float]:
-    """Generic Monitoring distribution parsing logic."""
-    distributions_by_group: dict[str, dict[str, Any]] = {}
+    """Parses distribution data from Monitoring and calculates requested percentiles.
+
+    This method iterates through time series data, extracting distribution values
+    (count, bucket bounds, bucket counts). It groups these distributions by a
+    specific label (defined in subclasses) and calculates the target percentiles
+    for each group using the histogram data.
+
+    Args:
+      time_series_data: A list of TimeSeries objects containing distribution data.
+
+    Returns:
+      A flattened list of calculated percentile values (floats). The list is ordered
+      first by the sorted group key, and then by the sorted percentiles for each group.
+    """
+
+    distributions_by_group: dict[str, dict[object, float]] = {}
     group_label = self._monitoring_group_by_label
 
     for ts in time_series_data:
@@ -195,7 +237,7 @@ class _BaseDistributionStrategy(BaseMetricStrategy):
       percentile_values_by_group[
           group_key
       ] = _calculate_percentiles_from_histogram(
-          percentiles=self.percentiles_to_check,
+          percentiles=[p.value for p in self.percentiles_to_check],
           total_count=data["count"],
           bounds=data["bounds"],
           bucket_counts=data["bucket_counts"],
@@ -204,14 +246,28 @@ class _BaseDistributionStrategy(BaseMetricStrategy):
     monitoring_values = []
     for group_key in sorted(distributions_by_group.keys()):
       for p in self.percentiles_to_check:
-        monitoring_values.append(percentile_values_by_group[group_key][p])
+        monitoring_values.append(percentile_values_by_group[group_key][p.value])
 
     return monitoring_values
 
   def parse_from_tpu_info(
       self, tpu_info_metric_output: list[tpu_info.Table]
   ) -> list[float]:
-    """Generic tpu-info percentile parsing logic."""
+    """Parses pre-calculated percentile values from `tpu-info` output tables.
+
+    This method locates the specific table (defined in subclasses) in the `tpu-info`
+    output and extracts values for the requested percentiles. It handles parsing
+    numeric values from string cells (e.g., "123.45 us") and mapping specific
+    column names (like "P999" for P99.9).
+
+    Args:
+      tpu_info_metric_output: A list of parsed Table objects from the `tpu-info` command.
+
+    Returns:
+      A flattened list of percentile values (floats) extracted from the table.
+      The list is ordered first by the sorted group key, and then by the sorted
+      percentiles for each group.
+    """
     parsed_values_by_group: dict[str, dict[float, float]] = {}
     table_name = self._tpu_info_table_name
     group_key = self._tpu_info_group_by_key
@@ -225,18 +281,19 @@ class _BaseDistributionStrategy(BaseMetricStrategy):
 
           parsed_values_by_group[group_value] = {}
           for p in self.percentiles_to_check:
-            # Handle the special key name for P99.9
-            p_key = f"P{p}" if p != 99.9 else "P999"
-            value_str = row_dict.get(p_key, "")
+            # Use Enum name as key (e.g. "P999")
+            value_str = row_dict.get(p.name, "")
 
             match = re.search(r"([\d\.]+)", value_str)
             if match:
-              parsed_values_by_group[group_value][p] = float(match.group(1))
+              parsed_values_by_group[group_value][p.name] = float(
+                  match.group(1)
+              )
 
     tpu_info_data_values = []
     for group_value in sorted(parsed_values_by_group.keys()):
       for p in self.percentiles_to_check:
-        tpu_info_data_values.append(parsed_values_by_group[group_value][p])
+        tpu_info_data_values.append(parsed_values_by_group[group_value][p.name])
 
     return tpu_info_data_values
 
@@ -351,7 +408,9 @@ class TensorcoreUtilizationStrategy(_BaseSimplePointStrategy):
 class BufferTransferLatencyStrategy(_BaseDistributionStrategy):
   """Strategy for verifying Buffer Transfer Latency from distribution data."""
 
-  metric_name = "kubernetes.io/container/multislice/network/dcn_transfer_latencies"
+  metric_name = (
+      "kubernetes.io/container/multislice/network/dcn_transfer_latencies"
+  )
   tpu_info_metric_name = "buffer_transfer_latency"
   dag_id_suffix = "buffer_transfer_latency"
   tolerance_percent = 3.0
@@ -395,7 +454,7 @@ class CollectiveEndToEndLatencyLatenciesStrategy(_BaseDistributionStrategy):
   tpu_info_metric_name = "collective_e2e_latency"
   dag_id_suffix = "collective_e2e_latency"
   tolerance_percent = 3.0
-  _monitoring_group_by_label = "buffer_size"
+  _monitoring_group_by_label = "collective_type"
   _tpu_info_table_name = "TPU Collective End to End Latency"
   _tpu_info_group_by_key = "Buffer Size"
 
@@ -424,13 +483,11 @@ class CollectiveEndToEndLatencyLatenciesStrategy(_BaseDistributionStrategy):
           buffer_size_name = buffer_size + "(" + str(i) + ")"
           parsed_values_by_buffer[buffer_size_name] = {}
           for p in self.percentiles_to_check:
-            # Handle the special key name for P99.9
-            p_key = f"P{p}" if p != 99.9 else "P999"
-            value_str = row_dict.get(p_key, "")
+            value_str = row_dict.get(p.name, "")
 
             match = re.search(r"([\d\.]+)", value_str)
             if match:
-              parsed_values_by_buffer[buffer_size_name][p] = float(
+              parsed_values_by_buffer[buffer_size_name][p.name] = float(
                   match.group(1)
               )
 
@@ -438,7 +495,7 @@ class CollectiveEndToEndLatencyLatenciesStrategy(_BaseDistributionStrategy):
     for buffer_size_name in sorted(parsed_values_by_buffer.keys()):
       for p in self.percentiles_to_check:
         tpu_info_data_values.append(
-            parsed_values_by_buffer[buffer_size_name][p]
+            parsed_values_by_buffer[buffer_size_name][p.name]
         )
 
     return tpu_info_data_values
@@ -449,8 +506,8 @@ ALL_METRIC_STRATEGIES = [
     MemoryTotalStrategy(),
     DutyCycleStrategy(),
     TensorcoreUtilizationStrategy(),
-    BufferTransferLatencyStrategy([50, 90, 95, 99.9]),
-    HostToDeviceTransferLatenciesStrategy([50, 90, 95, 99.9]),
-    DeviceToHostTransferLatenciesStrategy([50, 90, 95, 99.9]),
-    CollectiveEndToEndLatencyLatenciesStrategy([50, 90, 95, 99.9]),
+    BufferTransferLatencyStrategy(),
+    HostToDeviceTransferLatenciesStrategy(),
+    DeviceToHostTransferLatenciesStrategy(),
+    CollectiveEndToEndLatencyLatenciesStrategy(),
 ]
