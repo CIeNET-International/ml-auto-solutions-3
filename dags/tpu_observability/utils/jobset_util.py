@@ -746,13 +746,3 @@ def wait_for_all_pods_running(node_pool: node_pool_info, jobset_config: JobSet):
   )
   num_pods = jobset_config.replicas * jobset_config.parallelism
   return num_running == num_pods
-
-
-@task
-def kill_tpu_pod_workload(pod_name: str, namespace: str = "default") -> None:
-  """Kills the python process on a single pod."""
-  command = (
-      f"kubectl exec {pod_name} -n {namespace} -- "
-      f"bash -c 'pkill -9 -f python'"
-  )
-  subprocess.run_exec(command)
