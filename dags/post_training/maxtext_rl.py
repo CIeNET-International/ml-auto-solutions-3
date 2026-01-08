@@ -85,7 +85,7 @@ with models.DAG(
       ],
   )
   # HF token retrieved from Airflow Variables for secure credential management
-  HF_TOKEN_LLAMA3_1 = models.Variable.get("HF_TOKEN_LLAMA3_1", None)
+  HF_TOKEN_LLAMA3_1 = models.Variable.get("HF_TOKEN_CIENET", None)
 
   for mode, image in test_config_util.POST_TRAINING_DOCKER_IMAGES:
     # TODO: Enable stable mode once a new version of MaxText is available
