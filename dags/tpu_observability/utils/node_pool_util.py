@@ -225,10 +225,11 @@ def create(
       f"--num-nodes={node_pool.num_nodes} "
       f"--machine-type={node_pool.machine_type} "
       f"--tpu-topology={node_pool.tpu_topology} "
+      "--spot"
   )
 
-  if node_pool.reservation:
-    command += f" --reservation-affinity=specific --reservation={node_pool.reservation}"
+  # if node_pool.reservation:
+  #   command += f" --reservation-affinity=specific --reservation={node_pool.reservation}"
 
   if node_pool.node_pool_selector:
     command += f" --node-labels={NODE_POOL_SELECTOR_KEY}={node_pool.node_pool_selector}"
