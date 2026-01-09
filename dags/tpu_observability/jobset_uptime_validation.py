@@ -107,11 +107,11 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           tpu_topology=config.tpu_topology,
       )
 
-      create_node_pool = node_pool.create(
+      create_node_pool = node_pool.create.override(task_id="create_node_pool")(
           node_pool=cluster_info,
       )
 
-      apply_time = jobset.run_workload(
+      apply_time = jobset.run_workload.override(task_id="run_workload")(
           node_pool=cluster_info,
           yaml_config=jobset_config.generate_yaml(
               workload_script=workload_script
