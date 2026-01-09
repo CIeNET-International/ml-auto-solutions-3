@@ -169,11 +169,11 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           tpu_topology=config.tpu_topology,
       )
 
-      create_node_pool = node_pool.create(
+      create_node_pool = node_pool.create.override(task_id="create_node_pool")(
           node_pool=cluster_info,
       )
 
-      apply_time = jobset.run_workload(
+      apply_time = jobset.run_workload.override(task_id="run_workload")(
           node_pool=cluster_info,
           yaml_config=jobset_config.generate_yaml(
               workload_script=Workload.JAX_TPU_BENCHMARK
@@ -195,16 +195,22 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       with TaskGroup(  # pylint: disable=unexpected-keyword-arg
           group_id="verification_group"
       ) as verification_group:
-        help_validation = validate_help.partial(info=cluster_info).expand(
-            pod_name=pod_names
+        help_validation = (
+            validate_help.override(task_id="validate_help")
+            .partial(info=cluster_info)
+            .expand(pod_name=pod_names)
         )
 
-        version_validation = validate_version.partial(info=cluster_info).expand(
-            pod_name=pod_names
+        version_validation = (
+            validate_version.override(task_id="validate_version")
+            .partial(info=cluster_info)
+            .expand(pod_name=pod_names)
         )
 
-        process_validation = validate_process.partial(info=cluster_info).expand(
-            pod_name=pod_names
+        process_validation = (
+            validate_process.override(task_id="validate_process")
+            .partial(info=cluster_info)
+            .expand(pod_name=pod_names)
         )
 
       cleanup_workload = jobset.end_workload.override(
