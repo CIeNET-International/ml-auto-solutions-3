@@ -18,8 +18,10 @@ version metadata, and process monitoring are functional inside TPU worker pods.
 """
 
 import datetime
-import tempfile
 import os
+import subprocess
+import tempfile
+from typing import List
 
 from airflow import models
 from airflow.decorators import task
@@ -34,29 +36,32 @@ from dags.tpu_observability.utils.jobset_util import JobSet, Workload
 from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_PATH
 
 
-def _get_tpu_info_help_output(info: node_pool.Info, pod_name: str) -> str:
-  """
-  Retrieves the raw output of `tpu-info -help` from a specific pod.
-  """
+def run_command(info, pod_name: str, tpu_args: str) -> str:
+  """Helper to handle KUBECONFIG and execute kubectl."""
   with tempfile.NamedTemporaryFile() as temp_config_file:
     env = os.environ.copy()
     env["KUBECONFIG"] = temp_config_file.name
 
     cmd = " && ".join([
         jobset.Command.get_credentials_command(info),
-        f"kubectl exec {pod_name} -n default -- tpu-info -help",
+        f"kubectl exec {pod_name} -n default -- {tpu_args}",
     ])
-
     return subprocess.run_exec(cmd, env=env)
 
 
+def check_output_contains(output: str, patterns: List[str], context: str):
+  """Helper to verify expected strings in output."""
+  for pattern in patterns:
+    if pattern not in output:
+      raise AssertionError(
+          f"Validation failed for '{context}': Missing '{pattern}'."
+      )
+
+
 @task
-def validate_tpu_info_help(info: node_pool.Info, pod_name: str) -> str:
-  """
-  Validates that the `tpu-info -help` output contains all required fields.
-  """
-  output = _get_tpu_info_help_output(info, pod_name)
-  required_patterns = [
+def validate_help(info, pod_name: str) -> str:
+  output = run_command(info, pod_name, "tpu-info -help")
+  patterns = [
       "Display TPU info and metrics.",
       "options:",
       "-h, --help",
@@ -66,77 +71,22 @@ def validate_tpu_info_help(info: node_pool.Info, pod_name: str) -> str:
       "--rate RATE",
       "--list_metrics",
   ]
-
-  for pattern in required_patterns:
-    if pattern not in output:
-      raise AssertionError(
-          "Validation failed: Missing expected string "
-          f"'{pattern}' in tpu-info help.\n"
-          f"Output received:\n{output}"
-      )
-
+  check_output_contains(output, patterns, "tpu-info -help")
   return output
 
 
-def _get_tpu_version_output(info: node_pool.Info, pod_name: str) -> str:
-  """
-  Executes the version command in the pod to get libtpu version and accelerator type.
-  """
-  with tempfile.NamedTemporaryFile() as temp_config_file:
-    env = os.environ.copy()
-    env["KUBECONFIG"] = temp_config_file.name
-
-    cmd = " && ".join([
-        jobset.Command.get_credentials_command(info),
-        f"kubectl exec {pod_name} -n default -- tpu-info --version",
-    ])
-    return subprocess.run_exec(cmd, env=env)
-
-
 @task
-def validate_tpu_info_version(info: node_pool.Info, pod_name: str) -> str:
-  """
-  Validates that `tpu-info --version` returns version and accelerator info.
-  """
-  output = _get_tpu_version_output(info, pod_name)
-  required_patterns = [
-      "tpu-info version:",
-      "libtpu version:",
-      "accelerator type:",
-  ]
-
-  for pattern in required_patterns:
-    if pattern not in output:
-      raise AssertionError(
-          f"Validation failed: Missing expected string '{pattern}' "
-          f"in tpu-info --version output.\nOutput:\n{output}"
-      )
-
+def validate_version(info, pod_name: str) -> str:
+  output = run_command(info, pod_name, "tpu-info --version")
+  patterns = ["tpu-info version:", "libtpu version:", "accelerator type:"]
+  check_output_contains(output, patterns, "tpu-info --version")
   return output
 
 
-def _get_tpu_process_output(info: node_pool.Info, pod_name: str) -> str:
-  """
-  Executes the process command in the pod to get the TPU process table.
-  """
-  with tempfile.NamedTemporaryFile() as temp_config_file:
-    env = os.environ.copy()
-    env["KUBECONFIG"] = temp_config_file.name
-
-    cmd = " && ".join([
-        jobset.Command.get_credentials_command(info),
-        f"kubectl exec {pod_name} -n default -- tpu-info --process",
-    ])
-    return subprocess.run_exec(cmd, env=env)
-
-
 @task
-def validate_tpu_info_process(info: node_pool.Info, pod_name: str) -> str:
-  """
-  Validates that `tpu-info --process` displays the TPU process table.
-  """
-  output = _get_tpu_process_output(info, pod_name)
-  required_patterns = [
+def validate_process(info, pod_name: str) -> str:
+  output = run_command(info, pod_name, "tpu-info --process")
+  patterns = [
       "TPU Process Info",
       "Chip",
       "PID",
@@ -144,21 +94,14 @@ def validate_tpu_info_process(info: node_pool.Info, pod_name: str) -> str:
       "/dev/vfio/",
       "python",
   ]
-
-  for pattern in required_patterns:
-    if pattern not in output:
-      raise AssertionError(
-          f"Validation failed: Missing expected string '{pattern}' "
-          f"in tpu-info --process output.\nOutput:\n{output}"
-      )
-
+  check_output_contains(output, patterns, "tpu-info --process")
   return output
 
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
 # know this signature).
 with models.DAG(  # pylint: disable=unexpected-keyword-arg
-    dag_id="tpu_info_help_validation_dags",
+    dag_id="tpu_info_cli_validation_dags",
     start_date=datetime.datetime(2025, 8, 10),
     schedule="0 18 * * *" if composer_env.is_prod_env() else None,
     catchup=False,
@@ -193,7 +136,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     config = machine.value
 
     jobset_config = JobSet(
-        jobset_name="tpu-info-help-validation-jobset",
+        jobset_name="tpu-info-cli-validation-jobset",
         namespace="default",
         max_restarts=5,
         replicated_job_name="tpu-job-slice",
@@ -218,7 +161,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           task_id="build_node_pool_info_from_gcs_yaml"
       )(
           gcs_path=GCS_CONFIG_PATH,
-          dag_name="tpu_info_help_validation_dags",
+          dag_name="tpu_info_cli_validation_dags",
           is_prod=composer_env.is_prod_env(),
           machine_type=config.machine_version.value,
           tpu_topology=config.tpu_topology,
@@ -250,17 +193,17 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       with TaskGroup(  # pylint: disable=unexpected-keyword-arg
           group_id="verification_group"
       ) as verification_group:
-        validate_help = validate_tpu_info_help.partial(
-            info=cluster_info
-        ).expand(pod_name=pod_names)
+        help_validation = validate_help.partial(info=cluster_info).expand(
+            pod_name=pod_names
+        )
 
-        validate_version = validate_tpu_info_version.partial(
-            info=cluster_info
-        ).expand(pod_name=pod_names)
+        version_validation = validate_version.partial(info=cluster_info).expand(
+            pod_name=pod_names
+        )
 
-        validate_process = validate_tpu_info_process.partial(
-            info=cluster_info
-        ).expand(pod_name=pod_names)
+        process_validation = validate_process.partial(info=cluster_info).expand(
+            pod_name=pod_names
+        )
 
       cleanup_workload = jobset.end_workload.override(
           task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
