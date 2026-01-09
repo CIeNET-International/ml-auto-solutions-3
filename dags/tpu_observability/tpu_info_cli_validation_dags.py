@@ -187,7 +187,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       )
 
       wait_for_job_start = jobset.wait_for_jobset_started.override(
-          task_id="wait_for_job_start", timeout=1200
+          task_id="wait_for_job_start"
       )(cluster_info, pod_name_list=pod_names, job_apply_time=apply_time)
 
       # Keyword arguments are generated dynamically at runtime (pylint does not
