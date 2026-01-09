@@ -150,11 +150,11 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           tpu_topology=config.tpu_topology,
       )
 
-      create_node_pool = node_pool.create(
+      create_node_pool = node_pool.create.override(task_id="create_node_pool")(
           node_pool=cluster_info,
       )
 
-      apply_time = jobset.run_workload(
+      apply_time = jobset.run_workload.override(task_id="run_workload")(
           node_pool=cluster_info,
           yaml_config=jobset_config.generate_yaml(
               workload_script=Workload.JAX_TPU_BENCHMARK
@@ -171,11 +171,15 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           task_id="wait_for_job_start", timeout=1200
       )(cluster_info, pod_name_list=pod_names, job_apply_time=apply_time)
 
-      kill_tasks = kill_tpu_pod_workload.partial(info=cluster_info).expand(
-          pod_name=pod_names
+      kill_tasks = (
+          kill_tpu_pod_workload.override(task_id="kill_tpu_pod_workload")
+          .partial(info=cluster_info)
+          .expand(pod_name=pod_names)
       )
 
-      wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found(
+      wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
+          task_id="wait_for_metric_upload"
+      )(
           node_pool=cluster_info,
           jobset_name=jobset_config.jobset_name,
       )
