@@ -36,7 +36,7 @@ from dags.tpu_observability.utils.jobset_util import JobSet, Workload
 from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_PATH
 
 
-def run_command(info, pod_name: str, tpu_args: str) -> str:
+def execute_tpu_info_cli_command(info, pod_name: str, tpu_args: str) -> str:
   """Helper to handle KUBECONFIG and execute kubectl."""
   with tempfile.NamedTemporaryFile() as temp_config_file:
     env = os.environ.copy()
@@ -49,7 +49,9 @@ def run_command(info, pod_name: str, tpu_args: str) -> str:
     return subprocess.run_exec(cmd, env=env)
 
 
-def check_output_contains(output: str, patterns: List[str], context: str):
+def verify_output_contains_patterns(
+    output: str, patterns: List[str], context: str
+):
   """Helper to verify expected strings in output."""
   for pattern in patterns:
     if pattern not in output:
@@ -60,7 +62,7 @@ def check_output_contains(output: str, patterns: List[str], context: str):
 
 @task
 def validate_help(info, pod_name: str) -> str:
-  output = run_command(info, pod_name, "tpu-info -help")
+  output = execute_tpu_info_cli_command(info, pod_name, "tpu-info -help")
   patterns = [
       "Display TPU info and metrics.",
       "options:",
@@ -71,21 +73,21 @@ def validate_help(info, pod_name: str) -> str:
       "--rate RATE",
       "--list_metrics",
   ]
-  check_output_contains(output, patterns, "tpu-info -help")
+  verify_output_contains_patterns(output, patterns, "tpu-info -help")
   return output
 
 
 @task
 def validate_version(info, pod_name: str) -> str:
-  output = run_command(info, pod_name, "tpu-info --version")
+  output = execute_tpu_info_cli_command(info, pod_name, "tpu-info --version")
   patterns = ["tpu-info version:", "libtpu version:", "accelerator type:"]
-  check_output_contains(output, patterns, "tpu-info --version")
+  verify_output_contains_patterns(output, patterns, "tpu-info --version")
   return output
 
 
 @task
 def validate_process(info, pod_name: str) -> str:
-  output = run_command(info, pod_name, "tpu-info --process")
+  output = execute_tpu_info_cli_command(info, pod_name, "tpu-info --process")
   patterns = [
       "TPU Process Info",
       "Chip",
@@ -94,7 +96,7 @@ def validate_process(info, pod_name: str) -> str:
       "/dev/vfio/",
       "python",
   ]
-  check_output_contains(output, patterns, "tpu-info --process")
+  verify_output_contains_patterns(output, patterns, "tpu-info --process")
   return output
 
 
