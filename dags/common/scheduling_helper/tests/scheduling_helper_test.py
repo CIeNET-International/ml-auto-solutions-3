@@ -1,8 +1,8 @@
 # This test file should be run from the project root directory using:
-# python -m unittest discover dags/common/scheduling_helper/tests -p "scheduling_helper_test.py"
+# python -m unittest discover dags/common/scheduling_helper/tests -p "scheduling_helper_test.py" # pylint: disable=line-too-long
 #
 # Other methods that might work:
-# 1. Specific test: python -m unittest dags.common.scheduling_helper.tests.scheduling_helper_test.TestSampleSchedulingHelper.test_arrangescheduletime_is_correct
+# 1. Specific test: python -m unittest dags.common.scheduling_helper.tests.scheduling_helper_test.TestSampleSchedulingHelper.test_arrangescheduletime_is_correct # pylint: disable=line-too-long
 
 """The test file of scheduling helper"""
 
