@@ -31,7 +31,7 @@ from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_P
 with models.DAG(  # pylint: disable=unexpected-keyword-arg
     dag_id="jobset_pod_delete_ttr",
     start_date=datetime.datetime(2026, 1, 8),
-    schedule=None if composer_env.is_prod_env() else None,
+    schedule="0 18 * * *" if composer_env.is_prod_env() else None,
     catchup=False,
     tags=[
         "cloud-ml-auto-solutions",
