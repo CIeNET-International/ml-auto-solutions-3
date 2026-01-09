@@ -138,7 +138,7 @@ def get_tpu_info_metric_from_pod(
 @task
 def run_metric_verification(
     node_pool: Info,
-    job_apply_time: datetime.datetime,
+    job_apply_time: TimeUtil,
     metric_strategy: BaseMetricStrategy,
     comparison_data: tuple[str, list[tpu_info.Table]],
 ):
@@ -147,9 +147,11 @@ def run_metric_verification(
   metric_name = metric_strategy.metric_name
   logging.info("Verifying metric '%s' for pod: %s...", metric_name, pod_name)
 
-  end_time_datetime = job_apply_time + datetime.timedelta(minutes=10)
-  start_time = TimeUtil.from_datetime(job_apply_time)
-  end_time = TimeUtil.from_datetime(end_time_datetime)
+  end_time_datatime = job_apply_time.to_datetime() + datetime.timedelta(
+      minutes=10
+  )
+  start_time = job_apply_time
+  end_time = TimeUtil.from_datetime(end_time_datatime)
 
   filter_string = [
       f'metric.type = "{metric_name}"',
@@ -313,7 +315,7 @@ with models.DAG(
           namespace=jobset_config.namespace,
       )
 
-      active_pods = jobset.get_active_pods.override(task_id="get_active_pod")(
+      active_pods = jobset.list_pod_names.override(task_id="get_active_pod")(
           node_pool=cluster_info,
           namespace=jobset_config.namespace,
       )
