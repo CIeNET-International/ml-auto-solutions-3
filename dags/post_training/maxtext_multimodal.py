@@ -77,6 +77,7 @@ with models.DAG(
 
   # Test configuration
   test_run_name = "gemma3_multimodal_test"
+  timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
   base_output_dir = f"{DEFAULT_BUCKET}/gemma3-4b"
   maxtext_ckpt_path = f"{base_output_dir}/checkpoints/0/items"
 
@@ -123,11 +124,11 @@ with models.DAG(
   python -m MaxText.decode \
     MaxText/configs/base.yml \
     model_name=gemma3-4b \
-    hf_access_token='"'$HF_TOKEN'"' \
+    hf_access_token='$HF_TOKEN' \
     tokenizer_path=src/MaxText/assets/tokenizer.gemma3 \
     load_parameters_path=$MAXTEXT_CKPT_GCS_PATH \
     per_device_batch_size=1 \
-    run_name={test_run_name}_decode \
+    run_name={test_run_name}_decode_{timestamp} \
     max_prefill_predict_length=272 \
     max_target_length=300 \
     steps=1 \
@@ -148,10 +149,10 @@ with models.DAG(
 
   python -m MaxText.sft_trainer \
     src/MaxText/configs/sft-vision-chartqa.yml \
-    run_name="chartqa-sft" \
+    run_name=chartqa-sft_{timestamp} \
     model_name=gemma3-4b \
     tokenizer_path="google/gemma-3-4b-it" \
-    hf_access_token='"'$HF_TOKEN'"' \
+    hf_access_token='$HF_TOKEN' \
     load_parameters_path=$MAXTEXT_CKPT_GCS_PATH \
     base_output_directory=$BASE_OUTPUT_DIRECTORY \
     per_device_batch_size=1 \
