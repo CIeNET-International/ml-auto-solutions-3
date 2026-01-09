@@ -483,6 +483,49 @@ def rollback(node_pool: Info) -> None:
 
   subprocess.run_exec(command)
 
+@task
+def drain_one_random_node(node_pool: Info) -> None:
+  """Selects and drains a random node within a GKE node pool.
+
+  This task retrieves all nodes in the specified node pool, selects one at
+  random, and executes a 'kubectl drain' command. This is used to simulate
+  node failure or maintenance to test JobSet resiliency.
+
+  Args:
+      node_pool: An instance of the Info class containing node pool metadata.
+
+  Raises:
+      AirflowFailException: If no nodes are found in the node pool or if
+          the drain command fails.
+  """
+  nodes_list = list_nodes(node_pool)
+  if not nodes_list:
+    raise AirflowFailException(
+        f"No nodes found in node pool '{node_pool.node_pool_name}'. "
+        "Aborting drain operation."
+    )
+
+  node_to_drain = random.choice(nodes_list)
+  logging.info(
+    "Selected node '%s' from pool '%s' to drain.",
+    node_to_drain,
+    node_pool.node_pool_name,
+  )
+
+  auth_command = (
+      f"gcloud container clusters get-credentials {node_pool.cluster_name} "
+      f"--project={node_pool.project_id} "
+      f"--location={node_pool.location}"
+  )
+  subprocess.run_exec(auth_command)
+
+  drain_command = (
+      f"kubectl drain {node_to_drain} "
+      "--ignore-daemonsets --delete-emptydir-data"
+  )
+
+  logging.info("Executing: %s", drain_command)
+  subprocess.run_exec(drain_command)
 
 @task.sensor(poke_interval=30, timeout=1200, mode="poke")
 def wait_for_availability(
