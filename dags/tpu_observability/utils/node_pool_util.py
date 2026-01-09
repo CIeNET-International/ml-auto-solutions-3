@@ -484,7 +484,7 @@ def rollback(node_pool: Info) -> None:
   subprocess.run_exec(command)
 
 @task
-def drain_one_random_node(node_pool: Info) -> None:
+def drain_one_random_node(node_pool: Info) -> str:
   """Selects and drains a random node within a GKE node pool.
 
   This task retrieves all nodes in the specified node pool, selects one at
@@ -527,6 +527,38 @@ def drain_one_random_node(node_pool: Info) -> None:
   logging.info("Executing: %s", drain_command)
   subprocess.run_exec(drain_command)
 
+  return node_to_drain
+
+@task
+def uncordon_node(node_pool: Info, node_name: str) -> None:
+  """Restores a node to a schedulable state within a GKE node pool.
+
+  This task executes a 'kubectl uncordon' command on the specified node,
+  allowing new pods to be scheduled on it again. This is typically used
+  during cleanup after a drain test.
+
+  Args:
+      node_pool: An instance of the Info class containing node pool metadata.
+      node_name: The name of the node to be uncordoned.
+  """
+  if not node_name:
+    logging.warning("No node name provided to uncordon. Skipping.")
+    return
+
+  auth_command = (
+      f"gcloud container clusters get-credentials {node_pool.cluster_name} "
+      f"--project={node_pool.project_id} "
+      f"--location={node_pool.location}"
+  )
+  logging.info("Authenticating kubectl for cluster: %s", node_pool.cluster_name)
+  subprocess.run_exec(auth_command)
+
+  uncordon_command = f"kubectl uncordon {node_name}"
+
+  logging.info("Executing: %s", uncordon_command)
+  subprocess.run_exec(uncordon_command)
+
+  logging.info("Node '%s' has been successfully uncordoned.", node_name)
 
 @task.sensor(poke_interval=30, timeout=1200, mode="reschedule")
 def wait_for_availability(
