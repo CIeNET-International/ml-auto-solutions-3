@@ -121,13 +121,10 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           node_pool=cluster_info,
       )
 
-      drained_node = node_pool.drain_one_random_node(
-          node_pool=cluster_info
-      )
+      drained_node = node_pool.drain_one_random_node(node_pool=cluster_info)
 
       uncordon_node = node_pool.uncordon_node(
-          node_pool=cluster_info,
-          node_name=drained_node
+          node_pool=cluster_info, node_name=drained_node
       )
 
       wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found(
