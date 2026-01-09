@@ -20,6 +20,7 @@ killing the main process inside a worker Pod.
 import datetime
 import tempfile
 import os
+import logging
 
 from airflow import models
 from airflow.decorators import task
@@ -54,14 +55,11 @@ def kill_tpu_pod_workload(info: node_pool.Info, pod_name: str) -> None:
         '|| echo "Process already stopped"\'',
     ])
 
+    SIGKILL_EXIT_CODE = "137"  # 128 + 9 (SIGKILL)
     try:
       subprocess.run_exec(cmd, env=env)
     except AirflowFailException as e:
-      if "137" in str(e):
-        print(
-            f"Task completed successfully: Pod {pod_name} "
-            f"returned exit code 137 (SIGKILL)."
-        )
+      if SIGKILL_EXIT_CODE in str(e):
         return
       raise e
 
