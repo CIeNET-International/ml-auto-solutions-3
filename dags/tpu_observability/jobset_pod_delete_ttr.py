@@ -122,7 +122,8 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       )
 
       wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found(
-          node_pool=cluster_info
+          node_pool=cluster_info,
+          jobset_name=jobset_config.jobset_name,
       )
 
       cleanup_workload = jobset.end_workload.override(
