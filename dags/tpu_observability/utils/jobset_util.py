@@ -272,6 +272,14 @@ class Command:
         f"-n {namespace} -o jsonpath={{.items[*].metadata.name}}",
     ])
 
+  @staticmethod
+  def k8s_delete_pod_command(
+    kubeconfig: str, pod_name: str, namespace: str
+  ) -> str:
+    return " ".join([
+      f"kubectl --kubeconfig={kubeconfig} delete pod {pod_name}" ,
+      f"-n {namespace} --wait=false" ,
+    ])
 
 def get_replica_num(
     replica_type: str, job_name: str, node_pool: node_pool_info
@@ -458,7 +466,32 @@ def list_pod_names(node_pool: node_pool_info, namespace: str) -> list[str]:
     return pod_list
 
 
-@task.sensor(poke_interval=30, timeout=900, mode="poke")
+@task
+def delete_one_random_pod(node_pool: node_pool_info, namespace: str = 'default') :
+  running_pods = get_running_pods(node_pool=node_pool , namespace=namespace)
+  if not running_pods :
+    logging.error(f"No running pods found in namespace: {namespace}")
+    raise AirflowFailException(f"No running pods found in namespace: {namespace}")
+
+  target_pod = random.choice(running_pods)
+  logging.info(f"Targeting pod for deletion: {target_pod}")
+
+  with tempfile.NamedTemporaryFile() as temp_config_file:
+        env = os.environ.copy()
+        env["KUBECONFIG"] = temp_config_file.name
+
+        cmd = " && ".join([
+            Command.get_credentials_command(node_pool),
+            Command.k8s_delete_pod_command(
+                temp_config_file.name, target_pod, namespace
+            ),
+        ])
+
+        subprocess.run_exec(cmd, env=env)
+        logging.info(f"Successfully initiated deletion for pod: {target_pod}")
+
+
+@task.sensor(poke_interval=30, timeout=900, mode="reschedule")
 def wait_for_jobset_started(
     node_pool: node_pool_info,
     pod_name_list: str,
