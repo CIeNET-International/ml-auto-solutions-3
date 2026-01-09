@@ -51,15 +51,21 @@ def kill_tpu_pod_workload(info: node_pool.Info, pod_name: str) -> None:
 
     cmd = " && ".join([
         jobset.Command.get_credentials_command(info),
-        f"kubectl exec {pod_name} -n default -- bash -c 'pkill -9 -f python "
-        '|| echo "Process already stopped"\'',
+        f"kubectl exec {pod_name} -n default -- pkill -9 -f python",
     ])
 
-    SIGKILL_EXIT_CODE = "137"  # 128 + 9 (SIGKILL)
     try:
       subprocess.run_exec(cmd, env=env)
     except AirflowFailException as e:
-      if SIGKILL_EXIT_CODE in str(e):
+      error_msg = str(e)
+      SIGKILL_EXIT_CODE = "137"  # 128 + 9 (SIGKILL)
+
+      if SIGKILL_EXIT_CODE in error_msg:
+        logging.info(
+            "Pod %s has already been killed (exit code %s). Ignoring error.",
+            pod_name,
+            SIGKILL_EXIT_CODE,
+        )
         return
       raise e
 
