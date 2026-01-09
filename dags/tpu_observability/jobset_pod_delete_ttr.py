@@ -117,7 +117,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           node_pool=cluster_info,
       )
 
-      delete_random_pod = jobset.delete_one_random_pod(node_pool=cluster_info, namespace=jobset_config.namespace)
+      delete_random_pod = jobset.delete_one_random_pod(
+          node_pool=cluster_info, namespace=jobset_config.namespace
+      )
 
       wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found(
           node_pool=cluster_info
