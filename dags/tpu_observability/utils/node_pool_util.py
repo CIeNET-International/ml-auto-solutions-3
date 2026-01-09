@@ -498,6 +498,7 @@ def rollback(node_pool: Info) -> None:
 
   subprocess.run_exec(command)
 
+
 @task
 def drain_one_random_node(node_pool: Info) -> str:
   """Selects and drains a random node within a GKE node pool.
@@ -544,6 +545,7 @@ def drain_one_random_node(node_pool: Info) -> str:
 
   return node_to_drain
 
+
 @task
 def uncordon_node(node_pool: Info, node_name: str) -> None:
   """Restores a node to a schedulable state within a GKE node pool.
@@ -574,6 +576,7 @@ def uncordon_node(node_pool: Info, node_name: str) -> None:
   subprocess.run_exec(uncordon_command)
 
   logging.info("Node '%s' has been successfully uncordoned.", node_name)
+
 
 @task.sensor(poke_interval=30, timeout=1200, mode="reschedule")
 def wait_for_availability(
