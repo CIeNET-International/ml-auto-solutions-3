@@ -229,7 +229,7 @@ class Command:
     Returns the command to authenticate `gcloud` with the specified GKE cluster.
 
     Args:
-      node_pool: Configuration object with。cluster details.
+      node_pool: Configuration object with cluster details.
 
     Returns:
       A string containing the command to authenticate `gcloud` with the
