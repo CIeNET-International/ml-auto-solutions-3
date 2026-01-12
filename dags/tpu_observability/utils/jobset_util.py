@@ -229,7 +229,7 @@ class Command:
     Returns the command to authenticate `gcloud` with the specified GKE cluster.
 
     Args:
-      node_pool: Configuration object with cluster details.
+      node_pool: Configuration object with。cluster details.
 
     Returns:
       A string containing the command to authenticate `gcloud` with the
@@ -471,6 +471,22 @@ def list_pod_names(node_pool: node_pool_info, namespace: str) -> list[str]:
 def delete_one_random_pod(
     node_pool: node_pool_info, namespace: str = "default"
 ):
+  """
+  Randomly selects and deletes one pod that is currently in the "running" state.
+
+  This task is used for fault injection to test the self-healing and recovery
+  capabilities of a JobSet. It first retrieves all running pods in the
+  specified namespace and then triggers a deletion via kubectl.
+
+  Args:
+    node_pool: The Info object containing the cluster information needed for
+      the kubernetes API to connect to it.
+    namespace: The kubernetes namespace where the target pod resides.
+      Defaults to "default".
+
+  Raises:
+    AirflowFailException: If no running pods are found in the specified namespace.
+  """
   running_pods = get_running_pods(node_pool=node_pool, namespace=namespace)
   if not running_pods:
     logging.error(f"No running pods found in namespace: {namespace}")
