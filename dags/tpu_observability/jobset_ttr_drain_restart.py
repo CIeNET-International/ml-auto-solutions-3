@@ -29,7 +29,7 @@ from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_P
 # Keyword arguments are generated dynamically at runtime (pylint does not
 # know this signature).
 with models.DAG(  # pylint: disable=unexpected-keyword-arg
-    dag_id="jobset_drain_restart_ttr",
+    dag_id="jobset_ttr_drain_restart",
     start_date=datetime.datetime(2025, 8, 10),
     schedule="0 20 * * *" if composer_env.is_prod_env() else None,
     catchup=False,
@@ -98,7 +98,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           task_id="build_node_pool_info_from_gcs_yaml"
       )(
           gcs_path=GCS_CONFIG_PATH,
-          dag_name="jobset_drain_ttr",
+          dag_name="jobset_ttr_drain_restart",
           is_prod=composer_env.is_prod_env(),
           machine_type=config.machine_version.value,
           tpu_topology=config.tpu_topology,
