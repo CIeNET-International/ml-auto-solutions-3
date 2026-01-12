@@ -604,6 +604,7 @@ def wait_for_jobset_ttr_to_be_found(
       filter_str=(
           'metric.type="kubernetes.io/jobset/times_to_recover" '
           f'resource.labels.cluster_name="{node_pool.cluster_name}" '
+          f'resource.labels.entity_name="{jobset_name}"'
       ),
       start_time=TimeUtil.from_datetime(now - datetime.timedelta(minutes=60)),
       end_time=TimeUtil.from_datetime(now),
