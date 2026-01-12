@@ -29,7 +29,7 @@ from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_P
 # Keyword arguments are generated dynamically at runtime (pylint does not
 # know this signature).
 with models.DAG(  # pylint: disable=unexpected-keyword-arg
-    dag_id="jobset_pod_delete_ttr",
+    dag_id="jobset_ttr_pod_delete",
     start_date=datetime.datetime(2026, 1, 8),
     schedule="0 18 * * *" if composer_env.is_prod_env() else None,
     catchup=False,
@@ -94,21 +94,17 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           task_id="build_node_pool_info_from_gcs_yaml"
       )(
           gcs_path=GCS_CONFIG_PATH,
-          dag_name="jobset_pod_delete_ttr",
+          dag_name="jobset_ttr_pod_delete",
           is_prod=composer_env.is_prod_env(),
           machine_type=config.machine_version.value,
           tpu_topology=config.tpu_topology,
       )
 
-      create_node_pool = node_pool.create.override(
-          task_id="create_node_pool"
-      )(
+      create_node_pool = node_pool.create.override(task_id="create_node_pool")(
           node_pool=cluster_info,
       )
 
-      start_workload = jobset.run_workload.override(
-          task_id="start_workload"
-      )(
+      start_workload = jobset.run_workload.override(task_id="start_workload")(
           node_pool=cluster_info,
           yaml_config=jobset_config.generate_yaml(
               workload_script=Workload.JAX_TPU_BENCHMARK
@@ -125,9 +121,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 
       delete_random_pod = jobset.delete_one_random_pod.override(
           task_id="delete_random_pod"
-      )(
-          node_pool=cluster_info, namespace=jobset_config.namespace
-      )
+      )(node_pool=cluster_info, namespace=jobset_config.namespace)
 
       wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
           task_id="wait_for_jobset_ttr_to_be_found"
