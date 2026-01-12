@@ -100,11 +100,15 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           tpu_topology=config.tpu_topology,
       )
 
-      create_node_pool = node_pool.create(
+      create_node_pool = node_pool.create.override(
+          task_id="create_node_pool"
+      )(
           node_pool=cluster_info,
       )
 
-      start_workload = jobset.run_workload(
+      start_workload = jobset.run_workload.override(
+          task_id="start_workload"
+      )(
           node_pool=cluster_info,
           yaml_config=jobset_config.generate_yaml(
               workload_script=Workload.JAX_TPU_BENCHMARK
@@ -112,16 +116,22 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           namespace=jobset_config.namespace,
       )
 
-      ensure_all_pods_running = jobset.wait_for_all_pods_running(
+      ensure_all_pods_running = jobset.wait_for_all_pods_running.override(
+          task_id="ensure_all_pods_running"
+      )(
           num_pods=(jobset_config.replicas * jobset_config.parallelism),
           node_pool=cluster_info,
       )
 
-      delete_random_pod = jobset.delete_one_random_pod(
+      delete_random_pod = jobset.delete_one_random_pod.override(
+          task_id="delete_random_pod"
+      )(
           node_pool=cluster_info, namespace=jobset_config.namespace
       )
 
-      wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found(
+      wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
+          task_id="wait_for_jobset_ttr_to_be_found"
+      )(
           node_pool=cluster_info,
           jobset_name=jobset_config.jobset_name,
       )
