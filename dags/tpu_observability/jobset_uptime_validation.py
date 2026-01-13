@@ -33,7 +33,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     dag_id="jobset_uptime_validation",
     start_date=datetime.datetime(2025, 8, 15),
     default_args={"retries": 0},
-    schedule="0 4 * * *" if composer_env.is_prod_env() else None,
+    schedule=None,
     catchup=False,
     tags=[
         "cloud-ml-auto-solutions",
