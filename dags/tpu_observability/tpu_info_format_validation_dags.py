@@ -23,6 +23,7 @@ import os
 import re
 import subprocess
 import tempfile
+from dataclasses import replace
 
 from airflow import models
 from airflow.decorators import task
@@ -34,9 +35,9 @@ from airflow.utils.trigger_rule import TriggerRule
 from dags import composer_env
 from dags.common import test_owner
 from dags.tpu_observability.configs.common import (
-  GCS_CONFIG_PATH,
-  MachineConfigMap,
-  TpuConfig,
+    MachineConfigMap,
+    TpuConfig,
+    GCS_CONFIG_PATH,
 )
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
