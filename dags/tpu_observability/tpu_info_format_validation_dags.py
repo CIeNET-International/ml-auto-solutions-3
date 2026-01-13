@@ -23,7 +23,6 @@ import os
 import re
 import subprocess
 import tempfile
-from dataclasses import replace
 
 from airflow import models
 from airflow.decorators import task
@@ -35,9 +34,9 @@ from airflow.utils.trigger_rule import TriggerRule
 from dags import composer_env
 from dags.common import test_owner
 from dags.tpu_observability.configs.common import (
-    MachineConfigMap,
-    TpuConfig,
-    GCS_CONFIG_PATH,
+  GCS_CONFIG_PATH,
+  MachineConfigMap,
+  TpuConfig,
 )
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
@@ -351,7 +350,10 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
         tpu_accelerator_type="tpu-v6e-slice",
         tpu_topology="4x4",
         container_name="jax-tpu-worker",
-        image="asia-northeast1-docker.pkg.dev/cienet-cmcs/yuna-docker/tpu-info:v0.5.1",
+        image=(
+            "asia-northeast1-docker.pkg.dev/cienet-cmcs/yuna-docker/"
+            "tpu-info:v0.5.1"
+        ),
         tpu_cores_per_pod=4,
     )
 
