@@ -73,7 +73,7 @@ def kill_tpu_pod_workload(info: node_pool.Info, pod_name: str) -> None:
 # Keyword arguments are generated dynamically at runtime (pylint does not
 # know this signature).
 with models.DAG(  # pylint: disable=unexpected-keyword-arg
-    dag_id="jobset_ttr_kill",
+    dag_id="jobset_ttr_kill_process",
     start_date=datetime.datetime(2025, 8, 10),
     schedule=None,
     catchup=False,
@@ -119,7 +119,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     config = machine.value
 
     jobset_config = JobSet(
-        jobset_name="ttr-kill-v6e-workload",
+        jobset_name="ttr-kill-process-v6e-workload",
         namespace="default",
         max_restarts=5,
         replicated_job_name="tpu-job-slice",
@@ -144,7 +144,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           task_id="build_node_pool_info_from_gcs_yaml"
       )(
           gcs_path=GCS_CONFIG_PATH,
-          dag_name="jobset_ttr_kill",
+          dag_name="jobset_ttr_kill_process",
           is_prod=composer_env.is_prod_env(),
           machine_type=config.machine_version.value,
           tpu_topology=config.tpu_topology,
