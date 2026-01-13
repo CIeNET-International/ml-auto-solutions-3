@@ -85,6 +85,10 @@ with models.DAG(
             cluster=cluster,
             time_out_in_min=60,
             run_model_cmds=(
+                "export JAX_RPC_TIMEOUT_MS=600000 "
+                "JAX_DISTRIBUTED_SERVICE_TIME_OUT_SECONDS=3600 "
+                "JAX_COORDINATION_SERVICE_HEARTBEAT_TIMEOUT_SECONDS=3600 "
+                "JAX_CONNECT_RETRY_CNT=50 "
                 f"JAX_PLATFORMS=tpu,cpu ENABLE_PJRT_COMPATIBILITY=true TPU_SLICE_BUILDER_DUMP_CHIP_FORCE=true TPU_SLICE_BUILDER_DUMP_ICI=true JAX_FORCE_TPU_INIT=true ENABLE_TPUNETD_CLIENT=true && "
                 f"python -m MaxText.train MaxText/configs/base.yml run_name={slice_num}slice-V{cluster.device_version}_{cores}-maxtext-jax-stable-stack-{current_datetime} "
                 "steps=30 per_device_batch_size=1 max_target_length=4096 model_name=llama2-7b "
@@ -107,6 +111,10 @@ with models.DAG(
             cluster=cluster,
             time_out_in_min=60,
             run_model_cmds=(
+                "export JAX_RPC_TIMEOUT_MS=600000 "
+                "JAX_DISTRIBUTED_SERVICE_TIME_OUT_SECONDS=3600 "
+                "JAX_COORDINATION_SERVICE_HEARTBEAT_TIMEOUT_SECONDS=3600 "
+                "JAX_CONNECT_RETRY_CNT=50 "
                 f"JAX_PLATFORMS=tpu,cpu ENABLE_PJRT_COMPATIBILITY=true TPU_SLICE_BUILDER_DUMP_CHIP_FORCE=true TPU_SLICE_BUILDER_DUMP_ICI=true JAX_FORCE_TPU_INIT=true ENABLE_TPUNETD_CLIENT=true && "
                 f"pip install . && python src/maxdiffusion/train_sdxl.py src/maxdiffusion/configs/base_xl.yml "
                 f"pretrained_model_name_or_path=gs://maxdiffusion-github-runner-test-assets/checkpoints/models--stabilityai--stable-diffusion-xl-base-1.0 "
