@@ -161,7 +161,7 @@ def validate_streaming_rate(info, pod_name: str, rate: float) -> str:
 with models.DAG(  # pylint: disable=unexpected-keyword-arg
     dag_id="tpu_info_verify_streaming_rate_dags",
     start_date=datetime.datetime(2025, 8, 10),
-    schedule="0 19 * * *" if composer_env.is_prod_env() else None,
+    schedule=None,
     catchup=False,
     tags=[
         "cloud-ml-auto-solutions",
