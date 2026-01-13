@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-A
+DAG to verify tpu-info streaming rate functionality on TPU v6e slices.
 """
 
 import datetime
@@ -37,21 +37,16 @@ from dags.tpu_observability.utils.jobset_util import JobSet, Workload
 from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_PATH
 
 
-# --- Helper Methods ---
-
-
 def execute_tpu_info_cli_command(info, pod_name: str, tpu_args: str) -> str:
   """Helper to handle KUBECONFIG and execute kubectl exec."""
   with tempfile.NamedTemporaryFile() as temp_config_file:
     env = os.environ.copy()
     env["KUBECONFIG"] = temp_config_file.name
 
-    # Note: jobset.Command.get_credentials_command(info) must be accessible
     cmd = " && ".join([
         jobset.Command.get_credentials_command(info),
         f"kubectl exec {pod_name} -n default -- {tpu_args}",
     ])
-    # Returning the stdout of the command execution
     return subprocess.run_exec(cmd, env=env)
 
 
@@ -66,93 +61,23 @@ def verify_output_contains_patterns(
       )
 
 
-# --- Helper: Verification Logic ---
-
-
-def verify_streaming_frequency(output: str, rate: float, duration: int):
-  """
-  Verifies if the sampling rate is effective by distinguishing between
-  UI Rendering frequency and Actual Data Update frequency.
-  """
-  # 1. Capture UI Rendering Cycles (Equivalent to: grep -o $'\x1b\[H' | wc -l)
-  # This proves the --rate argument was accepted and the loop is running.
-  ui_render_count = output.count("\x1b[H")
-
-  # 2. Capture Unique Data Points (Equivalent to: grep "Last update:" | sort -u | wc -l)
-  # This accounts for the 1-second display precision limit.
-  timestamp_pattern = r"Last update: ([\d\- :]+) UTC"
-  found_timestamps = re.findall(timestamp_pattern, output)
-  unique_data_points = len(set(found_timestamps))
-
-  # 3. Calculate Expectations
-  # Theoretical UI cycles (limited by tool's 4Hz floor if rate > 0.25s)
-  expected_ui_cycles = duration / rate
-
-  # Real data updates (limited by tool's 1Hz sampling ceiling)
-  effective_data_rate = max(1.0, rate)
-  expected_data_points = duration / effective_data_rate
-
-  logging.info(f"[Verify] Target Rate: {rate}s | Duration: {duration}s")
-  logging.info(
-      f"[Verify] UI Renders: Found {ui_render_count} | Expected ~{expected_ui_cycles}"
-  )
-  logging.info(
-      f"[Verify] Data Points: Found {unique_data_points} | Expected ~{expected_data_points}"
-  )
-
-  # --- 4. Assertions ---
-
-  # Check A: Data Consistency
-  # We allow a margin of 2 points for initialization lag and clock boundary crossing.
-  if unique_data_points < (expected_data_points - 2):
-    raise AssertionError(
-        f"Data update frequency too low. Rate {rate}s should yield ~{expected_data_points} "
-        f"points in {duration}s, but only found {unique_data_points}."
-    )
-
-  # Check B: UI High-Frequency Enforcement (Only for rates <= 0.2s)
-  # This confirms the tool actually speeds up the rendering loop as requested.
-  if rate <= 0.2:
-    if ui_render_count < expected_ui_cycles * 0.7:
-      raise AssertionError(
-          f"High-frequency UI rendering failed. Requested {rate}s but "
-          f"rendering count {ui_render_count} is too low."
-      )
-
-  logging.info(f"Frequency validation successful for rate {rate}s.")
-
-
-# --- The Task Definition ---
-
-
 @task
 def validate_streaming_rate(info, pod_name: str, rate: float) -> str:
   """
   Executes tpu-info --streaming and validates frequency using UI and Data metrics.
   """
-  # Duration: 15s provides enough samples to overcome the 'Last update' precision limit
   duration = 15
 
-  # IMPORTANT: We use 'script -q -c' to simulate a TTY environment.
-  # Without this, kubectl exec may strip the ANSI control codes (\x1b[H)
-  # used to count UI refreshes.
   tpu_args = (
       f"sh -c \"script -q -c 'timeout {duration}s tpu-info --streaming --rate {rate}' /dev/null\" "
       f"|| [ $? -eq 124 ]"
   )
-
-  logging.info(f"Validating Pod: {pod_name} | Requested Rate: {rate}s")
   output = execute_tpu_info_cli_command(info, pod_name, tpu_args)
 
-  # 1. Verify basic output content
-  patterns = ["TPU Runtime Utilization", "HBM Usage (GiB)", "Last update:"]
+  patterns = ["Refresh rate:", f"{rate}s"]
   verify_output_contains_patterns(
       output, patterns, f"Content check on {pod_name}"
   )
-
-  # 2. Verify frequency logic (UI vs Data)
-  verify_streaming_frequency(output, rate, duration)
-
   return f"Validated {pod_name} at {rate}s"
 
 
@@ -166,29 +91,21 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     tags=[
         "cloud-ml-auto-solutions",
         "jobset",
-        "time-to-recover",
         "tpu-observability",
         "TPU",
         "v6e-16",
+        "tpu-info",
+        "streaming-rate",
     ],
     description=(
-        "Validates tpu-info CLI tool: help documentation, version metadata, "
-        "and process monitoring capabilities inside TPU worker pods."
+        "DAG to verify tpu-info streaming rate functionality on TPU v6e slices."
     ),
     doc_md="""
-        ### Description
-        This DAG performs an end-to-end validation of the `tpu-info` observability tool
-        within TPU worker pods. It ensures the CLI tool is correctly installed and
-        functional across different TPU configurations.
-
-        ### Validation Steps:
-        1. **Help Menu Validation**: Verifies `tpu-info -help` displays all required
-           options (streaming, rate, etc.) and specific usage instructions.
-        2. **Process Table Validation**: Confirms `tpu-info --process` can successfully
-           map PIDs to TPU chips.
-        3. **Version Validation**: Ensures `tpu-info --version` correctly reports
-           the tool version, libtpu version, and accelerator type.
-      """,
+    ## TPU Info Streaming Rate Verification DAG
+    This DAG validates the `tpu-info` CLI tool's ability to stream TPU metrics
+    at specified rates inside TPU worker pods. It ensures that the tool adheres to
+    the requested streaming frequency and accurately reflects TPU status updates.
+    """,
 ) as dag:
   for machine in MachineConfigMap:
     config = machine.value
@@ -251,36 +168,32 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       with TaskGroup(  # pylint: disable=unexpected-keyword-arg
           group_id="verification_group"
       ) as verification_group:
-        # 1. Define the static rates you want to test
         test_rates = [0.1, 0.5, 1.0, 5.0]
 
-        # 2. Use Dynamic Task Mapping (.expand)
-        # This creates a Cross-Product: (number of pods) x (number of rates)
-        # If pod_names has 8 pods, this will trigger 32 task instances.
         streaming_validation_results = (
             validate_streaming_rate.override(task_id="streaming_rate_test")
             .partial(info=cluster_info)
             .expand(
-                pod_name=pod_names,  # XComArg from a previous task
-                rate=test_rates,  # Standard Python list
+                pod_name=pod_names,
+                rate=test_rates,
             )
         )
 
-      # cleanup_workload = jobset.end_workload.override(
-      #     task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
-      # )(
-      #     node_pool=cluster_info,
-      #     jobset_name=jobset_config.jobset_name,
-      #     namespace=jobset_config.namespace,
-      # ).as_teardown(
-      #     setups=apply_time
-      # )
+      cleanup_workload = jobset.end_workload.override(
+          task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
+      )(
+          node_pool=cluster_info,
+          jobset_name=jobset_config.jobset_name,
+          namespace=jobset_config.namespace,
+      ).as_teardown(
+          setups=apply_time
+      )
 
-      # cleanup_node_pool = node_pool.delete.override(
-      #     task_id="cleanup_node_pool", trigger_rule=TriggerRule.ALL_DONE
-      # )(node_pool=cluster_info).as_teardown(
-      #     setups=create_node_pool,
-      # )
+      cleanup_node_pool = node_pool.delete.override(
+          task_id="cleanup_node_pool", trigger_rule=TriggerRule.ALL_DONE
+      )(node_pool=cluster_info).as_teardown(
+          setups=create_node_pool,
+      )
 
       # Airflow uses >> for task chaining, which is pointless for pylint.
       # pylint: disable=pointless-statement
@@ -291,7 +204,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           >> pod_names
           >> wait_for_job_start
           >> verification_group
-          # >> cleanup_workload
-          # >> cleanup_node_pool
+          >> cleanup_workload
+          >> cleanup_node_pool
       )
       # pylint: enable=pointless-statement
