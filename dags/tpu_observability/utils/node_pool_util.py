@@ -73,7 +73,7 @@ class Info:
   reservation: str = None
 
 
-@task
+@task(task_id="build_node_pool_info")
 def build_node_pool_info_from_gcs_yaml(
     gcs_path: str, dag_name: str, is_prod: bool = True, **overrides
 ) -> Info:
@@ -178,7 +178,7 @@ def _node_pool_exists(node_pool: Info) -> bool:
     return False
 
 
-@task
+@task(task_id="create_node_pool")
 def create(
     node_pool: Info,
     ignore_failure: bool = False,
@@ -220,7 +220,7 @@ def create(
   subprocess.run_exec(command)
 
 
-@task
+@task(task_id="delete_node_pool")
 def delete(node_pool: Info) -> None:
   """Deletes the GKE node pool using gcloud command."""
 
@@ -463,6 +463,85 @@ def rollback(node_pool: Info) -> None:
   )
 
   subprocess.run_exec(command)
+
+
+@task(task_id="drain_one_random_node")
+def drain_one_random_node(node_pool: Info) -> str:
+  """Selects and drains a random node within a GKE node pool.
+
+  This task retrieves all nodes in the specified node pool, selects one at
+  random, and executes a 'kubectl drain' command. This is used to simulate
+  node failure or maintenance to test JobSet resiliency.
+
+  Args:
+      node_pool: An instance of the Info class containing node pool metadata.
+
+  Raises:
+      AirflowFailException: If no nodes are found in the node pool or if
+          the drain command fails.
+  """
+  nodes_list = list_nodes(node_pool)
+  if not nodes_list:
+    raise AirflowFailException(
+        f"No nodes found in node pool '{node_pool.node_pool_name}'. "
+        "Aborting drain operation."
+    )
+
+  node_to_drain = random.choice(nodes_list)
+  logging.info(
+      "Selected node '%s' from pool '%s' to drain.",
+      node_to_drain,
+      node_pool.node_pool_name,
+  )
+
+  auth_command = (
+      f"gcloud container clusters get-credentials {node_pool.cluster_name} "
+      f"--project={node_pool.project_id} "
+      f"--location={node_pool.location}"
+  )
+  subprocess.run_exec(auth_command)
+
+  drain_command = (
+      f"kubectl drain {node_to_drain} "
+      "--ignore-daemonsets --delete-emptydir-data"
+  )
+
+  logging.info("Executing: %s", drain_command)
+  subprocess.run_exec(drain_command)
+
+  return node_to_drain
+
+
+@task(task_id="uncordon_a_node")
+def uncordon_node(node_pool: Info, node_name: str) -> None:
+  """Restores a node to a schedulable state within a GKE node pool.
+
+  This task executes a 'kubectl uncordon' command on the specified node,
+  allowing new pods to be scheduled on it again. This is typically used
+  during cleanup after a drain test.
+
+  Args:
+      node_pool: An instance of the Info class containing node pool metadata.
+      node_name: The name of the node to be uncordoned.
+  """
+  if not node_name:
+    logging.warning("No node name provided to uncordon. Skipping.")
+    return
+
+  auth_command = (
+      f"gcloud container clusters get-credentials {node_pool.cluster_name} "
+      f"--project={node_pool.project_id} "
+      f"--location={node_pool.location}"
+  )
+  logging.info("Authenticating kubectl for cluster: %s", node_pool.cluster_name)
+  subprocess.run_exec(auth_command)
+
+  uncordon_command = f"kubectl uncordon {node_name}"
+
+  logging.info("Executing: %s", uncordon_command)
+  subprocess.run_exec(uncordon_command)
+
+  logging.info("Node '%s' has been successfully uncordoned.", node_name)
 
 
 @task.sensor(poke_interval=30, timeout=1200, mode="reschedule")
