@@ -105,7 +105,7 @@ def validate_process(info, pod_name: str) -> str:
 with models.DAG(  # pylint: disable=unexpected-keyword-arg
     dag_id="tpu_info_cli_validation_dags",
     start_date=datetime.datetime(2025, 8, 10),
-    schedule="0 18 * * *" if composer_env.is_prod_env() else None,
+    schedule=None,
     catchup=False,
     tags=[
         "cloud-ml-auto-solutions",
