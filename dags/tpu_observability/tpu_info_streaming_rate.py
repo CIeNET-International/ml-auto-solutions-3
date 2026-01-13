@@ -9,7 +9,7 @@
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
+# See the License foar the specific language governing permissions and
 # limitations under the License.
 
 """
@@ -21,8 +21,6 @@ import os
 import subprocess
 import tempfile
 from typing import List
-import logging
-import re
 
 from airflow import models
 from airflow.decorators import task
@@ -98,13 +96,15 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
         "streaming-rate",
     ],
     description=(
-        "DAG to verify tpu-info streaming rate functionality on TPU v6e slices."
+        "Automated validation of the tpu-info CLI's --rate parameter, "
+        "ensuring accurate metric streaming frequencies on TPU v6e-16 slices."
     ),
     doc_md="""
-    ## TPU Info Streaming Rate Verification DAG
-    This DAG validates the `tpu-info` CLI tool's ability to stream TPU metrics
-    at specified rates inside TPU worker pods. It ensures that the tool adheres to
-    the requested streaming frequency and accurately reflects TPU status updates.
+      ## TPU Info Streaming Rate Verification DAG
+
+      This DAG automates the functional testing of the `tpu-info` CLI tool, specifically focusing on the
+      `--streaming` and `--rate` flags. It verifies that the tool correctly honors requested update
+      intervals within a Kubernetes-managed TPU environment.
     """,
 ) as dag:
   for machine in MachineConfigMap:
