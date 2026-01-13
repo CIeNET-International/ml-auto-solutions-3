@@ -73,7 +73,7 @@ class Info:
   reservation: str = None
 
 
-@task
+@task(task_id="build_node_pool_info")
 def build_node_pool_info_from_gcs_yaml(
     gcs_path: str, dag_name: str, is_prod: bool = True, **overrides
 ) -> Info:
@@ -178,7 +178,7 @@ def _node_pool_exists(node_pool: Info) -> bool:
     return False
 
 
-@task
+@task(task_id="create_node_pool")
 def create(
     node_pool: Info,
     ignore_failure: bool = False,
@@ -220,7 +220,7 @@ def create(
   subprocess.run_exec(command)
 
 
-@task
+@task(task_id="delete_node_pool")
 def delete(node_pool: Info) -> None:
   """Deletes the GKE node pool using gcloud command."""
 
@@ -465,7 +465,7 @@ def rollback(node_pool: Info) -> None:
   subprocess.run_exec(command)
 
 
-@task
+@task(task_id="drain_one_random_node")
 def drain_one_random_node(node_pool: Info) -> str:
   """Selects and drains a random node within a GKE node pool.
 
@@ -512,7 +512,7 @@ def drain_one_random_node(node_pool: Info) -> str:
   return node_to_drain
 
 
-@task
+@task(task_id="uncordon_a_node")
 def uncordon_node(node_pool: Info, node_name: str) -> None:
   """Restores a node to a schedulable state within a GKE node pool.
 

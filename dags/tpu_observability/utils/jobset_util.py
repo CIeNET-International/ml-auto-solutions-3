@@ -362,7 +362,7 @@ def get_running_pods(
   return running_pods
 
 
-@task
+@task(task_id="run_workload")
 def run_workload(
     node_pool: node_pool_info, yaml_config: str, namespace: str
 ) -> TimeUtil:
@@ -391,7 +391,7 @@ def run_workload(
     return TimeUtil.from_datetime(current_time_utc)
 
 
-@task
+@task(task_id="end_all_jobsets")
 def end_workload(node_pool: node_pool_info, jobset_name: str, namespace: str):
   """
   Deletes all JobSets from the GKE cluster to clean up resources.
@@ -525,7 +525,12 @@ def wait_for_jobset_started(
   return all(p > threshold_value for p in last_n_data_points)
 
 
-@task.sensor(poke_interval=60, timeout=3600, mode="reschedule")
+@task.sensor(
+    task_id="wait_for_jobset_ttr_matric_to_be_found",
+    poke_interval=60,
+    timeout=3600,
+    mode="reschedule",
+)
 def wait_for_jobset_ttr_to_be_found(node_pool: node_pool_info) -> bool:
   """
   Polls the jobset time_between_interruptions metric.
@@ -581,7 +586,12 @@ def wait_for_jobset_status_occurrence(
   return ready_replicas > 0
 
 
-@task.sensor(poke_interval=30, timeout=600, mode="reschedule")
+@task.sensor(
+    task_id="wait_for_all_pods_running",
+    poke_interval=30,
+    timeout=600,
+    mode="reschedule",
+)
 def wait_for_all_pods_running(num_pods: int, node_pool: node_pool_info):
   num_running = len(get_running_pods(node_pool=node_pool, namespace="default"))
   return num_running == num_pods
