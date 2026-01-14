@@ -63,6 +63,9 @@ def run_exec(
 
   if res.returncode != 0:
     logging.info("[subprocess] stderr: %s", res.stderr)
+    if res.returncode == 137:  # 128 + 9 (SIGKILL)
+      logging.info("Process was killed with SIGKILL (exit code 137).")
+      return res.stdout
     raise AirflowFailException(
         "Caught an error while executing a command. stderr Message:"
         f" {res.stderr}"
