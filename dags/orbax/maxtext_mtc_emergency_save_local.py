@@ -19,8 +19,8 @@ from dags.common.vm_resource import XpkClusters
 from dags.multipod.configs import gke_config
 from dags.orbax.util import validation_util
 from dags.orbax.util import checkpoint_util
-from xlml.utils.gke import zone_to_region
 from dags.orbax.util import test_config_util
+from xlml.utils.gke import zone_to_region
 
 
 SCHEDULE = "0 12 * * *" if composer_env.is_prod_env() else None
@@ -74,7 +74,8 @@ with models.DAG(
     """,
     concurrency=2,
 ) as dag:
-  # Only one set of test configurations (e.g., v5p-128) is supported at the moment.
+  # Only one set of test configurations (e.g., v5p-128) is supported at
+  # the moment.
   # Other configurations (e.g., v5e and/or v6e) may be introduced later.
   test_configs = [
       test_config_util.TestConfig(
@@ -130,7 +131,9 @@ with models.DAG(
                 run_name=run_name,
                 slice_num=slice_num,
                 out_folder=f"maxtext_{checkpointing.name}_orbax_save_local",
-                enable_multi_tier_checkpointing=checkpointing.enable_multi_tier_checkpointing,
+                enable_multi_tier_checkpointing=(
+                    checkpointing.enable_multi_tier_checkpointing
+                ),
             )
 
             start_time = validation_util.generate_timestamp()
@@ -174,6 +177,8 @@ with models.DAG(
                 )(test_config.cpc_config).as_teardown(setups=apply_cpc)
             )
 
+            # Airflow uses >> for task chaining, which is pointless for pylint.
+            # pylint: disable=pointless-statement
             (
                 wait_delete_cpc
                 >> apply_cpc
@@ -184,9 +189,12 @@ with models.DAG(
                 >> validate_local_check_steps
                 >> wait_delete_cpc_final
             )
+            # pylint: disable=pointless-statement
       # Add to a list of test to chain them sequentially.
       task_groups.append(group)
 
   # Chain all task groups sequentially.
   for idx in range(len(task_groups) - 1):
+    # pylint: disable=pointless-statement
     task_groups[idx] >> task_groups[idx + 1]
+    # pylint: disable=pointless-statement

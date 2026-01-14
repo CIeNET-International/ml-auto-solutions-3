@@ -37,7 +37,9 @@ with models.DAG(
         "TPU",
         "v5p-128",
     ],
-    description="DAG that verify MaxText regular checkpoint restoring functionality from GCS bucket.",
+    description="""
+      DAG that verify MaxText regular checkpoint restoring functionality from GCS bucket.
+    """,
     doc_md="""
       # MaxText Regular Checkpointing Validation DAG
 
@@ -104,8 +106,12 @@ with models.DAG(
             run_name=run_name,
             slice_num=slice_num,
             out_folder=DAG_TEST_NAME,
-            enable_multi_tier_checkpointing=checkpointing.enable_multi_tier_checkpointing,
-            enable_emergency_checkpoint=checkpointing.enable_emergency_checkpoint,
+            enable_multi_tier_checkpointing=(
+                checkpointing.enable_multi_tier_checkpointing
+            ),
+            enable_emergency_checkpoint=(
+                checkpointing.enable_emergency_checkpoint
+            ),
         )
 
         start_time = validation_util.generate_timestamp.override(
@@ -132,8 +138,12 @@ with models.DAG(
             run_name=run_name,
             slice_num=slice_num,
             out_folder=DAG_TEST_NAME,
-            enable_multi_tier_checkpointing=checkpointing.enable_multi_tier_checkpointing,
-            enable_emergency_checkpoint=checkpointing.enable_emergency_checkpoint,
+            enable_multi_tier_checkpointing=(
+                checkpointing.enable_multi_tier_checkpointing
+            ),
+            enable_emergency_checkpoint=(
+                checkpointing.enable_emergency_checkpoint
+            ),
         )
 
         resume_maxtext_chkpt_run_test = gke_config.get_gke_config(
@@ -188,6 +198,8 @@ with models.DAG(
             steps_to_validate=gcs_steps_to_validate,
         )
 
+        # Airflow uses >> for task chaining, which is pointless for pylint.
+        # pylint: disable=pointless-statement
         (
             run_name
             >> start_time
@@ -198,3 +210,4 @@ with models.DAG(
             >> validate_log
             >> validate_bucket
         )
+        # pylint: enable=pointless-statement
