@@ -110,12 +110,19 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
   for machine in MachineConfigMap:
     config = machine.value
 
+    @task
+    def generate_second_node_pool_name(
+        node_pool_info: node_pool.Info,
+    ) -> str:
+      """Generates a second node pool name."""
+      return f"{node_pool_info.node_pool_name}-2"
+
     jobset_config = JobSet(
         jobset_name="tpu-info-verify-streaming-rate-jobset",
         namespace="default",
         max_restarts=5,
         replicated_job_name="tpu-job-slice",
-        replicas=1,
+        replicas=2,
         backoff_limit=0,
         completions=4,
         parallelism=4,
@@ -142,9 +149,26 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           tpu_topology=config.tpu_topology,
       )
 
-      create_node_pool = node_pool.create.override(task_id="create_node_pool")(
-          node_pool=cluster_info,
+      cluster_info_2 = node_pool.copy_node_pool_info_with_override(
+          info=cluster_info,
+          node_pool_name=generate_second_node_pool_name(cluster_info),
       )
+
+      with TaskGroup(  # pylint: disable=unexpected-keyword-arg
+          group_id="create_node_pool"
+      ) as create_node_pool:
+        create_first_node_pool = node_pool.create.override(
+            task_id="node_pool_1"
+        )(
+            node_pool=cluster_info,
+        )
+
+        create_second_node_pool = node_pool.create.override(
+            task_id="node_pool_2",
+            retries=2,
+        )(
+            node_pool=cluster_info_2,
+        )
 
       apply_time = jobset.run_workload.override(task_id="run_workload")(
           node_pool=cluster_info,
@@ -189,11 +213,26 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           setups=apply_time
       )
 
-      cleanup_node_pool = node_pool.delete.override(
-          task_id="cleanup_node_pool", trigger_rule=TriggerRule.ALL_DONE
-      )(node_pool=cluster_info).as_teardown(
-          setups=create_node_pool,
-      )
+      # Keyword arguments are generated dynamically at runtime (pylint does not
+      # know this signature).
+      with TaskGroup(  # pylint: disable=unexpected-keyword-arg
+          group_id="cleanup_node_pool"
+      ) as cleanup_node_pool:
+        cleanup_first_node_pool = node_pool.delete.override(
+            task_id="cleanup_node_pool_1",
+            trigger_rule=TriggerRule.ALL_DONE,
+            retries=2,
+        )(node_pool=cluster_info).as_teardown(
+            setups=create_node_pool,
+        )
+
+        cleanup_second_node_pool = node_pool.delete.override(
+            task_id="cleanup_node_pool_2",
+            trigger_rule=TriggerRule.ALL_DONE,
+            retries=2,
+        )(node_pool=cluster_info_2).as_teardown(
+            setups=create_node_pool,
+        )
 
       # Airflow uses >> for task chaining, which is pointless for pylint.
       # pylint: disable=pointless-statement
