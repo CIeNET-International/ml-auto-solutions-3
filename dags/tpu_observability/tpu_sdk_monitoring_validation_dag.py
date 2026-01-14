@@ -17,7 +17,6 @@ list_supported_metrics() are functional inside TPU worker pods."""
 
 import datetime
 import tempfile
-import subprocess
 import os
 from typing import List
 
@@ -60,7 +59,8 @@ def execute_python_monitoring_command(
 
     cmd = " && ".join([
         jobset.Command.get_credentials_command(info),
-        f"kubectl exec {pod_name} -n default -- bash -c '{remote_shell_script}'",
+        f"kubectl exec {pod_name} -n default "
+        f"-- bash -c '{remote_shell_script}'",
     ])
     return subprocess.run_exec(cmd, env=env)
 
@@ -111,7 +111,8 @@ def validate_monitoring_help(info, pod_name: str) -> str:
 
 @task
 def validate_metrics_list(info, pod_name: str) -> str:
-  """Task to validate that list_supported_metrics() returns expected TPU metrics.
+  """Task to validate that list_supported_metrics() returns
+      expected TPU metrics.
 
   Args:
       info: Cluster info for gcloud credentials.
@@ -120,7 +121,10 @@ def validate_metrics_list(info, pod_name: str) -> str:
   Returns:
       The string representation of the supported metrics list.
   """
-  code = "from libtpu.sdk import tpumonitoring; print(tpumonitoring.list_supported_metrics())"
+  code = (
+      "from libtpu.sdk import tpumonitoring; "
+      "print(tpumonitoring.list_supported_metrics())"
+  )
   output = execute_python_monitoring_command(info, pod_name, code)
 
   patterns = [
@@ -152,7 +156,8 @@ with models.DAG(
         "Validation",
     ],
     description=(
-        "Validates tpumonitoring SDK: help() and list_supported_metrics() inside TPU worker pods."
+        "Validates tpumonitoring SDK: help() and "
+        "list_supported_metrics() inside TPU worker pods."
     ),
     doc_md="""
         ### Description
@@ -228,7 +233,7 @@ with models.DAG(
         node_pool=cluster_info,
     )
 
-    pod_name = jobset.list_pod_names.override(task_id="list_pod_names")(
+    pod_names = jobset.list_pod_names.override(task_id="list_pod_names")(
         node_pool=cluster_info,
         namespace=jobset_config.namespace,
     )
@@ -240,13 +245,13 @@ with models.DAG(
       sdk_help_validation = (
           validate_monitoring_help.override(task_id="sdk_help_validation")
           .partial(info=cluster_info)
-          .expand(pod_name=pod_name)
+          .expand(pod_name=pod_names)
       )
 
       metrics_list_validation = (
           validate_metrics_list.override(task_id="metrics_list_validation")
           .partial(info=cluster_info)
-          .expand(pod_name=pod_name)
+          .expand(pod_name=pod_names)
       )
 
     cleanup_workload = jobset.end_workload.override(
@@ -272,7 +277,7 @@ with models.DAG(
         >> create_node_pool
         >> start_workload
         >> ensure_all_pods_running
-        >> pod_name
+        >> pod_names
         >> verification_group
         >> cleanup_workload
         >> cleanup_node_pool
