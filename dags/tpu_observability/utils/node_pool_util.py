@@ -645,7 +645,56 @@ def update_labels(node_pool: Info, node_labels: dict) -> TimeUtil:
   subprocess.run_exec(command)
 
 
+class UpdateTarget(enum.IntEnum):
+  """Enum defining what to update on the node pool."""
+
+  DISK_SIZE = enum.auto()
+
+
+class UpdateOperation(enum.IntEnum):
+  """Enum defining how the update should be applied."""
+
+  INCREMENT = enum.auto()
+
+
+@dataclasses.dataclass
+class NodePoolUpdateSpec:
+  """Configuration parameters defining a mutation on a GKE node pool.
+
+  Attributes:
+    target: The specific node pool attribute to update.
+    operation: The logic used to apply the new value.
+    value: The actual data payload.
+  """
+
+  target: UpdateTarget
+  operation: UpdateOperation
+  value: int
+
+  def __post_init__(self):
+    if self.target == UpdateTarget.DISK_SIZE and not isinstance(
+        self.value, int
+    ):
+      raise TypeError(f"Target is DISK_SIZE but value is not int: {self.value}")
+
+
 @task
+def build_update_spec(
+    target: UpdateTarget, operation: UpdateOperation, value: int
+) -> NodePoolUpdateSpec:
+  """Constructs a specification for updating a GKE node pool.
+
+  Args:
+    target: The specific node pool attribute to update.
+    operation: The logic used to apply the new value.
+    value: The actual data payload.
+
+  Returns:
+    A configured NodePoolUpdateSpec object.
+  """
+  return NodePoolUpdateSpec(target=target, operation=operation, value=value)
+
+
 def get_node_pool_disk_size(node_pool: Info) -> int:
   """Gets the disk size of a GKE node pool using gcloud command.
 
@@ -669,75 +718,73 @@ def get_node_pool_disk_size(node_pool: Info) -> int:
   return int(result)
 
 
-@dataclasses.dataclass
-class NodePoolUpdateSpec:
-  """Configuration parameters for updating a GKE node pool.
-
-  Attributes:
-    disk_size: The target disk size in GB.
-  """
-
-  DEFAULT_DISK_SIZE_INCREMENT = 50
-
-  disk_size: int
-
-
-@task
-def build_update_spec(current_disk_size: int) -> NodePoolUpdateSpec:
-  """Constructs the specification required to update the node pool.
-
-  This task generates a NodePoolUpdateSpec object defining the target state
-  (e.g., updated disk size) for the node pool update operation.
-  """
-  updated_disk_size = (
-      current_disk_size + NodePoolUpdateSpec.DEFAULT_DISK_SIZE_INCREMENT
-  )
-
-  return NodePoolUpdateSpec(disk_size=updated_disk_size)
-
-
 @task
 def update(node_pool: Info, spec: NodePoolUpdateSpec) -> TimeUtil:
   """Executes the node pool update operation based on the provided specification.
 
-  This task constructs and runs the gcloud command to apply configuration
-  changes (e.g., disk size) to the node pool and returns the
-  operation start time used for TTR metric validation.
+  Constructs and runs gcloud commands to apply configuration changes to the
+  GKE node pool. Validates the current state before applying incremental changes.
 
   Args:
-    node_pool: An instance of the Info class that encapsulates
-      the configuration and metadata of a GKE node pool.
+    node_pool: An instance of the Info class that encapsulates the
+      configuration and metadata of a GKE node pool.
     spec: An instance of the NodePoolUpdateSpec class defining the
-      target configuration parameters to be applied during the update.
+      target parameter and the operation to be applied.
 
   Returns:
     A TimeUtil object representing the UTC timestamp when the operation started.
 
   Raises:
-    ValueError: If the update specification contains no valid changes.
+    ValueError: If the target is unsupported, the operation is invalid, or
+      flags cannot be constructed.
+    RuntimeError: If fetching the current configuration fails.
   """
-  base_command = (
+  # Get the current value for the specific target.
+  if spec.target == UpdateTarget.DISK_SIZE:
+    current_value = get_node_pool_disk_size(node_pool=node_pool)
+  else:
+    raise ValueError(
+        f"Unsupported target for retrieval: {UpdateTarget(spec.target).name}"
+    )
+
+  # Calculate the final value for the specific target.
+  if spec.operation == UpdateOperation.INCREMENT:
+    final_value = current_value + spec.value
+  else:
+    raise ValueError(
+        f"Unsupported operation: {UpdateOperation(spec.operation).name}"
+    )
+
+  logging.info(
+      "Update plan calculated: target=%s current=%s final=%s (op=%s, delta=%s)",
+      UpdateTarget(spec.target).name,
+      current_value,
+      final_value,
+      UpdateOperation(spec.operation).name,
+      spec.value,
+  )
+
+  # Construct the update command.
+  flags: list[str] = []
+
+  if spec.target == UpdateTarget.DISK_SIZE:
+    flags.append(f"--disk-size={final_value}")
+
+  flags_str = " ".join(flags)
+
+  update_cmd = (
       f"gcloud container node-pools update {node_pool.node_pool_name} "
       f"--project={node_pool.project_id} "
       f"--cluster={node_pool.cluster_name} "
       f"--location={node_pool.location} "
-      "--quiet "
+      f"--quiet "
+      f"{flags_str}"
   )
 
-  flags: list[str] = []
-
-  if spec.disk_size is not None:
-    flags.extend(["--disk-size", str(spec.disk_size)])
-
-  if not flags:
-    raise ValueError("At least one update field must be provided.")
-
-  full_command = base_command + " ".join(flags)
-
+  # Execute update.
   operation_start_time = TimeUtil.from_datetime(
       datetime.datetime.now(datetime.timezone.utc)
   )
 
-  subprocess.run_exec(full_command)
-
+  subprocess.run_exec(update_cmd)
   return operation_start_time

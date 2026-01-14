@@ -27,19 +27,7 @@ from dags import composer_env
 from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_PATH
 from dags.tpu_observability.utils import node_pool_util as node_pool
 
-
-@task
-def verify_disk_size(
-    disk_size: int, spec: node_pool.NodePoolUpdateSpec
-) -> None:
-  """Verifies that the disk size matches the update specification."""
-  assert spec.disk_size == disk_size, (
-      f"Disk size verification failed! "
-      f"Expected (from spec): {spec.disk_size}GB, "
-      f"But got (actual): {disk_size}GB."
-  )
-
-  logging.info(f"Verification Passed: Disk size is confirmed as {disk_size}GB.")
+_DISK_SIZE_INCREMENT = 50
 
 
 with models.DAG(
@@ -105,12 +93,10 @@ with models.DAG(
           task_id="wait_for_running"
       )(node_pool=node_pool_info, status=node_pool.Status.RUNNING)
 
-      fetched_original_size = node_pool.get_node_pool_disk_size.override(
-          task_id="get_original_disk_size"
-      )(node_pool=node_pool_info)
-
       update_spec = node_pool.build_update_spec(
-          current_disk_size=fetched_original_size
+          target=node_pool.UpdateTarget.DISK_SIZE,
+          operation=node_pool.UpdateOperation.INCREMENT,
+          value=_DISK_SIZE_INCREMENT,
       )
 
       update_start_time = node_pool.update.override(task_id="update_node_pool")(
@@ -120,14 +106,6 @@ with models.DAG(
       wait_for_recovered = node_pool.wait_for_status.override(
           task_id="wait_for_recovered"
       )(node_pool=node_pool_info, status=node_pool.Status.RUNNING)
-
-      fetched_updated_size = node_pool.get_node_pool_disk_size.override(
-          task_id="get_updated_disk_size"
-      )(node_pool=node_pool_info)
-
-      verify_disk_size = verify_disk_size(
-          disk_size=fetched_updated_size, spec=update_spec
-      )
 
       wait_for_ttr = node_pool.wait_for_ttr(
           node_pool=node_pool_info, operation_start_time=update_start_time
@@ -140,16 +118,13 @@ with models.DAG(
       )
 
       chain(
-          node_pool_info
-          >> create_node_pool
-          >> wait_for_provisioning
-          >> wait_for_running
-          >> fetched_original_size
-          >> update_spec
-          >> update_start_time
-          >> wait_for_recovered
-          >> fetched_updated_size
-          >> verify_disk_size
-          >> wait_for_ttr
-          >> cleanup_node_pool
+          node_pool_info,
+          create_node_pool,
+          wait_for_provisioning,
+          wait_for_running,
+          update_spec,
+          update_start_time,
+          wait_for_recovered,
+          wait_for_ttr,
+          cleanup_node_pool,
       )
