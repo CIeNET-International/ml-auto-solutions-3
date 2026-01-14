@@ -20,11 +20,9 @@ killing the main process inside a worker Pod.
 import datetime
 import tempfile
 import os
-import logging
 
 from airflow import models
 from airflow.decorators import task
-from airflow.exceptions import AirflowFailException
 from airflow.utils.trigger_rule import TriggerRule
 from airflow.utils.task_group import TaskGroup
 
@@ -53,21 +51,7 @@ def kill_tpu_pod_workload(info: node_pool.Info, pod_name: str) -> None:
         jobset.Command.get_credentials_command(info),
         f"kubectl exec {pod_name} -n default -- pkill -9 -f python",
     ])
-
-    try:
-      subprocess.run_exec(cmd, env=env)
-    except AirflowFailException as e:
-      error_msg = str(e)
-      SIGKILL_EXIT_CODE = "137"  # 128 + 9 (SIGKILL)
-
-      if SIGKILL_EXIT_CODE in error_msg:
-        logging.info(
-            "Pod %s has already been killed (exit code %s). Ignoring error.",
-            pod_name,
-            SIGKILL_EXIT_CODE,
-        )
-        return
-      raise e
+    subprocess.run_exec(cmd, env=env)
 
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
