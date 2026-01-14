@@ -37,8 +37,12 @@ def run_exec(
     env: dict[str, str] | None = None,
     log_command: bool = True,
     log_output: bool = True,
+    accepted_exit_codes: list[int] | None = None,
 ) -> str:
   """Executes a shell command and logs its output."""
+  if accepted_exit_codes is None:
+    accepted_exit_codes = [0]
+
   if log_command:
     logging.info("[subprocess] executing command:\n %s\n", cmd)
 
@@ -61,11 +65,8 @@ def run_exec(
       text=True,
   )
 
-  if res.returncode != 0:
+  if res.returncode not in accepted_exit_codes:
     logging.info("[subprocess] stderr: %s", res.stderr)
-    if res.returncode == 137:  # 128 + 9 (SIGKILL)
-      logging.info("Process was killed with SIGKILL (exit code 137).")
-      return res.stdout
     raise AirflowFailException(
         "Caught an error while executing a command. stderr Message:"
         f" {res.stderr}"
