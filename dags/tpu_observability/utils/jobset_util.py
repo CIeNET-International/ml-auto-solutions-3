@@ -272,6 +272,12 @@ class Command:
         f"-n {namespace} -o jsonpath={{.items[*].metadata.name}}",
     ])
 
+  @staticmethod
+  def suspend_jobset(jobset_name: str) -> str:
+    return " ".join([
+        f"kubectl patch jobset {jobset_name}",
+        "--type=merge -p '{{\"spec\": {{\"suspend\": true}}}}'",
+    ])
 
 def get_replica_num(
     replica_type: str, job_name: str, node_pool: node_pool_info
@@ -579,7 +585,6 @@ def wait_for_jobset_status_occurrence(
       node_pool=node_pool,
   )
   return ready_replicas > 0
-
 
 @task.sensor(poke_interval=30, timeout=600, mode="reschedule")
 def wait_for_all_pods_running(num_pods: int, node_pool: node_pool_info):
