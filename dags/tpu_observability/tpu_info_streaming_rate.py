@@ -67,7 +67,8 @@ def validate_streaming_rate(info, pod_name: str, rate: float) -> str:
   duration = 15
 
   tpu_args = (
-      f"sh -c \"script -q -c 'timeout {duration}s tpu-info --streaming --rate {rate}' /dev/null\" "
+      f"sh -c \"script -q -c 'timeout {duration}s "
+      f"tpu-info --streaming --rate {rate}' /dev/null\" "
       f"|| [ $? -eq 124 ]"
   )
   output = execute_tpu_info_cli_command(info, pod_name, tpu_args)
@@ -187,21 +188,20 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           task_id="wait_for_job_start"
       )(cluster_info, pod_name_list=pod_names, job_apply_time=apply_time)
 
-      # Keyword arguments are generated dynamically at runtime (pylint does not
-      # know this signature).
-      with TaskGroup(  # pylint: disable=unexpected-keyword-arg
-          group_id="verification_group"
-      ) as verification_group:
-        test_rates = [0.1, 0.5, 1.0, 5.0]
+      test_rates = [0.1, 0.5, 1.0, 5.0]
+      for rate in test_rates:
+        formatted_rate = str(rate).replace(".", "_")
 
-        streaming_validation_results = (
-            validate_streaming_rate.override(task_id="streaming_rate_test")
-            .partial(info=cluster_info)
-            .expand(
-                pod_name=pod_names,
-                rate=test_rates,
-            )
-        )
+        # Keyword arguments are generated dynamically at runtime (pylint does not
+        # know this signature).
+        with TaskGroup(  # pylint: disable=unexpected-keyword-arg
+            group_id=f"verification_group_rate_{formatted_rate}"
+        ) as rate_group:
+          streaming_validation_results = (
+              validate_streaming_rate.override(task_id="streaming_rate_test")
+              .partial(info=cluster_info, rate=rate)
+              .expand(pod_name=pod_names)
+          )
 
       cleanup_workload = jobset.end_workload.override(
           task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
