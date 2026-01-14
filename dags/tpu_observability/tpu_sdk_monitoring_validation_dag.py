@@ -143,7 +143,7 @@ def validate_metrics_list(info, pod_name: str) -> str:
 with models.DAG(
     dag_id="tpu_sdk_monitoring_validation",
     start_date=datetime.datetime(2026, 1, 13),
-    schedule=None,
+    schedule="0 18 * * *" if composer_env.is_prod_env() else None,
     catchup=False,
     tags=[
         "cloud-ml-auto-solutions",
