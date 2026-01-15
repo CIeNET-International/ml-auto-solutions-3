@@ -36,53 +36,55 @@ from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_P
 
 @task
 def trigger_oom_failure(info, pod_name: str):
-    """
-    Triggers an OOM (Out-of-Memory) event on a specified TPU pod.
+  """
+  Triggers an OOM (Out-of-Memory) event on a specified TPU pod.
 
-    This task connects to the specified pod via kubectl exec and runs a
-    memory-intensive Python script (oomkill.py). The script is designed
-    to exhaust the container's memory limit, forcing a SIGKILL (Exit Code 137).
-    A connection error is expected and caught when the pod is killed.
+  This task connects to the specified pod via kubectl exec and runs a
+  memory-intensive Python script (oomkill.py). The script is designed
+  to exhaust the container's memory limit, forcing a SIGKILL (Exit Code 137).
+  A connection error is expected and caught when the pod is killed.
 
-    Args:
-        info: Node pool and cluster information.
-        pod_name (str): The name of the target pod to be OOMKilled.
-    """
-    with tempfile.NamedTemporaryFile() as temp_config_file:
-        env = os.environ.copy()
-        env["KUBECONFIG"] = temp_config_file.name
+  Args:
+      info: Node pool and cluster information.
+      pod_name (str): The name of the target pod to be OOMKilled.
+  """
+  with tempfile.NamedTemporaryFile() as temp_config_file:
+    env = os.environ.copy()
+    env["KUBECONFIG"] = temp_config_file.name
 
-        cmd = " && ".join([
-            jobset.Command.get_credentials_command(info),
-            f"kubectl exec {pod_name} -n default -- python3 oomkill.py",
-        ])
+    cmd = " && ".join([
+        jobset.Command.get_credentials_command(info),
+        f"kubectl exec {pod_name} -n default -- python3 oomkill.py",
+    ])
 
-        try:
-            print(f"Executing OOM script in {pod_name}...")
-            subprocess.run_exec(cmd, env=env)
-        except Exception as e:
-            print(f"Expectation: Connection closed due to OOMKilled. Info: {e}")
+    try:
+      print(f"Executing OOM script in {pod_name}...")
+      subprocess.run_exec(cmd, env=env)
+    except Exception as e:
+      print(f"Expectation: Connection closed due to OOMKilled. Info: {e}")
+
 
 @task
 def pick_random_pod(pod_names: List[str]) -> str:
-    """
-    Randomly selects one pod from a list of available JobSet pods.
+  """
+  Randomly selects one pod from a list of available JobSet pods.
 
-    This ensures that the fault injection is performed on a single
-    unit of the TPU slice, allowing the test to validate how the
-    JobSet controller handles partial failures within a replica.
+  This ensures that the fault injection is performed on a single
+  unit of the TPU slice, allowing the test to validate how the
+  JobSet controller handles partial failures within a replica.
 
-    Args:
-        pod_names (List[str]): List of active pod names in the JobSet.
+  Args:
+      pod_names (List[str]): List of active pod names in the JobSet.
 
-    Returns:
-        str: The name of the randomly selected pod.
-    """
-    if not pod_names:
-        raise ValueError("No pods found to attack!")
-    chosen_pod = random.choice(pod_names)
-    print(f"Randomly selected pod for OOM test: {chosen_pod}")
-    return chosen_pod
+  Returns:
+      str: The name of the randomly selected pod.
+  """
+  if not pod_names:
+    raise ValueError("No pods found to attack!")
+  chosen_pod = random.choice(pod_names)
+  print(f"Randomly selected pod for OOM test: {chosen_pod}")
+  return chosen_pod
+
 
 with models.DAG(
     dag_id="jobset_ttr_pod_oom",
@@ -146,7 +148,7 @@ with models.DAG(
     raw_yaml = jobset_config.generate_yaml(workload_script="sleep infinity")
     custom_yaml = raw_yaml.replace(
         "google.com/tpu: 4",
-        "google.com/tpu: 4\n                  memory: \"4Gi\""
+        'google.com/tpu: 4\n                  memory: "4Gi"',
     )
   # Keyword arguments are generated dynamically at runtime (pylint does not
   # know this signature).
@@ -185,21 +187,20 @@ with models.DAG(
         namespace=jobset_config.namespace,
     )
 
-    select_random_pod = pick_random_pod.override(task_id='select_random_pod')(
-       pod_names=pod_names
+    select_random_pod = pick_random_pod.override(task_id="select_random_pod")(
+        pod_names=pod_names
     )
 
-    trigger_oom_killed = trigger_oom_failure.override(task_id='trigger_oom_killed')(
-        info=cluster_info,
-        pod_name=select_random_pod
-    )
+    trigger_oom_killed = trigger_oom_failure.override(
+        task_id="trigger_oom_killed"
+    )(info=cluster_info, pod_name=select_random_pod)
 
     wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
-          task_id="wait_for_jobset_ttr_to_be_found"
-      )(
-          node_pool=cluster_info,
-          jobset_name=jobset_config.jobset_name,
-      )
+        task_id="wait_for_jobset_ttr_to_be_found"
+    )(
+        node_pool=cluster_info,
+        jobset_name=jobset_config.jobset_name,
+    )
 
     cleanup_workload = jobset.end_workload.override(
         task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
