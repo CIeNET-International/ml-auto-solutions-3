@@ -649,12 +649,7 @@ class UpdateTarget(enum.IntEnum):
   """Enum defining what to update on the node pool."""
 
   DISK_SIZE = enum.auto()
-
-
-class UpdateOperation(enum.IntEnum):
-  """Enum defining how the update should be applied."""
-
-  INCREMENT = enum.auto()
+  LABEL = enum.auto()
 
 
 @dataclasses.dataclass
@@ -662,37 +657,32 @@ class NodePoolUpdateSpec:
   """Configuration parameters defining a mutation on a GKE node pool.
 
   Attributes:
-    target: The specific node pool attribute to update.
-    operation: The logic used to apply the new value.
-    value: The actual data payload.
+      target: The specific node pool attribute to update.
+      delta: The change to apply to the target's current state.
   """
 
   target: UpdateTarget
-  operation: UpdateOperation
-  value: int
+  delta: int | str
 
-  def __post_init__(self):
-    if self.target == UpdateTarget.DISK_SIZE and not isinstance(
-        self.value, int
-    ):
-      raise TypeError(f"Target is DISK_SIZE but value is not int: {self.value}")
+  @staticmethod
+  def DiskSize(delta: int) -> "NodePoolUpdateSpec":
+    if not isinstance(delta, int):
+      raise TypeError(f"Disk size delta must be an integer. Got: {type(delta)}")
+    if delta <= 0:
+      raise ValueError(f"Disk size delta must be positive. Got: {delta}")
+    return NodePoolUpdateSpec(
+        target=UpdateTarget.DISK_SIZE,
+        delta=delta,
+    )
 
-
-@task
-def build_update_spec(
-    target: UpdateTarget, operation: UpdateOperation, value: int
-) -> NodePoolUpdateSpec:
-  """Constructs a specification for updating a GKE node pool.
-
-  Args:
-    target: The specific node pool attribute to update.
-    operation: The logic used to apply the new value.
-    value: The actual data payload.
-
-  Returns:
-    A configured NodePoolUpdateSpec object.
-  """
-  return NodePoolUpdateSpec(target=target, operation=operation, value=value)
+  @staticmethod
+  def Label(delta: str) -> "NodePoolUpdateSpec":
+    if not isinstance(delta, str):
+      raise TypeError(f"Label delta must be a string. Got: {type(delta)}")
+    return NodePoolUpdateSpec(
+        target=UpdateTarget.LABEL,
+        delta=delta,
+    )
 
 
 def get_node_pool_disk_size(node_pool: Info) -> int:
@@ -719,17 +709,18 @@ def get_node_pool_disk_size(node_pool: Info) -> int:
 
 
 @task
-def update(node_pool: Info, spec: NodePoolUpdateSpec) -> TimeUtil:
-  """Executes the node pool update operation based on the provided specification.
+def update_by_delta(node_pool: Info, spec: NodePoolUpdateSpec) -> TimeUtil:
+  """Applies an update to a GKE node pool based on a delta specification.
 
-  Constructs and runs gcloud commands to apply configuration changes to the
-  GKE node pool. Validates the current state before applying incremental changes.
+  This task performs a state-aware update. It resolves the final desired configuration
+  by applying the delta defined in `spec` to the current node pool state, and then
+  executes the update operation.
 
   Args:
     node_pool: An instance of the Info class that encapsulates the
       configuration and metadata of a GKE node pool.
-    spec: An instance of the NodePoolUpdateSpec class defining the
-      target parameter and the operation to be applied.
+    spec: An instance of the NodePoolUpdateSpec class that contains the target attribute
+      and the delta value to apply.
 
   Returns:
     A TimeUtil object representing the UTC timestamp when the operation started.
@@ -737,38 +728,29 @@ def update(node_pool: Info, spec: NodePoolUpdateSpec) -> TimeUtil:
   Raises:
     ValueError: If the target is unsupported, the operation is invalid, or
       flags cannot be constructed.
-    RuntimeError: If fetching the current configuration fails.
   """
-  # Get the current value for the specific target.
-  if spec.target == UpdateTarget.DISK_SIZE:
-    current_value = get_node_pool_disk_size(node_pool=node_pool)
-  else:
-    raise ValueError(
-        f"Unsupported target for retrieval: {UpdateTarget(spec.target).name}"
-    )
-
-  # Calculate the final value for the specific target.
-  if spec.operation == UpdateOperation.INCREMENT:
-    final_value = current_value + spec.value
-  else:
-    raise ValueError(
-        f"Unsupported operation: {UpdateOperation(spec.operation).name}"
-    )
-
-  logging.info(
-      "Update plan calculated: target=%s current=%s final=%s (op=%s, delta=%s)",
-      UpdateTarget(spec.target).name,
-      current_value,
-      final_value,
-      UpdateOperation(spec.operation).name,
-      spec.value,
-  )
-
-  # Construct the update command.
+  current_value = None
+  final_value = None
   flags: list[str] = []
 
   if spec.target == UpdateTarget.DISK_SIZE:
+    current_value = get_node_pool_disk_size(node_pool=node_pool)
+    final_value = current_value + spec.delta
     flags.append(f"--disk-size={final_value}")
+
+  elif spec.target == UpdateTarget.LABELS:
+    pass
+
+  else:
+    raise ValueError(f"Unsupported target: {UpdateTarget(spec.target).name}")
+
+  logging.info(
+      "Update plan calculated: target=%s current=%s delta=%s final=%s",
+      UpdateTarget(spec.target).name,
+      current_value,
+      spec.delta,
+      final_value,
+  )
 
   flags_str = " ".join(flags)
 
@@ -781,7 +763,6 @@ def update(node_pool: Info, spec: NodePoolUpdateSpec) -> TimeUtil:
       f"{flags_str}"
   )
 
-  # Execute update.
   operation_start_time = TimeUtil.from_datetime(
       datetime.datetime.now(datetime.timezone.utc)
   )
