@@ -292,6 +292,7 @@ class Command:
         f"--type=merge -p '{patch_content}'"
     )
 
+
 def get_replica_num(
     replica_type: str, job_name: str, node_pool: node_pool_info
 ) -> int:
@@ -697,6 +698,7 @@ def wait_for_jobset_status_occurrence(
       node_pool=node_pool,
   )
   return ready_replicas > 0
+
 
 @task.sensor(poke_interval=30, timeout=600, mode="reschedule")
 def wait_for_all_pods_running(num_pods: int, node_pool: node_pool_info):
