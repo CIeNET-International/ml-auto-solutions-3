@@ -310,7 +310,7 @@ def execute_tpu_info_cli_command(info, pod_name: str, tpu_args: str) -> str:
 
 
 def verify_output_contains_patterns(
-    output: str, patterns: List[str], context: str
+    output: str, patterns: list[str], context: str
 ):
   """Helper to verify expected strings in output."""
   for pattern in patterns:
