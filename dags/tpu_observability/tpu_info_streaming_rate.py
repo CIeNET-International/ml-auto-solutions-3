@@ -21,7 +21,6 @@ import os
 import re
 import subprocess
 import tempfile
-from typing import List
 import logging
 
 from airflow import models
@@ -50,7 +49,6 @@ class TPUPerformanceAnalyzer:
     self.frames = []
     self.update_events = []
 
-    # Pre-compile regex patterns for optimized performance
     self._frame_start_re = re.compile(r"\[(\d{2}:\d{2}:\d{2}\.\d{3})\].*?\[H")
     self._chips_re = re.compile(
         r"│\s+(/dev/vfio/\d+)\s+│.*?│\s+\d+\s+│\s+(\d+)\s+│"
@@ -104,7 +102,7 @@ class TPUPerformanceAnalyzer:
         if current_frame["ts"]:
           self.frames.append(current_frame)
         current_frame = self._init_empty_frame()
-        current_frame["ts"] = datetime.strptime(
+        current_frame["ts"] = datetime.datetime.strptime(
             fs_match.group(1), "%H:%M:%S.%f"
         )
         continue
@@ -120,7 +118,6 @@ class TPUPerformanceAnalyzer:
     self.update_events = []
     last_snapshot = None
     for f in self.frames:
-      # Create a snapshot excluding the timestamp for comparison
       snapshot = {k: v for k, v in f.items() if k != "ts"}
       if last_snapshot is None or snapshot != last_snapshot:
         self.update_events.append(f)
@@ -223,7 +220,7 @@ def execute_tpu_info_cli_command(info, pod_name: str, tpu_args: str) -> str:
 
 
 def verify_output_contains_patterns(
-    output: str, patterns: List[str], context: str
+    output: str, patterns: list[str], context: str
 ):
   """Verifies that expected strings exist in the output."""
   for pattern in patterns:
@@ -234,35 +231,17 @@ def verify_output_contains_patterns(
 
 
 @task
-def validate_streaming_rate(info, pod_name: str, rate: float) -> str:
-  """
-  Executes tpu-info --streaming and validates frequency using UI and Data metrics.
-  """
-  duration = 15
-
-  tpu_args = (
-      f"sh -c \"script -q -c 'timeout {duration}s "
-      f"tpu-info --streaming --rate {rate}' /dev/null\" "
-      f"|| [ $? -eq 124 ]"
-  )
-  output = execute_tpu_info_cli_command(info, pod_name, tpu_args)
-
-  patterns = ["Refresh rate:", f"{rate}s"]
-  verify_output_contains_patterns(
-      output, patterns, f"Content check on {pod_name}"
-  )
-  return f"Validated {pod_name} at {rate}s"
-
-
-@task
 def validate_streaming_rate_iterations(
-    info, pod_name: str, rate: float, iteration_count: int = 40
+    info,
+    pod_name: str,
+    rate: float,
+    iteration_count: int = 40,
+    duration: int = 30,
 ) -> str:
   """
   Performs 40 iterations of 30s tests.
   The task succeeds if at least 50% of the iterations are valid.
   """
-  duration = 30
   analyzer = TPUPerformanceAnalyzer(target_rate=rate)
   success_count = 0
   pass_threshold = iteration_count / 2  # 50% threshold
@@ -286,6 +265,7 @@ def validate_streaming_rate_iterations(
       logging.info(analyzer.generate_report())
       if analyzer.validate_rate_match():
         success_count += 1
+        logging.info(f"Iteration {i}: Passed validation.")
       else:
         logging.info(
             f"Iteration {i}: Failed validation (Intervals out of range)."
@@ -293,7 +273,6 @@ def validate_streaming_rate_iterations(
     except Exception as e:
       logging.error(f"Iteration {i}: Command execution error: {str(e)}")
 
-  # Evaluation logic: Pass if success_count >= 20
   status_msg = f"Pod {pod_name} at {rate}s: {success_count}/{iteration_count} iterations passed."
   logging.info(status_msg)
 
@@ -376,7 +355,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           tpu_topology=config.tpu_topology,
       )
 
-      cluster_info_2 = node_pool.copy_node_pool_info_with_override(
+      cluster_info_2 = node_pool.copy_node_pool_info_with_override.override(
+          task_id="copy_node_pool_info_with_override"
+      )(
           info=cluster_info,
           node_pool_name=generate_second_node_pool_name(cluster_info),
       )
@@ -414,26 +395,32 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           task_id="wait_for_job_start"
       )(cluster_info, pod_name_list=pod_names, job_apply_time=apply_time)
 
-      test_rates = [0.1, 0.5, 1.0, 5.0]
-      rate_test_groups = []
-      for rate in test_rates:
-        formatted_rate = str(rate).replace(".", "_")
+      # Keyword arguments are generated dynamically at runtime (pylint does not
+      # know this signature).
+      with TaskGroup(  # pylint: disable=unexpected-keyword-arg
+          group_id="tpu_streaming_rate_verification"
+      ) as rate_verification_group:
+        test_rates = [0.1, 0.5, 1.0, 5.0]
 
-        with TaskGroup(
-            group_id=f"verification_group_rate_{formatted_rate}"
-        ) as rate_group:
-          # Fix: Ensure parameters match the task signature exactly
-          validate_streaming_rate_iterations.override(
-              task_id="streaming_rate_test",
-              execution_timeout=datetime.timedelta(minutes=60),
-          ).partial(
-              info=cluster_info,
-              rate=rate,
-              iteration_count=40,  # Pass integer directly to partial
-          ).expand(
-              pod_name=pod_names
-          )
-          rate_test_groups.append(rate_group)
+        for rate in test_rates:
+          formatted_rate = str(rate).replace(".", "_")
+
+          # Keyword arguments are generated dynamically at runtime (pylint does not
+          # know this signature).
+          with TaskGroup(  # pylint: disable=unexpected-keyword-arg
+              group_id=f"rate_{formatted_rate}"
+          ) as rate_iterations_group:
+            validate_streaming_rate_iterations.override(
+                task_id="streaming_rate_test",
+                execution_timeout=datetime.timedelta(minutes=60),
+                duration=30,  # Each iteration runs for 30 seconds
+            ).partial(
+                info=cluster_info,
+                rate=rate,
+                iteration_count=40,
+            ).expand(
+                pod_name=pod_names
+            )
 
       cleanup_workload = jobset.end_workload.override(
           task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
@@ -474,7 +461,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           >> apply_time
           >> pod_names
           >> wait_for_job_start
-          >> rate_test_groups
+          >> rate_verification_group
           >> cleanup_workload
           >> cleanup_node_pool
       )
