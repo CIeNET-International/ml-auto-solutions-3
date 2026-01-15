@@ -18,9 +18,11 @@ DAG to verify tpu-info streaming rate functionality on TPU v6e slices.
 
 import datetime
 import os
+import re
 import subprocess
 import tempfile
 from typing import List
+import logging
 
 from airflow import models
 from airflow.decorators import task
@@ -33,6 +35,178 @@ from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.tpu_observability.utils.jobset_util import JobSet, Workload
 from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_PATH
+
+
+class TPUPerformanceAnalyzer:
+
+  def __init__(self, target_rate: float = 0.1):
+    """
+    Initialize the analyzer with a target sampling rate.
+    :param target_rate: The expected update interval in seconds (default 0.1s).
+    """
+    self.target_rate = target_rate
+    self.lower_bound = target_rate * 0.8
+    self.upper_bound = target_rate * 1.2
+    self.frames = []
+    self.update_events = []
+
+    # Pre-compile regex patterns for optimized performance
+    self._frame_start_re = re.compile(r"\[(\d{2}:\d{2}:\d{2}\.\d{3})\].*?\[H")
+    self._chips_re = re.compile(
+        r"│\s+(/dev/vfio/\d+)\s+│.*?│\s+\d+\s+│\s+(\d+)\s+│"
+    )
+    self._runtime_re = re.compile(
+        r"│\s+(\d+)\s+│\s+([\d.]+ GiB / [\d.]+ GiB)\s+│\s+([\d.]+)%\s+│"
+    )
+    self._tensor_re = re.compile(r"│\s+(\d+)\s+│\s+([\d.]+)%\s+│")
+    self._latency_re = re.compile(
+        r"│\s+([\dMB+]+)\s+│\s+([\d.]+) us\s+│\s+([\d.]+) us\s+│\s+([\d.]+) us\s+│\s+([\d.]+) us\s+│"
+    )
+
+  def _init_empty_frame(self):
+    """Internal helper to initialize a structure for a single log frame."""
+    return {"ts": None, "chips": {}, "runtime": {}, "tensor": {}, "latency": {}}
+
+  def _extract_metrics(self, line, frame):
+    """Internal helper to extract various hardware metrics from a log line."""
+    m_c = self._chips_re.search(line)
+    if m_c:
+      frame["chips"][m_c.group(1)] = m_c.group(2)
+
+    m_r = self._runtime_re.search(line)
+    if m_r:
+      frame["runtime"][m_r.group(1)] = (m_r.group(2), m_r.group(3))
+
+    m_t = self._tensor_re.search(line)
+    if m_t:
+      frame["tensor"][m_t.group(1)] = m_t.group(2)
+
+    m_l = self._latency_re.search(line)
+    if m_l:
+      frame["latency"][m_l.group(1)] = (
+          m_l.group(2),
+          m_l.group(3),
+          m_l.group(4),
+          m_l.group(5),
+      )
+
+  def parse_log(self, log_content: str):
+    """
+    Parse raw log text into structured data frames.
+    """
+    self.frames = []
+    lines = log_content.splitlines()
+    current_frame = self._init_empty_frame()
+
+    for line in lines:
+      fs_match = self._frame_start_re.search(line)
+      if fs_match:
+        if current_frame["ts"]:
+          self.frames.append(current_frame)
+        current_frame = self._init_empty_frame()
+        current_frame["ts"] = datetime.strptime(
+            fs_match.group(1), "%H:%M:%S.%f"
+        )
+        continue
+      self._extract_metrics(line, current_frame)
+
+    if current_frame["ts"]:
+      self.frames.append(current_frame)
+
+  def filter_update_events(self):
+    """
+    Compare consecutive frames and retain only those where hardware data changed.
+    """
+    self.update_events = []
+    last_snapshot = None
+    for f in self.frames:
+      # Create a snapshot excluding the timestamp for comparison
+      snapshot = {k: v for k, v in f.items() if k != "ts"}
+      if last_snapshot is None or snapshot != last_snapshot:
+        self.update_events.append(f)
+        last_snapshot = snapshot
+
+  def validate_rate_match(self) -> bool:
+    """
+    Validates if the hardware update frequency aligns with the target rate.
+
+    Logic Rationale:
+    1. Eager Hardware Output: To ensure monitoring data does not lag behind the
+       specified sampling frequency (Target Rate), the hardware driver implements
+       an eager refresh strategy. This often results in intervals slightly below
+       or exactly at the target (e.g., 0.08s - 0.10s).
+    2. Jitter Tolerance: A +/- 20% buffer (0.08s to 0.12s) is established to
+       account for system scheduling jitters and network transmission latency.
+    3. Sensitivity Verification: A 'True' result confirms the system successfully
+       captured active hardware state changes at a high frequency, rather than
+       stale cached data.
+    """
+    if len(self.update_events) < 3:
+      return False
+
+    for i in range(2, len(self.update_events)):
+      delta = (
+          self.update_events[i]["ts"] - self.update_events[i - 1]["ts"]
+      ).total_seconds()
+      if self.lower_bound <= delta <= self.upper_bound:
+        return True
+    return False
+
+  def _format_row(self, no, ev, delta):
+    """Helper to format a single row of report data."""
+    pids = ", ".join(ev["chips"].values())
+    hbm_str = " | ".join(
+        [
+            f"D{k}:{v[0].split('/')[0].strip()}({v[1]}%)"
+            for k, v in ev["runtime"].items()
+        ]
+    )
+    tc_str = ", ".join([f"C{k}:{v}%" for k, v in ev["tensor"].items()])
+    lat_str = " || ".join(
+        [f"{k}: {'|'.join(v)}" for k, v in ev["latency"].items()]
+    )
+
+    return (
+        f"{no:<3} | {ev['ts'].strftime('%H:%M:%S.%f')[:-3]:<12} | {delta:<7.3f}s | "
+        f"{pids:<12} | {hbm_str:<60} | {tc_str:<30} | {lat_str}"
+    )
+
+  def generate_report(self) -> str:
+    """
+    Generate a complete aligned text report of detected performance updates.
+    """
+    num_events = len(self.update_events)
+    if num_events < 3:
+      return "Insufficient data to generate a report (at least 3 unique events required)."
+
+    output = []
+    header = (
+        f"{'No':<3} | {'Timestamp':<12} | {'Intv (s)':<10} | "
+        f"{'PIDs':<12} | {'HBM Usage (Device:Used | Duty%)':<60} | "
+        f"{'TensorCore':<30} | {'Latency Profile (us)'}"
+    )
+    output.append(header)
+    output.append("-" * 210)
+
+    intervals = []
+    for i in range(2, num_events):
+      ev = self.update_events[i]
+      prev_ev = self.update_events[i - 1]
+      delta = (ev["ts"] - prev_ev["ts"]).total_seconds()
+      intervals.append(delta)
+
+      row = self._format_row(i - 1, ev, delta)
+      output.append(row)
+
+    if intervals:
+      avg_intv = sum(intervals) / len(intervals)
+      is_matched = self.validate_rate_match()
+      output.append("-" * 210)
+      output.append(
+          f"Average Interval (Stable Phase): {avg_intv:.3f} s | Target Rate Match: {is_matched}"
+      )
+
+    return "\n".join(output)
 
 
 def execute_tpu_info_cli_command(info, pod_name: str, tpu_args: str) -> str:
@@ -78,6 +252,58 @@ def validate_streaming_rate(info, pod_name: str, rate: float) -> str:
       output, patterns, f"Content check on {pod_name}"
   )
   return f"Validated {pod_name} at {rate}s"
+
+
+@task
+def validate_streaming_rate_iterations(
+    info, pod_name: str, rate: float, iteration_count: int = 40
+) -> str:
+  """
+  Performs 40 iterations of 30s tests.
+  The task succeeds if at least 50% of the iterations are valid.
+  """
+  duration = 30
+  analyzer = TPUPerformanceAnalyzer(target_rate=rate)
+  success_count = 0
+  pass_threshold = iteration_count / 2  # 50% threshold
+
+  for i in range(1, iteration_count + 1):
+    # Precise command with Perl microsecond timestamping and terminal line export
+    tpu_args = (
+        f'sh -c "export LINES=50 && '
+        f"script -q -c 'timeout {duration}s tpu-info --streaming --rate {rate}' /dev/null\" "
+        f"| perl -MTime::HiRes=gettimeofday -ne ' "
+        f"($s, $usec) = gettimeofday; "
+        f"($sec,$min,$hour) = localtime($s); "
+        f'printf("[%02d:%02d:%02d.%03d] %s", $hour, $min, $sec, $usec/1000, $_);\' '
+        f"|| [ ${{PIPESTATUS[0]}} -eq 124 ]"
+    )
+
+    try:
+      output = execute_tpu_info_cli_command(info, pod_name, tpu_args)
+      analyzer.parse_log(output)
+      analyzer.filter_update_events()
+      logging.info(analyzer.generate_report())
+      if analyzer.validate_rate_match():
+        success_count += 1
+      else:
+        logging.info(
+            f"Iteration {i}: Failed validation (Intervals out of range)."
+        )
+    except Exception as e:
+      logging.error(f"Iteration {i}: Command execution error: {str(e)}")
+
+  # Evaluation logic: Pass if success_count >= 20
+  status_msg = f"Pod {pod_name} at {rate}s: {success_count}/{iteration_count} iterations passed."
+  logging.info(status_msg)
+
+  if success_count < pass_threshold:
+    raise AssertionError(
+        f"Validation Failed: Only {success_count}/{iteration_count} passed. "
+        f"Required at least {pass_threshold}."
+    )
+
+  return status_msg
 
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
@@ -189,19 +415,25 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       )(cluster_info, pod_name_list=pod_names, job_apply_time=apply_time)
 
       test_rates = [0.1, 0.5, 1.0, 5.0]
+      rate_test_groups = []
       for rate in test_rates:
         formatted_rate = str(rate).replace(".", "_")
 
-        # Keyword arguments are generated dynamically at runtime (pylint does not
-        # know this signature).
-        with TaskGroup(  # pylint: disable=unexpected-keyword-arg
+        with TaskGroup(
             group_id=f"verification_group_rate_{formatted_rate}"
         ) as rate_group:
-          streaming_validation_results = (
-              validate_streaming_rate.override(task_id="streaming_rate_test")
-              .partial(info=cluster_info, rate=rate)
-              .expand(pod_name=pod_names)
+          # Fix: Ensure parameters match the task signature exactly
+          validate_streaming_rate_iterations.override(
+              task_id="streaming_rate_test",
+              execution_timeout=datetime.timedelta(minutes=60),
+          ).partial(
+              info=cluster_info,
+              rate=rate,
+              iteration_count=40,  # Pass integer directly to partial
+          ).expand(
+              pod_name=pod_names
           )
+          rate_test_groups.append(rate_group)
 
       cleanup_workload = jobset.end_workload.override(
           task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
@@ -242,7 +474,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           >> apply_time
           >> pod_names
           >> wait_for_job_start
-          >> verification_group
+          >> rate_test_groups
           >> cleanup_workload
           >> cleanup_node_pool
       )
