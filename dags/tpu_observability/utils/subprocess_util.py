@@ -32,16 +32,19 @@ import subprocess
 from airflow.exceptions import AirflowFailException
 
 
+class CommandKilledException(AirflowFailException):
+  """Raised specifically when a command returns exit code 137 (SIGKILL)."""
+
+  pass
+
+
 def run_exec(
     cmd: str,
     env: dict[str, str] | None = None,
     log_command: bool = True,
     log_output: bool = True,
-    accepted_exit_codes: list[int] | None = None,
 ) -> str:
   """Executes a shell command and logs its output."""
-  if accepted_exit_codes is None:
-    accepted_exit_codes = [0]
 
   if log_command:
     logging.info("[subprocess] executing command:\n %s\n", cmd)
@@ -65,8 +68,11 @@ def run_exec(
       text=True,
   )
 
-  if res.returncode not in accepted_exit_codes:
+  if res.returncode != 0:
     logging.info("[subprocess] stderr: %s", res.stderr)
+    if res.returncode == 137:
+      raise CommandKilledException("Process was killed with SIGKILL")
+
     raise AirflowFailException(
         "Caught an error while executing a command. stderr Message:"
         f" {res.stderr}"
