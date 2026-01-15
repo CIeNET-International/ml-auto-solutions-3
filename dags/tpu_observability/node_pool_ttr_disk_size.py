@@ -15,10 +15,8 @@
 """A DAG to validate GKE node pool Times To Recover(TTR) metrics by triggering a disk size update."""
 
 import datetime
-import logging
 
 from airflow import models
-from airflow.decorators import task
 from airflow.models.baseoperator import chain
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
@@ -52,8 +50,8 @@ with models.DAG(
       ### Description
       This DAG automates the validation of GKE node pool Times To Recover (TTR) metrics.
       It creates a temporary node pool, triggers a disk resize operation to force a node
-      update, verifies that the disk size is updated correctly, and checks that the TTR
-      metric is correctly generated and reported to Google Cloud Monitoring.
+      pool update, and checks that the TTR metric is correctly generated and reported
+      to Google Cloud Monitoring.
 
       ### Prerequisites
       This test requires an existing GKE cluster.
@@ -61,12 +59,10 @@ with models.DAG(
       ### Procedures
       1. Create a temporary node pool.
       2. Wait for the node pool to be RUNNING.
-      3. Retrieve the current disk size.
-      4. Trigger a disk resize update on the node pool.
-      5. Wait for the node pool to recover and become RUNNING again.
-      6. Verify that the disk size has been correctly updated.
-      7. Wait for the Times To Recover (TTR) metrics to appear in Google Cloud Monitoring.
-      8. Clean up the node pool after the tests.
+      3. Trigger a disk resize update on the node pool.
+      4. Wait for the node pool to recover and become RUNNING again.
+      5. Wait for the Times To Recover (TTR) metrics to appear in Google Cloud Monitoring.
+      6. Clean up the node pool after the tests.
     """,
 ) as dag:
   for machine in MachineConfigMap:
@@ -75,7 +71,7 @@ with models.DAG(
     with TaskGroup(group_id=f"v{config.tpu_version.value}"):
       node_pool_info = node_pool.build_node_pool_info_from_gcs_yaml(
           gcs_path=GCS_CONFIG_PATH,
-          dag_name="node_pool_ttr_update_label",
+          dag_name="node_pool_ttr_disk_size",
           is_prod=composer_env.is_prod_env(),
           machine_type=config.machine_version.value,
           tpu_topology=config.tpu_topology,
@@ -93,14 +89,13 @@ with models.DAG(
           task_id="wait_for_running"
       )(node_pool=node_pool_info, status=node_pool.Status.RUNNING)
 
-      update_spec = node_pool.build_update_spec(
-          target=node_pool.UpdateTarget.DISK_SIZE,
-          operation=node_pool.UpdateOperation.INCREMENT,
-          value=_DISK_SIZE_INCREMENT,
-      )
-
-      update_start_time = node_pool.update.override(task_id="update_node_pool")(
-          node_pool=node_pool_info, spec=update_spec
+      update_start_time = node_pool.update_by_delta.override(
+          task_id="update_node_pool_by_delta"
+      )(
+          node_pool=node_pool_info,
+          spec=node_pool.NodePoolUpdateSpec.DiskSize(
+              delta=_DISK_SIZE_INCREMENT
+          ),
       )
 
       wait_for_recovered = node_pool.wait_for_status.override(
@@ -122,7 +117,6 @@ with models.DAG(
           create_node_pool,
           wait_for_provisioning,
           wait_for_running,
-          update_spec,
           update_start_time,
           wait_for_recovered,
           wait_for_ttr,
