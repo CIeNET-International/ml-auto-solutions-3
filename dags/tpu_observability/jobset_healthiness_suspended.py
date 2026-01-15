@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""A DAG to test "Jobset Ready Healthiness" metric."""
+"""A DAG to test "Jobset Suspended Healthiness" metric."""
 
 import datetime
 
@@ -31,7 +31,7 @@ from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_P
 # Keyword arguments are generated dynamically at runtime (pylint does not
 # know this signature).
 with models.DAG(  # pylint: disable=unexpected-keyword-arg
-    dag_id="jobset_healthiness_ready",
+    dag_id="jobset_healthiness_suspended",
     start_date=datetime.datetime(2025, 8, 10),
     schedule="30 19 * * *" if composer_env.is_prod_env() else None,
     catchup=False,
@@ -44,12 +44,12 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
         "v6e-16",
     ],
     description=(
-        "This DAG tests the 'Ready' status of jobset healthiness by "
+        "This DAG tests the 'Suspended' status of jobset healthiness by "
         "comparing the number of 'Ready' replicas before and after "
         "a jobset is running."
     ),
     doc_md="""
-      # JobSet Healthiness Test For the "Ready" Status
+      # JobSet Healthiness Test For the "Suspended" Status
       ### Description
       This DAG automates the process of creating node-pools, ensuring the
       correct number of "Ready" replicas appear, then launching a jobset on
@@ -58,11 +58,11 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       This test requires an existing cluster to run.
       ### Procedures
       First two node-pools are created. The validation test is then run to
-      check if the number of "Ready" replicas is 0. A jobset is then launched
+      check if the number of "Suspended" replicas is 0. A jobset is then launched
       which uses 2 replicas. Once the jobset is running the jobs should
-      quickly enter the "Ready" state. The number of found replicas is
-      tested against the number of replicas which should be "Ready". If they
-      match the DAG is a success.
+      quickly enter the "Ready" state. Then using command to suspend entire jobset.
+      The number of found replicas is tested against the number of replicas which
+      should be "Suspended". If they match the DAG is a success.
       """,
 ) as dag:
   for machine in MachineConfigMap:
@@ -76,10 +76,10 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       return f"{node_pool_info.node_pool_name}-2"
 
     jobset_config = JobSet(
-        jobset_name="jobset-healthiness-ready",
+        jobset_name="jobset-healthiness-suspended",
         namespace="default",
         max_restarts=0,
-        replicated_job_name="tpu-job-slice",
+        replicated_job_name="tpu-job-jax-v6e-slice",
         replicas=2,
         backoff_limit=0,
         completions=4,
@@ -96,7 +96,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     with TaskGroup(  # pylint: disable=unexpected-keyword-arg
         group_id=f"v{config.tpu_version.value}"
     ):
-      cluster_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
+      node_pool_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
           task_id="build_node_pool_info_from_gcs_yaml"
       )(
           gcs_path=GCS_CONFIG_PATH,
@@ -106,9 +106,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           tpu_topology=config.tpu_topology,
       )
 
-      cluster_info_2 = node_pool.copy_node_pool_info_with_override(
-          info=cluster_info,
-          node_pool_name=generate_second_node_pool_name(cluster_info),
+      node_pool_info_2 = node_pool.copy_node_pool_info_with_override(
+          info=node_pool_info,
+          node_pool_name=generate_second_node_pool_name(node_pool_info),
       )
 
       # Keyword arguments are generated dynamically at runtime (pylint does not
@@ -120,42 +120,47 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             task_id="node_pool_1",
             retries=2,
         )(
-            node_pool=cluster_info,
+            node_pool=node_pool_info,
         )
 
         create_second_node_pool = node_pool.create.override(
             task_id="node_pool_2",
             retries=2,
         )(
-            node_pool=cluster_info_2,
+            node_pool=node_pool_info_2,
         )
 
       validate_zero_replicas = jobset.validate_jobset_replica_number(
-          node_pool=cluster_info,
+          node_pool=node_pool_info,
           jobset_config=jobset_config,
-          replica_type="ready",
+          replica_type="suspended",
           correct_replica_num=0,
       )
 
       start_workload = jobset.run_workload(
-          node_pool=cluster_info,
+          node_pool=node_pool_info,
           yaml_config=jobset_config.generate_yaml(
               workload_script=Workload.JAX_TPU_BENCHMARK
           ),
           namespace=jobset_config.namespace,
       )
 
-      validate_ready_replicas = jobset.validate_jobset_replica_number(
-          node_pool=cluster_info,
+      suspend_jobset = jobset.suspended_jobset(
+          node_pool=node_pool_info,
+          jobset_name=jobset_config.jobset_name
+      )
+
+      validate_suspended_replicas = jobset.validate_jobset_replica_number(
+          node_pool=node_pool_info,
           jobset_config=jobset_config,
-          replica_type="ready",
+          replica_type="suspended",
           correct_replica_num=jobset_config.replicas,
       )
 
       cleanup_workload = jobset.end_workload.override(
           task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
       )(
-          node_pool=cluster_info,
+          node_pool=node_pool_info,
           jobset_name=jobset_config.jobset_name,
           namespace=jobset_config.namespace,
       ).as_teardown(
@@ -171,7 +176,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             task_id="cleanup_node_pool_1",
             trigger_rule=TriggerRule.ALL_DONE,
             retries=2,
-        )(node_pool=cluster_info).as_teardown(
+        )(node_pool=node_pool_info).as_teardown(
             setups=create_node_pool,
         )
 
@@ -179,19 +184,20 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             task_id="cleanup_node_pool_2",
             trigger_rule=TriggerRule.ALL_DONE,
             retries=2,
-        )(node_pool=cluster_info_2).as_teardown(
+        )(node_pool=node_pool_info_2).as_teardown(
             setups=create_node_pool,
         )
 
       # Airflow uses >> for task chaining, which is pointless for pylint.
       # pylint: disable=pointless-statement
       (
-          cluster_info
-          >> cluster_info_2
+          node_pool_info
+          >> node_pool_info_2
           >> create_node_pool
           >> validate_zero_replicas
           >> start_workload
-          >> validate_ready_replicas
+          >> suspend_jobset
+          >> validate_suspended_replicas
           >> cleanup_workload
           >> cleanup_node_pool
       )
