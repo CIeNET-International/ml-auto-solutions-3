@@ -51,7 +51,14 @@ def kill_tpu_pod_workload(info: node_pool.Info, pod_name: str) -> None:
         jobset.Command.get_credentials_command(info),
         f"kubectl exec {pod_name} -n default -- pkill -9 -f python",
     ])
-    subprocess.run_exec(cmd, env=env, accepted_exit_codes=[0, 137])
+
+    try:
+      subprocess.run_exec(cmd, env=env)
+    except subprocess.CommandKilledException:
+      # For this TTR test, receiving 137 is a success.
+      pass
+    except Exception as e:
+      raise e
 
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
