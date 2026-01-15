@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import random
+import re
 import string
 import tempfile
 import textwrap
@@ -385,7 +386,10 @@ def get_running_pods(
 
 @task
 def run_workload(
-    node_pool: node_pool_info, yaml_config: str, namespace: str
+    node_pool: node_pool_info,
+    yaml_config: str,
+    namespace: str,
+    **context,
 ) -> TimeUtil:
   """
   Applies the specified YAML file to the GKE cluster.
@@ -395,6 +399,14 @@ def run_workload(
     yaml_config: The JobSet object containing YAML configuration.
     namespace: The Kubernetes namespace to apply the JobSet.
   """
+  # Parse jobset_name from yaml_config and push to XCom for downstream tasks
+  ti = context.get("ti")
+  if ti:
+    match = re.search(r"name: (tpu-info-\d+-\d+)", yaml_config)
+    if match:
+      jobset_name = match.group(1)
+      ti.xcom_push(key="jobset_name", value=jobset_name)
+
   with tempfile.NamedTemporaryFile() as temp_config_file:
     env = os.environ.copy()
     env["KUBECONFIG"] = temp_config_file.name
