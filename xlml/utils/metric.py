@@ -748,9 +748,11 @@ def get_xpk_job_status(benchmark_id: str) -> bigquery.JobStatus:
   context = get_current_context()
   execution_date = context["dag_run"].logical_date
   current_dag = context["dag"]
+  current_task_id = context["task"].task_id
+  test_task_id = _parse_full_id_by_test_name(benchmark_id, current_task_id)
 
   workload_completion = current_dag.get_task(
-      task_id=f"{benchmark_id}.run_model.wait_for_workload_completion"
+      task_id=f"{test_task_id}.run_model.wait_for_workload_completion"
   )
   workload_completion_ti = TaskInstance(workload_completion, execution_date)
   workload_completion_state = workload_completion_ti.current_state()
@@ -1034,3 +1036,13 @@ def process_metrics(
 
   print("Test run rows:", test_run_rows)
   bigquery_metric.insert(test_run_rows)
+
+
+def _parse_full_id_by_test_name(test_name: str, current_task_id: str):
+  index = current_task_id.find(test_name)
+  if index == -1:
+    raise ValueError(
+        f"Test name '{test_name}' not found in current_task_id"
+        f" '{current_task_id}'"
+    )
+  return current_task_id[: index + len(test_name)]
