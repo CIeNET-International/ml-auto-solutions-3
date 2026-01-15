@@ -471,7 +471,11 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
       )(
           node_pool=cluster_info,
-          jobset_name=jobset_config.jobset_name,
+          jobset_name=(
+              "{{ ti.xcom_pull(task_ids='v"
+              + config.tpu_version.value
+              + ".run_workload', key='jobset_name') }}"
+          ),
           namespace=jobset_config.namespace,
       ).as_teardown(
           setups=apply_time
