@@ -525,8 +525,15 @@ def wait_for_jobset_started(
   return all(p > threshold_value for p in last_n_data_points)
 
 
+<<<<<<< HEAD
 @task.sensor(poke_interval=60, timeout=3600, mode="reschedule")
 def wait_for_jobset_ttr_to_be_found(node_pool: node_pool_info) -> bool:
+=======
+@task.sensor(poke_interval=60, timeout=3600, mode="poke")
+def wait_for_jobset_ttr_to_be_found(
+    node_pool: node_pool_info, jobset_name: str
+) -> bool:
+>>>>>>> 03535a3 (feat: add jobset_ttr_pod_oom DAG for v6e recovery validation)
   """
   Polls the jobset time_between_interruptions metric.
 
@@ -548,6 +555,7 @@ def wait_for_jobset_ttr_to_be_found(node_pool: node_pool_info) -> bool:
       filter_str=(
           'metric.type="kubernetes.io/jobset/times_to_recover" '
           f'resource.labels.cluster_name="{node_pool.cluster_name}" '
+          f'resource.labels.entity_name="{jobset_name}"'
       ),
       start_time=TimeUtil.from_datetime(now - datetime.timedelta(minutes=60)),
       end_time=TimeUtil.from_datetime(now),
