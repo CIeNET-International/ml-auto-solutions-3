@@ -272,6 +272,14 @@ class Command:
         f"-n {namespace} -o jsonpath={{.items[*].metadata.name}}",
     ])
 
+  @staticmethod
+  def suspend_jobset(jobset_name: str, namespace: str) -> str:
+    patch_content = '{"spec": {"suspend": true}}'
+    return (
+        f"kubectl patch jobset {jobset_name} -n {namespace} "
+        f"--type=merge -p '{patch_content}'"
+    )
+
 
 def get_replica_num(
     replica_type: str, job_name: str, node_pool: node_pool_info
@@ -420,6 +428,31 @@ def end_workload(node_pool: node_pool_info, jobset_name: str, namespace: str):
 
 
 @task
+def suspended_jobset(node_pool: node_pool_info, jobset_name: str):
+  """
+  Suspend a jobset from the GKE cluster.
+
+  This task executes a bash script to:
+  1. Authenticate `gcloud` with the specified GKE cluster.
+  2. Suspend a JobSet.
+
+  Args:
+    node_pool: Configuration object with cluster details.
+    jobset_name: The name of the JobSet to delete.
+  """
+  with tempfile.NamedTemporaryFile() as temp_config_file:
+    env = os.environ.copy()
+    env["KUBECONFIG"] = temp_config_file.name
+
+    cmd = " && ".join([
+        Command.get_credentials_command(node_pool),
+        Command.suspend_jobset(jobset_name, "default"),
+    ])
+
+    subprocess.run_exec(cmd, env=env)
+
+
+@task
 def list_pod_names(node_pool: node_pool_info, namespace: str) -> list[str]:
   """
   Retrieves a list of active pod names from a specific GKE cluster namespace.
@@ -557,6 +590,31 @@ def wait_for_jobset_ttr_to_be_found(node_pool: node_pool_info) -> bool:
   # it does not assess its value.
   logging.info("Time series: %s", time_series)
   return len(time_series) > 0
+
+
+@task.sensor(poke_interval=30, timeout=900, mode="reschedule")
+def validate_jobset_replica_number(
+    node_pool: node_pool_info,
+    jobset_config: JobSet,
+    replica_type: str,
+    correct_replica_num: int,
+):
+  """
+  A sensor which checks if the correct number jobset replicas in a status type.
+
+  Args:
+    node_pool: Configuration object with cluster details.
+    jobset_config: Configuration of JobSet which is being run.
+    replica_type(str): The name of the type of status being checked for.
+    correct_replica_num(int): The expected number of replicas to be found.
+  """
+  logging.info("Checking for number of replicas of type: %s", replica_type)
+  ready_replicas = get_replica_num(
+      replica_type=replica_type,
+      job_name=jobset_config.replicated_job_name,
+      node_pool=node_pool,
+  )
+  return ready_replicas == correct_replica_num
 
 
 @task.sensor(poke_interval=30, timeout=600, mode="reschedule")
