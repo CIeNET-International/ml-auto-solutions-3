@@ -67,16 +67,16 @@ def run_exec(
       # (using the default system encoding).
       text=True,
   )
-
   if res.returncode != 0:
     logging.info("[subprocess] stderr: %s", res.stderr)
-    if res.returncode == 137:
-      raise CommandKilledException("Process was killed with SIGKILL")
-
-    raise AirflowFailException(
-        "Caught an error while executing a command. stderr Message:"
-        f" {res.stderr}"
-    )
+    match res.returncode:
+      case 137:
+        raise CommandKilledException("Process was terminated with SIGKILL")
+      case _:
+        raise AirflowFailException(
+            f"Caught an error while executing a command. \n"
+            f"stderr Message: {res.stderr}"
+        )
 
   if log_output:
     logging.info("[subprocess] stdout: %s", res.stdout)
