@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""A DAG to validate GKE node pool Times To Recover(TTR) metrics by triggering a disk size update."""
+"""A DAG to validate GKE node pool Times To Recover(TTR) metrics
+by triggering a disk size update."""
 
 import datetime
 
@@ -89,9 +90,7 @@ with models.DAG(
           task_id="wait_for_running"
       )(node_pool=node_pool_info, status=node_pool.Status.RUNNING)
 
-      update_start_time = node_pool.update_by_delta.override(
-          task_id="update_node_pool_by_delta"
-      )(
+      update_start_time = node_pool.update.override(task_id="update_node_pool")(
           node_pool=node_pool_info,
           spec=node_pool.NodePoolUpdateSpec.DiskSize(
               delta=_DISK_SIZE_INCREMENT
