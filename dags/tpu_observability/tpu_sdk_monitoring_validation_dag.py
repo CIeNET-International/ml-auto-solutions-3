@@ -27,42 +27,11 @@ from airflow.decorators import task
 
 from dags import composer_env
 from dags.tpu_observability.utils import jobset_util as jobset
+from dags.tpu_observability.utils import sdk_util as sdk
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.tpu_observability.utils.jobset_util import JobSet, Workload
 from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_PATH
-
-
-def execute_python_monitoring_command(
-    info, pod_name: str, python_code: str
-) -> str:
-  """Executes a Python command inside a specific TPU pod with a retry loop.
-
-  Args:
-      info: Node pool and cluster information.
-      pod_name: The name of the target pod to execute the command in.
-      python_code: The Python snippet to run inside the pod.
-
-  Returns:
-      The standard output of the executed command.
-  """
-  with tempfile.NamedTemporaryFile() as temp_config_file:
-    env = os.environ.copy()
-    env["KUBECONFIG"] = temp_config_file.name
-    remote_shell_script = (
-        "for i in $(seq 1 12); do "
-        'python3 -c "import libtpu" &> /dev/null && break || '
-        'echo "Waiting for libtpu to be ready... ($i/12)" && sleep 5; '
-        "done; "
-        f'python3 -c "{python_code}"'
-    )
-
-    cmd = " && ".join([
-        jobset.Command.get_credentials_command(info),
-        f"kubectl exec {pod_name} -n default "
-        f"-- bash -c '{remote_shell_script}'",
-    ])
-    return subprocess.run_exec(cmd, env=env)
 
 
 def verify_output_contains_patterns(
@@ -87,17 +56,9 @@ def verify_output_contains_patterns(
 
 @task
 def validate_monitoring_help(info, pod_name: str) -> str:
-  """Task to validate that tpumonitoring.help() displays correct documentation.
-
-  Args:
-      info: Cluster info for gcloud credentials.
-      pod_name: Pod name provided by dynamic task mapping.
-
-  Returns:
-      The help documentation string from the SDK.
-  """
-  code = "from libtpu.sdk import tpumonitoring; tpumonitoring.help()"
-  output = execute_python_monitoring_command(info, pod_name, code)
+  """Uses the shared utility to validate tpumonitoring.help()."""
+  code = "tpumonitoring.help()"
+  output = sdk.execute_tpu_python_command(info, pod_name, code)
 
   patterns = [
       "List all supported functionality",
@@ -122,17 +83,16 @@ def validate_metrics_list(info, pod_name: str) -> str:
       The string representation of the supported metrics list.
   """
   code = (
-      "from libtpu.sdk import tpumonitoring; "
       "print(tpumonitoring.list_supported_metrics())"
   )
-  output = execute_python_monitoring_command(info, pod_name, code)
+  output = sdk.execute_tpu_python_command(info, pod_name, code)
 
   patterns = [
       "tensorcore_util",
-      "ici_link_health",
-      "hbm_capacity_usage",
       "duty_cycle_pct",
-      "host_to_device_transfer_latency",
+      "hbm_capacity_usage",
+      "buffer_transfer_latency",
+      "hlo_execution_timing",
   ]
   verify_output_contains_patterns(
       output, patterns, "tpumonitoring.list_supported_metrics()"
@@ -195,7 +155,8 @@ with models.DAG(
         tpu_accelerator_type="tpu-v6e-slice",
         tpu_topology="4x4",
         container_name="jax-tpu-worker",
-        image="python:3.11",
+        image="asia-northeast1-docker.pkg.dev/cienet-cmcs/"
+        "yuna-docker/tpu-info:v0.5.1",
         tpu_cores_per_pod=4,
     )
 
@@ -218,25 +179,27 @@ with models.DAG(
         node_pool=cluster_info,
     )
 
-    start_workload = jobset.run_workload.override(task_id="start_workload")(
-        node_pool=cluster_info,
-        yaml_config=jobset_config.generate_yaml(
-            workload_script=Workload.JAX_TPU_BENCHMARK
-        ),
-        namespace=jobset_config.namespace,
-    )
-
-    ensure_all_pods_running = jobset.wait_for_all_pods_running.override(
-        task_id="ensure_all_pods_running"
-    )(
-        num_pods=(jobset_config.replicas * jobset_config.parallelism),
-        node_pool=cluster_info,
-    )
+    apply_time = jobset.run_workload.override(task_id="run_workload")(
+          node_pool=cluster_info,
+          yaml_config=jobset_config.generate_yaml(
+              workload_script=Workload.JAX_TPU_BENCHMARK
+          ),
+          namespace=jobset_config.namespace,
+      )
 
     pod_names = jobset.list_pod_names.override(task_id="list_pod_names")(
         node_pool=cluster_info,
         namespace=jobset_config.namespace,
     )
+
+    wait_for_jobset_started = jobset.wait_for_jobset_started.override(
+        task_id="wait_for_jobset_started"
+        )(
+        node_pool=cluster_info,
+        pod_name_list=pod_names,
+        job_apply_time=apply_time,
+    )
+
     # Keyword arguments are generated dynamically at runtime (pylint does not
     # know this signature).
     with TaskGroup(  # pylint: disable=unexpected-keyword-arg
@@ -261,7 +224,7 @@ with models.DAG(
         jobset_name=jobset_config.jobset_name,
         namespace=jobset_config.namespace,
     ).as_teardown(
-        setups=start_workload
+        setups=apply_time
     )
 
     cleanup_node_pool = node_pool.delete.override(
@@ -275,9 +238,9 @@ with models.DAG(
     (
         cluster_info
         >> create_node_pool
-        >> start_workload
-        >> ensure_all_pods_running
+        >> apply_time
         >> pod_names
+        >> wait_for_jobset_started
         >> verification_group
         >> cleanup_workload
         >> cleanup_node_pool
