@@ -638,40 +638,21 @@ def get_node_pool_labels(node_pool: Info) -> dict[str, str]:
   Returns:
     A dictionary contains the node pool labels.
   """
-  instance_group_url_cmd = (
+  command = (
       f"gcloud container node-pools describe {node_pool.node_pool_name} "
       f"--project={node_pool.project_id} "
       f"--cluster={node_pool.cluster_name} "
       f"--location={node_pool.location} "
-      f"--format='value(instanceGroupUrls)'"
+      f"--format='json(config.resourceLabels)'"
   )
 
-  instance_group_url = subprocess.run_exec(instance_group_url_cmd).strip()
-
-  instance_template_cmd = (
-      f"gcloud compute instance-groups managed describe {instance_group_url} "
-      f"--project={node_pool.project_id} "
-      f"--format='json(instanceTemplate)'"
+  result = (
+      json.loads(subprocess.run_exec(command).strip())
+      .get("config", {})
+      .get("resourceLabels", {})
   )
 
-  instance_template = json.loads(
-      subprocess.run_exec(instance_template_cmd).strip()
-  )["instanceTemplate"].split("/")[-1]
-
-  get_node_pool_labels_cmd = (
-      f"gcloud compute instance-templates describe {instance_template} "
-      f"--project={node_pool.project_id} "
-      f"--region={node_pool.location} "
-      f"--format='json(properties.labels)'"
-  )
-
-  node_pool_labels = (
-      json.loads(subprocess.run_exec(get_node_pool_labels_cmd).strip())
-      .get("properties", {})
-      .get("labels", {})
-  )
-
-  return node_pool_labels
+  return result
 
 
 class UpdateTarget(enum.Enum):
@@ -752,8 +733,7 @@ def update(node_pool: Info, spec: NodePoolUpdateSpec) -> TimeUtil:
     A TimeUtil object representing the UTC timestamp when the operation started.
 
   Raises:
-    ValueError: If the target is unsupported, the operation is invalid, or
-      flags cannot be constructed.
+    ValueError: If the target is unsupported or the update is redundant.
   """
   flags: list[str] = []
 
@@ -764,7 +744,15 @@ def update(node_pool: Info, spec: NodePoolUpdateSpec) -> TimeUtil:
       flags.append(f"--{spec.target.value}={updated_disk_size}")
 
     case UpdateTarget.LABEL:
-      get_node_pool_labels(node_pool=node_pool)
+      current_labels = get_node_pool_labels(node_pool=node_pool)
+      duplicates = spec.delta.items() & current_labels.items()
+      if duplicates:
+        duplicates_str = ", ".join(f"{k}={v}" for k, v in duplicates)
+        raise ValueError(
+            f"Test Validation Failed: The following labels already exist with "
+            f"the same value: {duplicates_str}. "
+            f"Update aborted because it wouldn't change the state effectively."
+        )
       updated_labels = ",".join(f"{k}={v}" for k, v in spec.delta.items())
       flags.append(f"--{spec.target.value}={updated_labels}")
 
