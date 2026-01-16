@@ -2,8 +2,6 @@ name: Formatter
 
 on:
   pull_request:
-    branch:
-      - tpu-obs/dev/**
     types: [opened, synchronize, edited]
   push:
     branches: [master]

@@ -20,7 +20,7 @@ set -e
 FOLDERS_TO_FORMAT=("dags" "xlml")
 
 HEAD_SHA="$(git rev-parse HEAD)"
-BASE_BRANCH="tpu-obs/dev"
+BASE_BRANCH="dev"
 
 if ! git rev-parse --verify "$BASE_BRANCH" >/dev/null 2>&1; then
   git fetch origin "$BASE_BRANCH":"$BASE_BRANCH" || {

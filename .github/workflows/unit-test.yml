@@ -3,8 +3,6 @@ name: Unit Test
 
 on:
   pull_request:
-    branch:
-      - tpu-obs/dev/**
     types: [opened, synchronize, edited]
 
   push:

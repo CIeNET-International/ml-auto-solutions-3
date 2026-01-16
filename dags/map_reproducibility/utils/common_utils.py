@@ -795,7 +795,7 @@ def get_nemo_metrics_cmds(
       f"--model_type {model_id} "
       f"{step_cmd}"
       f"--accelerator_type {accelertator_type} | "
-      "gsutil cp - $METRICS_FILE",
+      "gcloud storage cp - $METRICS_FILE",
   )
   return cmds
 
@@ -1128,7 +1128,7 @@ def get_scheduled_time(hardware: str, model: str, framework: str):
   schedule_map = {
       "a3ultra": {
           "mixtral-8x7b": {
-              "nemo": "0 3 * * 5",
+              "nemo": "30 2 * * 5",
               "maxtext": "0 2 * * 5",  # 6 PM PST on Thursday
           },
           "llama3-1-70b": {

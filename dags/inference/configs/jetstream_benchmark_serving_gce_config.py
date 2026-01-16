@@ -207,8 +207,8 @@ def get_config(
       # Upload results (in jsonlines format) to GCS to be post-processed into
       # our BigQuery table
       "mv ${BENCHMARK_OUTPUT} metric_report.jsonl",
-      f"gsutil cp metric_report.jsonl {metric_config.SshEnvVars.GCS_OUTPUT.value}",
-      f"gsutil cp /tmp/request-outputs.json {metric_config.SshEnvVars.GCS_OUTPUT.value}",
+      f"gcloud storage cp metric_report.jsonl {metric_config.SshEnvVars.GCS_OUTPUT.value}",
+      f"gcloud storage cp /tmp/request-outputs.json {metric_config.SshEnvVars.GCS_OUTPUT.value}",
   )
 
   job_test_config = test_config.TpuVmTest(
@@ -224,7 +224,7 @@ def get_config(
       set_up_cmds=set_up_cmds,
       run_model_cmds=run_model_cmds,
       timeout=datetime.timedelta(minutes=time_out_in_min),
-      task_owner=test_owner.AIRFLOW,
+      task_owner=test_owner.XIANG_S,
       num_slices=num_slices,
       gcs_subfolder=f"{GCS_SUBFOLDER_PREFIX}/maxtext",
   )

@@ -332,6 +332,11 @@ class DockerImage(enum.Enum):
       "us-central1-docker.pkg.dev/tpu-pytorch-releases/docker/"
       f"xla:nightly_3.10_tpuvm_{datetime.datetime.today().strftime('%Y%m%d')}"
   )
+  AXLEARN_CUSTOM = (
+      # AXLearn's Docker/Artifact Registry bundler uses the run/workload name as
+      # the image tag, so we intentionally keep only the base image repo here.
+      "gcr.io/cloud-tpu-multipod-dev/axlearn-custom"
+  )
   AXLEARN_TPU_JAX_STABLE_STACK = (
       "us-docker.pkg.dev/tpu-prod-env-multipod/bite/tpu/axlearn:"
       f"{datetime.datetime.today().strftime('%Y-%m-%d')}"
@@ -363,20 +368,12 @@ class DockerImage(enum.Enum):
       "gcr.io/tpu-prod-env-multipod/maxdiffusion_stable_stack_candidate:"
       f"{datetime.datetime.today().strftime('%Y-%m-%d')}"
   )
-  MAXTEXT_GPU_JAX_STABLE_STACK = (
-      "gcr.io/tpu-prod-env-multipod/maxtext_gpu_jax_stable_stack:"
-      f"{datetime.datetime.today().strftime('%Y-%m-%d')}"
-  )
   MAXTEXT_GPU_JAX_STABLE = (
       "gcr.io/tpu-prod-env-multipod/maxtext_gpu_jax_stable:"
       f"{datetime.datetime.today().strftime('%Y-%m-%d')}"
   )
-  MAXTEXT_GPU_STABLE_STACK_NIGHTLY_JAX = (
-      "gcr.io/tpu-prod-env-multipod/maxtext_gpu_stable_stack_nightly_jax:"
-      f"{datetime.datetime.today().strftime('%Y-%m-%d')}"
-  )
-  MAXTEXT_GPU_JAX_AI_CANDIDATE_IMAGE = (
-      "gcr.io/tpu-prod-env-multipod/maxtext_stable_stack_candidate_gpu:"
+  MAXTEXT_GPU_JAX_NIGHTLY = (
+      "gcr.io/tpu-prod-env-multipod/maxtext_gpu_jax_nightly:"
       f"{datetime.datetime.today().strftime('%Y-%m-%d')}"
   )
   CLOUD_HYBRIDSIM_NIGHTLY = (
@@ -389,7 +386,11 @@ class DockerImage(enum.Enum):
   MAXTEXT_JAX_052_RECIPES_012 = (
       "gcr.io/tpu-prod-env-multipod/maxtext_tpu_recipes:jax0.5.2-recipes0.1.2"
   )
-  MAXTEXT_POST_TRAINING_RL = (
-      "gcr.io/cloud-tpu-multipod-dev/maxtext-post-training:"
+  MAXTEXT_POST_TRAINING_STABLE = (
+      "gcr.io/tpu-prod-env-multipod/maxtext_post_training_stable:"
+      f"{datetime.datetime.today().strftime('%Y-%m-%d')}"
+  )
+  MAXTEXT_POST_TRAINING_NIGHTLY = (
+      "gcr.io/tpu-prod-env-multipod/maxtext_post_training_nightly:"
       f"{datetime.datetime.today().strftime('%Y-%m-%d')}"
   )
