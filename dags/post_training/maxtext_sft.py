@@ -21,8 +21,56 @@ from dags.post_training.util import validation_util, test_config_util
 from xlml.utils.xpk import MAIN_BRANCH
 from xlml.utils.gke import zone_to_region
 
-SCHEDULE = "0 21 * * *" if composer_env.is_prod_env() else None
+SCHEDULE = "0 22 * * *" if composer_env.is_prod_env() else None
 DAG_TEST_NAME = "maxtext_sft"
+
+
+def create_training_taskgroup(num_slices, config, command, docker_image):
+  """Creates a TaskGroup for the SFT training job."""
+  with TaskGroup(group_id="run_training") as run_training_group:
+    s_time = validation_util.generate_timestamp.override(
+        task_id="generate_start_time"
+    )()
+
+    training_task = gke_config.get_gke_config(
+        num_slices=num_slices,
+        cluster=config.cluster,
+        time_out_in_min=30,
+        test_name=config.short_id,
+        run_model_cmds=command,
+        docker_image=docker_image.value,
+        test_owner=test_owner.JACKY_F,
+    ).run_model(
+        use_pathways=True,
+        xpk_branch=MAIN_BRANCH,
+    )
+
+    e_time = validation_util.generate_timestamp.override(
+        task_id="generate_end_time"
+    )()
+
+    chain(s_time, training_task, e_time)
+  return run_training_group, s_time, e_time
+
+
+def create_validation_taskgroup(config, steps, s_time, e_time):
+  """Creates a TaskGroup for validating the SFT training logs."""
+  with TaskGroup(group_id="validate_training") as validate_training_group:
+    validation_util.validate_log_exist.override(
+        task_id="validate_training_logs"
+    )(
+        project_id=config.cluster.project,
+        location=zone_to_region(config.cluster.zone),
+        cluster_name=config.cluster.name,
+        text_filter=f"\"'step': {steps}\"",
+        namespace="default",
+        container_name="jax-tpu",
+        pod_pattern=f"{config.short_id}.*",
+        start_time=s_time,
+        end_time=e_time,
+    )
+  return validate_training_group
+
 
 with models.DAG(
     dag_id=DAG_TEST_NAME,
@@ -64,6 +112,7 @@ with models.DAG(
     concurrency=2,
 ) as dag:
   training_steps = 30
+
   training_config = test_config_util.SFTTestConfig(
       cluster=XpkClusters.TPU_V5P_128_CLUSTER,
       accelerator="v5p-128",
@@ -82,12 +131,12 @@ with models.DAG(
       sft_config_path="src/MaxText/configs/sft.yml",
   )
   # HF token retrieved from Airflow Variables for secure credential management
-  HF_TOKEN_LLAMA3_1 = models.Variable.get("HF_TOKEN_LLAMA3_1", None)
+  HF_TOKEN_CIENET = models.Variable.get("HF_TOKEN_CIENET", None)
 
   for mode, image in test_config_util.POST_TRAINING_DOCKER_IMAGES:
     # TODO: Enable stable mode once a new version of MaxText is available
     if mode == test_config_util.SetupMode.STABLE:
-      continue  # Skip stable for RL training tests
+      continue  # Skip stable for SFT training tests
 
     for slice_num in training_config.slices:
       current_datetime = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
@@ -95,56 +144,16 @@ with models.DAG(
 
       sft_training_command = training_config.generate_sft_training_command(
           run_name=run_name,
-          hf_token=HF_TOKEN_LLAMA3_1,
+          hf_token=HF_TOKEN_CIENET,
       )
       with TaskGroup(
           group_id=f"sft-{mode.value}-{slice_num}x{training_config.accelerator}"
       ) as group:
-        with TaskGroup(group_id="run_training") as training_group:
-          start_time = validation_util.generate_timestamp.override(
-              task_id="generate_start_time"
-          )()
-
-          training_task = gke_config.get_gke_config(
-              num_slices=slice_num,
-              cluster=training_config.cluster,
-              time_out_in_min=30,
-              test_name=training_config.short_id,
-              run_model_cmds=sft_training_command,
-              docker_image=image.value,
-              test_owner=test_owner.JACKY_F,
-          ).run(
-              use_pathways=True,
-              xpk_branch=MAIN_BRANCH,
-              # skip_post_process=True,
-          )
-
-          end_time = validation_util.generate_timestamp.override(
-              task_id="generate_end_time"
-          )()
-
-          chain(
-              start_time,
-              training_task,
-              end_time,
-          )
-
-        with TaskGroup(group_id="validate_training") as validation_group:
-          validate_training_logs = validation_util.validate_log_exist.override(
-              task_id="validate_training_logs"
-          )(
-              project_id=training_config.cluster.project,
-              location=zone_to_region(training_config.cluster.zone),
-              cluster_name=training_config.cluster.name,
-              text_filter=f"\"'step': {training_steps}\"",
-              namespace="default",
-              container_name="jax-tpu",
-              pod_pattern=f"{training_config.short_id}.*",
-              start_time=start_time,
-              end_time=end_time,
-          )
-
-        chain(
-            training_group,
-            validation_group,
+        training_group, start_time, end_time = create_training_taskgroup(
+            slice_num, training_config, sft_training_command, image
         )
+        validation_group = create_validation_taskgroup(
+            training_config, training_steps, start_time, end_time
+        )
+
+        chain(training_group, validation_group)

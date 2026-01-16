@@ -119,15 +119,8 @@ class RLTestConfig:
     Returns:
       A tuple containing the RL training command string.
     """
-    command = (
-        f"export HF_TOKEN={hf_token} && "
-        "export TPU_MIN_LOG_LEVEL=0 && "
-        "export TF_CPP_MIN_LOG_LEVEL=0 && "
-        "export TPU_STDERR_LOG_LEVEL=0 && "
-        "export JAX_PLATFORMS=proxy,cpu && "
-        "export JAX_BACKEND_TARGET=grpc://127.0.0.1:29000 && "
-        "export ENABLE_PATHWAYS_PERSISTENCE='1' && "
-        f"python -m src.MaxText.rl.train_rl "
+    rl_command = (
+        "python -m src.MaxText.rl.train_rl "
         f"{self.rl_config_path} run_name={run_name} "
         f"model_name={self.model_name} "
         f"tokenizer_path={self.tokenizer_path} "
@@ -135,6 +128,16 @@ class RLTestConfig:
         f"base_output_directory={self.base_dir} "
         f"loss_algo={loss_algo.loss_name}"
     )
+    command = " && ".join([
+        f"export HF_TOKEN={hf_token}",
+        "export TPU_MIN_LOG_LEVEL=0",
+        "export TF_CPP_MIN_LOG_LEVEL=0",
+        "export TPU_STDERR_LOG_LEVEL=0",
+        "export JAX_PLATFORMS=proxy,cpu",
+        "export JAX_BACKEND_TARGET=grpc://127.0.0.1:29000",
+        "export ENABLE_PATHWAYS_PERSISTENCE='1'",
+        rl_command,
+    ])
 
     # Return as tuple for k8s yaml compatibility.
     return (command,)
@@ -227,15 +230,8 @@ class SFTTestConfig:
     Returns:
       A tuple containing the SFT training command string.
     """
-    command = (
-        f"export HF_TOKEN={hf_token} && "
-        "export JAX_PLATFORMS=proxy && "
-        "export JAX_BACKEND_TARGET=grpc://127.0.0.1:29000 && "
-        "export ENABLE_PATHWAYS_PERSISTENCE=1 && "
-        "export TPU_MIN_LOG_LEVEL=0 && "
-        "export TF_CPP_MIN_LOG_LEVEL=0 && "
-        "export TPU_STDERR_LOG_LEVEL=0 && "
-        f"python3 -m MaxText.sft.sft_trainer "
+    sft_command = (
+        "python3 -m MaxText.sft.sft_trainer "
         f"{self.sft_config_path} run_name={run_name} "
         f"base_output_directory={self.base_dir} "
         f"model_name={self.model_name} "
@@ -248,6 +244,16 @@ class SFTTestConfig:
         "checkpoint_storage_use_ocdbt=False "
         "enable_single_controller=True"
     )
+    command = " && ".join([
+        f"export HF_TOKEN={hf_token}",
+        "export JAX_PLATFORMS=proxy",
+        "export JAX_BACKEND_TARGET=grpc://127.0.0.1:29000",
+        "export ENABLE_PATHWAYS_PERSISTENCE=1",
+        "export TPU_MIN_LOG_LEVEL=0",
+        "export TF_CPP_MIN_LOG_LEVEL=0",
+        "export TPU_STDERR_LOG_LEVEL=0",
+        sft_command,
+    ])
 
     # Return as tuple for k8s yaml compatibility.
     return (command,)
