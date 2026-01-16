@@ -628,6 +628,52 @@ def get_node_pool_disk_size(node_pool: Info) -> int:
   return int(result)
 
 
+def get_node_pool_labels(node_pool: Info) -> dict[str, str]:
+  """Gets the labels of a GKE node pool using gcloud command.
+
+  Args:
+    node_pool: An instance of the Info class that encapsulates the
+      configuration and metadata of a GKE node pool.
+
+  Returns:
+    A dictionary contains the node pool labels.
+  """
+  instance_group_url_cmd = (
+      f"gcloud container node-pools describe {node_pool.node_pool_name} "
+      f"--project={node_pool.project_id} "
+      f"--cluster={node_pool.cluster_name} "
+      f"--location={node_pool.location} "
+      f"--format='value(instanceGroupUrls)'"
+  )
+
+  instance_group_url = subprocess.run_exec(instance_group_url_cmd).strip()
+
+  instance_template_cmd = (
+      f"gcloud compute instance-groups managed describe {instance_group_url} "
+      f"--project={node_pool.project_id} "
+      f"--format='json(instanceTemplate)'"
+  )
+
+  instance_template = json.loads(
+      subprocess.run_exec(instance_template_cmd).strip()
+  )["instanceTemplate"].split("/")[-1]
+
+  get_node_pool_labels_cmd = (
+      f"gcloud compute instance-templates describe {instance_template} "
+      f"--project={node_pool.project_id} "
+      f"--region={node_pool.location} "
+      f"--format='json(properties.labels)'"
+  )
+
+  node_pool_labels = (
+      json.loads(subprocess.run_exec(get_node_pool_labels_cmd).strip())
+      .get("properties", {})
+      .get("labels", {})
+  )
+
+  return node_pool_labels
+
+
 class UpdateTarget(enum.Enum):
   """Defines what to update on the node pool."""
 
@@ -709,30 +755,21 @@ def update(node_pool: Info, spec: NodePoolUpdateSpec) -> TimeUtil:
     ValueError: If the target is unsupported, the operation is invalid, or
       flags cannot be constructed.
   """
-  current_value = None
-  final_value = None
   flags: list[str] = []
 
   match spec.target:
     case UpdateTarget.DISK_SIZE:
-      current_value = get_node_pool_disk_size(node_pool=node_pool)
-      final_value = current_value + spec.delta
-      flags.append(f"--{UpdateTarget.DISK_SIZE}={final_value}")
+      current_disk_size = get_node_pool_disk_size(node_pool=node_pool)
+      updated_disk_size = current_disk_size + spec.delta
+      flags.append(f"--{spec.target.value}={updated_disk_size}")
 
     case UpdateTarget.LABEL:
-      final_value = ",".join(f"{k}={v}" for k, v in spec.delta.items())
-      flags.append(f"--{UpdateTarget.LABEL}={final_value}")
+      get_node_pool_labels(node_pool=node_pool)
+      updated_labels = ",".join(f"{k}={v}" for k, v in spec.delta.items())
+      flags.append(f"--{spec.target.value}={updated_labels}")
 
     case _:
       raise ValueError(f"Unsupported target: {spec.target}")
-
-  logging.info(
-      "Update plan calculated: target=%s current=%s delta=%s final=%s",
-      spec.target,
-      current_value,
-      spec.delta,
-      final_value,
-  )
 
   flags_str = " ".join(flags)
 

@@ -94,9 +94,7 @@ with models.DAG(
       task_id = "update_node_pool_label"
       update_node_pool_label = node_pool.update.override(task_id=task_id)(
           node_pool=node_pool_info,
-          spec=node_pool.UpdateTarget.LABEL(
-              delta=LABELS_TO_UPDATE,
-          ),
+          spec=node_pool.NodePoolUpdateSpec.Label(delta=LABELS_TO_UPDATE),
       )
 
       task_id = "wait_for_recovered"

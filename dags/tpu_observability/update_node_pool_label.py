@@ -92,9 +92,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           task_id="update_node_pool_label"
       )(
           node_pool=node_pool_info,
-          spec=node_pool.UpdateTarget.LABEL(
-              LABELS_TO_UPDATE,
-          ),
+          spec=node_pool.NodePoolUpdateSpec.Label(delta=LABELS_TO_UPDATE),
       )
 
       wait_for_unavailable = node_pool.wait_for_availability.override(
