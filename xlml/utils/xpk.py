@@ -110,6 +110,7 @@ def run_workload(
     mtc_enabled: bool = False,  # It enables MTC phase-2 drivers
     xpk_branch: str = MAIN_BRANCH,
     max_restart: int = 0,
+    priority: str = "very-high",
 ):
   """Run workload through xpk tool."""
 
@@ -146,6 +147,7 @@ def run_workload(
         f" --command='{run_cmds}' --{type_field}={accelerator_type}"
         f" --{multi_keyword}={num_slices} --docker-image={docker_image}"
         f" --project={cluster_project} --zone={zone}"
+        f" --priority={priority}"
         f" --env {metric_config.SshEnvVars.GCS_OUTPUT.name}={gcs_path}"
     )
 
