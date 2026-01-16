@@ -19,6 +19,7 @@ import tempfile
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import subprocess_util as subprocess
 
+
 def execute_tpu_python_command(
     info, pod_name: str, python_code: str, namespace: str = "default"
 ) -> str:
@@ -46,6 +47,6 @@ def execute_tpu_python_command(
     # Build command: Get credentials and execute the command in pod
     cmd = " && ".join([
         jobset.Command.get_credentials_command(info),
-        f"kubectl exec {pod_name} -n {namespace} -- python3 -c \"{full_python_code}\"",
+        f'kubectl exec {pod_name} -n {namespace} -- python3 -c "{full_python_code}"',
     ])
     return subprocess.run_exec(cmd, env=env)
