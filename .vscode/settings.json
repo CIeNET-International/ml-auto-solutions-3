@@ -4,7 +4,6 @@
 
   // Formatting
   "editor.tabSize": 2,
-  "editor.rulers": [80],
   "editor.detectIndentation" : false,
   "files.insertFinalNewline": true,
   "files.trimTrailingWhitespace": true,
