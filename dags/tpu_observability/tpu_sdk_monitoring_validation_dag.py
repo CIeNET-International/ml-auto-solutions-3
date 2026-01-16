@@ -82,9 +82,7 @@ def validate_metrics_list(info, pod_name: str) -> str:
   Returns:
       The string representation of the supported metrics list.
   """
-  code = (
-      "print(tpumonitoring.list_supported_metrics())"
-  )
+  code = "print(tpumonitoring.list_supported_metrics())"
   output = sdk.execute_tpu_python_command(info, pod_name, code)
 
   patterns = [
@@ -180,12 +178,12 @@ with models.DAG(
     )
 
     apply_time = jobset.run_workload.override(task_id="run_workload")(
-          node_pool=cluster_info,
-          yaml_config=jobset_config.generate_yaml(
-              workload_script=Workload.JAX_TPU_BENCHMARK
-          ),
-          namespace=jobset_config.namespace,
-      )
+        node_pool=cluster_info,
+        yaml_config=jobset_config.generate_yaml(
+            workload_script=Workload.JAX_TPU_BENCHMARK
+        ),
+        namespace=jobset_config.namespace,
+    )
 
     pod_names = jobset.list_pod_names.override(task_id="list_pod_names")(
         node_pool=cluster_info,
@@ -194,7 +192,7 @@ with models.DAG(
 
     wait_for_jobset_started = jobset.wait_for_jobset_started.override(
         task_id="wait_for_jobset_started"
-        )(
+    )(
         node_pool=cluster_info,
         pod_name_list=pod_names,
         job_apply_time=apply_time,
