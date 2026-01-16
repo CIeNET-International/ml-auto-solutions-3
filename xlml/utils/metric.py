@@ -466,7 +466,8 @@ def xplane_to_metrics(dir_location: str | airflow.XComArg) -> dict:
       op_profile = get_tool_data(input_path, tool="op_profile", params={})
       out.update({
           "TPU FLOPS Utilization (%): exclude_idle": round_number(
-              op_profile["byProgramExcludeIdle"]["metrics"]["flops"] * 100, 2
+              op_profile["byProgramExcludeIdle"]["metrics"]["flops"] * 100,
+              2,
           ),
           "HBM Bandwidth Utilization (%): exclude_idle": round_number(
               op_profile["byProgramExcludeIdle"]["metrics"]["bandwidthUtils"][0]
@@ -748,11 +749,14 @@ def get_xpk_job_status(benchmark_id: str) -> bigquery.JobStatus:
   context = get_current_context()
   execution_date = context["dag_run"].logical_date
   current_dag = context["dag"]
-  current_task_id = context["task"].task_id
-  test_task_id = _parse_full_id_by_test_name(benchmark_id, current_task_id)
+
+  full_task_id = benchmark_id
+  current_task_group = context["task"].task_group
+  if current_task_group and current_task_group.parent_group:
+    full_task_id = f"{current_task_group.parent_group.group_id}"
 
   workload_completion = current_dag.get_task(
-      task_id=f"{test_task_id}.run_model.wait_for_workload_completion"
+      task_id=f"{full_task_id}.run_model.wait_for_workload_completion"
   )
   workload_completion_ti = TaskInstance(workload_completion, execution_date)
   workload_completion_state = workload_completion_ti.current_state()
@@ -1036,13 +1040,3 @@ def process_metrics(
 
   print("Test run rows:", test_run_rows)
   bigquery_metric.insert(test_run_rows)
-
-
-def _parse_full_id_by_test_name(test_name: str, current_task_id: str):
-  index = current_task_id.find(test_name)
-  if index == -1:
-    raise ValueError(
-        f"Test name '{test_name}' not found in current_task_id"
-        f" '{current_task_id}'"
-    )
-  return current_task_id[: index + len(test_name)]
