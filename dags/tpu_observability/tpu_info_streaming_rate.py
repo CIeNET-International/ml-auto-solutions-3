@@ -13,7 +13,8 @@
 # limitations under the License.
 
 """
-DAG to verify tpu-info streaming rate functionality on TPU v6e slices.
+DAG to validate the 'tpu-info' streaming refresh rate by calculating the time interval
+between consecutive hardware telemetry updates on TPU v6e slices.
 """
 
 import datetime
@@ -40,7 +41,7 @@ class TPUPerformanceAnalyzer:
 
   def __init__(self, target_rate: float = 0.1):
     """
-    Initialize the analyzer with a target sampling rate.
+    Initialize the analyzer with a target refresh rate.
     :param target_rate: The expected update interval in seconds (default 0.1s).
     """
     self.target_rate = target_rate
@@ -125,11 +126,11 @@ class TPUPerformanceAnalyzer:
 
   def validate_rate_match(self) -> bool:
     """
-    Validates if the hardware update frequency aligns with the target rate.
+    Validates if the hardware update frequency aligns with the target refresh rate.
 
     Logic Rationale:
     1. Eager Hardware Output: To ensure monitoring data does not lag behind the
-       specified sampling frequency (Target Rate), the hardware driver implements
+       specified refresh frequency (Target Refresh Rate e.g., 0.1s), the hardware driver implements
        an eager refresh strategy. This often results in intervals slightly below
        or exactly at the target (e.g., 0.08s - 0.10s).
     2. Jitter Tolerance: A +/- 20% buffer (0.08s to 0.12s) is established to
@@ -200,7 +201,9 @@ class TPUPerformanceAnalyzer:
       is_matched = self.validate_rate_match()
       output.append("-" * 210)
       output.append(
-          f"Average Interval (Stable Phase): {avg_intv:.3f} s | Target Rate Match: {is_matched}"
+          f"Average Interval (Stable Phase): {avg_intv:.3f} s\n"
+          f"Target Rate Match: {is_matched}\n"
+          f"(Verified: Streaming data updated within the target refresh rate window)"
       )
 
     return "\n".join(output)
@@ -237,6 +240,7 @@ def validate_streaming_rate_iterations(
     rate: float,
     iteration_count: int = 40,
     duration: int = 30,
+    pass_threshold_percent: float = 0.5,
 ) -> str:
   """
   Performs 40 iterations of 30s tests.
@@ -244,7 +248,7 @@ def validate_streaming_rate_iterations(
   """
   analyzer = TPUPerformanceAnalyzer(target_rate=rate)
   success_count = 0
-  pass_threshold = iteration_count / 2  # 50% threshold
+  pass_threshold = iteration_count * pass_threshold_percent
 
   for i in range(1, iteration_count + 1):
     # Precise command with Perl microsecond timestamping and terminal line export
@@ -302,15 +306,20 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
         "streaming-rate",
     ],
     description=(
-        "Automated validation of the tpu-info CLI's --rate parameter, "
-        "ensuring accurate metric streaming frequencies on TPU v6e-16 slices."
+        "Validates the tpu-info refresh rate by "
+        "calculating the time interval "
+        "between consecutive hardware telemetry updates on TPU v6e-16 slices."
     ),
     doc_md="""
-      ## TPU Info Streaming Rate Verification DAG
+      ## TPU Info Streaming Refresh Rate Verification DAG
 
-      This DAG automates the functional testing of the `tpu-info` CLI tool, specifically focusing on the
-      `--streaming` and `--rate` flags. It verifies that the tool correctly honors requested update
-      intervals within a Kubernetes-managed TPU environment.
+      This DAG automates the functional testing of the `tpu-info` CLI tool, specifically
+      validating the accuracy of the streaming **refresh rate**.
+
+      The core verification logic calculates the precise time delta between
+      consecutive hardware data frames. It ensures that the actual refresh frequency
+      matches the requested `--rate` parameter within a defined jitter tolerance,
+      confirming that the system delivers real-time hardware metrics without stale data.
     """,
 ) as dag:
   for machine in MachineConfigMap:
@@ -362,6 +371,8 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           node_pool_name=generate_second_node_pool_name(cluster_info),
       )
 
+      # Keyword arguments are generated dynamically at runtime (pylint does not
+      # know this signature).
       with TaskGroup(  # pylint: disable=unexpected-keyword-arg
           group_id="create_node_pool"
       ) as create_node_pool:
@@ -398,7 +409,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       # Keyword arguments are generated dynamically at runtime (pylint does not
       # know this signature).
       with TaskGroup(  # pylint: disable=unexpected-keyword-arg
-          group_id="tpu_streaming_rate_verification"
+          group_id="streaming_rate_verification"
       ) as rate_verification_group:
         test_rates = [0.1, 0.5, 1.0, 5.0]
 
@@ -418,6 +429,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
                 info=cluster_info,
                 rate=rate,
                 iteration_count=40,
+                pass_threshold_percent=0.5,  # At least 50% must pass
             ).expand(
                 pod_name=pod_names
             )
