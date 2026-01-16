@@ -605,46 +605,6 @@ def wait_for_ttr(
   return False
 
 
-@task
-def update_labels(node_pool: Info, node_labels: dict) -> TimeUtil:
-  """Updates the labels of a GKE node pool using gcloud command.
-
-  This task updates GKE node pool labels via gcloud.
-  It captures the current time before execution and returns it as
-  a TimeUtil object for downstream tracking.
-
-  Args:
-    node_pool: An instance of the Info class.
-    node_labels: A dictionary of labels to update or remove.
-
-  Returns:
-    A TimeUtil object representing the UTC timestamp when the operation started.
-  """
-  operation_start_time = TimeUtil.from_datetime(
-      datetime.datetime.now(datetime.timezone.utc)
-  )
-
-  if not node_labels:
-    logging.info("The specified label is empty, nothing to update.")
-    return operation_start_time
-
-  labels = []
-
-  for key, val in node_labels.items():
-    labels.append(f"{key}={val}")
-
-  command = (
-      f"gcloud container node-pools update {node_pool.node_pool_name} "
-      f"--project={node_pool.project_id} "
-      f"--cluster={node_pool.cluster_name} "
-      f"--location={node_pool.location} "
-      f"--labels={','.join(labels)} "
-      "--quiet"
-  )
-
-  subprocess.run_exec(command)
-
-
 def get_node_pool_disk_size(node_pool: Info) -> int:
   """Gets the disk size of a GKE node pool using gcloud command.
 
@@ -668,7 +628,7 @@ def get_node_pool_disk_size(node_pool: Info) -> int:
   return int(result)
 
 
-class UpdateTarget:
+class UpdateTarget(enum.Enum):
   """Defines what to update on the node pool."""
 
   DISK_SIZE = "disk-size"
