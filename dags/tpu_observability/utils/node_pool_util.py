@@ -645,46 +645,6 @@ def update_labels(node_pool: Info, node_labels: dict) -> TimeUtil:
   subprocess.run_exec(command)
 
 
-class UpdateTarget(enum.IntEnum):
-  """Enum defining what to update on the node pool."""
-
-  DISK_SIZE = enum.auto()
-  LABEL = enum.auto()
-
-
-@dataclasses.dataclass
-class NodePoolUpdateSpec:
-  """Configuration parameters defining a mutation on a GKE node pool.
-
-  Attributes:
-      target: The specific node pool attribute to update.
-      delta: The change to apply to the target's current state.
-  """
-
-  target: UpdateTarget
-  delta: int | str
-
-  @staticmethod
-  def DiskSize(delta: int) -> "NodePoolUpdateSpec":
-    if not isinstance(delta, int):
-      raise TypeError(f"Disk size delta must be an integer. Got: {type(delta)}")
-    if delta <= 0:
-      raise ValueError(f"Disk size delta must be positive. Got: {delta}")
-    return NodePoolUpdateSpec(
-        target=UpdateTarget.DISK_SIZE,
-        delta=delta,
-    )
-
-  @staticmethod
-  def Label(delta: str) -> "NodePoolUpdateSpec":
-    if not isinstance(delta, str):
-      raise TypeError(f"Label delta must be a string. Got: {type(delta)}")
-    return NodePoolUpdateSpec(
-        target=UpdateTarget.LABEL,
-        delta=delta,
-    )
-
-
 def get_node_pool_disk_size(node_pool: Info) -> int:
   """Gets the disk size of a GKE node pool using gcloud command.
 
@@ -708,19 +668,79 @@ def get_node_pool_disk_size(node_pool: Info) -> int:
   return int(result)
 
 
-@task
-def update_by_delta(node_pool: Info, spec: NodePoolUpdateSpec) -> TimeUtil:
-  """Applies an update to a GKE node pool based on a delta specification.
+class UpdateTarget:
+  """Defines what to update on the node pool."""
 
-  This task performs a state-aware update. It resolves the final desired configuration
-  by applying the delta defined in `spec` to the current node pool state, and then
-  executes the update operation.
+  DISK_SIZE = "disk-size"
+  LABEL = "labels"
+
+
+@dataclasses.dataclass
+class NodePoolUpdateSpec:
+  """Configuration parameters defining a mutation on a GKE node pool.
+
+  Attributes:
+    target: The specific node pool attribute to update.
+    delta: The change to apply to the target's current state.
+  """
+
+  target: UpdateTarget
+  delta: int | dict[str, str]
+
+  @staticmethod
+  def DiskSize(delta: int) -> "NodePoolUpdateSpec":
+    if not isinstance(delta, int):
+      raise TypeError(f"Disk size delta must be an integer. Got: {type(delta)}")
+
+    if delta <= 0:
+      raise ValueError(f"Disk size delta must be positive. Got: {delta}")
+
+    return NodePoolUpdateSpec(
+        target=UpdateTarget.DISK_SIZE,
+        delta=delta,
+    )
+
+  @staticmethod
+  def Label(delta: dict[str, str]) -> "NodePoolUpdateSpec":
+    if not isinstance(delta, dict):
+      raise TypeError(f"Label delta must be a dictionary. Got: {type(delta)}")
+
+    key_pattern = re.compile(r"^[a-z][a-z0-9_-]*$")
+    for k, v in delta.items():
+      if not isinstance(k, str) or not isinstance(v, str):
+        raise TypeError(
+            f"All label keys and values must be strings. "
+            f"Found incompatible item: key='{k}'({type(k)}), "
+            f"value='{v}'({type(v)})"
+        )
+
+      if not key_pattern.match(k):
+        raise ValueError(
+            f"Invalid label key: '{k}'. "
+            "Keys must start with a lowercase letter and contain only "
+            "lowercase letters ([a-z]), numeric characters ([0-9]), "
+            "underscores (_) and dashes (-)."
+        )
+
+    return NodePoolUpdateSpec(
+        target=UpdateTarget.LABEL,
+        delta=delta,
+    )
+
+
+@task
+def update(node_pool: Info, spec: NodePoolUpdateSpec) -> TimeUtil:
+  """Applies an update to a GKE node pool based on the provided specification.
+
+  This task performs a state-aware update. It retrieves the current node pool
+  state, resolves the final desired configuration based on the provided `spec`,
+  and executes the update operation.
 
   Args:
     node_pool: An instance of the Info class that encapsulates the
       configuration and metadata of a GKE node pool.
-    spec: An instance of the NodePoolUpdateSpec class that contains the target attribute
-      and the delta value to apply.
+    spec: An instance of the NodePoolUpdateSpec class defining the
+      update target and parameters.
 
   Returns:
     A TimeUtil object representing the UTC timestamp when the operation started.
@@ -733,20 +753,22 @@ def update_by_delta(node_pool: Info, spec: NodePoolUpdateSpec) -> TimeUtil:
   final_value = None
   flags: list[str] = []
 
-  if spec.target == UpdateTarget.DISK_SIZE:
-    current_value = get_node_pool_disk_size(node_pool=node_pool)
-    final_value = current_value + spec.delta
-    flags.append(f"--disk-size={final_value}")
+  match spec.target:
+    case UpdateTarget.DISK_SIZE:
+      current_value = get_node_pool_disk_size(node_pool=node_pool)
+      final_value = current_value + spec.delta
+      flags.append(f"--{UpdateTarget.DISK_SIZE}={final_value}")
 
-  elif spec.target == UpdateTarget.LABELS:
-    pass
+    case UpdateTarget.LABEL:
+      final_value = ",".join(f"{k}={v}" for k, v in spec.delta.items())
+      flags.append(f"--{UpdateTarget.LABEL}={final_value}")
 
-  else:
-    raise ValueError(f"Unsupported target: {UpdateTarget(spec.target).name}")
+    case _:
+      raise ValueError(f"Unsupported target: {spec.target}")
 
   logging.info(
       "Update plan calculated: target=%s current=%s delta=%s final=%s",
-      UpdateTarget(spec.target).name,
+      spec.target,
       current_value,
       spec.delta,
       final_value,
