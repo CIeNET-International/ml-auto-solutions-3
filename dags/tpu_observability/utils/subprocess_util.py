@@ -29,10 +29,11 @@ us to capture the full STDOUT and STDERR streams.
 import logging
 import subprocess
 
+from airflow.exceptions import AirflowException
 from airflow.exceptions import AirflowFailException
 
 
-class CommandKilledException(AirflowFailException):
+class ProcessKilledException(AirflowException):
   """Raised specifically when a command returns exit code 137 (SIGKILL)."""
 
   pass
@@ -71,7 +72,7 @@ def run_exec(
     logging.info("[subprocess] stderr: %s", res.stderr)
     match res.returncode:
       case 137:
-        raise CommandKilledException("Process was terminated with SIGKILL")
+        raise ProcessKilledException("Process was terminated with SIGKILL")
       case _:
         raise AirflowFailException(
             f"Caught an error while executing a command. \n"
