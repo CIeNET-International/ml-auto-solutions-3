@@ -16,8 +16,6 @@
 list_supported_metrics() are functional inside TPU worker pods."""
 
 import datetime
-import tempfile
-import os
 from typing import List
 
 from airflow import models
@@ -29,7 +27,6 @@ from dags import composer_env
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import sdk_util as sdk
 from dags.tpu_observability.utils import node_pool_util as node_pool
-from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.tpu_observability.utils.jobset_util import JobSet, Workload
 from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_PATH
 
