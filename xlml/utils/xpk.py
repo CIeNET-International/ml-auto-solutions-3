@@ -110,7 +110,7 @@ def run_workload(
     mtc_enabled: bool = False,  # It enables MTC phase-2 drivers
     xpk_branch: str = MAIN_BRANCH,
     max_restart: int = 0,
-    priority: str = "very-high",
+    priority: str = "very-high",  # to avoid workload preemption by manual tests.
 ):
   """Run workload through xpk tool."""
 
