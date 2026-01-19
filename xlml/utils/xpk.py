@@ -112,7 +112,7 @@ def run_workload(
     xpk_branch: str = MAIN_BRANCH,
     max_restart: int = 0,
     # to avoid workload preemption by manual tests.
-    priority: str = "very-high",
+    priority: str = "high",
 ):
   """Run workload through xpk tool."""
 
