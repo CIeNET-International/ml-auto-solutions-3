@@ -130,7 +130,6 @@ def run_workload(
       "num_slices": num_slices,
   })
 
-
   with tempfile.TemporaryDirectory() as tmpdir:
     if accelerator_type in [
         GpuVersion.XPK_H100.value,
