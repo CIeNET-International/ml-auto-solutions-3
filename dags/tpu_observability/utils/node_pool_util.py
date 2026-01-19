@@ -733,7 +733,7 @@ def update(node_pool: Info, spec: NodePoolUpdateSpec) -> TimeUtil:
     A TimeUtil object representing the UTC timestamp when the operation started.
 
   Raises:
-    ValueError: If the target is unsupported or the update is redundant.
+    ValueError: If the target is unsupported.
   """
   flags: list[str] = []
 
@@ -745,16 +745,12 @@ def update(node_pool: Info, spec: NodePoolUpdateSpec) -> TimeUtil:
 
     case UpdateTarget.LABEL:
       current_labels = get_node_pool_labels(node_pool=node_pool)
-      duplicates = spec.delta.items() & current_labels.items()
-      if duplicates:
-        duplicates_str = ", ".join(f"{k}={v}" for k, v in duplicates)
-        raise ValueError(
-            f"Test Validation Failed: The following labels already exist with "
-            f"the same value: {duplicates_str}. "
-            f"Update aborted because it wouldn't change the state effectively."
-        )
-      updated_labels = ",".join(f"{k}={v}" for k, v in spec.delta.items())
-      flags.append(f"--{spec.target.value}={updated_labels}")
+      updated_labels = []
+      for key, val in spec.delta.items():
+        if current_labels.get(key) == val:
+          val += val
+        updated_labels.append(f"{key}={val}")
+      flags.append(f"--{spec.target.value}={','.join(updated_labels)}")
 
     case _:
       raise ValueError(f"Unsupported target: {spec.target}")
