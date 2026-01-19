@@ -1,8 +1,6 @@
 name: Require Checklist
 on:
   pull_request:
-    branch:
-      - tpu-obs/dev/**
     types: [opened, edited, synchronize]
 
   workflow_dispatch: {}
