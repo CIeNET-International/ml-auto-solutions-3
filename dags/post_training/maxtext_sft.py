@@ -11,11 +11,13 @@ import datetime
 
 from airflow import models
 from airflow.models.baseoperator import chain
+from airflow.models.xcom_arg import XComArg
+from airflow.models.taskmixin import DAGNode
 from airflow.utils.task_group import TaskGroup
 
 from dags import composer_env
 from dags.common import test_owner
-from dags.common.vm_resource import XpkClusters
+from dags.common.vm_resource import DockerImage, XpkClusters
 from dags.multipod.configs import gke_config
 from dags.post_training.util import validation_util, test_config_util
 from xlml.utils.xpk import MAIN_BRANCH
@@ -25,7 +27,12 @@ SCHEDULE = "0 22 * * *" if composer_env.is_prod_env() else None
 DAG_TEST_NAME = "maxtext_sft"
 
 
-def create_training_taskgroup(num_slices, config, command, docker_image):
+def run_training(
+    num_slices: int,
+    config: test_config_util.SFTTestConfig,
+    command: tuple[str, ...],
+    docker_image: DockerImage,
+) -> tuple[DAGNode, XComArg, XComArg]:
   """Creates a TaskGroup for the SFT training job."""
   with TaskGroup(group_id="run_training") as run_training_group:
     s_time = validation_util.generate_timestamp.override(
@@ -53,7 +60,12 @@ def create_training_taskgroup(num_slices, config, command, docker_image):
   return run_training_group, s_time, e_time
 
 
-def create_validation_taskgroup(config, steps, s_time, e_time):
+def validate_training(
+    config: test_config_util.SFTTestConfig,
+    steps: int,
+    s_time: XComArg,
+    e_time: XComArg,
+) -> DAGNode:
   """Creates a TaskGroup for validating the SFT training logs."""
   with TaskGroup(group_id="validate_training") as validate_training_group:
     validation_util.validate_log_exist.override(
@@ -149,10 +161,10 @@ with models.DAG(
       with TaskGroup(
           group_id=f"sft-{mode.value}-{slice_num}x{training_config.accelerator}"
       ) as group:
-        training_group, start_time, end_time = create_training_taskgroup(
+        training_group, start_time, end_time = run_training(
             slice_num, training_config, sft_training_command, image
         )
-        validation_group = create_validation_taskgroup(
+        validation_group = validate_training(
             training_config, training_steps, start_time, end_time
         )
 
