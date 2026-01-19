@@ -38,13 +38,15 @@ def _calculate_percentiles_from_histogram(
     bounds: list[float],
     bucket_counts: list[int],
 ) -> dict[float, float]:
-  """Estimates multiple percentile values from histogram data in a single pass."""
+  """
+  Estimates multiple percentile values from histogram data in a single pass.
+  """
+  results = {}
   if total_count == 0:
-    return {p: 0.0 for p in percentiles}
+    return results
 
   sorted_percentiles = sorted(percentiles)
   target_ranks = {p: total_count * (p / 100.0) for p in sorted_percentiles}
-  results = {}
   cumulative_count = 0
   percentiles_to_find = list(sorted_percentiles)
 
