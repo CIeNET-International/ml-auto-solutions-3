@@ -62,9 +62,7 @@ def validate_monitoring_help(info, pod_name: str) -> str:
   Returns:
       The standard output of the help command.
   """
-  output = sdk.execute_tpu_python_command(
-      info, pod_name, sdk.TpuMonitoringScript.HELP
-  )
+  output = sdk.execute_sdk_command(info, pod_name, sdk.TpuMonitoringScript.HELP)
 
   patterns = [
       "List all supported functionality",
@@ -87,7 +85,7 @@ def validate_metrics_list(info, pod_name: str) -> str:
   Returns:
       The string representation of the supported metrics list.
   """
-  output = sdk.execute_tpu_python_command(
+  output = sdk.execute_sdk_command(
       info, pod_name, sdk.TpuMonitoringScript.LIST_SUPPORTED_METRICS
   )
 

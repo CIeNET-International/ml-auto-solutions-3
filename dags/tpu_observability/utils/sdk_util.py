@@ -28,18 +28,18 @@ class TpuMonitoringScript:
         from libtpu.sdk import tpumonitoring
         tpumonitoring.help()
         """
-  ).strip()
+  )
 
   LIST_SUPPORTED_METRICS = textwrap.dedent(
       """
         from libtpu.sdk import tpumonitoring
         print(tpumonitoring.list_supported_metrics())
         """
-  ).strip()
+  )
 
 
 def execute_sdk_command(
-    info: jobset.ClusterInfo,
+    info: jobset.node_pool_info,
     pod_name: str,
     script: str,
     namespace: str = "default",
@@ -63,7 +63,7 @@ def execute_sdk_command(
         jobset.Command.get_credentials_command(info),
         (
             f"kubectl exec {pod_name} -n {namespace} "
-            f'-- python3 -c "{script}"'
+            f"-- python3 -c '{script}'"
         ),
     ])
     return subprocess.run_exec(cmd, env=env)
