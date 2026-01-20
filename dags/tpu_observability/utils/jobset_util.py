@@ -512,7 +512,7 @@ def delete_one_random_pod(
     logging.info(f"Successfully initiated deletion for pod: {target_pod}")
 
 
-@task.sensor(poke_interval=30, timeout=900, mode="reschedule")
+@task.sensor(poke_interval=30, timeout=900, mode="poke")
 def wait_for_jobset_started(
     node_pool: node_pool_info,
     pod_name_list: str,
