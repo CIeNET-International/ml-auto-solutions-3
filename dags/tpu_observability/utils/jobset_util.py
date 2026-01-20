@@ -606,7 +606,7 @@ def delete_one_random_pod(
 
   Raises:
     AirflowFailException: If no running pods are found in the specified
-      namespace.
+    namespace.
   """
   running_pods = get_running_pods(
       node_pool=node_pool,
