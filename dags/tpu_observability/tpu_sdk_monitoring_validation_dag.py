@@ -53,9 +53,18 @@ def verify_output_contains_patterns(
 
 @task
 def validate_monitoring_help(info, pod_name: str) -> str:
-  """Uses the shared utility to validate tpumonitoring.help()."""
-  code = "tpumonitoring.help()"
-  output = sdk.execute_tpu_python_command(info, pod_name, code)
+  """Validates the tpumonitoring.help() output using predefined SDK scripts.
+
+  Args:
+      info: Cluster info for gcloud credentials.
+      pod_name: Pod name provided by dynamic task mapping.
+
+  Returns:
+      The standard output of the help command.
+  """
+  output = sdk.execute_tpu_python_command(
+      info, pod_name, sdk.TpuMonitoringScript.HELP
+  )
 
   patterns = [
       "List all supported functionality",
@@ -69,8 +78,7 @@ def validate_monitoring_help(info, pod_name: str) -> str:
 
 @task
 def validate_metrics_list(info, pod_name: str) -> str:
-  """Task to validate that list_supported_metrics() returns
-      expected TPU metrics.
+  """Validates tpumonitoring.list_supported_metrics() using predefined SDK scripts.
 
   Args:
       info: Cluster info for gcloud credentials.
@@ -79,8 +87,9 @@ def validate_metrics_list(info, pod_name: str) -> str:
   Returns:
       The string representation of the supported metrics list.
   """
-  code = "print(tpumonitoring.list_supported_metrics())"
-  output = sdk.execute_tpu_python_command(info, pod_name, code)
+  output = sdk.execute_tpu_python_command(
+      info, pod_name, sdk.TpuMonitoringScript.LIST_SUPPORTED_METRICS
+  )
 
   patterns = [
       "tensorcore_util",
