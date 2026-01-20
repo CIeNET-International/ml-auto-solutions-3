@@ -18,6 +18,7 @@ killing the main process inside a worker Pod.
 """
 
 import datetime
+import logging
 import tempfile
 import os
 
@@ -54,9 +55,8 @@ def kill_tpu_pod_workload(info: node_pool.Info, pod_name: str) -> None:
 
     try:
       subprocess.run_exec(cmd, env=env)
-    except subprocess.CommandKilledException:
-      # For this TTR test, receiving 137 is a success.
-      pass
+    except subprocess.ProcessKilledException:
+      logging.info("Process was terminated with SIGKILL")
     except Exception as e:
       raise e
 
