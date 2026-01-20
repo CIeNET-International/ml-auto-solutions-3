@@ -308,11 +308,12 @@ class Command:
     ])
 
   @staticmethod
-  def suspend_jobset(jobset_name: str) -> str:
-    return " ".join([
-        f"kubectl patch jobset {jobset_name}",
-        "--type=merge -p '{{\"spec\": {{\"suspend\": true}}}}'",
-    ])
+  def suspend_jobset(jobset_name: str, namespace: str) -> str:
+    patch_content = '{"spec": {"suspend": true}}'
+    return (
+        f"kubectl patch jobset {jobset_name} -n {namespace} "
+        f"--type=merge -p '{patch_content}'"
+    )
 
   class K8sGetPodsOutput(enum.Enum):
     DEFAULT = "json"
