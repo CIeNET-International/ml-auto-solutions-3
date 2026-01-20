@@ -301,12 +301,17 @@ class Command:
     ])
 
   @staticmethod
-  def k8s_delete_pod_command(
-      kubeconfig: str, pod_name: str, namespace: str
-  ) -> str:
+  def k8s_get_pod_name_command(kubeconfig: str, namespace: str) -> str:
     return " ".join([
-        f"kubectl --kubeconfig={kubeconfig} delete pod {pod_name}",
-        f"-n {namespace} --wait=false",
+        f"kubectl --kubeconfig={kubeconfig} get pods",
+        f"-n {namespace} -o jsonpath={{.items[*].metadata.name}}",
+    ])
+
+  @staticmethod
+  def suspend_jobset(jobset_name: str) -> str:
+    return " ".join([
+        f"kubectl patch jobset {jobset_name}",
+        "--type=merge -p '{{\"spec\": {{\"suspend\": true}}}}'",
     ])
 
   class K8sGetPodsOutput(enum.Enum):
@@ -645,7 +650,7 @@ def delete_one_random_pod(
 
   Raises:
     AirflowFailException: If no running pods are found in the specified
-      namespace.
+    namespace.
   """
   running_pods = get_running_pods(
       node_pool=node_pool,
