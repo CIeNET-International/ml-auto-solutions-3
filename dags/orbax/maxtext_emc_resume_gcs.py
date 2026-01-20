@@ -108,7 +108,7 @@ with models.DAG(
           steps=first_training_step,
           local_checkpoint_period=20,
           checkpoint_period=25,
-          base_dir=test_config_util.DEFAULT_BUCKET,
+          base_dir=test_config_util.DEFAULT_BUCKET_FLAT,
       ),
   ]
 
@@ -229,13 +229,11 @@ with models.DAG(
         )
 
         # Validate that checkpoint files exist in GCS bucket
-        validate_saved_checkpoints_steps_gcs = (
-            validation_util.validate_gcs_checkpoint_files(
-                bucket_path=(
-                    f"{test_config_util.DEFAULT_BUCKET}/{out_folder}/{run_name}"
-                ),
-                steps_to_validate=steps_to_validate,
-            )
+        validate_saved_checkpoints_steps_gcs = validation_util.validate_gcs_checkpoint_files(
+            bucket_path=(
+                f"{test_config_util.DEFAULT_BUCKET_FLAT}/{out_folder}/{run_name}"
+            ),
+            steps_to_validate=steps_to_validate,
         )
 
         # Final CPC cleanup to ensure symmetric start/end

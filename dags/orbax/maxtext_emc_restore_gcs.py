@@ -80,7 +80,7 @@ with models.DAG(
           steps=200,
           checkpoint_period=30,
           local_checkpoint_period=200,
-          base_dir=test_config_util.DEFAULT_BUCKET,
+          base_dir=test_config_util.DEFAULT_BUCKET_FLAT,
       ),
   ]
 
@@ -171,7 +171,7 @@ with models.DAG(
 
         validate_saved_checkpoints_steps_gcs = validation_util.validate_gcs_checkpoint_files(
             bucket_path=(
-                f"{test_config_util.DEFAULT_BUCKET}/{DAG_TEST_NAME}/{run_name}"
+                f"{test_config_util.DEFAULT_BUCKET_FLAT}/{DAG_TEST_NAME}/{run_name}"
             ),
             steps_to_validate=gcs_saved_steps_to_validate,
         )

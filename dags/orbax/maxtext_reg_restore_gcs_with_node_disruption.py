@@ -91,7 +91,7 @@ with models.DAG(
           short_id="max-reg-res-gcs-node",
           steps=120,
           checkpoint_period=20,
-          base_dir=test_config_util.DEFAULT_BUCKET,
+          base_dir=test_config_util.DEFAULT_BUCKET_FLAT,
       ),
   ]
 
@@ -182,7 +182,7 @@ with models.DAG(
         )
 
         validate_bucket = validation_util.validate_gcs_checkpoint_files(
-            bucket_path=f"{test_config_util.DEFAULT_BUCKET}/{DAG_TEST_NAME}/{run_name}",
+            bucket_path=f"{test_config_util.DEFAULT_BUCKET_FLAT}/{DAG_TEST_NAME}/{run_name}",
             steps_to_validate=gcs_steps_to_validate,
         )
 

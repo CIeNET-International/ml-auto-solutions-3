@@ -78,7 +78,7 @@ with models.DAG(
           steps=200,
           checkpoint_period=50,
           local_checkpoint_period=20,
-          base_dir=test_config_util.DEFAULT_BUCKET,
+          base_dir=test_config_util.DEFAULT_BUCKET_FLAT,
       ),
   ]
 
