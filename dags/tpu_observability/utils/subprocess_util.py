@@ -72,7 +72,7 @@ def run_exec(
     logging.info("[subprocess] stderr: %s", res.stderr)
     match res.returncode:
       case 137:
-        raise ProcessKilledException("Process was terminated with SIGKILL")
+        raise ProcessKilledException()
       case _:
         raise AirflowFailException(
             f"Caught an error while executing a command. \n"
