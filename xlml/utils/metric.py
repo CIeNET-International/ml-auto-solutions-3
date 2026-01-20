@@ -740,7 +740,27 @@ def update_dataset_name_if_needed(
   return prod_dataset_name.value
 
 
-def get_xpk_job_status(benchmark_id: str) -> bigquery.JobStatus:
+def find_task_in_upstream(
+    start_task: airflow.models.baseoperator.BaseOperator,
+    task_id_substring: str,
+    current_dag: airflow.DAG,
+) -> Optional[str]:
+  """Finds a task in the upstream hierarchy that contains the given substring."""
+  q = [start_task]
+  visited = {start_task.task_id}
+  while q:
+    current_task = q.pop(0)
+    if task_id_substring in current_task.task_id:
+      return current_task.task_id
+    for upstream_task_id in current_task.upstream_task_ids:
+      upstream_task = current_dag.get_task(upstream_task_id)
+      if upstream_task and upstream_task.task_id not in visited:
+        visited.add(upstream_task.task_id)
+        q.append(upstream_task)
+  return None
+
+
+def get_xpk_job_status() -> bigquery.JobStatus:
   """Get job status for the GKE run.
 
   FAILED - if any failure occurs in run_model
@@ -750,13 +770,13 @@ def get_xpk_job_status(benchmark_id: str) -> bigquery.JobStatus:
   execution_date = context["dag_run"].logical_date
   current_dag = context["dag"]
 
-  full_task_id = benchmark_id
-  current_task_group = context["task"].task_group
-  if current_task_group and current_task_group.parent_group:
-    full_task_id = f"{current_task_group.parent_group.group_id}"
+  workload_completion_task_id = find_task_in_upstream(
+      context["task"], "wait_for_workload_completion", current_dag
+  )
+  logging.info("found completion_task_id: %s", workload_completion_task_id)
 
   workload_completion = current_dag.get_task(
-      task_id=f"{full_task_id}.run_model.wait_for_workload_completion"
+      task_id=workload_completion_task_id
   )
   workload_completion_ti = TaskInstance(workload_completion, execution_date)
   workload_completion_state = workload_completion_ti.current_state()
@@ -1017,7 +1037,7 @@ def process_metrics(
   )
 
   if hasattr(task_test_config, "cluster_name"):
-    test_job_status = get_xpk_job_status(task_test_config.benchmark_id)
+    test_job_status = get_xpk_job_status()
   elif isinstance(task_test_config, test_config.GpuGkeTest):
     test_job_status = get_gke_job_status(task_test_config)
   else:
