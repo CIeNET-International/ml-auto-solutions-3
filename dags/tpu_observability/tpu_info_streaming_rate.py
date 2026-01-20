@@ -424,11 +424,11 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             validate_streaming_rate_iterations.override(
                 task_id="streaming_rate_test",
                 execution_timeout=datetime.timedelta(minutes=60),
-                duration=30,  # Each iteration runs for 30 seconds
             ).partial(
                 info=cluster_info,
                 rate=rate,
                 iteration_count=40,
+                duration=30,  # Each iteration runs for 30 seconds
                 pass_threshold_percent=0.5,  # At least 50% must pass
             ).expand(
                 pod_name=pod_names
