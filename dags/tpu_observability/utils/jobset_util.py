@@ -285,14 +285,11 @@ class Command:
     ])
 
   @staticmethod
-  def k8s_delete_pod_command(
-      kubeconfig: str, pod_name: str, namespace: str
-  ) -> str:
+  def suspend_jobset(jobset_name: str) -> str:
     return " ".join([
-        f"kubectl --kubeconfig={kubeconfig} delete pod {pod_name}",
-        f"-n {namespace} --wait=false",
+        f"kubectl patch jobset {jobset_name}",
+        "--type=merge -p '{{\"spec\": {{\"suspend\": true}}}}'",
     ])
-
 
 def get_replica_num(
     replica_type: str, job_name: str, node_pool: node_pool_info
@@ -498,7 +495,7 @@ def delete_one_random_pod(
 
   Raises:
     AirflowFailException: If no running pods are found in the specified
-      namespace.
+    namespace.
   """
   running_pods = get_running_pods(node_pool=node_pool, namespace=namespace)
   if not running_pods:
@@ -650,8 +647,7 @@ def wait_for_jobset_status_occurrence(
   )
   return ready_replicas > 0
 
-
-@task.sensor(poke_interval=30, timeout=600, mode="poke")
+@task.sensor(poke_interval=30, timeout=600, mode="reschedule")
 def wait_for_all_pods_running(num_pods: int, node_pool: node_pool_info):
   num_running = len(get_running_pods(node_pool=node_pool, namespace="default"))
   return num_running == num_pods
