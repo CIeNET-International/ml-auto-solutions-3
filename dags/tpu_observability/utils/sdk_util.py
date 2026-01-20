@@ -25,23 +25,23 @@ class TpuMonitoringScript:
 
   HELP = textwrap.dedent(
       """
-        from libtpu.sdk import tpumonitoring
-        tpumonitoring.help()
-        """
+      from libtpu.sdk import tpumonitoring
+      tpumonitoring.help()
+      """
   )
 
   LIST_SUPPORTED_METRICS = textwrap.dedent(
       """
-        from libtpu.sdk import tpumonitoring
-        print(tpumonitoring.list_supported_metrics())
-        """
+      from libtpu.sdk import tpumonitoring
+      print(tpumonitoring.list_supported_metrics())
+      """
   )
 
 
 def execute_sdk_command(
     info: jobset.node_pool_info,
     pod_name: str,
-    script: str,
+    script: TpuMonitoringScript,
     namespace: str = "default",
 ) -> str:
   """Executes a predefined Python script inside a specific TPU pod via kubectl exec.
