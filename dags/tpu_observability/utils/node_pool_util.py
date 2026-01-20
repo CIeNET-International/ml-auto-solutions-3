@@ -507,9 +507,9 @@ def drain_one_random_node(node_pool: Info) -> None:
 
   node_to_drain = random.choice(nodes_list)
   logging.info(
-    "Selected node '%s' from pool '%s' to drain.",
-    node_to_drain,
-    node_pool.node_pool_name,
+      "Selected node '%s' from pool '%s' to drain.",
+      node_to_drain,
+      node_pool.node_pool_name,
   )
 
   auth_command = (
@@ -527,7 +527,8 @@ def drain_one_random_node(node_pool: Info) -> None:
   logging.info("Executing: %s", drain_command)
   subprocess.run_exec(drain_command)
 
-@task.sensor(poke_interval=30, timeout=1200, mode="poke")
+
+@task.sensor(poke_interval=30, timeout=1200, mode="reschedule")
 def wait_for_availability(
     node_pool: Info,
     availability: bool,
