@@ -23,6 +23,7 @@ import random
 import re
 
 from airflow.decorators import task
+from airflow.providers.google.cloud.hooks.compute_ssh import ComputeEngineSSHHook
 from airflow.exceptions import AirflowFailException
 from google.cloud import monitoring_v3
 
@@ -52,6 +53,15 @@ class Status(enum.Enum):
       return Status.UNKNOWN
     return status
 
+
+class NodeCommands:
+  """Commands for TPU node disruption during TTR tests."""
+  REBOOT = "sudo sh -c 'sync; nohup sh -c \"sleep 5 && reboot\" > /dev/null 2>&1 &'"
+  """
+  Safely reboots the node. Uses 'sync' for data integrity and 'nohup' with
+  a 'sleep' delay to allow the SSH session to close gracefully before the
+  system goes offline.
+  """
 
 @dataclasses.dataclass
 class Info:
@@ -772,3 +782,52 @@ def update(node_pool: Info, spec: NodePoolUpdateSpec) -> TimeUtil:
 
   subprocess.run_exec(update_cmd)
   return operation_start_time
+
+def execute_ssh_command(
+    node_name: str,
+    node_pool: Info,
+    command: str
+) -> str:
+  """
+  Executes a shell command on a GKE node via SSH.
+
+  Args:
+    node_name: The name of the GCE instance (node).
+    node_pool: An Info object containing project_id and location details.
+    command: The shell command string to execute.
+
+  Returns:
+    The standard output (stdout) of the command, or a "Reboot initiated"
+    message if a reboot was triggered.
+
+  Raises:
+    AirflowFailException: If the command returns a non-zero exit status
+    and is not a reboot command.
+  """
+  ssh_hook = ComputeEngineSSHHook(
+      instance_name=node_name,
+      zone=node_pool.location,
+      project_id=node_pool.project_id,
+      use_oslogin=True,
+      use_internal_ip=True
+  )
+
+  with ssh_hook.get_conn() as client:
+    logging.info(f"SSH executing on {node_name}: {command}")
+    stdin, stdout, stderr = client.exec_command(command)
+
+    # Special handling for reboot: we don't wait for exit_status because
+    # the connection will be severed by the node shutting down.
+    if "reboot" in command:
+      logging.info("Reboot command sent, connection will close.")
+      return "Reboot initiated"
+
+    exit_status = stdout.channel.recv_exit_status()
+    result = stdout.read().decode("utf-8")
+    error = stderr.read().decode("utf-8")
+
+    if exit_status != 0:
+      logging.error(f"SSH Command failed with exit code {exit_status}: {error}")
+      raise AirflowFailException(f"SSH command failed: {error}")
+
+    return result
