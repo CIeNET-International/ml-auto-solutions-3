@@ -16,7 +16,6 @@
 list_supported_metrics() are functional inside TPU worker pods."""
 
 import datetime
-from typing import List
 
 from airflow import models
 from airflow.models.baseoperator import chain
@@ -32,29 +31,16 @@ from dags.tpu_observability.utils.jobset_util import JobSet, Workload
 from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_PATH
 
 
-def verify_output_contains_patterns(
-    output: str, patterns: List[str], context: str
-):
-  """Verifies that the command output contains all expected string patterns.
-
-  Args:
-    output: The raw string output from the command.
-    patterns: A list of strings to search for in the output.
-    context: A descriptive string for error reporting (e.g., function name).
-
-  Raises:
-    AssertionError: If any pattern is missing from the output.
-  """
-  for pattern in patterns:
-    if pattern not in output:
-      raise AssertionError(
-          f"Validation failed for '{context}': Missing '{pattern}'."
-      )
-
-
 @task
-def validate_monitoring_help(info, pod_name: str) -> str:
+def validate_monitoring_help(info: jobset.node_pool_info, pod_name: str) -> str:
   """Validates the tpumonitoring.help() output using predefined SDK scripts.
+
+  Example output:
+    TPU Monitoring SDK Help
+    -----------------------
+    - list_supported_metrics(): List all supported functionality...
+    - get_metric(metric_name:str): Get specific metric...
+    - snapshot mode: Enable real-time monitoring...
 
   Args:
     info: Cluster info for gcloud credentials.
@@ -71,13 +57,22 @@ def validate_monitoring_help(info, pod_name: str) -> str:
       "get_metric(metric_name:str)",
       "snapshot mode",
   ]
-  verify_output_contains_patterns(output, patterns, "tpumonitoring.help()")
+
+  for pattern in patterns:
+    if pattern not in output:
+      raise AssertionError(
+          f"Validation failed for 'tpumonitoring.help()': Missing '{pattern}'."
+      )
   return output
 
 
 @task
-def validate_metrics_list(info, pod_name: str) -> str:
+def validate_metrics_list(info: jobset.node_pool_info, pod_name: str) -> str:
   """Validates tpumonitoring.list_supported_metrics() using predefined SDK scripts.
+
+  Example output:
+    ['tensorcore_util', 'duty_cycle_pct', 'hbm_capacity_usage',
+     'buffer_transfer_latency', 'hlo_execution_timing']
 
   Args:
     info: Cluster info for gcloud credentials.
@@ -97,9 +92,12 @@ def validate_metrics_list(info, pod_name: str) -> str:
       "buffer_transfer_latency",
       "hlo_execution_timing",
   ]
-  verify_output_contains_patterns(
-      output, patterns, "tpumonitoring.list_supported_metrics()"
-  )
+
+  for pattern in patterns:
+    if pattern not in output:
+      raise AssertionError(
+          f"Validation failed for 'tpumonitoring.list_supported_metrics()': Missing '{pattern}'."
+      )
   return output
 
 
@@ -239,6 +237,7 @@ with models.DAG(
         apply_time,
         pod_names,
         wait_for_jobset_started,
+        verification_group,
         cleanup_workload,
         cleanup_node_pool,
     )
