@@ -61,7 +61,8 @@ def validate_monitoring_help(info: jobset.node_pool_info, pod_name: str) -> str:
   for pattern in patterns:
     if pattern not in output:
       raise AssertionError(
-          f"Validation failed for 'tpumonitoring.help()': Missing '{pattern}'."
+          f"Validation failed for 'tpumonitoring.help()': "
+          f"Missing '{pattern}'."
       )
   return output
 
@@ -96,7 +97,8 @@ def validate_metrics_list(info: jobset.node_pool_info, pod_name: str) -> str:
   for pattern in patterns:
     if pattern not in output:
       raise AssertionError(
-          f"Validation failed for 'tpumonitoring.list_supported_metrics()': Missing '{pattern}'."
+          "Validation failed for 'tpumonitoring.list_supported_metrics()': "
+          f"Missing '{pattern}'."
       )
   return output
 
