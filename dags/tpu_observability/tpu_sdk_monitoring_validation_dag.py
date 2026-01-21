@@ -26,7 +26,7 @@ from airflow.decorators import task
 
 from dags import composer_env
 from dags.tpu_observability.utils import jobset_util as jobset
-from dags.tpu_observability.utils import sdk_util as sdk
+from dags.tpu_observability.utils import tpu_monitoring_sdk_util as sdk
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils.jobset_util import JobSet, Workload
 from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_PATH
@@ -112,11 +112,9 @@ with models.DAG(
         "cloud-ml-auto-solutions",
         "jobset",
         "tpu-observability",
-        "delete_pod",
         "TPU",
         "v6e-16",
-        "SDK",
-        "Validation",
+        "tpu-monitoring-sdk",
     ],
     description=(
         "Validates tpumonitoring SDK: help() and "

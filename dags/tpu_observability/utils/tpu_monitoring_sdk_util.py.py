@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Utilities for executing Python commands within TPU worker pods."""
+"""Utilities for executing Python commands within the TPU Monitoring SDK."""
 import os
 import tempfile
 import textwrap
