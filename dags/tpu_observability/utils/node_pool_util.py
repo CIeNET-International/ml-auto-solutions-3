@@ -56,12 +56,16 @@ class Status(enum.Enum):
 
 class NodeCommands:
   """Commands for TPU node disruption during TTR tests."""
-  REBOOT = "sudo sh -c 'sync; nohup sh -c \"sleep 5 && reboot\" > /dev/null 2>&1 &'"
+
+  REBOOT = (
+      "sudo sh -c 'sync; nohup sh -c \"sleep 5 && reboot\" > /dev/null 2>&1 &'"
+  )
   """
   Safely reboots the node. Uses 'sync' for data integrity and 'nohup' with
   a 'sleep' delay to allow the SSH session to close gracefully before the
   system goes offline.
   """
+
 
 @dataclasses.dataclass
 class Info:
@@ -783,11 +787,8 @@ def update(node_pool: Info, spec: NodePoolUpdateSpec) -> TimeUtil:
   subprocess.run_exec(update_cmd)
   return operation_start_time
 
-def execute_ssh_command(
-    node_name: str,
-    node_pool: Info,
-    command: str
-) -> str:
+
+def execute_ssh_command(node_name: str, node_pool: Info, command: str) -> str:
   """
   Executes a shell command on a GKE node via SSH.
 
@@ -809,7 +810,7 @@ def execute_ssh_command(
       zone=node_pool.location,
       project_id=node_pool.project_id,
       use_oslogin=True,
-      use_internal_ip=True
+      use_internal_ip=True,
   )
 
   with ssh_hook.get_conn() as client:
