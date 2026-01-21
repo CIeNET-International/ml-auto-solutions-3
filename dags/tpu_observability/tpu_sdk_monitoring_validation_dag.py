@@ -38,12 +38,12 @@ def verify_output_contains_patterns(
   """Verifies that the command output contains all expected string patterns.
 
   Args:
-      output: The raw string output from the command.
-      patterns: A list of strings to search for in the output.
-      context: A descriptive string for error reporting (e.g., function name).
+    output: The raw string output from the command.
+    patterns: A list of strings to search for in the output.
+    context: A descriptive string for error reporting (e.g., function name).
 
   Raises:
-      AssertionError: If any pattern is missing from the output.
+    AssertionError: If any pattern is missing from the output.
   """
   for pattern in patterns:
     if pattern not in output:
@@ -57,11 +57,11 @@ def validate_monitoring_help(info, pod_name: str) -> str:
   """Validates the tpumonitoring.help() output using predefined SDK scripts.
 
   Args:
-      info: Cluster info for gcloud credentials.
-      pod_name: Pod name provided by dynamic task mapping.
+    info: Cluster info for gcloud credentials.
+    pod_name: Pod name provided by dynamic task mapping.
 
   Returns:
-      The standard output of the help command.
+    The standard output of the help command.
   """
   output = sdk.execute_sdk_command(info, pod_name, sdk.TpuMonitoringScript.HELP)
 
@@ -80,11 +80,11 @@ def validate_metrics_list(info, pod_name: str) -> str:
   """Validates tpumonitoring.list_supported_metrics() using predefined SDK scripts.
 
   Args:
-      info: Cluster info for gcloud credentials.
-      pod_name: Pod name provided by dynamic task mapping.
+    info: Cluster info for gcloud credentials.
+    pod_name: Pod name provided by dynamic task mapping.
 
   Returns:
-      The string representation of the supported metrics list.
+    The string representation of the supported metrics list.
   """
   output = sdk.execute_sdk_command(
       info, pod_name, sdk.TpuMonitoringScript.LIST_SUPPORTED_METRICS
@@ -157,7 +157,7 @@ with models.DAG(
         tpu_topology="4x4",
         container_name="jax-tpu-worker",
         image="asia-northeast1-docker.pkg.dev/cienet-cmcs/"
-        "yuna-docker/tpu-info:v0.5.1",
+            "yuna-docker/tpu-info:v0.5.1",
         tpu_cores_per_pod=4,
     )
 

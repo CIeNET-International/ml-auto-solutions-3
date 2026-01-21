@@ -47,13 +47,13 @@ def execute_sdk_command(
   """Executes a predefined Python script inside a specific TPU pod via kubectl exec.
 
   Args:
-      info: Node pool and cluster information.
-      pod_name: The name of the target pod.
-      script: The Python script to run (use TpuMonitoringScript options).
-      namespace: Kubernetes namespace.
+    info: Node pool and cluster information.
+    pod_name: The name of the target pod.
+    script: The Python script to run (use TpuMonitoringScript options).
+    namespace: Kubernetes namespace.
 
   Returns:
-      The standard output of the executed command.
+    The standard output of the executed command.
   """
   with tempfile.NamedTemporaryFile() as temp_config_file:
     env = os.environ.copy()
