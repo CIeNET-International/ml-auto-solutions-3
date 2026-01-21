@@ -13,6 +13,7 @@ tensorflow-cpu
 kubernetes
 pyarrow
 apache-airflow-providers-google
+apache-airflow-providers-ssh
 dacite
 virtualenv
 apache-airflow-providers-postgres
