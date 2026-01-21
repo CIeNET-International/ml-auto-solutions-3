@@ -35,31 +35,29 @@ from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_P
 
 @task
 def random_node_reboot(info: node_pool.Info):
-    """
-    Selects a random node from the pool and triggers a system-level reboot via SSH.
+  """
+  Selects a random node from the pool and triggers a system-level reboot via SSH.
 
-    This task simulates a hardware failure or a maintenance event to verify that
-    the JobSet can gracefully recover. By using a node reboot instead of a simple
-    pod deletion, we test the full recovery path, including node availability
-    checks and TPU stack re-initialization.
+  This task simulates a hardware failure or a maintenance event to verify that
+  the JobSet can gracefully recover. By using a node reboot instead of a simple
+  pod deletion, we test the full recovery path, including node availability
+  checks and TPU stack re-initialization.
 
-    Args:
-      info: Node pool and cluster information.
+  Args:
+    info: Node pool and cluster information.
 
-    Returns:
-      str: The name of the node that was targeted for the reboot.
-    """
-    nodes = node_pool.list_nodes(info)
-    target = random.choice(nodes)
+  Returns:
+    str: The name of the node that was targeted for the reboot.
+  """
+  nodes = node_pool.list_nodes(info)
+  target = random.choice(nodes)
 
-    logging.info(f"Targeting node {target} for reboot.")
+  logging.info(f"Targeting node {target} for reboot.")
 
-    node_pool.execute_ssh_command(
-        node_name=target,
-        node_pool=info,
-        command=node_pool.NodeCommands.REBOOT
-    )
-    return target
+  node_pool.execute_ssh_command(
+      node_name=target, node_pool=info, command=node_pool.NodeCommands.REBOOT
+  )
+  return target
 
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
@@ -158,7 +156,8 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       )
 
       node_reboot = random_node_reboot.override(task_id="random_node_reboot")(
-         info=cluster_info,)
+          info=cluster_info,
+      )
 
       wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
           task_id="wait_for_jobset_ttr_to_be_found"
