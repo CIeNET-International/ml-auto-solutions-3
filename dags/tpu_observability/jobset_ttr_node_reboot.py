@@ -92,8 +92,8 @@ def random_node_reboot(info: node_pool.Info, ssh_key_pair: SshKeys):
     # Use warn=True because the connection will drop immediately upon reboot,
     # which is expected behavior for this operation.
     conn.run("sudo reboot", warn=True)
-  except Exception as e:
-    # Log unexpected errors but allow the task to proceed if the reboot was initiated
+  except Exception as e: # pylint: disable=broad-exception-caught
+    # Log unexpected errors but allow the task to proceed
     logging.warning(
         f"Reboot command issued, but connection closed with error: {e}"
     )
@@ -120,8 +120,8 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
         "v6e-16",
     ],
     description=(
-        "This DAG tests the JobSet time-to-recover metric by rebooting a random "
-        "TPU node to trigger a recovery, then polls the metric to check for updates."
+        "Tests JobSet TTR metric by rebooting a random TPU node to trigger "
+        "recovery, then polls the metric for updates."
     ),
     doc_md="""
       # JobSet Time-To-Recover (TTR) Test Using Random Node Reboot
