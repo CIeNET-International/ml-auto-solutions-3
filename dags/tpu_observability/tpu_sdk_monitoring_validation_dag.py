@@ -35,75 +35,46 @@ from dags.tpu_observability.configs.common import (
 
 
 @task
-def validate_monitoring_help(info: node_pool.Info, pod_name: str) -> str:
-  """Validates the tpumonitoring.help() output using predefined SDK scripts.
+def validate_monitoring_sdk(info: node_pool.Info, pod_name: str) -> None:
+  """Validates the tpumonitoring SDK functions inside TPU worker pods.
 
-  Example output:
-    TPU Monitoring SDK Help
-    -----------------------
-    - list_supported_metrics(): List all supported functionality...
-    - get_metric(metric_name:str): Get specific metric...
-    - snapshot mode: Enable real-time monitoring...
+  This task executes both help() and list_supported_metrics() via the SDK
+  and verifies that the output contains the expected strings and patterns.
 
   Args:
     info: Cluster info for gcloud credentials.
     pod_name: Pod name provided by dynamic task mapping.
-
-  Returns:
-    The standard output of the help command.
   """
-  output = sdk.execute_sdk_command(info, pod_name, sdk.TpuMonitoringScript.HELP)
+  # A dict of script to its expected result patterns.
+  validate_spec: dict[sdk.TpuMonitoringScript, list[str]] = {
+      # Validates help() output. Expected format:
+      # - list_supported_metrics(): List all supported functionality...
+      # - get_metric(metric_name:str): Get specific metric...
+      # - snapshot mode: Enable real-time monitoring...
+      sdk.TpuMonitoringScript.HELP: [
+          "list_supported_metrics()",
+          "get_metric(metric_name:str)",
+          "snapshot mode",
+      ],
+      # Validates list_supported_metrics() output. Expected format:
+      # ['tensorcore_util', 'duty_cycle_pct', 'hbm_capacity_usage', ...]
+      sdk.TpuMonitoringScript.LIST_SUPPORTED_METRICS: [
+          "tensorcore_util",
+          "duty_cycle_pct",
+          "hbm_capacity_usage",
+          "buffer_transfer_latency",
+          "hlo_execution_timing",
+      ],
+  }
 
-  patterns = [
-      "list_supported_metrics()",
-      "get_metric(metric_name:str)",
-      "snapshot mode",
-  ]
-
-  for pattern in patterns:
-    if pattern not in output:
-      raise AssertionError(
-          f"Validation failed for 'tpumonitoring.help()': "
-          f"Missing '{pattern}'."
-      )
-  return output
-
-
-@task
-def validate_metrics_list(info: node_pool.Info, pod_name: str) -> str:
-  """Validates tpumonitoring.list_supported_metrics() using predefined SDK scripts.
-
-  Example output:
-    ['tensorcore_util', 'duty_cycle_pct', 'hbm_capacity_usage',
-     'buffer_transfer_latency', 'hlo_execution_timing']
-
-  Args:
-    info: Cluster info for gcloud credentials.
-    pod_name: Pod name provided by dynamic task mapping.
-
-  Returns:
-    The string representation of the supported metrics list.
-  """
-  output = sdk.execute_sdk_command(
-      info, pod_name, sdk.TpuMonitoringScript.LIST_SUPPORTED_METRICS
-  )
-
-  patterns = [
-      "tensorcore_util",
-      "duty_cycle_pct",
-      "hbm_capacity_usage",
-      "buffer_transfer_latency",
-      "hlo_execution_timing",
-  ]
-
-  for pattern in patterns:
-    if pattern not in output:
-      raise AssertionError(
-          "Validation failed for 'tpumonitoring.list_supported_metrics()': "
-          f"Missing '{pattern}'."
-      )
-  return output
-
+  for script, patterns in validate_spec.items():
+    output = sdk.execute_sdk_command(info, pod_name, script)
+    for pattern in patterns:
+      if pattern not in output:
+        raise AssertionError(
+            f"Validation failed for 'tpumonitoring.{script.name.lower()}()': "
+            f"Missing '{pattern}'."
+        )
 
 with models.DAG(
     dag_id="tpu_sdk_monitoring_validation",
@@ -208,14 +179,8 @@ with models.DAG(
     with TaskGroup(  # pylint: disable=unexpected-keyword-arg
         group_id="sdk_verification"
     ) as verification_group:
-      sdk_help_validation = (
-          validate_monitoring_help.override(task_id="sdk_help_validation")
-          .partial(info=cluster_info)
-          .expand(pod_name=pod_names)
-      )
-
-      metrics_list_validation = (
-          validate_metrics_list.override(task_id="metrics_list_validation")
+      sdk_validation = (
+          validate_monitoring_sdk.override(task_id="sdk_validation")
           .partial(info=cluster_info)
           .expand(pod_name=pod_names)
       )
