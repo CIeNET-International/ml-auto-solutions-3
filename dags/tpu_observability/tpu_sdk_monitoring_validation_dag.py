@@ -175,16 +175,11 @@ with models.DAG(
         job_apply_time=apply_time,
     )
 
-    # Keyword arguments are generated dynamically at runtime (pylint does not
-    # know this signature).
-    with TaskGroup(  # pylint: disable=unexpected-keyword-arg
-        group_id="sdk_verification"
-    ) as verification_group:
-      sdk_validation = (
-          validate_monitoring_sdk.override(task_id="sdk_validation")
-          .partial(info=cluster_info)
-          .expand(pod_name=pod_names)
-      )
+    sdk_validation = (
+        validate_monitoring_sdk.override(task_id="sdk_validation")
+        .partial(info=cluster_info)
+        .expand(pod_name=pod_names)
+    )
 
     cleanup_workload = jobset.end_workload.override(
         task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
@@ -207,7 +202,7 @@ with models.DAG(
         apply_time,
         pod_names,
         wait_for_jobset_started,
-        verification_group,
+        sdk_validation,
         cleanup_workload,
         cleanup_node_pool,
     )
