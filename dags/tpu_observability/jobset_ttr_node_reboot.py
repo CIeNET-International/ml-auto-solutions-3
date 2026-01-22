@@ -92,7 +92,7 @@ def random_node_reboot(info: node_pool.Info, ssh_key_pair: SshKeys):
     # Use warn=True because the connection will drop immediately upon reboot,
     # which is expected behavior for this operation.
     conn.run("sudo reboot", warn=True)
-  except Exception as e: # pylint: disable=broad-exception-caught
+  except Exception as e:  # pylint: disable=broad-exception-caught
     # Log unexpected errors but allow the task to proceed
     logging.warning(
         f"Reboot command issued, but connection closed with error: {e}"
