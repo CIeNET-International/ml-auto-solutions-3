@@ -53,19 +53,6 @@ class Status(enum.Enum):
     return status
 
 
-class NodeCommands:
-  """Commands for TPU node disruption during TTR tests."""
-
-  REBOOT = (
-      "sudo sh -c 'sync; nohup sh -c \"sleep 5 && reboot\" > /dev/null 2>&1 &'"
-  )
-  """
-  Safely reboots the node. Uses 'sync' for data integrity and 'nohup' with
-  a 'sleep' delay to allow the SSH session to close gracefully before the
-  system goes offline.
-  """
-
-
 @dataclasses.dataclass
 class Info:
   """

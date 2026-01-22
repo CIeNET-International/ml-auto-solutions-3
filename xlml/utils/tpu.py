@@ -67,10 +67,10 @@ def add_ssh_key_to_oslogin(ssh_public_key: str, project_id: str):
     request = oslogin_service.users().importSshPublicKey(
         parent=user_parent, body=body, projectId=project_id
     )
-    response = request.execute()
-    logging.info(f"Successfully imported SSH key to OS Login profile.")
+    _ = request.execute()
+    logging.info("Successfully imported SSH key to OS Login profile.")
   except Exception as e:
-    logging.error(f"Failed to add SSH key to OS Login profile: {e}")
+    logging.error("Failed to add SSH key to OS Login profile: {e}")
 
 
 def get_oslogin_username() -> str:
