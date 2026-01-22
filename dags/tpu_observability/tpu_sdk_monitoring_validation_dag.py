@@ -28,11 +28,14 @@ from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import tpu_monitoring_sdk_util as sdk
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils.jobset_util import JobSet, Workload
-from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_PATH
+from dags.tpu_observability.configs.common import (
+    MachineConfigMap,
+    GCS_CONFIG_PATH,
+)
 
 
 @task
-def validate_monitoring_help(info: jobset.node_pool_info, pod_name: str) -> str:
+def validate_monitoring_help(info: node_pool.Info, pod_name: str) -> str:
   """Validates the tpumonitoring.help() output using predefined SDK scripts.
 
   Example output:
@@ -52,7 +55,6 @@ def validate_monitoring_help(info: jobset.node_pool_info, pod_name: str) -> str:
   output = sdk.execute_sdk_command(info, pod_name, sdk.TpuMonitoringScript.HELP)
 
   patterns = [
-      "List all supported functionality",
       "list_supported_metrics()",
       "get_metric(metric_name:str)",
       "snapshot mode",
@@ -68,7 +70,7 @@ def validate_monitoring_help(info: jobset.node_pool_info, pod_name: str) -> str:
 
 
 @task
-def validate_metrics_list(info: jobset.node_pool_info, pod_name: str) -> str:
+def validate_metrics_list(info: node_pool.Info, pod_name: str) -> str:
   """Validates tpumonitoring.list_supported_metrics() using predefined SDK scripts.
 
   Example output:

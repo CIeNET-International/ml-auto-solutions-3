@@ -19,6 +19,7 @@ import tempfile
 import textwrap
 
 from dags.tpu_observability.utils import jobset_util as jobset
+from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils import subprocess_util as subprocess
 
 
@@ -41,7 +42,7 @@ class TpuMonitoringScript:
 
 
 def execute_sdk_command(
-    info: jobset.node_pool_info,
+    info: node_pool.Info,
     pod_name: str,
     script: TpuMonitoringScript,
     namespace: str = "default",
