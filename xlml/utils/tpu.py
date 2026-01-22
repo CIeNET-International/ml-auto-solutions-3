@@ -40,7 +40,7 @@ from google.protobuf.duration_pb2 import Duration
 from googleapiclient import discovery
 
 
-TTL = 'ttl'
+TTL = "ttl"
 
 
 @task
@@ -48,7 +48,7 @@ def generate_tpu_name(
     base_tpu_name: str,
     set_env_var: bool,
 ) -> str:
-  tpu_name = f'{base_tpu_name}-{str(uuid.uuid4())}'
+  tpu_name = f"{base_tpu_name}-{str(uuid.uuid4())}"
   if set_env_var:
     Variable.set(base_tpu_name, tpu_name)
   return tpu_name
@@ -58,36 +58,36 @@ def add_ssh_key_to_oslogin(ssh_public_key: str, project_id: str):
   """Adds an SSH public key to the authenticated service account's OS Login profile."""
   try:
     creds, _ = google.auth.default()
-    oslogin_service = discovery.build('oslogin', 'v1', credentials=creds)
+    oslogin_service = discovery.build("oslogin", "v1", credentials=creds)
 
     # Use 'users/me' to refer to the authenticated principal (Service Account)
-    user_parent = f'users/ml-auto-solutions-dev@cloud-ml-auto-solutions.iam.gserviceaccount.com'
-    body = {'key': ssh_public_key}
+    user_parent = f"users/ml-auto-solutions-dev@cloud-ml-auto-solutions.iam.gserviceaccount.com"
+    body = {"key": ssh_public_key}
 
     request = oslogin_service.users().importSshPublicKey(
         parent=user_parent, body=body, projectId=project_id
     )
     response = request.execute()
-    logging.info(f'Successfully imported SSH key to OS Login profile.')
+    logging.info(f"Successfully imported SSH key to OS Login profile.")
   except Exception as e:
-    logging.error(f'Failed to add SSH key to OS Login profile: {e}')
+    logging.error(f"Failed to add SSH key to OS Login profile: {e}")
 
 
 def get_oslogin_username() -> str:
   """Retrieves the POSIX username from the OS Login profile for the current user."""
   try:
     creds, _ = google.auth.default()
-    oslogin_service = discovery.build('oslogin', 'v1', credentials=creds)
-    user_name = f'users/ml-auto-solutions-dev@cloud-ml-auto-solutions.iam.gserviceaccount.com'
+    oslogin_service = discovery.build("oslogin", "v1", credentials=creds)
+    user_name = f"users/ml-auto-solutions-dev@cloud-ml-auto-solutions.iam.gserviceaccount.com"
     profile = oslogin_service.users().getLoginProfile(name=user_name).execute()
 
-    if profile and profile.get('posixAccounts'):
-      username = profile['posixAccounts'][0]['username']
+    if profile and profile.get("posixAccounts"):
+      username = profile["posixAccounts"][0]["username"]
       return username
     else:
-      raise RuntimeError(f'No POSIX account for {user_name}')
+      raise RuntimeError(f"No POSIX account for {user_name}")
   except Exception as e:
-    logging.error(f'Failed to get OS Login username: {e}')
+    logging.error(f"Failed to get OS Login username: {e}")
     raise
 
 
@@ -123,25 +123,25 @@ def create_queued_resource(
   ) -> str:
     # Log required info for XLML PLX Dashboard
     composer.log_metadata_for_xlml_dashboard({
-        'instance_name': tpu_name,
-        'cluster_project': gcp.project_name,
-        'zone': gcp.zone,
-        'dataset_name': gcp.dataset_name.value,
-        'composer_project': gcp.composer_project,
-        'dataset_project': gcp.dataset_project,
-        'accelerator': {
-            'name': task_test_config.accelerator.name,
-            'num_cores': task_test_config.accelerator.cores,
-            'runtime_version': task_test_config.accelerator.runtime_version,
-            'version': task_test_config.accelerator.version.value,
+        "instance_name": tpu_name,
+        "cluster_project": gcp.project_name,
+        "zone": gcp.zone,
+        "dataset_name": gcp.dataset_name.value,
+        "composer_project": gcp.composer_project,
+        "dataset_project": gcp.dataset_project,
+        "accelerator": {
+            "name": task_test_config.accelerator.name,
+            "num_cores": task_test_config.accelerator.cores,
+            "runtime_version": task_test_config.accelerator.runtime_version,
+            "version": task_test_config.accelerator.version.value,
         },
-        'accelerator_type': task_test_config.accelerator.name,
+        "accelerator_type": task_test_config.accelerator.name,
     })
 
     creds, _ = google.auth.default()
     client = tpu_api.TpuClient(credentials=creds)
 
-    parent = f'projects/{gcp.project_name}/locations/{gcp.zone}'
+    parent = f"projects/{gcp.project_name}/locations/{gcp.zone}"
 
     # Determine node_id and multiNodeParams based on num_slices
     if task_test_config.num_slices == 1:
@@ -151,14 +151,15 @@ def create_queued_resource(
       node_id = None
       multi_node_params = (
           tpu_api.types.QueuedResource.Tpu.NodeSpec.MultiNodeParams(
-              node_count=task_test_config.num_slices, node_id_prefix=tpu_name
+              node_count=task_test_config.num_slices,
+              node_id_prefix=tpu_name,
           )
       )
 
-    startup_script_command = ''
+    startup_script_command = ""
 
     if use_startup_script:
-      main_command = '\n'.join(
+      main_command = "\n".join(
           task_test_config.set_up_cmds + task_test_config.run_model_cmds
       )
       startup_script_command = startup_script.generate_startup_script(
@@ -166,8 +167,8 @@ def create_queued_resource(
       )
 
     metadata = {
-        'ssh-keys': f'ml-auto-solutions:{ssh_keys.public}',
-        'startup-script': startup_script_command,
+        "ssh-keys": f"ml-auto-solutions:{ssh_keys.public}",
+        "startup-script": startup_script_command,
     }
 
     create_tpu_timeout_in_sec = int(timeout.total_seconds())
@@ -195,7 +196,7 @@ def create_queued_resource(
                     parent=parent,
                     node=tpu_api.Node(
                         accelerator_type=accelerator.name,
-                        description='noteardown',
+                        description="noteardown",
                         runtime_version=accelerator.runtime_version,
                         network_config=tpu_api.NetworkConfig(
                             network=accelerator.network,
@@ -226,13 +227,13 @@ def create_queued_resource(
         queued_resource=queued_resource,
     )
     response = qr_operation.result()
-    logging.info(f'Create QR response: {response}')
+    logging.info(f"Create QR response: {response}")
     # TODO(wcromar): do anything about failures
 
     return response.name
 
   @task.sensor(
-      poke_interval=60, timeout=timeout.total_seconds(), mode='reschedule'
+      poke_interval=60, timeout=timeout.total_seconds(), mode="reschedule"
   )
   def wait_for_ready_queued_resource(qualified_name: str):
     creds, _ = google.auth.default()
@@ -240,7 +241,7 @@ def create_queued_resource(
 
     qr = client.get_queued_resource(name=qualified_name)
     state = qr.state.state
-    logging.info(f'Queued resource state: {state.name}')
+    logging.info(f"Queued resource state: {state.name}")
     if qr.state.state == tpu_api.QueuedResourceState.State.ACTIVE:
       return True
     elif qr.state.state in [
@@ -251,7 +252,7 @@ def create_queued_resource(
     ]:
       return False
     else:
-      raise RuntimeError(f'Bad queued resource state {state.name}')
+      raise RuntimeError(f"Bad queued resource state {state.name}")
 
   def check_if_startup_script_end(
       queued_resource: airflow.XComArg, ssh_keys: airflow.XComArg
@@ -259,7 +260,7 @@ def create_queued_resource(
     check_script = startup_script.monitor_startup_script()
 
     return ssh_tpu.override(
-        task_id='check_if_startup_script_end',
+        task_id="check_if_startup_script_end",
         execution_timeout=task_test_config.timeout,
         owner=task_test_config.task_owner,
     )(
@@ -269,7 +270,7 @@ def create_queued_resource(
         False,
     )
 
-  with TaskGroup(group_id='create_queued_resource') as tg:
+  with TaskGroup(group_id="create_queued_resource") as tg:
     qualified_name = create_queued_resource_request(tpu_name, ssh_keys)
 
     if use_startup_script:
@@ -291,7 +292,7 @@ def delete_queued_resource(qualified_name: airflow.XComArg):
       resource.
   """
 
-  @task(trigger_rule='all_done')
+  @task(trigger_rule="all_done")
   def delete_tpu_nodes_request(qualified_name: str):
     # TODO(wcromar): Find a less repetitive way to manage the TPU client.
     creds, _ = google.auth.default()
@@ -300,17 +301,17 @@ def delete_queued_resource(qualified_name: airflow.XComArg):
     try:
       qr = client.get_queued_resource(name=qualified_name)
     except google.api_core.exceptions.NotFound:
-      logging.info(f'{qualified_name} not found')
+      logging.info(f"{qualified_name} not found")
       return
 
     for node in qr.tpu.node_spec:
       try:
-        op = client.delete_node(name=f'{node.parent}/nodes/{node.node_id}')
-        logging.info(f'Delete node state: {op}')
+        op = client.delete_node(name=f"{node.parent}/nodes/{node.node_id}")
+        logging.info(f"Delete node state: {op}")
       except google.api_core.exceptions.NotFound:
-        logging.info(f'{node.node_id} is already deleted')
+        logging.info(f"{node.node_id} is already deleted")
 
-  @task.sensor(poke_interval=60, timeout=3600, mode='reschedule')
+  @task.sensor(poke_interval=60, timeout=3600, mode="reschedule")
   def wait_for_tpu_deletion(qualified_name: str):
     creds, _ = google.auth.default()
     client = tpu_api.TpuClient(credentials=creds)
@@ -319,7 +320,7 @@ def delete_queued_resource(qualified_name: airflow.XComArg):
       qr = client.get_queued_resource(name=qualified_name)
     except google.api_core.exceptions.NotFound:
       logging.info(
-          f'{qualified_name} was removed by cleanup DAG or deleted unexpectedly'
+          f"{qualified_name} was removed by cleanup DAG or deleted unexpectedly"
       )
       return True
 
@@ -331,30 +332,30 @@ def delete_queued_resource(qualified_name: airflow.XComArg):
         tpu_api.QueuedResourceState.State.WAITING_FOR_RESOURCES,
         tpu_api.QueuedResourceState.State.ACCEPTED,
     ]:
-      logging.info(f'All TPU nodes deleted for {qualified_name}')
+      logging.info(f"All TPU nodes deleted for {qualified_name}")
       return True
 
-    logging.info(f'TPU Nodes: {qr.tpu.node_spec}')
+    logging.info(f"TPU Nodes: {qr.tpu.node_spec}")
     return False
 
-  @task(trigger_rule='all_done')
+  @task(trigger_rule="all_done")
   def delete_queued_resource_request(qualified_name: str) -> Optional[str]:
     creds, _ = google.auth.default()
     client = tpu_api.TpuClient(credentials=creds)
 
     try:
       op = client.delete_queued_resource(name=qualified_name)
-      logging.info(f'delete op {op}')
+      logging.info(f"delete op {op}")
     except google.api_core.exceptions.NotFound:
-      logging.info(f'{qualified_name} is already deleted')
+      logging.info(f"{qualified_name} is already deleted")
       return None
 
     return op.operation.name
 
-  @task.sensor(poke_interval=60, timeout=3600, mode='reschedule')
+  @task.sensor(poke_interval=60, timeout=3600, mode="reschedule")
   def wait_for_queued_resource_deletion(op_name: Optional[str]):
     if not op_name:
-      logging.info('No delete operation given')
+      logging.info("No delete operation given")
       return True
 
     creds, _ = google.auth.default()
@@ -408,7 +409,7 @@ def ssh_tpu(
   # 1. Retrieve TPU and Node info
   queued_resource = client.get_queued_resource(name=qualified_name)
   nodes = [
-      client.get_node(name=os.path.join(node.parent, 'nodes', node.node_id))
+      client.get_node(name=os.path.join(node.parent, "nodes", node.node_id))
       for node in queued_resource.tpu.node_spec
   ]
   node_metadata = nodes[0].metadata
@@ -430,7 +431,7 @@ def ssh_tpu(
   else:
     endpoints = [nodes[0].network_endpoints[0]]
 
-  use_external_ips = os.getenv('XLMLTEST_SSH_EXTERNAL_IPS', '0') == '1'
+  use_external_ips = os.getenv("XLMLTEST_SSH_EXTERNAL_IPS", "0") == "1"
   ip_addresses = [
       endpoint.access_config.external_ip
       if use_external_ips
@@ -440,11 +441,11 @@ def ssh_tpu(
 
   # 3. Setup OS Login Authentication
   # Parse project_id from qualified_name: projects/{project}/locations/{zone}/...
-  project_id = qualified_name.split('/')[1]
+  project_id = qualified_name.split("/")[1]
   add_ssh_key_to_oslogin(ssh_keys.public, project_id)
   oslogin_username = get_oslogin_username()
 
-  logging.info(f'Connecting to IPs: {ip_addresses} as user: {oslogin_username}')
+  logging.info(f"Connecting to IPs: {ip_addresses} as user: {oslogin_username}")
 
   # 4. Initialize Fabric ThreadingGroup
   pkey = paramiko.RSAKey.from_private_key(io.StringIO(ssh_keys.private))
@@ -452,6 +453,7 @@ def ssh_tpu(
       *ip_addresses,
       user=oslogin_username,
       connect_kwargs={
+<<<<<<< HEAD
 <<<<<<< HEAD
           'auth_strategy': paramiko.auth_strategy.InMemoryPrivateKey(
               user, pkey
@@ -461,40 +463,44 @@ def ssh_tpu(
           'pkey': pkey,
 >>>>>>> abf576d (refactor(ttr): optimize node reboot logic and fix OS Login authentication)
           'banner_timeout': 200,
+=======
+          "pkey": pkey,
+          "banner_timeout": 200,
+>>>>>>> 81003f5 (format)
       },
-      gateway='corp-ssh-helper %h %p' if use_external_ips else None,
+      gateway="corp-ssh-helper %h %p" if use_external_ips else None,
   )
 
   def ssh_group_run(commands: Iterable[str]):
     try:
       # Join multiple commands into a single shell execution string
       cmd_str = (
-          '; '.join(commands) if not isinstance(commands, str) else commands
+          "; ".join(commands) if not isinstance(commands, str) else commands
       )
-      logging.info(f'Executing commands: {cmd_str}')
+      logging.info(f"Executing commands: {cmd_str}")
 
       # Use 'warn=True' if you want to handle exit codes manually or for reboot scenarios
       ssh_group.run(cmd_str, env=env, warn=True)
     except fabric.group.GroupException as e:
       for connection, result in e.result.items():
         if isinstance(result, paramiko.ssh_exception.AuthenticationException):
-          logging.error(f'SSH Authentication Failed on {connection.host}')
+          logging.error(f"SSH Authentication Failed on {connection.host}")
       raise AirflowFailException(
-          'SSH command failed on one or more hosts.'
+          "SSH command failed on one or more hosts."
       ) from e
     finally:
       ssh_group.close()
 
   # 5. Handle Retry Logic: Kill lingering TPU processes
   context = get_current_context()
-  if context['task_instance'].try_number > 1:
-    logging.info('Retry detected. Cleaning up lingering TPU processes...')
-    tmp_file = '/tmp/kill_process.sh'
+  if context["task_instance"].try_number > 1:
+    logging.info("Retry detected. Cleaning up lingering TPU processes...")
+    tmp_file = "/tmp/kill_process.sh"
     accelerator_type = nodes[0].accelerator_type
     script = kill_process_by_pid()
     kill_process_cmds = [
         f'sudo echo "{script}" > {tmp_file}',
-        f'bash {tmp_file} {accelerator_type}',
+        f"bash {tmp_file} {accelerator_type}",
     ]
     ssh_group_run(kill_process_cmds)
 
@@ -515,10 +521,10 @@ def clean_up_idle_queued_resources(
   creds, _ = google.auth.default()
   client = tpu_api.TpuClient(credentials=creds)
 
-  logging.info(f'Cleaning up resources in project {project_name}.')
+  logging.info(f"Cleaning up resources in project {project_name}.")
   for zone in zones:
-    logging.info(f'Checking in zone {zone.value}.')
-    parent = f'projects/{project_name}/locations/{zone.value}'
+    logging.info(f"Checking in zone {zone.value}.")
+    parent = f"projects/{project_name}/locations/{zone.value}"
     request = tpu_api.types.ListQueuedResourcesRequest(parent=parent)
     responses = client.list_queued_resources(request)
 
@@ -528,7 +534,7 @@ def clean_up_idle_queued_resources(
           state == tpu_api.QueuedResourceState.State.FAILED
           or state == tpu_api.QueuedResourceState.State.SUSPENDED
       ):
-        logging.info(f'Deleting {qr.name} in {state.name} status.')
+        logging.info(f"Deleting {qr.name} in {state.name} status.")
         client.delete_queued_resource(name=qr.name)
 
 
@@ -543,10 +549,10 @@ def clean_up_idle_nodes(project_name: str, zones: Iterable[str]) -> None:
   creds, _ = google.auth.default()
   client = tpu_api.TpuClient(credentials=creds)
 
-  logging.info(f'Cleaning up nodes in project {project_name}.')
+  logging.info(f"Cleaning up nodes in project {project_name}.")
   for zone in zones:
-    logging.info(f'Checking in zone {zone.value}.')
-    parent = f'projects/{project_name}/locations/{zone.value}'
+    logging.info(f"Checking in zone {zone.value}.")
+    parent = f"projects/{project_name}/locations/{zone.value}"
     request = tpu_api.types.ListNodesRequest(parent=parent)
     responses = client.list_nodes(request)
 
@@ -557,8 +563,8 @@ def clean_up_idle_nodes(project_name: str, zones: Iterable[str]) -> None:
         current_time = datetime.datetime.now(datetime.timezone.utc)
         logging.info(
             (
-                f'Checking node {node.name}: create_time is {create_time},'
-                f' and current_time is {current_time}.'
+                f"Checking node {node.name}: create_time is {create_time},"
+                f" and current_time is {current_time}."
             )
         )
         active_time = current_time - create_time
@@ -567,8 +573,8 @@ def clean_up_idle_nodes(project_name: str, zones: Iterable[str]) -> None:
           datetime_delta = str(datetime.timedelta(seconds=delta))
           logging.info(
               (
-                  f'Deleting node {node.name} due to exceeding its time to'
-                  f' live (TTL) by {datetime_delta}.'
+                  f"Deleting node {node.name} due to exceeding its time to"
+                  f" live (TTL) by {datetime_delta}."
               )
           )
           client.delete_node(name=node.name)
