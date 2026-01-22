@@ -55,13 +55,17 @@ def generate_tpu_name(
 
 
 def add_ssh_key_to_oslogin(ssh_public_key: str, project_id: str):
-  """Adds an SSH public key to the authenticated service account's OS Login profile."""
+  """Adds an SSH public key to the service account's OS Login profile."""
   try:
     creds, _ = google.auth.default()
     oslogin_service = discovery.build("oslogin", "v1", credentials=creds)
 
     # Use 'users/me' to refer to the authenticated principal (Service Account)
-    user_parent = f"users/ml-auto-solutions-dev@cloud-ml-auto-solutions.iam.gserviceaccount.com"
+    email = (
+            "ml-auto-solutions-dev@cloud-ml-auto-solutions"
+            ".iam.gserviceaccount.com"
+        )
+    user_parent = f"users/{email}"
     body = {"key": ssh_public_key}
 
     request = oslogin_service.users().importSshPublicKey(
@@ -78,7 +82,11 @@ def get_oslogin_username() -> str:
   try:
     creds, _ = google.auth.default()
     oslogin_service = discovery.build("oslogin", "v1", credentials=creds)
-    user_name = f"users/ml-auto-solutions-dev@cloud-ml-auto-solutions.iam.gserviceaccount.com"
+    email = (
+        "ml-auto-solutions-dev@cloud-ml-auto-solutions"
+        ".iam.gserviceaccount.com"
+    )
+    user_name = f"users/{email}"
     profile = oslogin_service.users().getLoginProfile(name=user_name).execute()
 
     if profile and profile.get("posixAccounts"):
