@@ -22,7 +22,6 @@ import paramiko
 import io
 
 from airflow import models
-from airflow.exceptions import AirflowFailException
 from airflow.models.baseoperator import chain
 from airflow.utils.trigger_rule import TriggerRule
 from airflow.utils.task_group import TaskGroup
@@ -33,7 +32,10 @@ from dags import composer_env
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils.jobset_util import JobSet, Workload
-from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_PATH
+from dags.tpu_observability.configs.common import (
+    MachineConfigMap,
+    GCS_CONFIG_PATH,
+)
 
 from xlml.utils.tpu import add_ssh_key_to_oslogin, get_oslogin_username
 from xlml.utils.ssh import SshKeys, generate_ssh_keys
