@@ -62,9 +62,10 @@ def add_ssh_key_to_oslogin(ssh_public_key: str, project_id: str):
 
     # Use 'users/me' to refer to the authenticated principal (Service Account)
     email = (
-            "ml-auto-solutions-dev@cloud-ml-auto-solutions"
-            ".iam.gserviceaccount.com"
-        )
+        "ml-auto-solutions-dev"
+        "@cloud-ml-auto-solutions"
+        ".iam.gserviceaccount.com"
+    )
     user_parent = f"users/{email}"
     body = {"key": ssh_public_key}
 
@@ -83,7 +84,8 @@ def get_oslogin_username() -> str:
     creds, _ = google.auth.default()
     oslogin_service = discovery.build("oslogin", "v1", credentials=creds)
     email = (
-        "ml-auto-solutions-dev@cloud-ml-auto-solutions"
+        "ml-auto-solutions-dev"
+        "@cloud-ml-auto-solutions"
         ".iam.gserviceaccount.com"
     )
     user_name = f"users/{email}"
