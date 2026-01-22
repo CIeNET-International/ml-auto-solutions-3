@@ -48,6 +48,10 @@ class TimeUtil:
     iso_str = self.to_datetime().isoformat()
     return iso_str.replace("+00:00", "Z")
 
+  def to_mql_string(self) -> str:
+    dt = self.to_datetime()
+    return dt.strftime("d'%Y/%m/%d-%H:%M:%S'")
+
 
 if __name__ == "__main__":
   time = "2025-09-19T04:08:35.951+00:00"
