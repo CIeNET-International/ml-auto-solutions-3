@@ -37,6 +37,7 @@ import google.cloud.tpu_v2alpha1 as tpu_api
 import google.longrunning.operations_pb2 as operations
 import paramiko
 from google.protobuf.duration_pb2 import Duration
+from googleapiclient import discovery
 
 
 TTL = 'ttl'
@@ -51,6 +52,43 @@ def generate_tpu_name(
   if set_env_var:
     Variable.set(base_tpu_name, tpu_name)
   return tpu_name
+
+
+def add_ssh_key_to_oslogin(ssh_public_key: str, project_id: str):
+  """Adds an SSH public key to the authenticated service account's OS Login profile."""
+  try:
+    creds, _ = google.auth.default()
+    oslogin_service = discovery.build('oslogin', 'v1', credentials=creds)
+
+    # Use 'users/me' to refer to the authenticated principal (Service Account)
+    user_parent = f'users/ml-auto-solutions-dev@cloud-ml-auto-solutions.iam.gserviceaccount.com'
+    body = {'key': ssh_public_key}
+
+    request = oslogin_service.users().importSshPublicKey(
+        parent=user_parent, body=body, projectId=project_id
+    )
+    response = request.execute()
+    logging.info(f'Successfully imported SSH key to OS Login profile.')
+  except Exception as e:
+    logging.error(f'Failed to add SSH key to OS Login profile: {e}')
+
+
+def get_oslogin_username() -> str:
+  """Retrieves the POSIX username from the OS Login profile for the current user."""
+  try:
+    creds, _ = google.auth.default()
+    oslogin_service = discovery.build('oslogin', 'v1', credentials=creds)
+    user_name = f'users/ml-auto-solutions-dev@cloud-ml-auto-solutions.iam.gserviceaccount.com'
+    profile = oslogin_service.users().getLoginProfile(name=user_name).execute()
+
+    if profile and profile.get('posixAccounts'):
+      username = profile['posixAccounts'][0]['username']
+      return username
+    else:
+      raise RuntimeError(f'No POSIX account for {user_name}')
+  except Exception as e:
+    logging.error(f'Failed to get OS Login username: {e}')
+    raise
 
 
 def create_queued_resource(
@@ -355,26 +393,26 @@ def ssh_tpu(
     all_workers: bool,
     env: Dict[str, str] = None,
 ) -> None:
-  """SSH TPU and run commands in multi process.
+  """SSH into TPU Worker(s) and run commands in parallel using Fabric ThreadingGroup.
 
   Args:
-   qualified_name: The qualified name of a queued resource.
-   cmds: The commands to run on a TPU.
-   ssh_keys: The SSH key pair to use for authentication.
-   all_workers: The flag to define if run commands on all workers or worker 0
-     only.
-   env: environment variables to be pass to the ssh runner session using dict.
+    qualified_name: The qualified name of a queued resource.
+    cmds: The commands to run on the TPU.
+    ssh_keys: The SSH key pair to use for authentication.
+    all_workers: Flag to define if commands run on all workers or worker 0 only.
+    env: Environment variables to pass to the SSH session.
   """
   creds, _ = google.auth.default()
   client = tpu_api.TpuClient(credentials=creds)
 
+  # 1. Retrieve TPU and Node info
   queued_resource = client.get_queued_resource(name=qualified_name)
-
   nodes = [
       client.get_node(name=os.path.join(node.parent, 'nodes', node.node_id))
       for node in queued_resource.tpu.node_spec
   ]
 
+  # 2. Determine IP addresses
   if all_workers:
     endpoints = itertools.chain.from_iterable(
         node.network_endpoints for node in nodes
@@ -383,62 +421,67 @@ def ssh_tpu(
     endpoints = [nodes[0].network_endpoints[0]]
 
   use_external_ips = os.getenv('XLMLTEST_SSH_EXTERNAL_IPS', '0') == '1'
-  if use_external_ips:
-    ip_addresses = [
-        endpoint.access_config.external_ip for endpoint in endpoints
-    ]
-  else:
-    ip_addresses = [endpoint.ip_address for endpoint in endpoints]
+  ip_addresses = [
+      endpoint.access_config.external_ip
+      if use_external_ips
+      else endpoint.ip_address
+      for endpoint in endpoints
+  ]
 
-  logging.info(f'Connecting to IP addresses of workers: {ip_addresses}')
+  # 3. Setup OS Login Authentication
+  # Parse project_id from qualified_name: projects/{project}/locations/{zone}/...
+  project_id = qualified_name.split('/')[1]
+  add_ssh_key_to_oslogin(ssh_keys.public, project_id)
+  oslogin_username = get_oslogin_username()
 
+  logging.info(f'Connecting to IPs: {ip_addresses} as user: {oslogin_username}')
+
+  # 4. Initialize Fabric ThreadingGroup
   pkey = paramiko.RSAKey.from_private_key(io.StringIO(ssh_keys.private))
   ssh_group = fabric.ThreadingGroup(
       *ip_addresses,
+      user=oslogin_username,
       connect_kwargs={
-          'auth_strategy': paramiko.auth_strategy.InMemoryPrivateKey(
-              'ml-auto-solutions', pkey
-          ),
-          # See https://stackoverflow.com/a/59453832
+          'pkey': pkey,
           'banner_timeout': 200,
       },
-      # Proxy required on Cloudtops to connect to external IPs
       gateway='corp-ssh-helper %h %p' if use_external_ips else None,
   )
 
-  def ssh_group_run(cmds: Iterable[str]):
+  def ssh_group_run(commands: Iterable[str]):
     try:
-      ssh_group.run(cmds, env=env)
+      # Join multiple commands into a single shell execution string
+      cmd_str = (
+          '; '.join(commands) if not isinstance(commands, str) else commands
+      )
+      logging.info(f'Executing commands: {cmd_str}')
+
+      # Use 'warn=True' if you want to handle exit codes manually or for reboot scenarios
+      ssh_group.run(cmd_str, env=env, warn=True)
     except fabric.group.GroupException as e:
       for connection, result in e.result.items():
         if isinstance(result, paramiko.ssh_exception.AuthenticationException):
-          logging.error(
-              f'SSH Authentication Failed on {connection.host}: {result}'
-          )
-          raise AirflowFailException(
-              'SSH Authentication failed on one or more hosts. Check logs for details.'
-          ) from e
-      raise
-    except paramiko.ssh_exception.AuthenticationException as e:
-      error_msg = f'SSH Authentication Failed: {e}'
-      logging.error(error_msg)
-      raise AirflowFailException(error_msg) from e
-
+          logging.error(f'SSH Authentication Failed on {connection.host}')
+      raise AirflowFailException(
+          'SSH command failed on one or more hosts.'
+      ) from e
     finally:
       ssh_group.close()
 
+  # 5. Handle Retry Logic: Kill lingering TPU processes
   context = get_current_context()
   if context['task_instance'].try_number > 1:
-    # kill TPU process by pid (if any) to avoid `TPU in use` error in retry
+    logging.info('Retry detected. Cleaning up lingering TPU processes...')
     tmp_file = '/tmp/kill_process.sh'
     accelerator_type = nodes[0].accelerator_type
     script = kill_process_by_pid()
-    kill_process_cmds = (
-        f'set -xue; sudo echo "{script}" > {tmp_file}',
+    kill_process_cmds = [
+        f'sudo echo "{script}" > {tmp_file}',
         f'bash {tmp_file} {accelerator_type}',
-    )
-    ssh_group_run(';'.join(kill_process_cmds))
-  # run provided commands
+    ]
+    ssh_group_run(kill_process_cmds)
+
+  # 6. Execute provided commands
   ssh_group_run(cmds)
 
 
