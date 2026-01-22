@@ -28,7 +28,7 @@ from airflow.decorators import task
 from airflow.operators.empty import EmptyOperator
 
 from dags.common.quarantined_tests import QuarantineTests
-from xlml.utils import gpu, metric, name_format, ssh, tpu, xpk, axlearn, gke
+from xlml.utils import gpu, metric, name_format, ssh, xpk, axlearn, gke, tpu
 from xlml.apis import gcp_config, metric_config, test_config, gcs
 
 
@@ -102,7 +102,6 @@ def run_queued_resource_test(
         tpu_name = tpu.generate_tpu_name(
             task_test_config.benchmark_id, tpu_name_env_var
         )
-        ssh_keys = ssh.generate_ssh_keys()
         output_location = name_format.generate_gcs_folder_location(
             task_test_config.gcs_subfolder,
             task_test_config.benchmark_id,
@@ -111,7 +110,6 @@ def run_queued_resource_test(
       queued_resource_op, queued_resource_name = tpu.create_queued_resource(
           tpu_name,
           task_gcp_config,
-          ssh_keys,
           tpu_create_timeout,
           task_test_config,
       )
@@ -125,7 +123,6 @@ def run_queued_resource_test(
       )(
           queued_resource_name,
           task_test_config.setup_script,
-          ssh_keys,
           True if task_test_config.test_name.startswith("tf_") else all_workers,
       )
       _ = queued_resource_op >> setup_task
@@ -137,7 +134,6 @@ def run_queued_resource_test(
     )(
         queued_resource_name,
         task_test_config.test_script,
-        ssh_keys,
         all_workers,
         # We purposely put `custom_env` last to allow overriding values.
         # For example, `GCS_OUTPUT` can be overridden if needed.
