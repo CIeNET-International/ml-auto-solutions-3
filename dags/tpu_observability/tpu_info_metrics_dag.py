@@ -38,7 +38,7 @@ from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.tpu_observability.utils import tpu_info_util as tpu_info
-from dags.tpu_observability.utils.gcp_util import query_time_series
+from dags.tpu_observability.utils.gcp_util import list_time_series, query_time_series
 from dags.tpu_observability.utils.node_pool_util import Info
 from dags.tpu_observability.utils.time_util import TimeUtil
 from google.cloud.monitoring_v3 import types as monitoring_types
@@ -153,18 +153,33 @@ def run_metric_verification(
   start_time = job_apply_time
   end_time = TimeUtil.from_datetime(end_time_datatime)
 
-  filter_string = [
-      f'metric.type = "{metric_name}"',
-      f'resource.labels.cluster_name = "{node_pool.cluster_name}"',
-      f'resource.labels.pod_name = "{pod_name}"',
-  ]
-  time_series_data = query_time_series(
-      project_id=node_pool.project_id,
-      filter_str=" AND ".join(filter_string),
-      start_time=start_time,
-      end_time=end_time,
-      view=monitoring_types.ListTimeSeriesRequest.TimeSeriesView.FULL,
-  )
+  if metric_strategy.uses_mql:
+    time_range_str = f"{start_time.to_mql_string()}, {end_time.to_mql_string()}"
+
+    query = metric_strategy.build_mql_query(
+        cluster_name=node_pool.cluster_name,
+        pod_name=pod_name,
+        time_range_str=time_range_str,
+    )
+
+    logging.info("Executing MQL Query:\n%s", query)
+
+    time_series_data = query_time_series(node_pool.project_id, query)
+
+  else:
+    filter_string = [
+        f'metric.type = "{metric_name}"',
+        f'resource.labels.cluster_name = "{node_pool.cluster_name}"',
+        f'resource.labels.pod_name = "{pod_name}"',
+    ]
+
+    time_series_data = list_time_series(
+        project_id=node_pool.project_id,
+        filter_str=" AND ".join(filter_string),
+        start_time=start_time,
+        end_time=end_time,
+        view=monitoring_types.ListTimeSeriesRequest.TimeSeriesView.FULL,
+    )
 
   monitoring_values = metric_strategy.parse_from_monitoring(time_series_data)
   cmd_values = metric_strategy.parse_from_tpu_info(tpu_info_output)

@@ -88,6 +88,13 @@ class BaseMetricStrategy(ABC):
   tpu_info_metric_name: str
   dag_id_suffix: str
   tolerance_percent: float = 3.0
+  uses_mql: bool = False
+
+  def build_mql_query(
+      self, cluster_name: str, pod_name: str, time_range_str: str
+  ) -> str:
+    """Builds the MQL query string for this strategy."""
+    raise NotImplementedError("MQL not supported for this strategy")
 
   @abstractmethod
   def parse_from_monitoring(
@@ -192,63 +199,94 @@ class _BaseSimplePointStrategy(BaseMetricStrategy):
 class _BaseDistributionStrategy(BaseMetricStrategy):
   """Base strategy for parsing distribution (histogram) data and calculating percentiles.
 
-  This abstract base class handles the common logic for processing metrics represented
-  as distributions in Cloud Monitoring. It calculates specific percentiles (e.g., P50, P99)
-  from the raw histogram data and parses corresponding percentile values from
-  `tpu-info` command output tables.
+  This abstract base class handles the common logic for processing metrics
+  represented as distributions in Cloud Monitoring. It calculates specific
+  percentiles (e.g., P50, P99) from the raw histogram data and parses
+  corresponding percentile values from `tpu-info` command output tables.
   """
 
   _monitoring_group_by_label: str
   _tpu_info_table_name: str
   _tpu_info_group_by_key: str
   percentiles_to_check = list(_Percentiles)
+  uses_mql = True
+
+  def build_mql_query(
+      self, cluster_name: str, pod_name: str, time_range_str: str
+  ) -> str:
+    """
+    Constructs the MQL query dynamically based on the metric and grouping label.
+    """
+    aggregators = []
+    for p in self.percentiles_to_check:
+      aggregators.append(f"{p.name}: percentile(val(), {p.value})")
+
+    aggregator_str = ",\n        ".join(aggregators)
+
+    target_group_label = f"metric.{self._monitoring_group_by_label}"
+
+    query = f"""
+    fetch k8s_container
+    | metric '{self.metric_name}'
+    | filter
+        (resource.cluster_name == '{cluster_name}'
+        &&
+        resource.pod_name == '{pod_name}')
+    | within {time_range_str}
+    | align delta(1m)
+    | every 1m
+    | group_by [resource.pod_name, {target_group_label}],
+        [{aggregator_str}]
+    """
+
+    return query
 
   def parse_from_monitoring(
       self, time_series_data: list[monitoring_types.TimeSeries]
   ) -> list[float]:
     """Parses distribution data from Monitoring and calculates requested percentiles.
 
-    This method iterates through time series data, extracting distribution values
-    (count, bucket bounds, bucket counts). It groups these distributions by a
-    specific label (defined in subclasses) and calculates the target percentiles
-    for each group using the histogram data.
+    This method iterates through time series data, extracting distribution
+    values (count, bucket bounds, bucket counts). It groups these distributions
+    by a specific label (defined in subclasses) and calculates the target
+    percentiles for each group using the histogram data.
 
     Args:
-      time_series_data: A list of TimeSeries objects containing distribution data.
+      time_series_data: A list of TimeSeries objects containing distribution
+      data.
 
     Returns:
-      A flattened list of calculated percentile values (floats). The list is ordered
-      first by the sorted group key, and then by the sorted percentiles for each group.
+      A flattened list of calculated percentile values (floats). The list is
+      ordered first by the sorted group key, and then by the sorted percentiles
+      for each group.
     """
 
-    distributions_by_group: dict[str, dict[object, float]] = {}
-    group_label = self._monitoring_group_by_label
+    if not time_series_data:
+      return []
 
-    for ts in time_series_data:
-      if ts.points and ts.metric.labels.get(group_label):
-        group_key = ts.metric.labels[group_label]
-        dist_value = ts.points[0].value.distribution_value
-        distributions_by_group[group_key] = {
-            "count": dist_value.count,
-            "bounds": dist_value.bucket_options.explicit_buckets.bounds,
-            "bucket_counts": dist_value.bucket_counts,
-        }
+    parsed_data = {}
 
-    percentile_values_by_group: dict[str, dict[float, float]] = {}
-    for group_key, data in distributions_by_group.items():
-      percentile_values_by_group[
-          group_key
-      ] = _calculate_percentiles_from_histogram(
-          percentiles=[p.value for p in self.percentiles_to_check],
-          total_count=data["count"],
-          bounds=data["bounds"],
-          bucket_counts=data["bucket_counts"],
-      )
+    for ts_data in time_series_data:
+      if len(ts_data.label_values) < 2:
+        continue
+
+      group_key_value = ts_data.label_values[1].string_value
+
+      if not ts_data.point_data:
+        continue
+
+      latest_point = ts_data.point_data[0]
+
+      parsed_data[group_key_value] = {}
+
+      for idx, p in enumerate(self.percentiles_to_check):
+        val = latest_point.values[idx].double_value
+        parsed_data[group_key_value][p.name] = val
 
     monitoring_values = []
-    for group_key in sorted(distributions_by_group.keys()):
+    for group_key in sorted(parsed_data.keys()):
       for p in self.percentiles_to_check:
-        monitoring_values.append(percentile_values_by_group[group_key][p.value])
+        monitoring_values.append(parsed_data[group_key][p.name])
 
     return monitoring_values
 
@@ -257,13 +295,14 @@ class _BaseDistributionStrategy(BaseMetricStrategy):
   ) -> list[float]:
     """Parses pre-calculated percentile values from `tpu-info` output tables.
 
-    This method locates the specific table (defined in subclasses) in the `tpu-info`
-    output and extracts values for the requested percentiles. It handles parsing
-    numeric values from string cells (e.g., "123.45 us") and mapping specific
-    column names (like "P999" for P99.9).
+    This method locates the specific table (defined in subclasses) in the
+    `tpu-info` output and extracts values for the requested percentiles.
+    It handles parsing numeric values from string cells (e.g., "123.45 us")
+    and mapping specific column names (like "P999" for P99.9).
 
     Args:
-      tpu_info_metric_output: A list of parsed Table objects from the `tpu-info` command.
+      tpu_info_metric_output: A list of parsed Table objects from the `tpu-info`
+      command.
 
     Returns:
       A flattened list of percentile values (floats) extracted from the table.
