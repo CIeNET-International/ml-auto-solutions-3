@@ -42,7 +42,7 @@ from xlml.utils.ssh import SshKeys, generate_ssh_keys
 
 
 @task
-def random_node_reboot(info: node_pool.Info, ssh_keys: SshKeys):
+def random_node_reboot(info: node_pool.Info, ssh_key_pair: SshKeys):
   """
   Selects a random node from the node pool and triggers a system reboot via SSH.
 
@@ -72,11 +72,11 @@ def random_node_reboot(info: node_pool.Info, ssh_keys: SshKeys):
 
   # OS Login Setup
   # Register public key and retrieve the POSIX username
-  add_ssh_key_to_oslogin(ssh_keys.public, info.project_id)
+  add_ssh_key_to_oslogin(ssh_key_pair.public, info.project_id)
   os_user = get_oslogin_username()
 
   # Execute Reboot via Fabric
-  pkey = paramiko.RSAKey.from_private_key(io.StringIO(ssh_keys.private))
+  pkey = paramiko.RSAKey.from_private_key(io.StringIO(ssh_key_pair.private))
 
   # Establish connection using the dynamic OS Login username
   conn = fabric.Connection(
