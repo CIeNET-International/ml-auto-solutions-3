@@ -76,6 +76,7 @@ def validate_monitoring_sdk(info: node_pool.Info, pod_name: str) -> None:
             f"Missing '{pattern}'."
         )
 
+
 with models.DAG(
     dag_id="tpu_sdk_monitoring_validation",
     start_date=datetime.datetime(2026, 1, 13),
