@@ -17,6 +17,9 @@
 import datetime
 import random
 import logging
+import fabric
+import paramiko
+import io
 
 from airflow import models
 from airflow.exceptions import AirflowFailException
@@ -24,7 +27,7 @@ from airflow.models.baseoperator import chain
 from airflow.utils.trigger_rule import TriggerRule
 from airflow.utils.task_group import TaskGroup
 from airflow.decorators import task
-from airflow.providers.google.cloud.hooks.compute_ssh import ComputeEngineSSHHook
+from google.cloud import compute_v1
 
 from dags import composer_env
 from dags.tpu_observability.utils import jobset_util as jobset
@@ -32,32 +35,70 @@ from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils.jobset_util import JobSet, Workload
 from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_PATH
 
+from xlml.utils.tpu import add_ssh_key_to_oslogin, get_oslogin_username
+from xlml.utils.ssh import SshKeys, generate_ssh_keys
+
 
 @task
-def random_node_reboot(info: node_pool.Info):
+def random_node_reboot(info: node_pool.Info, ssh_keys: SshKeys):
   """
-  Selects a random node from the pool and triggers a system-level reboot via SSH.
-
-  This task simulates a hardware failure or a maintenance event to verify that
-  the JobSet can gracefully recover. By using a node reboot instead of a simple
-  pod deletion, we test the full recovery path, including node availability
-  checks and TPU stack re-initialization.
+  Selects a random node from the node pool and triggers a system reboot via SSH.
 
   Args:
-    info: Node pool and cluster information.
+    info: Configuration and metadata of the GKE node pool.
+    ssh_keys: SSH key pair used for authentication.
 
   Returns:
-    str: The name of the node that was targeted for the reboot.
+    The name of the node that was rebooted.
   """
+  # Retrieve all nodes from the pool and select one at random
   nodes = node_pool.list_nodes(info)
-  target = random.choice(nodes)
+  if not nodes:
+    raise RuntimeError(f"No nodes found in node pool {info.node_pool_name}")
 
-  logging.info(f"Targeting node {target} for reboot.")
+  target_node_url = random.choice(nodes)
+  target_node_name = target_node_url.split("/")[-1]
+  logging.info(f"Selected node name: {target_node_name}")
 
-  node_pool.execute_ssh_command(
-      node_name=target, node_pool=info, command=node_pool.NodeCommands.REBOOT
+  # Get the internal IP address of the instance
+  instance_client = compute_v1.InstancesClient()
+  instance = instance_client.get(
+      project=info.project_id, zone=info.zone, instance=target_node_name
   )
-  return target
+  target_ip = instance.network_interfaces[0].network_i_p
+  logging.info(f"Targeting node {target_node_name} at {target_ip} for reboot.")
+
+  # OS Login Setup
+  # Register public key and retrieve the POSIX username
+  add_ssh_key_to_oslogin(ssh_keys.public, info.project_id)
+  os_user = get_oslogin_username()
+
+  # Execute Reboot via Fabric
+  pkey = paramiko.RSAKey.from_private_key(io.StringIO(ssh_keys.private))
+
+  # Establish connection using the dynamic OS Login username
+  conn = fabric.Connection(
+      host=target_ip,
+      user=os_user,
+      connect_kwargs={"pkey": pkey, "banner_timeout": 200},
+  )
+
+  try:
+    logging.info(
+        f"Sending 'sudo reboot' command to {target_ip} as user '{os_user}'..."
+    )
+    # Use warn=True because the connection will drop immediately upon reboot,
+    # which is expected behavior for this operation.
+    conn.run("sudo reboot", warn=True)
+  except Exception as e:
+    # Log unexpected errors but allow the task to proceed if the reboot was initiated
+    logging.warning(
+        f"Reboot command issued, but connection closed with error: {e}"
+    )
+  finally:
+    conn.close()
+
+  return target_node_name
 
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
@@ -126,6 +167,8 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     with TaskGroup(  # pylint: disable=unexpected-keyword-arg
         group_id=f"v{config.tpu_version.value}"
     ):
+      ssh_keys = generate_ssh_keys.override(task_id="generate_ssh_keys")()
+
       cluster_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
           task_id="build_node_pool_info_from_gcs_yaml"
       )(
@@ -156,7 +199,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       )
 
       node_reboot = random_node_reboot.override(task_id="random_node_reboot")(
-          info=cluster_info,
+          info=cluster_info, ssh_keys=ssh_keys
       )
 
       wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
@@ -183,6 +226,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       )
 
       chain(
+          ssh_keys,
           create_node_pool,
           start_workload,
           ensure_all_pods_running,
