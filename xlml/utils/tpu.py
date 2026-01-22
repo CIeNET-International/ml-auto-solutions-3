@@ -137,7 +137,7 @@ def create_queued_resource(
     # Log required info for XLML PLX Dashboard
     composer.log_metadata_for_xlml_dashboard({
         'instance_name': tpu_name,
-        'project_name': gcp.project_name,
+        'cluster_project': gcp.project_name,
         'zone': gcp.zone,
         'dataset_name': gcp.dataset_name.value,
         'composer_project': gcp.composer_project,
@@ -179,7 +179,7 @@ def create_queued_resource(
 
     metadata = {
         'startup-script': startup_script_command,
-        'enable-oslogin': 'TRUE',
+        # 'enable-oslogin': 'TRUE',
     }
 
     create_tpu_timeout_in_sec = int(timeout.total_seconds())
