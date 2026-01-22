@@ -201,7 +201,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       )
 
       node_reboot = random_node_reboot.override(task_id="random_node_reboot")(
-          info=cluster_info, ssh_keys=ssh_keys
+          info=cluster_info, ssh_key_pair=ssh_keys
       )
 
       wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
