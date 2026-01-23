@@ -46,8 +46,8 @@ def trigger_oom_failure(info, pod_name: str):
   A connection error is expected and caught when the pod is killed.
 
   Args:
-      info: Node pool and cluster information.
-      pod_name (str): The name of the target pod to be OOMKilled.
+    info: Node pool and cluster information.
+    pod_name (str): The name of the target pod to be OOMKilled.
   """
   with tempfile.NamedTemporaryFile() as temp_config_file:
     env = os.environ.copy()
@@ -75,10 +75,10 @@ def pick_random_pod(active_pods: List[str]) -> str:
   JobSet controller handles partial failures within a replica.
 
   Args:
-      pod_names (List[str]): List of active pod names in the JobSet.
+    pod_names (List[str]): List of active pod names in the JobSet.
 
   Returns:
-      str: The name of the randomly selected pod.
+    str: The name of the randomly selected pod.
   """
   if not active_pods:
     raise ValueError("No pods found to attack!")
