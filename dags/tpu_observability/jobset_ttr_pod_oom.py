@@ -219,6 +219,7 @@ with models.DAG(
     )
 
     chain(
+        cluster_info,
         create_node_pool,
         start_workload,
         ensure_all_pods_running,
