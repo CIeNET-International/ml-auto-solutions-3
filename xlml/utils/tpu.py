@@ -54,33 +54,6 @@ def generate_tpu_name(
     Variable.set(base_tpu_name, tpu_name)
   return tpu_name
 
-
-def add_ssh_key_to_oslogin(ssh_public_key: str, project_id: str):
-    """Adds an SSH public key to the current authenticated user's OS Login profile."""
-    try:
-        creds, _ = google.auth.default()
-        logging.info("Adding SSH key to OS Login profile for current user.")
-
-        oslogin_service = discovery.build('oslogin', 'v1', credentials=creds)
-        # Get the email of the service account
-        # sa_email = creds.service_account_email
-        user_parent = f"users/ml-auto-solutions@cloud-ml-auto-solutions.iam.gserviceaccount.com"
-
-        body = {
-            'key': ssh_public_key,
-            # Optionally, you can set an expiration time for the key in microseconds
-            # 'expirationTimeUsec': str(int((time.time() + 3600) * 1000000))  # Example: 1 hour
-        }
-
-        # Use 'users/me' to refer to the authenticated principal
-        # request = oslogin_service.users().importSshPublicKey(parent='users/me', body=body, projectId=project_id)
-        request = oslogin_service.users().importSshPublicKey(parent=user_parent, body=body, projectId=project_id)
-        response = request.execute()
-        logging.info(f"OS Login ImportSshPublicKey response: {response}")
-    except Exception as e:
-        logging.error(f"Failed to add SSH key to OS Login profile: {e}")
-        # Depending on requirements, you might want to raise the exception
-
 def get_oslogin_username_from_api() -> str | None:
     """Retrieves the POSIX username from the OS Login profile for the current user."""
     try:
