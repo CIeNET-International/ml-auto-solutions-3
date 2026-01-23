@@ -219,14 +219,13 @@ with models.DAG(
     )
 
     chain(
-      create_node_pool,
-      start_workload,
-      ensure_all_pods_running,
-      found_pods,
-      select_random_pod,
-      trigger_oom_killed,
-      wait_for_metric_upload,
-      cleanup_workload,
-      cleanup_node_pool,
+        create_node_pool,
+        start_workload,
+        ensure_all_pods_running,
+        found_pods,
+        select_random_pod,
+        trigger_oom_killed,
+        wait_for_metric_upload,
+        cleanup_workload,
+        cleanup_node_pool,
     )
-
