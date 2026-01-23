@@ -22,6 +22,7 @@ import random
 from typing import List
 
 from airflow import models
+from airflow.models.baseoperator import chain
 from airflow.utils.trigger_rule import TriggerRule
 from airflow.utils.task_group import TaskGroup
 from airflow.decorators import task
@@ -30,7 +31,7 @@ from dags import composer_env
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils import subprocess_util as subprocess
-from dags.tpu_observability.utils.jobset_util import JobSet, Workload
+from dags.tpu_observability.utils.jobset_util import JobSet
 from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_PATH
 
 
@@ -60,12 +61,12 @@ def trigger_oom_failure(info, pod_name: str):
     try:
       print(f"Executing OOM script in {pod_name}...")
       subprocess.run_exec(cmd, env=env)
-    except Exception as e:
+    except RuntimeError as e:
       print(f"Expectation: Connection closed due to OOMKilled. Info: {e}")
 
 
 @task
-def pick_random_pod(pod_names: List[str]) -> str:
+def pick_random_pod(active_pods: List[str]) -> str:
   """
   Randomly selects one pod from a list of available JobSet pods.
 
@@ -79,9 +80,9 @@ def pick_random_pod(pod_names: List[str]) -> str:
   Returns:
       str: The name of the randomly selected pod.
   """
-  if not pod_names:
+  if not active_pods:
     raise ValueError("No pods found to attack!")
-  chosen_pod = random.choice(pod_names)
+  chosen_pod = random.choice(active_pods)
   print(f"Randomly selected pod for OOM test: {chosen_pod}")
   return chosen_pod
 
@@ -98,13 +99,12 @@ with models.DAG(
         "pod_oom",
         "TPU",
         "v6e-16",
-        "SDK",
         "Validation",
     ],
     description=(
-        "This DAG tests the JobSet time-to-recover metric by injecting an OOM event "
-        "into a random pod to trigger a recovery, then polls Cloud Monitoring to "
-        "verify the metric is updated."
+        "This DAG tests the JobSet time-to-recover metric by injecting "
+        "an OOM event into a random pod to trigger a recovery, "
+        "then polls Cloud Monitoring to verify the metric is updated."
     ),
     doc_md="""
         ### JobSet Time-To-Recover (TTR) Test Using Random Pod OOM Injection
@@ -182,13 +182,13 @@ with models.DAG(
         node_pool=cluster_info,
     )
 
-    pod_names = jobset.list_pod_names.override(task_id="list_pod_names")(
+    found_pods = jobset.list_pod_names.override(task_id="list_pod_names")(
         node_pool=cluster_info,
         namespace=jobset_config.namespace,
     )
 
     select_random_pod = pick_random_pod.override(task_id="select_random_pod")(
-        pod_names=pod_names
+        active_pods=found_pods
     )
 
     trigger_oom_killed = trigger_oom_failure.override(
@@ -218,18 +218,15 @@ with models.DAG(
         setups=create_node_pool,
     )
 
-    # Airflow uses >> for task chaining, which is pointless for pylint.
-    # pylint: disable=pointless-statement
-    (
-        cluster_info
-        >> create_node_pool
-        >> start_workload
-        >> ensure_all_pods_running
-        >> pod_names
-        >> select_random_pod
-        >> trigger_oom_killed
-        >> wait_for_metric_upload
-        >> cleanup_workload
-        >> cleanup_node_pool
+    chain(
+      create_node_pool,
+      start_workload,
+      ensure_all_pods_running,
+      found_pods,
+      select_random_pod,
+      trigger_oom_killed,
+      wait_for_metric_upload,
+      cleanup_workload,
+      cleanup_node_pool,
     )
-    # pylint: enable=pointless-statement
+
