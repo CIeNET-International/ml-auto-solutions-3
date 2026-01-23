@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""A DAG to validate the `tpumonitoring` SDK, ensuring help() and
-list_supported_metrics() are functional inside TPU worker pods."""
+"""A DAG to validate JobSet Time-to-Recover (TTR) metrics
+by injecting Out-of-Memory (OOM) faults into TPU worker pods."""
 
 import datetime
 import tempfile
