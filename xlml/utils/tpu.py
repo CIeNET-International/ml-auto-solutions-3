@@ -39,7 +39,7 @@ import google.longrunning.operations_pb2 as operations
 import paramiko
 from google.protobuf.duration_pb2 import Duration
 from googleapiclient import discovery
-
+from typing import Any
 
 TTL = 'ttl'
 
@@ -81,10 +81,11 @@ def get_oslogin_username_from_api() -> str | None:
 def create_queued_resource(
     tpu_name: airflow.XComArg,
     gcp: gcp_config.GCPConfig,
-    timeout: datetime.timedelta,
+    ssh_keys: Any = None,
+    timeout: datetime.timedelta = None,
     task_test_config: Union[
         test_config.TpuVmTest, test_config.JSonnetTpuVmTest
-    ],
+    ] = None,
     use_startup_script: bool = False,
 ) -> Tuple[TaskGroup, airflow.XComArg]:
   """Request a QueuedResource and wait until the nodes are created.
@@ -373,7 +374,8 @@ def kill_process_by_pid() -> str:
 def ssh_tpu(
     qualified_name: str,
     cmds: Iterable[str],
-    all_workers: bool,
+    ssh_keys: Any = None,
+    all_workers: bool = None,
     env: Dict[str, str] = None,
 ) -> None:
   """SSH TPU and run commands in multi process.
