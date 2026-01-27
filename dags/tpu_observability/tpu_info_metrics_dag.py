@@ -147,39 +147,16 @@ def run_metric_verification(
   metric_name = metric_strategy.metric_name
   logging.info("Verifying metric '%s' for pod: %s...", metric_name, pod_name)
 
-  end_time_datatime = job_apply_time.to_datetime() + datetime.timedelta(
-      minutes=10
-  )
   start_time = job_apply_time
-  end_time = TimeUtil.from_datetime(end_time_datatime)
+  end_time = job_apply_time + datetime.timedelta(minutes=10)
 
-  if metric_strategy.uses_mql:
-    time_range_str = f"{start_time.to_mql_string()}, {end_time.to_mql_string()}"
-
-    query = metric_strategy.build_mql_query(
-        cluster_name=node_pool.cluster_name,
-        pod_name=pod_name,
-        time_range_str=time_range_str,
-    )
-
-    logging.info("Executing MQL Query:\n%s", query)
-
-    time_series_data = query_time_series(node_pool.project_id, query)
-
-  else:
-    filter_string = [
-        f'metric.type = "{metric_name}"',
-        f'resource.labels.cluster_name = "{node_pool.cluster_name}"',
-        f'resource.labels.pod_name = "{pod_name}"',
-    ]
-
-    time_series_data = list_time_series(
-        project_id=node_pool.project_id,
-        filter_str=" AND ".join(filter_string),
-        start_time=start_time,
-        end_time=end_time,
-        view=monitoring_types.ListTimeSeriesRequest.TimeSeriesView.FULL,
-    )
+  time_series_data = metric_strategy.list_or_query_metric(
+      project_id=node_pool.project_id,
+      cluster_name=node_pool.cluster_name,
+      pod_name=pod_name,
+      start_time=start_time,
+      end_time=end_time,
+  )
 
   monitoring_values = metric_strategy.parse_from_monitoring(time_series_data)
   cmd_values = metric_strategy.parse_from_tpu_info(tpu_info_output)

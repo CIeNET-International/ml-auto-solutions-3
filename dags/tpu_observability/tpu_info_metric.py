@@ -15,7 +15,9 @@
 
 from abc import ABC, abstractmethod
 import enum
+import logging
 import re
+import textwrap
 from typing import Any
 
 from google.cloud import monitoring_v3
@@ -23,6 +25,8 @@ from google.cloud.monitoring_v3 import types as monitoring_types
 from airflow.exceptions import AirflowException
 
 from dags.tpu_observability.utils import tpu_info_util as tpu_info
+from dags.tpu_observability.utils.time_util import TimeUtil
+from dags.tpu_observability.utils.gcp_util import list_time_series, query_time_series
 
 
 class _Percentiles(enum.Enum):
@@ -88,13 +92,18 @@ class BaseMetricStrategy(ABC):
   tpu_info_metric_name: str
   dag_id_suffix: str
   tolerance_percent: float = 3.0
-  uses_mql: bool = False
 
-  def build_mql_query(
-      self, cluster_name: str, pod_name: str, time_range_str: str
-  ) -> str:
-    """Builds the MQL query string for this strategy."""
-    raise NotImplementedError("MQL not supported for this strategy")
+  @abstractmethod
+  def list_or_query_metric(
+      self,
+      project_id: str,
+      cluster_name: str,
+      pod_name: str,
+      start_time: TimeUtil,
+      end_time: TimeUtil,
+  ) -> list[monitoring_types.TimeSeries]:
+    """Fetches metric data from Cloud Monitoring via ListTimeSeries or MQL."""
+    pass
 
   @abstractmethod
   def parse_from_monitoring(
@@ -140,6 +149,28 @@ class _BaseSimplePointStrategy(BaseMetricStrategy):
       The processed value as a float.
     """
     return float(raw_value)
+
+  def list_or_query_metric(
+      self,
+      project_id: str,
+      cluster_name: str,
+      pod_name: str,
+      start_time: TimeUtil,
+      end_time: TimeUtil,
+  ) -> list[monitoring_types.TimeSeries]:
+    filter_string = [
+        f'metric.type = "{self.metric_name}"',
+        f'resource.labels.cluster_name = "{cluster_name}"',
+        f'resource.labels.pod_name = "{pod_name}"',
+    ]
+
+    return list_time_series(
+        project_id=project_id,
+        filter_str=" AND ".join(filter_string),
+        start_time=start_time,
+        end_time=end_time,
+        view=monitoring_types.ListTimeSeriesRequest.TimeSeriesView.FULL,
+    )
 
   def parse_from_monitoring(
       self, time_series_data: list[monitoring_types.TimeSeries]
@@ -211,35 +242,39 @@ class _BaseDistributionStrategy(BaseMetricStrategy):
   percentiles_to_check = list(_Percentiles)
   uses_mql = True
 
-  def build_mql_query(
-      self, cluster_name: str, pod_name: str, time_range_str: str
-  ) -> str:
-    """
-    Constructs the MQL query dynamically based on the metric and grouping label.
-    """
+  def list_or_query_metric(
+      self,
+      project_id: str,
+      cluster_name: str,
+      pod_name: str,
+      start_time: TimeUtil,
+      end_time: TimeUtil,
+  ) -> list[monitoring_types.TimeSeries]:
     aggregators = []
     for p in self.percentiles_to_check:
       aggregators.append(f"{p.name}: percentile(val(), {p.value})")
 
     aggregator_str = ",\n        ".join(aggregators)
-
     target_group_label = f"metric.{self._monitoring_group_by_label}"
 
-    query = f"""
-    fetch k8s_container
-    | metric '{self.metric_name}'
-    | filter
-        (resource.cluster_name == '{cluster_name}'
-        &&
-        resource.pod_name == '{pod_name}')
-    | within {time_range_str}
-    | align delta(1m)
-    | every 1m
-    | group_by [resource.pod_name, {target_group_label}],
-        [{aggregator_str}]
+    query = textwrap.dedent(
+        f"""
+        fetch k8s_container
+        | metric '{self.metric_name}'
+        | filter (
+            resource.cluster_name == '{cluster_name}'
+            && resource.pod_name == '{pod_name}'
+        )
+        | within {start_time.to_mql_string()}, {end_time.to_mql_string()}
+        | align delta(1m)
+        | every 1m
+        | group_by [resource.pod_name, {target_group_label}],
+            [{aggregator_str}]
     """
+    ).strip()
 
-    return query
+    logging.info("Executing MQL Query:\n%s", query)
+    return query_time_series(project_id, query)
 
   def parse_from_monitoring(
       self, time_series_data: list[monitoring_types.TimeSeries]
