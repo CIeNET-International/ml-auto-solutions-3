@@ -772,3 +772,32 @@ def update(node_pool: Info, spec: NodePoolUpdateSpec) -> TimeUtil:
 
   subprocess.run_exec(update_cmd)
   return operation_start_time
+
+
+@task
+def update_node_pool_disk_size(node_pool: Info, target_size: int = 200) -> None:
+  """Updates the disk size of a GKE node pool to a specific value.
+
+  Args:
+    node_pool: An instance of the Info class that encapsulates the
+      configuration and metadata of a GKE node pool.
+    target_size: The desired disk size in GB (defaults to 200).
+
+  Returns:
+    A TimeUtil object representing the UTC timestamp when the update started.
+  """
+  command = (
+      f"gcloud container node-pools update {node_pool.node_pool_name} "
+      f"--project={node_pool.project_id} "
+      f"--cluster={node_pool.cluster_name} "
+      f"--location={node_pool.location} "
+      f"--disk-size={target_size} "
+      f"--quiet"
+  )
+
+  operation_start_time = TimeUtil.from_datetime(
+      datetime.datetime.now(datetime.timezone.utc)
+  )
+
+  print(f"Triggering disk resize to {target_size}GB for TTR validation...")
+  subprocess.run_exec(command)
