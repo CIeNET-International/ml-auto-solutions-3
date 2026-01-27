@@ -30,7 +30,6 @@ import logging
 import subprocess
 
 from airflow.exceptions import AirflowException
-from airflow.exceptions import AirflowFailException
 
 
 class ProcessKilledException(AirflowException):
@@ -74,7 +73,7 @@ def run_exec(
       case 137:
         raise ProcessKilledException()
       case _:
-        raise AirflowFailException(
+        raise AirflowException(
             f"Caught an error while executing a command. \n"
             f"stderr Message: {res.stderr}"
         )
