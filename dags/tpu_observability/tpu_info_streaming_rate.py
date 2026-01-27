@@ -26,6 +26,7 @@ import logging
 
 from airflow import models
 from airflow.decorators import task
+from airflow.models.baseoperator import chain
 from airflow.utils.trigger_rule import TriggerRule
 from airflow.utils.task_group import TaskGroup
 
@@ -465,16 +466,14 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             setups=create_node_pool,
         )
 
-      # Airflow uses >> for task chaining, which is pointless for pylint.
-      # pylint: disable=pointless-statement
-      (
-          cluster_info
-          >> create_node_pool
-          >> apply_time
-          >> pod_names
-          >> wait_for_job_start
-          >> rate_verification_group
-          >> cleanup_workload
-          >> cleanup_node_pool
+      chain(
+          cluster_info,
+          create_node_pool,
+          apply_time,
+          pod_names,
+          wait_for_job_start,
+          rate_verification_group,
+          cleanup_workload,
+          cleanup_node_pool,
       )
       # pylint: enable=pointless-statement
