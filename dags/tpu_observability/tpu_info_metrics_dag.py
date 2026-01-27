@@ -26,6 +26,7 @@ import tempfile
 from airflow import models
 from airflow.decorators import task
 from airflow.exceptions import AirflowException
+from airflow.models.baseoperator import chain
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
@@ -38,10 +39,8 @@ from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.tpu_observability.utils import tpu_info_util as tpu_info
-from dags.tpu_observability.utils.gcp_util import list_time_series, query_time_series
 from dags.tpu_observability.utils.node_pool_util import Info
 from dags.tpu_observability.utils.time_util import TimeUtil
-from google.cloud.monitoring_v3 import types as monitoring_types
 
 
 SCHEDULE = "0 10 * * *" if composer_env.is_prod_env() else None
@@ -394,16 +393,16 @@ with models.DAG(
       # Airflow uses >> for task chaining, which is pointless for pylint.
       # pylint: disable=pointless-statement
       [create_first_node_pool, create_second_node_pool]
-      (cleanup_first_node_pool >> cleanup_second_node_pool)
+      chain(cleanup_first_node_pool, cleanup_second_node_pool)
 
-      (
-          create_node_pool
-          >> apply_time
-          >> active_pods
-          >> wait_for_job_start
-          >> all_verification_groups
-          >> summary
-          >> clean_up_workload
-          >> cleanup_node_pool
+      chain(
+          create_node_pool,
+          apply_time,
+          active_pods,
+          wait_for_job_start,
+          all_verification_groups,
+          summary,
+          clean_up_workload,
+          cleanup_node_pool,
       )
       # pylint: enable=pointless-statement
