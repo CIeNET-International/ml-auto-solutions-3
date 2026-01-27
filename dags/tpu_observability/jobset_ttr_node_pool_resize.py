@@ -27,6 +27,8 @@ from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils.jobset_util import JobSet, Workload
 from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_PATH
 
+_DISK_SIZE_INCREMENT = 100
+
 # Keyword arguments are generated dynamically at runtime (pylint does not
 # know this signature).
 with models.DAG(  # pylint: disable=unexpected-keyword-arg
@@ -121,15 +123,20 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           node_pool=cluster_info,
       )
 
-      node_pool_resize = node_pool.update_node_pool_disk_size.override(
-          task_id="node_pool_resize"
-      )(node_pool=cluster_info, target_size=200)
+      node_pool_resize = node_pool.update.override(task_id="node_pool_resize")(
+          node_pool=cluster_info,
+          spec=node_pool.NodePoolUpdateSpec(
+              target=node_pool.UpdateTarget.DISK_SIZE,
+              delta=_DISK_SIZE_INCREMENT,
+          ),
+      )
 
       wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
           task_id="wait_for_jobset_ttr_to_be_found"
       )(
           node_pool=cluster_info,
           jobset_name=jobset_config.jobset_name,
+          start_time=node_pool_resize,
       )
 
       cleanup_workload = jobset.end_workload.override(
