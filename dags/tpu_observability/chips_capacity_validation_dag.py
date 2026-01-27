@@ -129,6 +129,14 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           jobset_name=jobset_config.jobset_name,
       )
 
+      pod_ts = jobset.get_pod_creation_timestamps.override(
+          task_id="get_pod_creation_timestamps"
+      )(
+          node_pool=cluster_info,
+          namespace=jobset_config.namespace,
+          jobset_name=jobset_config.jobset_name,
+      )
+
       # Keyword arguments are generated dynamically at runtime (pylint does not
       # know this signature).
       with TaskGroup(  # pylint: disable=unexpected-keyword-arg
@@ -142,6 +150,12 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             .expand(
                 instance_id=instance_ids,
             )
+        )
+
+        latency_report = jobset.calculate_latency.expand(
+            instance_id=instance_ids,
+            pod_timestamps=pod_ts,
+            scheduled_ts=scheduled_chips.output,
         )
 
         tpu_active_chips = (
@@ -198,6 +212,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           >> apply_time
           >> pod_names
           >> wait_for_job_start
+          >> pod_ts
           >> instance_ids
           >> verification_group
           >> clean_up_workload
