@@ -17,6 +17,8 @@
 import datetime
 
 from airflow import models
+from airflow.decorators import task
+from airflow.models.baseoperator import chain
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
@@ -25,6 +27,14 @@ from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_P
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils.jobset_util import JobSet, Workload
+from dags.tpu_observability.utils.time_util import TimeUtil
+
+
+@task
+def get_current_time() -> TimeUtil:
+  """Get the current time in UTC."""
+  current_time_utc = datetime.datetime.now(datetime.timezone.utc)
+  return TimeUtil.from_datetime(current_time_utc)
 
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
@@ -146,7 +156,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           setups=apply_time
       )
 
-      jobset_clear_time = jobset.get_current_time.override(
+      jobset_clear_time = get_current_time.override(
           task_id="get_current_time"
       )()
 
@@ -166,18 +176,15 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           setups=create_node_pool,
       )
 
-      # Airflow uses >> for task chaining, which is pointless for pylint.
-      # pylint: disable=pointless-statement
-      (
-          cluster_info
-          >> create_node_pool
-          >> apply_time
-          >> pod_names
-          >> wait_for_job_start
-          >> wait_for_jobset_uptime_data
-          >> clean_up_workload
-          >> jobset_clear_time
-          >> ensure_no_jobset_uptime_data
-          >> cleanup_node_pool
+      chain(
+          cluster_info,
+          create_node_pool,
+          apply_time,
+          pod_names,
+          wait_for_job_start,
+          wait_for_jobset_uptime_data,
+          clean_up_workload,
+          jobset_clear_time,
+          ensure_no_jobset_uptime_data,
+          cleanup_node_pool,
       )
-      # pylint: enable=pointless-statement

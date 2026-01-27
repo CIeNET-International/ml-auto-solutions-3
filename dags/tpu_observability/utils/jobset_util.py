@@ -814,10 +814,3 @@ def ensure_no_jobset_uptime_data(
     logging.info("Stability period passed with no data detected.")
     return True
   return False
-
-
-@task
-def get_current_time() -> TimeUtil:
-  """Get the current time in UTC."""
-  current_time_utc = datetime.datetime.now(datetime.timezone.utc)
-  return TimeUtil.from_datetime(current_time_utc)
