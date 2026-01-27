@@ -33,7 +33,7 @@ _DISK_SIZE_INCREMENT = 100
 # know this signature).
 with models.DAG(  # pylint: disable=unexpected-keyword-arg
     dag_id="jobset_ttr_node_pool_resize",
-    start_date=datetime.datetime(2026, 1, 8),
+    start_date=datetime.datetime(2026, 1, 27),
     schedule="0 18 * * *" if composer_env.is_prod_env() else None,
     catchup=False,
     tags=[
