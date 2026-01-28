@@ -127,8 +127,6 @@ def get_tpu_info_metric_from_pod(
     result = subprocess.run_exec(
         cmd,
         env=env,
-        log_command=True,
-        log_output=True,
     )
 
     return result
@@ -287,14 +285,12 @@ with models.DAG(
       with TaskGroup(group_id="create_node_pool") as create_node_pool:
         create_first_node_pool = node_pool.create.override(
             task_id="node_pool_1",
-            retries=2,
         )(
             node_pool=cluster_info,
         )
 
         create_second_node_pool = node_pool.create.override(
             task_id="node_pool_2",
-            retries=2,
         )(
             node_pool=cluster_info_2,
         )
@@ -305,6 +301,8 @@ with models.DAG(
           ),
           namespace=jobset_config.namespace,
       )
+
+      _ = [create_first_node_pool, create_second_node_pool]
 
       active_pods = jobset.list_pod_names.override(task_id="get_active_pod")(
           node_pool=cluster_info,
@@ -377,7 +375,6 @@ with models.DAG(
         cleanup_first_node_pool = node_pool.delete.override(
             task_id="cleanup_node_pool_1",
             trigger_rule=TriggerRule.ALL_DONE,
-            retries=2,
         )(node_pool=cluster_info).as_teardown(
             setups=create_node_pool,
         )
@@ -385,12 +382,10 @@ with models.DAG(
         cleanup_second_node_pool = node_pool.delete.override(
             task_id="cleanup_node_pool_2",
             trigger_rule=TriggerRule.ALL_DONE,
-            retries=2,
         )(node_pool=cluster_info_2).as_teardown(
             setups=create_node_pool,
         )
 
-      _ = [create_first_node_pool, create_second_node_pool]
       chain(cleanup_first_node_pool, cleanup_second_node_pool)
 
       chain(
