@@ -21,6 +21,7 @@ import json
 import logging
 import random
 import re
+from enum import Enum
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
@@ -62,6 +63,9 @@ class Status(enum.Enum):
       return Status.UNKNOWN
     return status
 
+class NodeOperation(Enum):
+  DELETE = "delete"
+  DRAIN = "drain"
 
 @dataclasses.dataclass
 class Info:
@@ -336,7 +340,7 @@ def list_nodes(node_pool: Info) -> list[str]:
 @task
 def delete_one_random_node(
     node_pool: Info,
-    action: str = "delete",
+    action: NodeOperation = NodeOperation.DELETE,
 ) -> str:
   """Performs a random node operation (delete or drain) on the specified
   GKE node pool.
@@ -374,7 +378,7 @@ def delete_one_random_node(
   )
   subprocess.run_exec(auth_command)
 
-  if action == "delete":
+  if action == NodeOperation.DELETE:
     logging.info(
         "Randomly selected node for deletion: %s",
         target_node,
@@ -386,7 +390,7 @@ def delete_one_random_node(
         f"--zone={node_pool.node_locations} "
         "--quiet"
     )
-  elif action == "drain":
+  elif action == NodeOperation.DRAIN:
     logging.info(
         "Selected node '%s' from pool '%s' to drain.",
         target_node,
