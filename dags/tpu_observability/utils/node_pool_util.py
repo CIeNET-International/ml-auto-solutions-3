@@ -562,7 +562,6 @@ def uncordon_node(node_pool: Info, node_name: str) -> None:
 
   logging.info("Node '%s' has been successfully uncordoned.", node_name)
 
-
 @task.sensor(poke_interval=30, timeout=1200, mode="reschedule")
 def wait_for_availability(
     node_pool: Info,
