@@ -160,5 +160,5 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           uncordon_node,
           wait_for_metric_upload,
           cleanup_workload,
-          cleanup_node_pool
+          cleanup_node_pool,
       )
