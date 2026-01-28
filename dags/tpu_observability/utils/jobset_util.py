@@ -27,12 +27,13 @@ from typing import Final
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
+from google.cloud.monitoring_v3 import types
+import kubernetes
 
 from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.tpu_observability.utils.gcp_util import list_time_series
+from dags.tpu_observability.utils.node_pool_util import Info as node_pool_info
 from dags.tpu_observability.utils.time_util import TimeUtil
-from google.cloud.monitoring_v3 import types
-import kubernetes
 from xlml.utils import gke
 
 
