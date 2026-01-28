@@ -356,7 +356,7 @@ def delete_one_random_node(
   Raises:
     AirflowFailException: If no nodes are found or an unsupported action is
     provided.
-    """
+  """
 
   nodes_list = list_nodes(node_pool)
   if not nodes_list:
@@ -388,9 +388,9 @@ def delete_one_random_node(
     )
   elif action == "drain":
     logging.info(
-      "Selected node '%s' from pool '%s' to drain.",
-      target_node,
-      node_pool.node_pool_name,
+        "Selected node '%s' from pool '%s' to drain.",
+        target_node,
+        node_pool.node_pool_name,
     )
 
     command = (
@@ -520,6 +520,7 @@ def rollback(node_pool: Info) -> None:
 
   subprocess.run_exec(command)
 
+
 @task
 def uncordon_node(node_pool: Info, node_name: str) -> None:
   """Restores a node to a schedulable state within a GKE node pool.
@@ -550,6 +551,7 @@ def uncordon_node(node_pool: Info, node_name: str) -> None:
   subprocess.run_exec(uncordon_command)
 
   logging.info("Node '%s' has been successfully uncordoned.", node_name)
+
 
 @task.sensor(poke_interval=30, timeout=1200, mode="reschedule")
 def wait_for_availability(
