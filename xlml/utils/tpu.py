@@ -23,11 +23,12 @@ import uuid
 
 from absl import logging
 import airflow
-from airflow.decorators import task, task_group
+from airflow.decorators import task_group
+from airflow.decorators import task
 from airflow.utils.task_group import TaskGroup
 from airflow.operators.python import get_current_context
 from airflow.models import Variable
-from airflow.exceptions import AirflowFailException
+from airflow.exceptions import AirflowException, AirflowFailException
 from xlml.apis import gcp_config, test_config
 from xlml.utils import ssh, startup_script, composer
 import fabric
@@ -37,7 +38,8 @@ import google.cloud.tpu_v2alpha1 as tpu_api
 import google.longrunning.operations_pb2 as operations
 import paramiko
 from google.protobuf.duration_pb2 import Duration
-
+from googleapiclient import discovery
+from typing import Any
 
 TTL = 'ttl'
 
@@ -51,7 +53,6 @@ def generate_tpu_name(
   if set_env_var:
     Variable.set(base_tpu_name, tpu_name)
   return tpu_name
-
 
 def create_queued_resource(
     tpu_name: airflow.XComArg,
@@ -97,7 +98,6 @@ def create_queued_resource(
             'runtime_version': task_test_config.accelerator.runtime_version,
             'version': task_test_config.accelerator.version.value,
         },
-        'accelerator_type': task_test_config.accelerator.name,
     })
 
     creds, _ = google.auth.default()
@@ -130,6 +130,7 @@ def create_queued_resource(
     metadata = {
         'ssh-keys': f'ml-auto-solutions:{ssh_keys.public}',
         'startup-script': startup_script_command,
+        # 'enable-oslogin': 'TRUE',
     }
 
     create_tpu_timeout_in_sec = int(timeout.total_seconds())
@@ -365,6 +366,9 @@ def ssh_tpu(
      only.
    env: environment variables to be pass to the ssh runner session using dict.
   """
+  # 1. get private key from  Airflow Variable
+  private_key_content = Variable.get("jax_ssh_private_key")
+
   creds, _ = google.auth.default()
   client = tpu_api.TpuClient(credentials=creds)
 
@@ -374,6 +378,18 @@ def ssh_tpu(
       client.get_node(name=os.path.join(node.parent, 'nodes', node.node_id))
       for node in queued_resource.tpu.node_spec
   ]
+  node_metadata = nodes[0].metadata
+  is_oslogin_enabled = node_metadata.get('enable-oslogin', '').upper() == 'TRUE'
+
+
+  if private_key_content and is_oslogin_enabled:
+    logging.info("Auto-detected OS Login enabled on node {nodes[0].name}.")
+    target_user = Variable.get("jax_oslogin_fallback_user", default_var="sa_112632397993248756658")
+    final_pkey = paramiko.RSAKey.from_private_key(io.StringIO(private_key_content))
+  else:
+    logging.info("Using legacy ephemeral ssh_keys mode.")
+    target_user = 'ml-auto-solutions'
+    final_pkey = paramiko.RSAKey.from_private_key(io.StringIO(ssh_keys.private))
 
   if all_workers:
     endpoints = itertools.chain.from_iterable(
@@ -392,40 +408,53 @@ def ssh_tpu(
 
   logging.info(f'Connecting to IP addresses of workers: {ip_addresses}')
 
-  pkey = paramiko.RSAKey.from_private_key(io.StringIO(ssh_keys.private))
+
+  # gcloud_proxy_command = "gcloud compute ssh --zone us-east5 %h --ssh-flag='-W %h:%p' --ssh-flag='-o StrictHostKeyChecking=no' --ssh-flag='-o UserKnownHostsFile=/dev/null'"
+
+  # ssh_group = fabric.ThreadingGroup(
+  #       *hostnames,
+  #       # This replaces all the old connect_kwargs and auth_strategy
+  #       gateway=gcloud_proxy_command,
+  # )
+
+  # ssh_group = fabric.ThreadingGroup(
+  #     *ip_addresses,
+  #     connect_kwargs={
+  #         'auth_strategy': paramiko.auth_strategy.InMemoryPrivateKey(
+  #             'ml-auto-solutions', pkey
+  #         ),
+  #         # See https://stackoverflow.com/a/59453832
+  #         'banner_timeout': 200,
+  #     },
+  #     # Proxy required on Cloudtops to connect to external IPs
+  #     gateway='corp-ssh-helper %h %p' if use_external_ips else None,
+  # )
+
   ssh_group = fabric.ThreadingGroup(
-      *ip_addresses,
-      connect_kwargs={
-          'auth_strategy': paramiko.auth_strategy.InMemoryPrivateKey(
-              'ml-auto-solutions', pkey
-          ),
-          # See https://stackoverflow.com/a/59453832
-          'banner_timeout': 200,
-      },
-      # Proxy required on Cloudtops to connect to external IPs
-      gateway='corp-ssh-helper %h %p' if use_external_ips else None,
+        *ip_addresses,
+        user=target_user,
+        connect_kwargs={
+            "pkey": final_pkey,  # Pass the private key object directly
+            "banner_timeout": 200,
+            # 'disabled_algorithms': dict(pubkeys=["rsa-sha2-512", "rsa-sha2-256"]), # Optional: If needed for server compatibility
+        },
+        gateway='corp-ssh-helper %h %p' if use_external_ips else None,
   )
 
-  def ssh_group_run(cmds: Iterable[str]):
-    try:
-      ssh_group.run(cmds, env=env)
-    except fabric.group.GroupException as e:
-      for connection, result in e.result.items():
-        if isinstance(result, paramiko.ssh_exception.AuthenticationException):
-          logging.error(
-              f'SSH Authentication Failed on {connection.host}: {result}'
-          )
-          raise AirflowFailException(
-              'SSH Authentication failed on one or more hosts. Check logs for details.'
-          ) from e
-      raise
-    except paramiko.ssh_exception.AuthenticationException as e:
-      error_msg = f'SSH Authentication Failed: {e}'
-      logging.error(error_msg)
-      raise AirflowFailException(error_msg) from e
+  def ssh_group_run(cmds_to_run: Iterable[str]):
+      try:
+          ssh_group.run(cmds_to_run, env=env)
+      except fabric.group.GroupException as e:
+          for connection, result in e.result.items():
+              if isinstance(result, paramiko.ssh_exception.AuthenticationException):
+                  logging.error(f'SSH authentication failed on {connection.host}. Please check the long-lived key.')
+          raise AirflowFailException(f'Fabric Group execution failed: {e}') from e
+      except Exception as e:
+          logging.error(f"connection error: {e}")
+          raise AirflowFailException(f'SSH connection or execution failed: {e}') from e
+      finally:
+          ssh_group.close()
 
-    finally:
-      ssh_group.close()
 
   context = get_current_context()
   if context['task_instance'].try_number > 1:
@@ -438,8 +467,9 @@ def ssh_tpu(
         f'bash {tmp_file} {accelerator_type}',
     )
     ssh_group_run(';'.join(kill_process_cmds))
+
   # run provided commands
-  ssh_group_run(cmds)
+  ssh_group_run(';'.join(cmds) if isinstance(cmds, list) else cmds)
 
 
 @task
