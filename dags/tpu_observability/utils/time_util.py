@@ -53,23 +53,15 @@ class TimeUtil:
     return dt.strftime("d'%Y/%m/%d-%H:%M:%S'")
 
   def __add__(self, other: datetime.timedelta) -> "TimeUtil":
-    """Allows usage like: TimeUtil(...) + timedelta(minutes=10)"""
+    """Allows usage like: TimeUtil(...) + timedelta(minutes=10)."""
     if isinstance(other, datetime.timedelta):
       return TimeUtil(self.time + int(other.total_seconds()))
     return NotImplemented
 
-  def __sub__(self, other) -> "TimeUtil | datetime.timedelta":
-    """
-    Allows usage like:
-    1. TimeUtil(...) - timedelta(...) -> returns new TimeUtil
-    2. TimeUtil(...) - TimeUtil(...) -> returns timedelta (time difference)
-    """
+  def __sub__(self, other) -> "TimeUtil":
+    """Allows usage like: TimeUtil(...) - timedelta(minutes=10)."""
     if isinstance(other, datetime.timedelta):
       return TimeUtil(self.time - int(other.total_seconds()))
-
-    elif isinstance(other, TimeUtil):
-      return datetime.timedelta(seconds=self.time - other.time)
-
     return NotImplemented
 
 

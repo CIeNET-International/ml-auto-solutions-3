@@ -36,52 +36,6 @@ class _Percentiles(enum.Enum):
   P999 = 99.9
 
 
-def _calculate_percentiles_from_histogram(
-    percentiles: list[float],
-    total_count: int,
-    bounds: list[float],
-    bucket_counts: list[int],
-) -> dict[float, float]:
-  """
-  Estimates multiple percentile values from histogram data in a single pass.
-  """
-  results = {}
-  if total_count == 0:
-    return results
-
-  sorted_percentiles = sorted(percentiles)
-  target_ranks = {p: total_count * (p / 100.0) for p in sorted_percentiles}
-  cumulative_count = 0
-  percentiles_to_find = list(sorted_percentiles)
-
-  for i, count_in_bucket in enumerate(bucket_counts):
-    if not percentiles_to_find:
-      break
-
-    prev_cumulative_count = cumulative_count
-    cumulative_count += count_in_bucket
-
-    while (
-        percentiles_to_find
-        and target_ranks[percentiles_to_find[0]] <= cumulative_count
-    ):
-      p = percentiles_to_find.pop(0)
-      target_rank = target_ranks[p]
-      lower_bound = bounds[i - 1] if i > 0 else 0.0
-      upper_bound = bounds[i]
-
-      if count_in_bucket == 0:
-        results[p] = lower_bound
-        continue
-
-      rank_in_bucket = target_rank - prev_cumulative_count
-      fraction = rank_in_bucket / count_in_bucket
-      estimated_value = lower_bound + fraction * (upper_bound - lower_bound)
-      results[p] = estimated_value
-
-  return results
-
-
 class BaseMetricStrategy(ABC):
   """Abstract Base Class (Interface) for a metric verification strategy.
 
@@ -270,7 +224,7 @@ class _BaseDistributionStrategy(BaseMetricStrategy):
         | every 1m
         | group_by [resource.pod_name, {target_group_label}],
             [{aggregator_str}]
-    """
+        """
     ).strip()
 
     logging.info("Executing MQL Query:\n%s", query)
