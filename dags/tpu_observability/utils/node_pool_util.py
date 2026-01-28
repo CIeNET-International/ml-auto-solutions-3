@@ -63,9 +63,11 @@ class Status(enum.Enum):
       return Status.UNKNOWN
     return status
 
+
 class NodeOperation(Enum):
   DELETE = "delete"
   DRAIN = "drain"
+
 
 @dataclasses.dataclass
 class Info:
