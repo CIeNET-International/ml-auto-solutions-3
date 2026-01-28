@@ -285,13 +285,12 @@ class Command:
     ])
 
   @staticmethod
-  def k8s_delete_pod_command(
-      kubeconfig: str, pod_name: str, namespace: str
-  ) -> str:
-    return " ".join([
-        f"kubectl --kubeconfig={kubeconfig} delete pod {pod_name}",
-        f"-n {namespace} --wait=false",
-    ])
+  def suspend_jobset(jobset_name: str, namespace: str) -> str:
+    patch_content = '{"spec": {"suspend": true}}'
+    return (
+        f"kubectl patch jobset {jobset_name} -n {namespace} "
+        f"--type=merge -p '{patch_content}'"
+    )
 
 
 def get_replica_num(
@@ -441,6 +440,31 @@ def end_workload(node_pool: node_pool_info, jobset_name: str, namespace: str):
 
 
 @task
+def suspended_jobset(node_pool: node_pool_info, jobset_name: str):
+  """
+  Suspend a jobset from the GKE cluster.
+
+  This task executes a bash script to:
+  1. Authenticate `gcloud` with the specified GKE cluster.
+  2. Suspend a JobSet.
+
+  Args:
+    node_pool: Configuration object with cluster details.
+    jobset_name: The name of the JobSet to delete.
+  """
+  with tempfile.NamedTemporaryFile() as temp_config_file:
+    env = os.environ.copy()
+    env["KUBECONFIG"] = temp_config_file.name
+
+    cmd = " && ".join([
+        Command.get_credentials_command(node_pool),
+        Command.suspend_jobset(jobset_name, "default"),
+    ])
+
+    subprocess.run_exec(cmd, env=env)
+
+
+@task
 def list_pod_names(node_pool: node_pool_info, namespace: str) -> list[str]:
   """
   Retrieves a list of active pod names from a specific GKE cluster namespace.
@@ -498,7 +522,7 @@ def delete_one_random_pod(
 
   Raises:
     AirflowFailException: If no running pods are found in the specified
-      namespace.
+    namespace.
   """
   running_pods = get_running_pods(node_pool=node_pool, namespace=namespace)
   if not running_pods:
@@ -629,7 +653,32 @@ def wait_for_jobset_ttr_to_be_found(
   return len(time_series) > 0
 
 
-@task.sensor(poke_interval=30, timeout=600, mode="poke")
+@task.sensor(poke_interval=30, timeout=900, mode="reschedule")
+def validate_jobset_replica_number(
+    node_pool: node_pool_info,
+    jobset_config: JobSet,
+    replica_type: str,
+    correct_replica_num: int,
+):
+  """
+  A sensor which checks if the correct number jobset replicas in a status type.
+
+  Args:
+    node_pool: Configuration object with cluster details.
+    jobset_config: Configuration of JobSet which is being run.
+    replica_type(str): The name of the type of status being checked for.
+    correct_replica_num(int): The expected number of replicas to be found.
+  """
+  logging.info("Checking for number of replicas of type: %s", replica_type)
+  ready_replicas = get_replica_num(
+      replica_type=replica_type,
+      job_name=jobset_config.replicated_job_name,
+      node_pool=node_pool,
+  )
+  return ready_replicas == correct_replica_num
+
+
+@task.sensor(poke_interval=30, timeout=600, mode="reschedule")
 def wait_for_jobset_status_occurrence(
     replica_type: str, job_name: str, node_pool: node_pool_info
 ):
@@ -651,7 +700,7 @@ def wait_for_jobset_status_occurrence(
   return ready_replicas > 0
 
 
-@task.sensor(poke_interval=30, timeout=600, mode="poke")
+@task.sensor(poke_interval=30, timeout=600, mode="reschedule")
 def wait_for_all_pods_running(num_pods: int, node_pool: node_pool_info):
   num_running = len(get_running_pods(node_pool=node_pool, namespace="default"))
   return num_running == num_pods
