@@ -23,11 +23,11 @@ import uuid
 
 from absl import logging
 import airflow
-from airflow.decorators import task, task_group
+from airflow.decorators import task_group
+from airflow.decorators import task
 from airflow.utils.task_group import TaskGroup
 from airflow.operators.python import get_current_context
 from airflow.models import Variable
-from airflow.exceptions import AirflowFailException
 from xlml.apis import gcp_config, test_config
 from xlml.utils import ssh, startup_script, composer
 import fabric
@@ -37,6 +37,7 @@ import google.cloud.tpu_v2alpha1 as tpu_api
 import google.longrunning.operations_pb2 as operations
 import paramiko
 from google.protobuf.duration_pb2 import Duration
+from googleapiclient import discovery
 
 
 TTL = 'ttl'
@@ -52,6 +53,56 @@ def generate_tpu_name(
     Variable.set(base_tpu_name, tpu_name)
   return tpu_name
 
+
+def add_ssh_key_to_oslogin(ssh_public_key: str, project_id: str):
+    """Adds an SSH public key to the current authenticated user's OS Login profile."""
+    try:
+        creds, _ = google.auth.default()
+        logging.info("Adding SSH key to OS Login profile for current user.")
+
+        oslogin_service = discovery.build('oslogin', 'v1', credentials=creds)
+        # Get the email of the service account
+        # sa_email = creds.service_account_email
+        user_parent = f"users/ml-auto-solutions-dev@cloud-ml-auto-solutions.iam.gserviceaccount.com"
+
+        body = {
+            'key': ssh_public_key,
+            # Optionally, you can set an expiration time for the key in microseconds
+            # 'expirationTimeUsec': str(int((time.time() + 3600) * 1000000))  # Example: 1 hour
+        }
+
+        # Use 'users/me' to refer to the authenticated principal
+        # request = oslogin_service.users().importSshPublicKey(parent='users/me', body=body, projectId=project_id)
+        request = oslogin_service.users().importSshPublicKey(parent=user_parent, body=body, projectId=project_id)
+        response = request.execute()
+        logging.info(f"OS Login ImportSshPublicKey response: {response}")
+    except Exception as e:
+        logging.error(f"Failed to add SSH key to OS Login profile: {e}")
+        # Depending on requirements, you might want to raise the exception
+
+def get_oslogin_username_from_api() -> str | None:
+    """Retrieves the POSIX username from the OS Login profile for the current user."""
+    try:
+        creds, _ = google.auth.default()
+        oslogin_service = discovery.build('oslogin', 'v1', credentials=creds)
+
+        # Use 'users/me' to get the profile of the authenticated principal
+        # sa_email = creds.application_default_email
+        user_name = f"users/ml-auto-solutions-dev@cloud-ml-auto-solutions.iam.gserviceaccount.com"
+        logging.info(f"Getting OS Login profile for user: {user_name}")
+        profile = oslogin_service.users().getLoginProfile(name=user_name).execute()
+        # profile = oslogin_service.users().getLoginProfile(name='users/me').execute()
+
+        if profile and profile.get('posixAccounts'):
+            # Typically, the first POSIX account is used
+            username = profile['posixAccounts'][0]['username']
+            return username
+        else:
+            logging.error("No POSIX account found in OS Login profile.")
+            return None
+    except Exception as e:
+        logging.error(f"Failed to get OS Login username from API: {e}")
+        return None
 
 def create_queued_resource(
     tpu_name: airflow.XComArg,
@@ -86,7 +137,7 @@ def create_queued_resource(
     # Log required info for XLML PLX Dashboard
     composer.log_metadata_for_xlml_dashboard({
         'instance_name': tpu_name,
-        'cluster_project': gcp.project_name,
+        'project_name': gcp.project_name,
         'zone': gcp.zone,
         'dataset_name': gcp.dataset_name.value,
         'composer_project': gcp.composer_project,
@@ -97,13 +148,15 @@ def create_queued_resource(
             'runtime_version': task_test_config.accelerator.runtime_version,
             'version': task_test_config.accelerator.version.value,
         },
-        'accelerator_type': task_test_config.accelerator.name,
     })
 
     creds, _ = google.auth.default()
     client = tpu_api.TpuClient(credentials=creds)
 
     parent = f'projects/{gcp.project_name}/locations/{gcp.zone}'
+
+    # Add the public key to the OS Login profile for the current user/SA
+    add_ssh_key_to_oslogin(ssh_keys.public, gcp.project_name)
 
     # Determine node_id and multiNodeParams based on num_slices
     if task_test_config.num_slices == 1:
@@ -370,6 +423,10 @@ def ssh_tpu(
 
   queued_resource = client.get_queued_resource(name=qualified_name)
 
+  oslogin_username = get_oslogin_username_from_api()
+  if not oslogin_username:
+        raise Exception("Could not determine OS Login username. SSH cannot proceed.")
+
   nodes = [
       client.get_node(name=os.path.join(node.parent, 'nodes', node.node_id))
       for node in queued_resource.tpu.node_spec
@@ -393,39 +450,40 @@ def ssh_tpu(
   logging.info(f'Connecting to IP addresses of workers: {ip_addresses}')
 
   pkey = paramiko.RSAKey.from_private_key(io.StringIO(ssh_keys.private))
+
+  # gcloud_proxy_command = "gcloud compute ssh --zone us-east5 %h --ssh-flag='-W %h:%p' --ssh-flag='-o StrictHostKeyChecking=no' --ssh-flag='-o UserKnownHostsFile=/dev/null'"
+
+  # ssh_group = fabric.ThreadingGroup(
+  #       *hostnames,
+  #       # This replaces all the old connect_kwargs and auth_strategy
+  #       gateway=gcloud_proxy_command,
+  # )
+
+  # ssh_group = fabric.ThreadingGroup(
+  #     *ip_addresses,
+  #     connect_kwargs={
+  #         'auth_strategy': paramiko.auth_strategy.InMemoryPrivateKey(
+  #             'ml-auto-solutions', pkey
+  #         ),
+  #         # See https://stackoverflow.com/a/59453832
+  #         'banner_timeout': 200,
+  #     },
+  #     # Proxy required on Cloudtops to connect to external IPs
+  #     gateway='corp-ssh-helper %h %p' if use_external_ips else None,
+  # )
+
   ssh_group = fabric.ThreadingGroup(
-      *ip_addresses,
-      connect_kwargs={
-          'auth_strategy': paramiko.auth_strategy.InMemoryPrivateKey(
-              'ml-auto-solutions', pkey
-          ),
-          # See https://stackoverflow.com/a/59453832
-          'banner_timeout': 200,
-      },
-      # Proxy required on Cloudtops to connect to external IPs
-      gateway='corp-ssh-helper %h %p' if use_external_ips else None,
+        *ip_addresses,
+        user=oslogin_username,
+        connect_kwargs={
+            "pkey": pkey,  # Pass the private key object directly
+            "banner_timeout": 200,
+            # 'disabled_algorithms': dict(pubkeys=["rsa-sha2-512", "rsa-sha2-256"]), # Optional: If needed for server compatibility
+        },
+        gateway='corp-ssh-helper %h %p' if use_external_ips else None,
   )
 
-  def ssh_group_run(cmds: Iterable[str]):
-    try:
-      ssh_group.run(cmds, env=env)
-    except fabric.group.GroupException as e:
-      for connection, result in e.result.items():
-        if isinstance(result, paramiko.ssh_exception.AuthenticationException):
-          logging.error(
-              f'SSH Authentication Failed on {connection.host}: {result}'
-          )
-          raise AirflowFailException(
-              'SSH Authentication failed on one or more hosts. Check logs for details.'
-          ) from e
-      raise
-    except paramiko.ssh_exception.AuthenticationException as e:
-      error_msg = f'SSH Authentication Failed: {e}'
-      logging.error(error_msg)
-      raise AirflowFailException(error_msg) from e
 
-    finally:
-      ssh_group.close()
 
   context = get_current_context()
   if context['task_instance'].try_number > 1:
@@ -437,9 +495,10 @@ def ssh_tpu(
         f'set -xue; sudo echo "{script}" > {tmp_file}',
         f'bash {tmp_file} {accelerator_type}',
     )
-    ssh_group_run(';'.join(kill_process_cmds))
+    ssh_group.run(';'.join(kill_process_cmds))
+
   # run provided commands
-  ssh_group_run(cmds)
+  ssh_group.run(cmds, env=env)
 
 
 @task
