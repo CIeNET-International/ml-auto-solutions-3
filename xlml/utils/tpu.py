@@ -54,35 +54,11 @@ def generate_tpu_name(
     Variable.set(base_tpu_name, tpu_name)
   return tpu_name
 
-def get_oslogin_username_from_api() -> str | None:
-    """Retrieves the POSIX username from the OS Login profile for the current user."""
-    try:
-        creds, _ = google.auth.default()
-        oslogin_service = discovery.build('oslogin', 'v1', credentials=creds)
-
-        # Use 'users/me' to get the profile of the authenticated principal
-        # sa_email = creds.application_default_email
-        user_name = f"users/ml-auto-solutions@cloud-ml-auto-solutions.iam.gserviceaccount.com"
-        logging.info(f"Getting OS Login profile for user: {user_name}")
-        profile = oslogin_service.users().getLoginProfile(name=user_name).execute()
-        # profile = oslogin_service.users().getLoginProfile(name='users/me').execute()
-
-        if profile and profile.get('posixAccounts'):
-            # Typically, the first POSIX account is used
-            username = profile['posixAccounts'][0]['username']
-            return username
-        else:
-            logging.error("No POSIX account found in OS Login profile.")
-            return None
-    except Exception as e:
-        logging.error(f"Failed to get OS Login username from API: {e}")
-        return None
-
 def create_queued_resource(
     tpu_name: airflow.XComArg,
     gcp: gcp_config.GCPConfig,
-    ssh_keys: Any = None,
-    timeout: datetime.timedelta = None,
+    ssh_keys: airflow.XComArg,
+    timeout: datetime.timedelta,
     task_test_config: Union[
         test_config.TpuVmTest, test_config.JSonnetTpuVmTest
     ] = None,
@@ -106,7 +82,7 @@ def create_queued_resource(
 
   @task
   def create_queued_resource_request(
-      tpu_name: str
+      tpu_name: str, ssh_keys: ssh.SshKeys
   ) -> str:
     # Log required info for XLML PLX Dashboard
     composer.log_metadata_for_xlml_dashboard({
@@ -152,6 +128,7 @@ def create_queued_resource(
       )
 
     metadata = {
+        'ssh-keys': f'ml-auto-solutions:{ssh_keys.public}',
         'startup-script': startup_script_command,
         # 'enable-oslogin': 'TRUE',
     }
@@ -240,7 +217,7 @@ def create_queued_resource(
       raise RuntimeError(f'Bad queued resource state {state.name}')
 
   def check_if_startup_script_end(
-      queued_resource: airflow.XComArg
+      queued_resource: airflow.XComArg, ssh_keys: airflow.XComArg
   ):
     check_script = startup_script.monitor_startup_script()
 
@@ -251,16 +228,17 @@ def create_queued_resource(
     )(
         queued_resource,
         check_script,
+        ssh_keys,
         False,
     )
 
   with TaskGroup(group_id='create_queued_resource') as tg:
-    qualified_name = create_queued_resource_request(tpu_name)
+    qualified_name = create_queued_resource_request(tpu_name, ssh_keys)
 
     if use_startup_script:
       wait_for_ready_queued_resource(
           qualified_name
-      ) >> check_if_startup_script_end(qualified_name)
+      ) >> check_if_startup_script_end(qualified_name, ssh_keys)
     else:
       wait_for_ready_queued_resource(qualified_name)
 
@@ -374,8 +352,8 @@ def kill_process_by_pid() -> str:
 def ssh_tpu(
     qualified_name: str,
     cmds: Iterable[str],
-    ssh_keys: Any = None,
-    all_workers: bool = None,
+    ssh_keys: ssh.SshKeys,
+    all_workers: bool,
     env: Dict[str, str] = None,
 ) -> None:
   """SSH TPU and run commands in multi process.
@@ -391,15 +369,6 @@ def ssh_tpu(
   # 1. get private key from  Airflow Variable
   private_key_content = Variable.get("jax_ssh_private_key")
 
-  # 2. set OS Login username
-  oslogin_username = get_oslogin_username_from_api()
-  if not oslogin_username:
-      oslogin_username = Variable.get(
-        "jax_oslogin_fallback_user",
-        default_var="sa_112632397993248756658"
-      )
-      logging.warning(f"Using Production fallback username: {oslogin_username}")
-
   creds, _ = google.auth.default()
   client = tpu_api.TpuClient(credentials=creds)
 
@@ -409,6 +378,18 @@ def ssh_tpu(
       client.get_node(name=os.path.join(node.parent, 'nodes', node.node_id))
       for node in queued_resource.tpu.node_spec
   ]
+  node_metadata = nodes[0].metadata
+  is_oslogin_enabled = node_metadata.get('enable-oslogin', '').upper() == 'TRUE'
+
+
+  if private_key_content and is_oslogin_enabled:
+    logging.info("Auto-detected OS Login enabled on node {nodes[0].name}.")
+    target_user = Variable.get("jax_oslogin_fallback_user", default_var="sa_112632397993248756658")
+    final_pkey = paramiko.RSAKey.from_private_key(io.StringIO(private_key_content))
+  else:
+    logging.info("Using legacy ephemeral ssh_keys mode.")
+    target_user = 'ml-auto-solutions'
+    final_pkey = paramiko.RSAKey.from_private_key(io.StringIO(ssh_keys.private))
 
   if all_workers:
     endpoints = itertools.chain.from_iterable(
@@ -427,7 +408,6 @@ def ssh_tpu(
 
   logging.info(f'Connecting to IP addresses of workers: {ip_addresses}')
 
-  pkey = paramiko.RSAKey.from_private_key(io.StringIO(private_key_content))
 
   # gcloud_proxy_command = "gcloud compute ssh --zone us-east5 %h --ssh-flag='-W %h:%p' --ssh-flag='-o StrictHostKeyChecking=no' --ssh-flag='-o UserKnownHostsFile=/dev/null'"
 
@@ -452,9 +432,9 @@ def ssh_tpu(
 
   ssh_group = fabric.ThreadingGroup(
         *ip_addresses,
-        user=oslogin_username,
+        user=target_user,
         connect_kwargs={
-            "pkey": pkey,  # Pass the private key object directly
+            "pkey": final_pkey,  # Pass the private key object directly
             "banner_timeout": 200,
             # 'disabled_algorithms': dict(pubkeys=["rsa-sha2-512", "rsa-sha2-256"]), # Optional: If needed for server compatibility
         },
