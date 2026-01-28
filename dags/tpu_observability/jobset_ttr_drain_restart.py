@@ -122,7 +122,10 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           node_pool=cluster_info,
       )
 
-      drained_node = node_pool.drain_one_random_node(node_pool=cluster_info)
+      drained_node = node_pool.delete_one_random_node(
+          node_pool=cluster_info,
+          action="drain",
+      )
 
       uncordon_node = node_pool.uncordon_node(
           node_pool=cluster_info, node_name=drained_node

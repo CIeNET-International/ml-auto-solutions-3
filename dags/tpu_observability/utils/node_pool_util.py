@@ -334,41 +334,78 @@ def list_nodes(node_pool: Info) -> list[str]:
 
 
 @task
-def delete_one_random_node(node_pool: Info) -> None:
-  """Delete one random node from the specified GKE node pool.
+def delete_one_random_node(
+    node_pool: Info,
+    action: str = "delete",
+) -> str:
+  """Performs a random node operation (delete or drain) on the specified
+  GKE node pool.
 
-  This function first lists all nodes under the given node pool,
-  then randomly selects one node and deletes it.
+  This task selects a random node from the pool and executes the specified
+  action. 'drain' is typically used for maintenance simulation, while
+  'delete' removes the instance entirely.
 
   Args:
-      node_pool: An instance of the Info class that encapsulates
-        the configuration and metadata of a GKE node pool.
+    node_pool: An instance of the Info class containing GKE node pool metadata.
+    action: The operation to perform. Supported values are 'delete' and 'drain'.
+      Defaults to 'delete'.
+
+  Returns:
+      str: The name of the node that was selected and operated upon.
 
   Raises:
-      ValueError: If no nodes are found in the specified node pool.
-  """
+    AirflowFailException: If no nodes are found or an unsupported action is
+    provided.
+    """
 
   nodes_list = list_nodes(node_pool)
   if not nodes_list:
     raise AirflowFailException(
         f"No nodes found in node pool '{node_pool.node_pool_name}'. "
-        "Cannot proceed with node deletion."
+        "Cannot proceed with node deletion or drain."
     )
 
-  node_to_delete = random.choice(nodes_list)
-  logging.info(
-      "Randomly selected node for deletion: %s",
-      node_to_delete,
-  )
+  target_node = random.choice(nodes_list)
 
-  command = (
-      f"gcloud compute instances delete {node_to_delete} "
+  auth_command = (
+      f"gcloud container clusters get-credentials {node_pool.cluster_name} "
       f"--project={node_pool.project_id} "
-      f"--zone={node_pool.node_locations} "
-      "--quiet"
+      f"--location={node_pool.location}"
   )
+  subprocess.run_exec(auth_command)
+
+  if action == "delete":
+    logging.info(
+        "Randomly selected node for deletion: %s",
+        target_node,
+    )
+
+    command = (
+        f"gcloud compute instances delete {target_node} "
+        f"--project={node_pool.project_id} "
+        f"--zone={node_pool.node_locations} "
+        "--quiet"
+    )
+  elif action == "drain":
+    logging.info(
+      "Selected node '%s' from pool '%s' to drain.",
+      target_node,
+      node_pool.node_pool_name,
+    )
+
+    command = (
+        f"kubectl drain {target_node} "
+        "--ignore-daemonsets --delete-emptydir-data"
+    )
+  else:
+    raise AirflowFailException(
+        f"Unsupported action '{action}. "
+        "Supported actions are 'delete' and 'drain'."
+    )
 
   subprocess.run_exec(command)
+
+  return target_node
 
 
 def _query_status_metric(node_pool: Info) -> Status:
@@ -482,54 +519,6 @@ def rollback(node_pool: Info) -> None:
   )
 
   subprocess.run_exec(command)
-
-
-@task
-def drain_one_random_node(node_pool: Info) -> str:
-  """Selects and drains a random node within a GKE node pool.
-
-  This task retrieves all nodes in the specified node pool, selects one at
-  random, and executes a 'kubectl drain' command. This is used to simulate
-  node failure or maintenance to test JobSet resiliency.
-
-  Args:
-      node_pool: An instance of the Info class containing node pool metadata.
-
-  Raises:
-      AirflowFailException: If no nodes are found in the node pool or if
-          the drain command fails.
-  """
-  nodes_list = list_nodes(node_pool)
-  if not nodes_list:
-    raise AirflowFailException(
-        f"No nodes found in node pool '{node_pool.node_pool_name}'. "
-        "Aborting drain operation."
-    )
-
-  node_to_drain = random.choice(nodes_list)
-  logging.info(
-      "Selected node '%s' from pool '%s' to drain.",
-      node_to_drain,
-      node_pool.node_pool_name,
-  )
-
-  auth_command = (
-      f"gcloud container clusters get-credentials {node_pool.cluster_name} "
-      f"--project={node_pool.project_id} "
-      f"--location={node_pool.location}"
-  )
-  subprocess.run_exec(auth_command)
-
-  drain_command = (
-      f"kubectl drain {node_to_drain} "
-      "--ignore-daemonsets --delete-emptydir-data"
-  )
-
-  logging.info("Executing: %s", drain_command)
-  subprocess.run_exec(drain_command)
-
-  return node_to_drain
-
 
 @task
 def uncordon_node(node_pool: Info, node_name: str) -> None:
