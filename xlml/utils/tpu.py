@@ -61,7 +61,7 @@ def create_queued_resource(
     timeout: datetime.timedelta,
     task_test_config: Union[
         test_config.TpuVmTest, test_config.JSonnetTpuVmTest
-    ] = None,
+    ],
     use_startup_script: bool = False,
 ) -> Tuple[TaskGroup, airflow.XComArg]:
   """Request a QueuedResource and wait until the nodes are created.
