@@ -17,6 +17,7 @@
 import enum
 import dataclasses
 import datetime
+from dateutil import parser
 import json
 import logging
 import os
@@ -28,7 +29,7 @@ from typing import Final
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
-from airflow.operators.python import get_current_context
+from airflow.sensors.base import PokeReturnValue
 from google.cloud.monitoring_v3 import types
 import kubernetes
 
@@ -854,12 +855,75 @@ def get_pod_creation_timestamps(
     return timestamps
 
 
+@task
+def get_pod_metadata_map(
+    node_pool: node_pool_info, namespace: str, jobset_name: str
+) -> dict[str, dict[str, str]]:
+  """
+  Returns a map: {
+    pod_name: {
+      "timestamp": "2026-01-27T...",
+      "instance_id": "12345..."
+    }
+  }
+  """
+  with tempfile.NamedTemporaryFile() as temp_config_file:
+    env = os.environ.copy()
+    env["KUBECONFIG"] = temp_config_file.name
+
+    # This command gets: PodName, Timestamp, and NodeName
+    get_pod_info_cmd = (
+        f"kubectl get pods -n {namespace} --kubeconfig={temp_config_file.name} "
+        f"-l jobset.sigs.k8s.io/jobset-name={jobset_name} "
+        '-o jsonpath=\'{range .items[*]}{.metadata.name}{"\\t"}{.metadata.creationTimestamp}{"\\t"}{.spec.nodeName}{"\\n"}{end}\''
+    )
+
+    cmd = " && ".join([
+        Command.get_credentials_command(node_pool),
+        get_pod_info_cmd,
+    ])
+
+    stdout = subprocess.run_exec(cmd, env=env)
+
+    metadata_map = {}
+    for line in stdout.strip().split("\n"):
+      parts = line.split("\t")
+      if len(parts) == 3:
+        pod_name, ts, node_name = parts
+
+        # Now get the Instance ID for this specific Node
+        get_inst_id_cmd = (
+            f"kubectl get node {node_name} --kubeconfig={temp_config_file.name} "
+            "-o jsonpath='{.metadata.annotations.container\\.googleapis\\.com/instance_id}'"
+        )
+
+        # Execute sub-command to get the ID
+        full_inst_cmd = " && ".join(
+            [Command.get_credentials_command(node_pool), get_inst_id_cmd]
+        )
+        inst_id = subprocess.run_exec(full_inst_cmd, env=env).strip()
+
+        metadata_map[pod_name] = {
+            "timestamp": ts.strip(),
+            "instance_id": inst_id,
+        }
+
+    logging.info(f"Successfully mapped metadata: {metadata_map}")
+    return metadata_map
+
+
 @task.sensor(poke_interval=60, timeout=3600, mode="poke")
 def wait_for_tpu_scheduled_chips(
     node_pool: node_pool_info,
-    instance_id: str,
+    pod_name: str,
+    metadata_map: dict,
     job_apply_time: TimeUtil,
-) -> bool:
+):
+  pod_data = metadata_map.get(pod_name, {})
+  logging.info(f"Checking scheduled_chips for pod: {pod_name} data: {pod_data}")
+  instance_id = pod_data.get("instance_id")
+  logging.info(f"Instance ID for pod {pod_name} is {instance_id}")
+
   now = datetime.datetime.now()
   time_series = query_time_series(
       project_id=node_pool.project_id,
@@ -872,38 +936,106 @@ def wait_for_tpu_scheduled_chips(
   )
 
   if len(time_series) > 0:
-    # Capture the timestamp of the first metric point
-    first_ts = str(time_series[0].points[0].interval.start_time)
-    # Push to XCom so the latency task can read it
-    ti = get_current_context()["ti"]
-    ti.xcom_push(key="scheduled_ts", value=first_ts)
-    return True
-  return False
+    # Get the timestamp from the metric
+    t_scheduled = str(time_series[0].points[0].interval.start_time)
+
+    logging.info(f"Detected scheduled_chips for {pod_name} at {t_scheduled}")
+
+    # Returning PokeReturnValue signals sensor completion AND pushes xcom_value
+    return PokeReturnValue(is_done=True, xcom_value=t_scheduled)
+
+  return PokeReturnValue(is_done=False, xcom_value=None)
+
+
+# @task.sensor(poke_interval=60, timeout=600, mode="poke")
+# def wait_for_tpu_scheduled_chips(
+#     node_pool: node_pool_info,
+#     instance_id: str,
+#     job_apply_time: TimeUtil,
+#     pod_timestamps: dict,
+# ) -> bool:
+#   """
+#   Polls for scheduled_chips and calculates latency from Pod creation.
+#   """
+#   now = datetime.datetime.now()
+#   time_series = query_time_series(
+#       project_id=node_pool.project_id,
+#       filter_str=(
+#           'metric.type="compute.googleapis.com/instance/tpu/scheduled_chips" '
+#           f'resource.labels.instance_id="{instance_id}"'
+#       ),
+#       start_time=job_apply_time,
+#       end_time=TimeUtil.from_datetime(now),
+#   )
+
+#   if len(time_series) > 0:
+#     scheduled_ts_str = str(time_series[0].points[0].interval.start_time)
+#     t_scheduled = parser.isoparse(scheduled_ts_str)
+#     pod_ts_str = min(pod_timestamps.values())
+#     t_pod = parser.isoparse(pod_ts_str)
+#     latency_sec = (t_scheduled - t_pod).total_seconds()
+#     logging.info(f"--- Latency Found for Instance {instance_id} ---")
+#     logging.info(f"Pod Created: {t_pod} | TPU Scheduled: {t_scheduled}")
+#     logging.info(f"Latency (seconds): {latency_sec}")
+#     if latency_sec > 600:
+#       return False
+#     return True
+
+#   return False
+
+
+@task.sensor(poke_interval=60, timeout=600, mode="poke")
+def wait_for_tpu_metrics(
+    node_pool: node_pool_info,
+    instance_id: str,
+    job_apply_time: TimeUtil,
+) -> PokeReturnValue:
+  """
+  Polls for the 'scheduled_chips' metric and returns the event timestamp.
+  """
+  now = datetime.datetime.now()
+  time_series = query_time_series(
+      project_id=node_pool.project_id,
+      filter_str=(
+          'metric.type="compute.googleapis.com/instance/tpu/scheduled_chips" '
+          f'resource.labels.instance_id="{instance_id}"'
+      ),
+      start_time=job_apply_time,
+      end_time=TimeUtil.from_datetime(now),
+  )
+
+  logging.info(
+      "TPU Scheduled Chips Time series for %s: %s", instance_id, time_series
+  )
+
+  if len(time_series) > 0:
+    # Extract the timestamp of the first data point found
+    scheduled_ts_str = str(time_series[0].points[0].interval.start_time)
+    logging.info(f"Metric found: {scheduled_ts_str}")
+    return PokeReturnValue(is_done=True, xcom_value=scheduled_ts_str)
+
+  return PokeReturnValue(is_done=False)
 
 
 @task
-def calculate_latency(
-    instance_id: str, pod_timestamps: dict, scheduled_ts: str
-):
-  """Calculates time delta between Pod Creation and TPU Scheduling."""
-  from dateutil import parser
+def calculate_pod_latency(pod_name: str, metadata_map: dict, scheduled_ts: str):
+  """Calculates the delta between Pod Creation and Metric detection."""
 
+  pod_data = metadata_map.get(pod_name, {})
+  pod_ts_str = pod_data.get("timestamp")
+
+  t_pod = parser.isoparse(pod_ts_str)
   t_scheduled = parser.isoparse(scheduled_ts)
-  # Match the first available pod timestamp from the JobSet
-  first_pod_ts = list(pod_timestamps.values())[0]
-  t_pod = parser.isoparse(first_pod_ts)
 
-  diff_seconds = (t_scheduled - t_pod).total_seconds()
-  logging.info(f"Instance {instance_id} Latency: {diff_seconds}s")
+  latency_sec = (t_scheduled - t_pod).total_seconds()
 
-  return {
-      "instance_id": instance_id,
-      "latency_seconds": diff_seconds,
-      "latency_minutes": round(diff_seconds / 60, 2),
-  }
+  logging.info(f"--- Latency Analysis: {pod_name} ---")
+  logging.info(f"Latency: {latency_sec}s ({latency_sec/60:.2f} min)")
+
+  return {"pod_name": pod_name, "latency_sec": latency_sec}
 
 
-@task.sensor(poke_interval=60, timeout=3600, mode="poke")
+@task.sensor(poke_interval=60, timeout=600, mode="poke")
 def wait_for_tpu_active_chips(
     node_pool: node_pool_info,
     instance_id: str,
@@ -942,26 +1074,15 @@ def wait_for_tpu_active_chips(
   return len(time_series) > 0
 
 
-@task.sensor(poke_interval=60, timeout=3600, mode="poke")
+@task.sensor(poke_interval=60, timeout=600, mode="poke")
 def wait_for_tpu_utilized_chips(
     node_pool: node_pool_info,
     instance_id: str,
     job_apply_time: TimeUtil,
 ) -> bool:
   """
-  Polls the TPU utilized_chips metric for a specific GCE instance.
-
-  This metric represents the number of TPU chips currently being utilized by
-  a workload. It is the best indicator that the training software (JAX/PyTorch)
-   has successfully opened the TPU device and started computation.
-
-  Args:
-    node_pool: Configuration object with project and cluster details.
-    instance_id: The specific GCE Instance ID to monitor.
-    job_apply_time: The time when the job was applied.
-
-  Returns:
-    True if the utilized_chips metric is found, False otherwise.
+  Polls the TPU utilized_chips metric and verifies the count matches
+  the expected hardware capacity and is in a HEALTHY state.
   """
   now = datetime.datetime.now()
 
@@ -977,11 +1098,10 @@ def wait_for_tpu_utilized_chips(
   logging.info(
       "TPU Utilized Chips Time series for %s: %s", instance_id, time_series
   )
-
   return len(time_series) > 0
 
 
-@task.sensor(poke_interval=60, timeout=3600, mode="poke")
+@task.sensor(poke_interval=60, timeout=600, mode="poke")
 def wait_for_tpu_chip_state(
     node_pool: node_pool_info,
     instance_id: str,

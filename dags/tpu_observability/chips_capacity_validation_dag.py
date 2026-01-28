@@ -137,25 +137,58 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           jobset_name=jobset_config.jobset_name,
       )
 
+      metadata_map = jobset.get_pod_metadata_map.override(
+          task_id="get_pod_metadata_map"
+      )(
+          node_pool=cluster_info,
+          namespace=jobset_config.namespace,
+          jobset_name=jobset_config.jobset_name,
+      )
+
       # Keyword arguments are generated dynamically at runtime (pylint does not
       # know this signature).
       with TaskGroup(  # pylint: disable=unexpected-keyword-arg
           group_id="verification_group"
       ) as verification_group:
-        scheduled_chips = (
+        # scheduled_chips = (
+        #     jobset.wait_for_tpu_scheduled_chips.override(
+        #         task_id="wait_for_tpu_scheduled_chips"
+        #     )
+        #     .partial(
+        #         node_pool=cluster_info,
+        #         job_apply_time=apply_time,
+        #         pod_timestamps=pod_ts
+        #     )
+        #     .expand(
+        #         instance_id=instance_ids,
+        #     )
+        # )
+
+        scheduled_tasks = (
             jobset.wait_for_tpu_scheduled_chips.override(
                 task_id="wait_for_tpu_scheduled_chips"
             )
-            .partial(node_pool=cluster_info, job_apply_time=apply_time)
+            .partial(
+                node_pool=cluster_info,
+                metadata_map=metadata_map,
+                job_apply_time=apply_time,
+            )
             .expand(
-                instance_id=instance_ids,
+                pod_name=pod_names,
             )
         )
 
-        latency_report = jobset.calculate_latency.expand(
-            instance_id=instance_ids,
-            pod_timestamps=pod_ts,
-            scheduled_ts=scheduled_chips.output,
+        latency_results = (
+            jobset.calculate_pod_latency.override(
+                task_id="calculate_pod_latency"
+            )
+            .partial(
+                metadata_map=metadata_map,
+                scheduled_ts=scheduled_tasks,
+            )
+            .expand(
+                pod_name=pod_names,
+            )
         )
 
         tpu_active_chips = (
@@ -212,8 +245,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           >> apply_time
           >> pod_names
           >> wait_for_job_start
-          >> pod_ts
           >> instance_ids
+          >> pod_ts
+          >> metadata_map
           >> verification_group
           >> clean_up_workload
           >> cleanup_node_pool
