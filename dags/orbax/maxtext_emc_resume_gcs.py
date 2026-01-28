@@ -27,6 +27,7 @@ DAG_TEST_NAME = "maxtext_emc_resume_from_gcs"
 with models.DAG(
     dag_id=DAG_TEST_NAME,
     start_date=datetime.datetime(2025, 6, 12),
+    dagrun_timeout=datetime.timedelta(hours=18),
     schedule_interval=SCHEDULE,
     catchup=False,
     tags=[
@@ -38,7 +39,9 @@ with models.DAG(
         "TPU",
         "v5p-128",
     ],
-    description="A DAG to test MaxText Emergency Checkpoint Manager GCS restore functionality.",
+    description="""
+      A DAG to test MaxText Emergency Checkpoint Manager GCS restore functionality.
+    """,
     doc_md="""
       # Emergency Checkpoint Manager GCS Restore Validation DAG
 
@@ -136,7 +139,9 @@ with models.DAG(
             run_name=run_name,
             slice_num=slice_num,
             out_folder=out_folder,
-            enable_multi_tier_checkpointing=checkpointing.enable_multi_tier_checkpointing,
+            enable_multi_tier_checkpointing=(
+                checkpointing.enable_multi_tier_checkpointing
+            ),
         )
 
         start_time = validation_util.generate_timestamp.override(
@@ -169,7 +174,9 @@ with models.DAG(
             run_name=run_name,
             slice_num=slice_num,
             out_folder=out_folder,
-            enable_multi_tier_checkpointing=checkpointing.enable_multi_tier_checkpointing,
+            enable_multi_tier_checkpointing=(
+                checkpointing.enable_multi_tier_checkpointing
+            ),
         )
 
         resume_training_run = gke_config.get_gke_config(
@@ -244,6 +251,8 @@ with models.DAG(
             task_id="wait_delete_cpc_final",
         )(test_config.cpc_config).as_teardown(setups=apply_first_cpc)
 
+        # Airflow uses >> for task chaining, which is pointless for pylint.
+        # pylint: disable=pointless-statement
         (
             wait_delete_cpc
             >> apply_first_cpc
@@ -259,3 +268,4 @@ with models.DAG(
             >> validate_saved_checkpoints_steps_gcs
             >> wait_delete_cpc_final
         )
+        # pylint: enable=pointless-statement

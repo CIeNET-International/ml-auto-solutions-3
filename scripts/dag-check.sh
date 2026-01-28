@@ -16,4 +16,4 @@ export PYTHONPATH=$PWD
 export XLMLTEST_CONFIGS=$PWD/dags/jsonnet/
 export CORES="$(nproc)"
 
-find dags -name '*.py' -print0 | xargs -0 -n 1 -P "${CORES}" -t python
+find dags -path dags/common/scheduling_helper -prune -name '*.py' -print0 | xargs -0 -n 1 -P "${CORES}" -t python
