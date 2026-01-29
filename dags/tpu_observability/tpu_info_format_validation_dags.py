@@ -340,7 +340,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       return f"{node_pool_info.node_pool_name}-2"
 
     jobset_config = JobSet(
-        jobset_name="tpu-info-{{ ds_nodash }}-{{ ti.job_id }}",
+        jobset_name="tpu-info-format-validation-workload",
         namespace="default",
         max_restarts=5,
         replicated_job_name="tpu-job-slice",
