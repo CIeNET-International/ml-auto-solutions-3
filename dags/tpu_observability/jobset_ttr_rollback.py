@@ -24,7 +24,7 @@ from airflow.utils.task_group import TaskGroup
 from dags import composer_env
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
-from dags.tpu_observability.utils.jobset_util import JobSet, Workload
+from dags.tpu_observability.utils.jobset_util import JobSet, Workload, get_jobset_metric
 from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_PATH
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
@@ -120,6 +120,11 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           node_pool=cluster_info,
       )
 
+      get_jobset_metric(
+        node_pool=cluster_info,
+        jobset_name=jobset_config.jobset_name,
+        timeout=30
+      )
       rollback_node_pool = node_pool.rollback(node_pool=cluster_info)
 
       wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found(

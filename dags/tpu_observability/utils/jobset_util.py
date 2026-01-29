@@ -383,6 +383,73 @@ def get_running_pods(
   return running_pods
 
 
+def get_jobset_metric(node_pool: node_pool_info, jobset_name: str, timeout=30):
+  client = monitoring_v3.MetricServiceClient()
+
+  node_pool_name = {
+      "cluster_project": node_pool.project_id,
+      "region": node_pool.location,
+      "zone": node_pool.node_locations,
+      "cluster_name": node_pool.cluster_name,
+      "node_pool_name": node_pool.node_pool_name,
+      "accelerator_type": node_pool.machine_type,
+  }
+
+  request = monitoring_v3.ListTimeSeriesRequest(
+      name=f"projects/{node_pool.project_id}",
+      filter=(
+          f'metric.type="prometheus/kube_jobset_status_condition/gauge" AND '
+          f'resource.labels.project_id="{node_pool.project_id}" AND '
+          f'resource.labels.cluster_name="{node_pool.cluster_name}" AND '
+      ),
+      interval=monitoring_v3.TimeInterval({
+          "start_time": {"seconds":int(start_time)},
+          "end_time": {"seconds": int(current_time-60)}
+      }),
+      view=monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.FULLvie,
+  )
+
+  start_time = time.time()
+  while(time.time() - start_time < (timeout*60)):
+    current_time = time.time()
+    request.interval = monitoring_v3.TimeInterval({
+          "start_time": {"seconds":int(start_time)},
+          "end_time": {"seconds": int(current_time-60)}
+      })
+
+    results = client.list_time_series(request=request)
+
+    for series in results:
+      status = series.metric.labels.get("condition")
+      val = series.points[0].value.double_value
+
+      # If the gauge is 1, that condition is active
+      if val == 1.0:
+          print(f"[{time.strftime('%H:%M:%S')}] Status: {status}")
+          if status in ["Completed", "Failed"]:
+            print("🏁 Terminal state reached. Exiting monitor.")
+            break
+
+    time.sleep(30)
+
+# # --- EXECUTION ---
+# project_id = "your-project-id"
+
+# # 1. Get JobSet Healthiness (Conditions)
+# health_data = query_gke_metric(project_id, "prometheus.googleapis.com/kube_jobset_status_condition/gauge")
+# for series in health_data:
+#     # 'condition' label represents health type (Ready, Failed, Suspended)
+#     print(f"JobSet: {series.metric.labels['jobset_name']} | Status: {series.metric.labels['condition']}")
+
+# # 2. Get Interruption Reason
+# # Note: This uses the standard kubernetes.io prefix, not Prometheus
+# interruption_data = query_gke_metric(project_id, "kubernetes.io/node/interruption_count")
+# for series in interruption_data:
+#     reason = series.metric.labels.get('interruption_reason', 'Unknown')
+#     print(f"Node: {series.resource.labels['node_name']} | Interruption Reason: {reason}")
+
+
+
 @task
 def run_workload(
     node_pool: node_pool_info, yaml_config: str, namespace: str

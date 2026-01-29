@@ -22,5 +22,5 @@ class MachineConfigMap(enum.Enum):
 
 
 GCS_CONFIG_PATH = (
-    "gs://ml-auto-solutions-dag-configs/tpu_observability/dag_config.yaml"
+    "gs://ml-auto-solutions-dag-configs/tpu_observability/yihao_dag_config.yaml"
 )
