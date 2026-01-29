@@ -98,6 +98,7 @@ def create_queued_resource(
             'runtime_version': task_test_config.accelerator.runtime_version,
             'version': task_test_config.accelerator.version.value,
         },
+        'accelerator_type': task_test_config.accelerator.name,
     })
 
     creds, _ = google.auth.default()
@@ -130,7 +131,6 @@ def create_queued_resource(
     metadata = {
         'ssh-keys': f'ml-auto-solutions:{ssh_keys.public}',
         'startup-script': startup_script_command,
-        # 'enable-oslogin': 'TRUE',
     }
 
     create_tpu_timeout_in_sec = int(timeout.total_seconds())
@@ -367,7 +367,7 @@ def ssh_tpu(
    env: environment variables to be pass to the ssh runner session using dict.
   """
   # 1. get private key from  Airflow Variable
-  private_key_content = Variable.get("jax_ssh_private_key")
+  private_key_content = Variable.get("os-login-ssh-private-key")
 
   creds, _ = google.auth.default()
   client = tpu_api.TpuClient(credentials=creds)
@@ -379,15 +379,15 @@ def ssh_tpu(
       for node in queued_resource.tpu.node_spec
   ]
   node_metadata = nodes[0].metadata
-  is_oslogin_enabled = node_metadata.get('enable-oslogin', '').upper() == 'TRUE'
+  is_oslogin_enabled = node_metadata.get('enable-oslogin', '') == 'TRUE'
 
 
   if private_key_content and is_oslogin_enabled:
-    logging.info("Auto-detected OS Login enabled on node {nodes[0].name}.")
-    target_user = Variable.get("jax_oslogin_fallback_user", default_var="sa_112632397993248756658")
+    logging.info("Auto-detected OS Login enabled on node {nodes[0].name}..")
+    target_user = Variable.get("os-login-ssh-user")
     final_pkey = paramiko.RSAKey.from_private_key(io.StringIO(private_key_content))
   else:
-    logging.info("Using legacy ephemeral ssh_keys mode.")
+    logging.info("Using legacy ephemeral ssh_keys mode..")
     target_user = 'ml-auto-solutions'
     final_pkey = paramiko.RSAKey.from_private_key(io.StringIO(ssh_keys.private))
 
@@ -441,19 +441,26 @@ def ssh_tpu(
         gateway='corp-ssh-helper %h %p' if use_external_ips else None,
   )
 
-  def ssh_group_run(cmds_to_run: Iterable[str]):
-      try:
-          ssh_group.run(cmds_to_run, env=env)
-      except fabric.group.GroupException as e:
-          for connection, result in e.result.items():
-              if isinstance(result, paramiko.ssh_exception.AuthenticationException):
-                  logging.error(f'SSH authentication failed on {connection.host}. Please check the long-lived key.')
-          raise AirflowFailException(f'Fabric Group execution failed: {e}') from e
-      except Exception as e:
-          logging.error(f"connection error: {e}")
-          raise AirflowFailException(f'SSH connection or execution failed: {e}') from e
-      finally:
-          ssh_group.close()
+  def ssh_group_run(cmds: Iterable[str]):
+    try:
+      ssh_group.run(cmds, env=env)
+    except fabric.group.GroupException as e:
+      for connection, result in e.result.items():
+        if isinstance(result, paramiko.ssh_exception.AuthenticationException):
+          logging.error(
+              f'SSH Authentication Failed on {connection.host}: {result}'
+          )
+          raise AirflowFailException(
+              'SSH Authentication failed on one or more hosts. Check logs for details.'
+          ) from e
+      raise
+    except paramiko.ssh_exception.AuthenticationException as e:
+      error_msg = f'SSH Authentication Failed: {e}'
+      logging.error(error_msg)
+      raise AirflowFailException(error_msg) from e
+
+    finally:
+      ssh_group.close()
 
 
   context = get_current_context()
@@ -469,7 +476,7 @@ def ssh_tpu(
     ssh_group_run(';'.join(kill_process_cmds))
 
   # run provided commands
-  ssh_group_run(';'.join(cmds) if isinstance(cmds, list) else cmds)
+  ssh_group_run(cmds)
 
 
 @task
