@@ -24,7 +24,7 @@ from airflow.utils.task_group import TaskGroup
 from dags import composer_env
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
-from dags.tpu_observability.utils.node_pool_util import NodeOperation
+from dags.tpu_observability.utils.node_pool_util import NodeOperationSpec
 from dags.tpu_observability.utils.jobset_util import JobSet, Workload
 from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_PATH
 
@@ -125,7 +125,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 
       drained_node = node_pool.delete_one_random_node(
           node_pool=cluster_info,
-          action=NodeOperation.DRAIN,
+          spec=NodeOperationSpec.Drain(),
       )
 
       uncordon_node = node_pool.uncordon_node(
