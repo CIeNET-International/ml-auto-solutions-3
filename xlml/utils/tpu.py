@@ -365,8 +365,7 @@ def ssh_tpu(
      only.
    env: environment variables to be pass to the ssh runner session using dict.
   """
-  # 1. get private key from  Airflow Variable
-  private_key_content = Variable.get("os-login-ssh-private-key")
+
 
   creds, _ = google.auth.default()
   client = tpu_api.TpuClient(credentials=creds)
@@ -381,14 +380,16 @@ def ssh_tpu(
   is_oslogin_enabled = node_metadata.get('enable-oslogin', '') == 'TRUE'
 
 
-  if private_key_content and is_oslogin_enabled:
+  if is_oslogin_enabled:
     logging.info("Auto-detected OS Login enabled on node {nodes[0].name}..")
+    # get private key from  Airflow Variable
+    private_key_content = Variable.get("os-login-ssh-private-key")
     target_user = Variable.get("os-login-ssh-user")
-    final_pkey = paramiko.RSAKey.from_private_key(io.StringIO(private_key_content))
+    pkey = paramiko.RSAKey.from_private_key(io.StringIO(private_key_content))
   else:
     logging.info("Using legacy ephemeral ssh_keys mode..")
     target_user = 'ml-auto-solutions'
-    final_pkey = paramiko.RSAKey.from_private_key(io.StringIO(ssh_keys.private))
+    pkey = paramiko.RSAKey.from_private_key(io.StringIO(ssh_keys.private))
 
   if all_workers:
     endpoints = itertools.chain.from_iterable(
@@ -407,40 +408,16 @@ def ssh_tpu(
 
   logging.info(f'Connecting to IP addresses of workers: {ip_addresses}')
 
-
-  # gcloud_proxy_command = "gcloud compute ssh --zone us-east5 %h --ssh-flag='-W %h:%p' --ssh-flag='-o StrictHostKeyChecking=no' --ssh-flag='-o UserKnownHostsFile=/dev/null'"
-
-  # ssh_group = fabric.ThreadingGroup(
-  #       *hostnames,
-  #       # This replaces all the old connect_kwargs and auth_strategy
-  #       gateway=gcloud_proxy_command,
-  # )
-
-  # ssh_group = fabric.ThreadingGroup(
-  #     *ip_addresses,
-  #     connect_kwargs={
-  #         'auth_strategy': paramiko.auth_strategy.InMemoryPrivateKey(
-  #             'ml-auto-solutions', pkey
-  #         ),
-  #         # See https://stackoverflow.com/a/59453832
-  #         'banner_timeout': 200,
-  #     },
-  #     # Proxy required on Cloudtops to connect to external IPs
-  #     gateway='corp-ssh-helper %h %p' if use_external_ips else None,
-  # )
-
   ssh_group = fabric.ThreadingGroup(
         *ip_addresses,
         connect_kwargs={
           'auth_strategy': paramiko.auth_strategy.InMemoryPrivateKey(
-              target_user, final_pkey
+              target_user, pkey
           ),
           # See https://stackoverflow.com/a/59453832
           'banner_timeout': 200,
       },
-        gateway='corp-ssh-helper %h %p' if use_external_ips else None,
   )
-
 
   def ssh_group_run(cmds: Iterable[str]):
     try:
@@ -463,7 +440,6 @@ def ssh_tpu(
     finally:
       ssh_group.close()
 
-
   context = get_current_context()
   if context['task_instance'].try_number > 1:
     # kill TPU process by pid (if any) to avoid `TPU in use` error in retry
@@ -475,7 +451,6 @@ def ssh_tpu(
         f'bash {tmp_file} {accelerator_type}',
     )
     ssh_group_run(';'.join(kill_process_cmds))
-
   # run provided commands
   ssh_group_run(cmds)
 
