@@ -407,8 +407,13 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           namespace=jobset_config.namespace,
       )
 
-      pod_names = jobset.list_pod_names.override(task_id="list_pod_names")(
+      pod_names = jobset.list_pod_names.override(
+          task_id="list_pod_names",
+          retries=5,
+          retry_delay=datetime.timedelta(seconds=10),
+      )(
           node_pool=cluster_info,
+          jobset_name=jobset_config.jobset_name,
           namespace=jobset_config.namespace,
       )
 

@@ -164,6 +164,7 @@ with models.DAG(
 
     pod_names = jobset.list_pod_names.override(task_id="list_pod_names")(
         node_pool=cluster_info,
+        jobset_name=jobset_config.jobset_name,
         namespace=jobset_config.namespace,
     )
 

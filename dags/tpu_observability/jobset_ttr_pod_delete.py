@@ -117,12 +117,17 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           task_id="ensure_all_pods_running"
       )(
           num_pods=(jobset_config.replicas * jobset_config.parallelism),
+          jobset_name=jobset_config.jobset_name,
           node_pool=cluster_info,
       )
 
       delete_random_pod = jobset.delete_one_random_pod.override(
           task_id="delete_random_pod"
-      )(node_pool=cluster_info, namespace=jobset_config.namespace)
+      )(
+          node_pool=cluster_info,
+          jobset_name=jobset_config.jobset_name,
+          namespace=jobset_config.namespace,
+      )
 
       wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
           task_id="wait_for_jobset_ttr_to_be_found"

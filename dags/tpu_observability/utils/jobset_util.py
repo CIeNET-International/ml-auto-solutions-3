@@ -278,10 +278,15 @@ class Command:
     ])
 
   @staticmethod
-  def k8s_get_pod_name_command(kubeconfig: str, namespace: str) -> str:
+  def k8s_get_pod_name_command(
+      kubeconfig: str, jobset_name: str, namespace: str
+  ) -> str:
+    """Generates a kubectl command to get pod names for a specific JobSet."""
     return " ".join([
         f"kubectl --kubeconfig={kubeconfig} get pods",
-        f"-n {namespace} -o jsonpath={{.items[*].metadata.name}}",
+        f"-n {namespace}",
+        f"-l jobset.sigs.k8s.io/jobset-name={jobset_name}",
+        "-o jsonpath={.items[*].metadata.name}",
     ])
 
   @staticmethod
@@ -345,14 +350,15 @@ def get_replica_num(
 
 
 def get_running_pods(
-    node_pool: node_pool_info, namespace="default"
+    node_pool: node_pool_info, jobset_name: str, namespace: str = "default"
 ) -> list[str]:
   """
-  Get a list of pods which are in the "running" state.
+  Get a list of pods for a specific JobSet which are in the "Running" state.
 
   Args:
     node_pool: The Info object containing the cluster information needed for
       the kubernetes API to connect to it.
+    jobset_name: The name of the JobSet to filter pods by.
     namespace: The kubernetes namespace which is being searched for running
       pods.
   Returns:
@@ -361,15 +367,15 @@ def get_running_pods(
   """
   with tempfile.TemporaryDirectory() as tmpdir:
     env = os.environ.copy()
-    env["KUBECONFIG"] = tmpdir + "/kubeconfig"
+    env["KUBECONFIG"] = os.path.join(tmpdir, "kubeconfig")
 
     cmd = " && ".join([
         Command.get_credentials_command(node_pool),
-        f"kubectl get pods -n {namespace} -o json",
+        f"kubectl get pods -n {namespace} "
+        f"-l jobset.sigs.k8s.io/jobset-name={jobset_name} -o json",
     ])
 
     stdout = subprocess.run_exec(cmd, env=env)
-
     data = json.loads(stdout)
 
     running_pods = [
@@ -378,7 +384,7 @@ def get_running_pods(
         if item.get("status", {}).get("phase") == "Running"
     ]
 
-    logging.info("Running pods: %s", running_pods)
+    logging.info("Running pods for JobSet '%s': %s", jobset_name, running_pods)
 
   return running_pods
 
@@ -441,9 +447,12 @@ def end_workload(node_pool: node_pool_info, jobset_name: str, namespace: str):
 
 
 @task
-def list_pod_names(node_pool: node_pool_info, namespace: str) -> list[str]:
+def list_pod_names(
+    node_pool: node_pool_info, jobset_name: str, namespace: str
+) -> list[str]:
   """
-  Retrieves a list of active pod names from a specific GKE cluster namespace.
+  Lists the names of all active pods in the specified namespace for a given
+  JobSet.
 
   This task executes a series of shell commands to:
   1. Authenticate `gcloud` and generate a temporary kubeconfig for the cluster.
@@ -451,6 +460,7 @@ def list_pod_names(node_pool: node_pool_info, namespace: str) -> list[str]:
 
   Args:
     node_pool: Configuration object with cluster details.
+    jobset_name: The name of the JobSet to filter pods by.
     namespace: The Kubernetes namespace to query for pods.
 
   Returns:
@@ -466,7 +476,9 @@ def list_pod_names(node_pool: node_pool_info, namespace: str) -> list[str]:
 
     cmd = " && ".join([
         Command.get_credentials_command(node_pool),
-        Command.k8s_get_pod_name_command(temp_config_file.name, namespace),
+        Command.k8s_get_pod_name_command(
+            temp_config_file.name, jobset_name, namespace
+        ),
     ])
 
     stdout = subprocess.run_exec(cmd, env=env)
@@ -481,7 +493,9 @@ def list_pod_names(node_pool: node_pool_info, namespace: str) -> list[str]:
 
 @task
 def delete_one_random_pod(
-    node_pool: node_pool_info, namespace: str = "default"
+    node_pool: node_pool_info,
+    jobset_name,
+    namespace: str = "default",
 ):
   """
   Randomly selects and deletes one pod that is currently in the "running" state.
@@ -500,7 +514,9 @@ def delete_one_random_pod(
     AirflowFailException: If no running pods are found in the specified
       namespace.
   """
-  running_pods = get_running_pods(node_pool=node_pool, namespace=namespace)
+  running_pods = get_running_pods(
+      node_pool=node_pool, jobset_name=jobset_name, namespace=namespace
+  )
   if not running_pods:
     logging.error("No running pods found in namespace: %s", namespace)
     raise AirflowFailException(
@@ -661,6 +677,12 @@ def wait_for_jobset_status_occurrence(
 
 
 @task.sensor(poke_interval=30, timeout=600, mode="poke")
-def wait_for_all_pods_running(num_pods: int, node_pool: node_pool_info):
-  num_running = len(get_running_pods(node_pool=node_pool, namespace="default"))
+def wait_for_all_pods_running(
+    num_pods: int, node_pool: node_pool_info, jobset_name: str
+):
+  num_running = len(
+      get_running_pods(
+          node_pool=node_pool, jobset_name=jobset_name, namespace="default"
+      )
+  )
   return num_running == num_pods

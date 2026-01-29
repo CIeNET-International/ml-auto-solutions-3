@@ -117,6 +117,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 
       ensure_all_pods_running = jobset.wait_for_all_pods_running(
           num_pods=(jobset_config.replicas * jobset_config.parallelism),
+          jobset_name=jobset_config.jobset_name,
           node_pool=cluster_info,
       )
 
