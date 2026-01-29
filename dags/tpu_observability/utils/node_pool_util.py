@@ -64,9 +64,26 @@ class Status(enum.Enum):
     return status
 
 
-class NodeOperation(Enum):
+class NodeOperationTarget(enum.Enum):
   DELETE = "delete"
   DRAIN = "drain"
+
+
+@dataclasses.dataclass
+class NodeOperationSpec:
+  """Configuration parameters for a random node operation."""
+
+  target: NodeOperationTarget
+
+  @staticmethod
+  def Delete() -> "NodeOperationSpec":
+    """Factory method for a delete operation."""
+    return NodeOperationSpec(target=NodeOperationTarget.DELETE)
+
+  @staticmethod
+  def Drain() -> "NodeOperationSpec":
+    """Factory method for a drain operation."""
+    return NodeOperationSpec(target=NodeOperationTarget.DRAIN)
 
 
 @dataclasses.dataclass
@@ -342,75 +359,54 @@ def list_nodes(node_pool: Info) -> list[str]:
 @task
 def delete_one_random_node(
     node_pool: Info,
-    action: NodeOperation = NodeOperation.DELETE,
+    spec: NodeOperationSpec = NodeOperationSpec.Delete(),
 ) -> str:
-  """Performs a random node operation (delete or drain) on the specified
-  GKE node pool.
-
-  This task selects a random node from the pool and executes the specified
-  action. 'drain' is typically used for maintenance simulation, while
-  'delete' removes the instance entirely.
+  """Performs a random node operation based on the provided specification.
 
   Args:
-    node_pool: An instance of the Info class containing GKE node pool metadata.
-    action: The operation to perform. Supported values are 'delete' and 'drain'.
-      Defaults to 'delete'.
-
-  Returns:
-      str: The name of the node that was selected and operated upon.
-
-  Raises:
-    AirflowFailException: If no nodes are found or an unsupported action is
-    provided.
+    node_pool: An instance of the Info class with GKE metadata.
+    spec: A NodeOperationSpec defining the action to perform.
   """
-
   nodes_list = list_nodes(node_pool)
   if not nodes_list:
     raise AirflowFailException(
-        f"No nodes found in node pool '{node_pool.node_pool_name}'. "
-        "Cannot proceed with node deletion or drain."
+        f"No nodes found in node pool '{node_pool.node_pool_name}'."
     )
 
   target_node = random.choice(nodes_list)
 
+  # 認證步驟 (通用)
   auth_command = (
       f"gcloud container clusters get-credentials {node_pool.cluster_name} "
-      f"--project={node_pool.project_id} "
-      f"--location={node_pool.location}"
+      f"--project={node_pool.project_id} --location={node_pool.location}"
   )
   subprocess.run_exec(auth_command)
 
-  if action == NodeOperation.DELETE:
-    logging.info(
-        "Randomly selected node for deletion: %s",
-        target_node,
-    )
+  # 根據 spec.target 決定指令 (對齊範例的 match-case 邏輯)
+  match spec.target:
+    case NodeOperationTarget.DELETE:
+      logging.info("Selected node for deletion: %s", target_node)
+      command = (
+          f"gcloud compute instances delete {target_node} "
+          f"--project={node_pool.project_id} "
+          f"--zone={node_pool.node_locations} --quiet"
+      )
 
-    command = (
-        f"gcloud compute instances delete {target_node} "
-        f"--project={node_pool.project_id} "
-        f"--zone={node_pool.node_locations} "
-        "--quiet"
-    )
-  elif action == NodeOperation.DRAIN:
-    logging.info(
-        "Selected node '%s' from pool '%s' to drain.",
-        target_node,
-        node_pool.node_pool_name,
-    )
+    case NodeOperationTarget.DRAIN:
+      logging.info(
+          "Selected node '%s' from pool '%s' to drain.",
+          target_node,
+          node_pool.node_pool_name,
+      )
+      command = (
+          f"kubectl drain {target_node} "
+          "--ignore-daemonsets --delete-emptydir-data"
+      )
 
-    command = (
-        f"kubectl drain {target_node} "
-        "--ignore-daemonsets --delete-emptydir-data"
-    )
-  else:
-    raise AirflowFailException(
-        f"Unsupported action '{action}. "
-        "Supported actions are 'delete' and 'drain'."
-    )
+    case _:
+      raise AirflowFailException(f"Unsupported action target: {spec.target}")
 
   subprocess.run_exec(command)
-
   return target_node
 
 
