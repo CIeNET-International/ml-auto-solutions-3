@@ -139,6 +139,8 @@ def run_queued_resource_test(
         task_test_config.test_script,
         ssh_keys,
         all_workers,
+        # We purposely put `custom_env` last to allow overriding values.
+        # For example, `GCS_OUTPUT` can be overridden if needed.
         env={
             metric_config.SshEnvVars.GCS_OUTPUT.name: output_location,
             **custom_env,
