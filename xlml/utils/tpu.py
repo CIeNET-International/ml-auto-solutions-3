@@ -431,14 +431,16 @@ def ssh_tpu(
 
   ssh_group = fabric.ThreadingGroup(
         *ip_addresses,
-        user=target_user,
         connect_kwargs={
-            "pkey": final_pkey,  # Pass the private key object directly
-            "banner_timeout": 200,
-            # 'disabled_algorithms': dict(pubkeys=["rsa-sha2-512", "rsa-sha2-256"]), # Optional: If needed for server compatibility
-        },
+          'auth_strategy': paramiko.auth_strategy.InMemoryPrivateKey(
+              target_user, final_pkey
+          ),
+          # See https://stackoverflow.com/a/59453832
+          'banner_timeout': 200,
+      },
         gateway='corp-ssh-helper %h %p' if use_external_ips else None,
   )
+
 
   def ssh_group_run(cmds: Iterable[str]):
     try:
