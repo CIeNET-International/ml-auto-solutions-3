@@ -23,12 +23,11 @@ import uuid
 
 from absl import logging
 import airflow
-from airflow.decorators import task_group
-from airflow.decorators import task
+from airflow.decorators import task_group, task
 from airflow.utils.task_group import TaskGroup
 from airflow.operators.python import get_current_context
 from airflow.models import Variable
-from airflow.exceptions import AirflowException, AirflowFailException
+from airflow.exceptions import AirflowFailException
 from xlml.apis import gcp_config, test_config
 from xlml.utils import ssh, startup_script, composer
 import fabric
