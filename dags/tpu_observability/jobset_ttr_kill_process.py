@@ -193,8 +193,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           setups=create_node_pool,
       )
 
-      # Airflow uses >> for task chaining, which is pointless for pylint.
-      # pylint: disable=pointless-statement
       chain(
           cluster_info,
           create_node_pool,
@@ -206,4 +204,3 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           cleanup_workload,
           cleanup_node_pool,
       )
-      # pylint: enable=pointless-statement
