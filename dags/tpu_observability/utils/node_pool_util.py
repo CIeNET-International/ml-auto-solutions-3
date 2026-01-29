@@ -375,14 +375,12 @@ def delete_one_random_node(
 
   target_node = random.choice(nodes_list)
 
-  # 認證步驟 (通用)
   auth_command = (
       f"gcloud container clusters get-credentials {node_pool.cluster_name} "
       f"--project={node_pool.project_id} --location={node_pool.location}"
   )
   subprocess.run_exec(auth_command)
 
-  # 根據 spec.target 決定指令 (對齊範例的 match-case 邏輯)
   match spec.target:
     case NodeOperationTarget.DELETE:
       logging.info("Selected node for deletion: %s", target_node)
