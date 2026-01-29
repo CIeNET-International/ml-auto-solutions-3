@@ -399,7 +399,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             node_pool=cluster_info_2,
         )
 
-      apply_time = jobset.run_workload.override(owner=test_owner.YUNA_T)(
+      workload_result = jobset.run_workload.override(owner=test_owner.YUNA_T)(
           node_pool=cluster_info,
           yaml_config=jobset_config.generate_yaml(
               workload_script=workload_script
@@ -414,7 +414,11 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 
       wait_for_job_start = jobset.wait_for_jobset_started.override(
           task_id="wait_for_job_start"
-      )(cluster_info, pod_name_list=pod_names, job_apply_time=apply_time)
+      )(
+          cluster_info,
+          pod_name_list=pod_names,
+          job_apply_time=workload_result["apply_time"],
+      )
 
       outputs_of_tpu_info = (
           get_tpu_info_from_pod.override(task_id="get_tpu_info")
@@ -471,14 +475,10 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
       )(
           node_pool=cluster_info,
-          jobset_name=(
-              "{{ ti.xcom_pull(task_ids='v"
-              + config.tpu_version.value
-              + ".run_workload', key='jobset_name') }}"
-          ),
+          jobset_name=workload_result["jobset_name"],
           namespace=jobset_config.namespace,
       ).as_teardown(
-          setups=apply_time
+          setups=workload_result
       )
 
       # Keyword arguments are generated dynamically at runtime (pylint does not
@@ -520,7 +520,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           cluster_info,
           cluster_info_2,
           create_node_pool,
-          apply_time,
+          workload_result,
           pod_names,
           wait_for_job_start,
           outputs_of_tpu_info,

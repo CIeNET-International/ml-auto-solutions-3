@@ -384,13 +384,12 @@ def get_running_pods(
   return running_pods
 
 
-@task
+@task(multiple_outputs=True)
 def run_workload(
     node_pool: node_pool_info,
     yaml_config: str,
     namespace: str,
-    **context,
-) -> TimeUtil:
+) -> dict:
   """
   Applies the specified YAML file to the GKE cluster.
 
@@ -398,14 +397,13 @@ def run_workload(
     node_pool: Configuration object with cluster details.
     yaml_config: The JobSet object containing YAML configuration.
     namespace: The Kubernetes namespace to apply the JobSet.
+
+  Returns:
+    A dict containing 'apply_time' (TimeUtil) and 'jobset_name' (str).
   """
-  # Parse jobset_name from yaml_config and push to XCom for downstream tasks
-  ti = context.get("ti")
-  if ti:
-    match = re.search(r"name: (tpu-info-\d+-\d+)", yaml_config)
-    if match:
-      jobset_name = match.group(1)
-      ti.xcom_push(key="jobset_name", value=jobset_name)
+  # Parse jobset_name from yaml_config
+  match = re.search(r"name: (tpu-info-\d+-\d+)", yaml_config)
+  jobset_name = match.group(1) if match else ""
 
   with tempfile.NamedTemporaryFile() as temp_config_file:
     env = os.environ.copy()
@@ -421,7 +419,10 @@ def run_workload(
     subprocess.run_exec(cmd, env=env)
 
     current_time_utc = datetime.datetime.now(datetime.timezone.utc)
-    return TimeUtil.from_datetime(current_time_utc)
+    return {
+        "apply_time": TimeUtil.from_datetime(current_time_utc),
+        "jobset_name": jobset_name,
+    }
 
 
 @task
