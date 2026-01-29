@@ -383,7 +383,7 @@ def get_running_pods(
   return running_pods
 
 
-@task
+@task(task_id="run_workload")
 def run_workload(
     node_pool: node_pool_info, yaml_config: str, namespace: str
 ) -> TimeUtil:
@@ -412,7 +412,7 @@ def run_workload(
     return TimeUtil.from_datetime(current_time_utc)
 
 
-@task
+@task(task_id="end_all_jobsets")
 def end_workload(node_pool: node_pool_info, jobset_name: str, namespace: str):
   """
   Deletes all JobSets from the GKE cluster to clean up resources.
@@ -498,7 +498,7 @@ def delete_one_random_pod(
 
   Raises:
     AirflowFailException: If no running pods are found in the specified
-      namespace.
+    namespace.
   """
   running_pods = get_running_pods(node_pool=node_pool, namespace=namespace)
   if not running_pods:
@@ -651,7 +651,12 @@ def wait_for_jobset_status_occurrence(
   return ready_replicas > 0
 
 
-@task.sensor(poke_interval=30, timeout=600, mode="poke")
+@task.sensor(
+    task_id="wait_for_all_pods_running",
+    poke_interval=30,
+    timeout=600,
+    mode="reschedule",
+)
 def wait_for_all_pods_running(num_pods: int, node_pool: node_pool_info):
   num_running = len(get_running_pods(node_pool=node_pool, namespace="default"))
   return num_running == num_pods
