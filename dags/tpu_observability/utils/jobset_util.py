@@ -141,6 +141,15 @@ class Workload:
       ensure_ascii=False,
   )
 
+  SCRIPTS = {
+      "JAX_TPU_BENCHMARK": JAX_TPU_BENCHMARK,
+  }
+
+  @classmethod
+  def get_script(cls, workload_type: str) -> str:
+    """Returns the script string."""
+    return cls.SCRIPTS.get(workload_type)
+
 
 # pylint: disable=line-too-long
 _TEMPLATE = string.Template(
