@@ -294,6 +294,9 @@ with models.DAG(
         )(
             node_pool=cluster_info_2,
         )
+
+        _ = [create_first_node_pool, create_second_node_pool]
+
       apply_time = jobset.run_workload(
           node_pool=cluster_info,
           yaml_config=jobset_config.generate_yaml(
@@ -301,8 +304,6 @@ with models.DAG(
           ),
           namespace=jobset_config.namespace,
       )
-
-      _ = [create_first_node_pool, create_second_node_pool]
 
       active_pods = jobset.list_pod_names.override(task_id="get_active_pod")(
           node_pool=cluster_info,
@@ -386,7 +387,7 @@ with models.DAG(
             setups=create_node_pool,
         )
 
-      chain(cleanup_first_node_pool, cleanup_second_node_pool)
+        chain(cleanup_first_node_pool, cleanup_second_node_pool)
 
       chain(
           create_node_pool,
