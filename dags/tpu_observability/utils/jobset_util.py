@@ -719,28 +719,6 @@ def wait_for_jobset_ttr_to_be_found(
 
 
 @task.sensor(poke_interval=30, timeout=600, mode="poke")
-def wait_for_jobset_status_occurrence(
-    replica_type: str, job_name: str, node_pool: node_pool_info
-):
-  """
-  A sensor which checks if are any jobset replicas in a status type.
-
-  Args:
-    replica_type(str): The type of status being checked for.
-    job_name(str): The name of the job replica which is run from the jobset.
-    node_pool(Info): The Info object containing the cluster information needed
-    for the kubernetes API to connect to it.
-  """
-  logging.info("Checking for number of replicas of type: %s", replica_type)
-  ready_replicas = get_replica_num(
-      replica_type=replica_type,
-      job_name=job_name,
-      node_pool=node_pool,
-  )
-  return ready_replicas > 0
-
-
-@task.sensor(poke_interval=30, timeout=600, mode="poke")
 def wait_for_all_pods_running(node_pool: node_pool_info, jobset_config: JobSet):
   num_running = len(
       get_running_pods(
