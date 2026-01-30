@@ -123,6 +123,15 @@ class Workload:
       ensure_ascii=False,
   )
 
+  SCRIPTS = {
+      "JAX_TPU_BENCHMARK": JAX_TPU_BENCHMARK,
+  }
+
+  @classmethod
+  def get_script(cls, workload_type: str) -> str:
+    """Returns the script string."""
+    return cls.SCRIPTS.get(workload_type)
+
 
 # pylint: disable=line-too-long
 _TEMPLATE = string.Template(
@@ -210,6 +219,7 @@ class JobSet:
   container_name: str
   image: str
   tpu_cores_per_pod: int
+  workload_type: str
 
   def generate_yaml(self, workload_script: Workload) -> str:
     """Generates the final JobSet YAML content.
