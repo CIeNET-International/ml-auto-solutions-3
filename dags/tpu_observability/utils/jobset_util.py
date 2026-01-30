@@ -34,6 +34,7 @@ from dags.tpu_observability.utils.node_pool_util import Info as node_pool_info
 from dags.tpu_observability.utils.time_util import TimeUtil
 from google.cloud.monitoring_v3 import types
 import kubernetes
+from xlml.apis import gcs
 from xlml.utils import gke
 
 
@@ -389,44 +390,83 @@ def get_running_pods(
   return running_pods
 
 
-@task
-def generate_jobset_name(dag_id: str) -> str:
+def _generate_jobset_name(dag_id_prefix: str) -> str:
   """
   Generates a jobset name.
 
   Args:
-    dag_id: The DAG ID to use as a prefix for the jobset name.
+    dag_id_prefix: The DAG ID to use as a prefix for the jobset name.
     (should be shorter than 40 characters to fit k8s naming 63 characters limit)
   Returns:
     A string representing the generated jobset name.
   """
   now_utc = datetime.datetime.now(datetime.timezone.utc)
   timestamp = now_utc.strftime("%Y%m%d%H%M%S")
-  dag_id_prefix = dag_id.replace("_", "-").lower()
+  dag_id_prefix = dag_id_prefix.replace("_", "-").lower()
 
   return f"{dag_id_prefix}-workload-{timestamp}"
 
 
 @task
-def run_workload(
-    node_pool: node_pool_info, yaml_config: str, namespace: str
-) -> TimeUtil:
+def build_jobset_from_gcs_yaml(
+    gcs_path: str,
+    dag_name: str,
+    **overrides,
+) -> JobSet:
+  """
+  Builds a JobSet instance by merging YAML defaults and generating
+  a timestamped name based on dag_id_prefix.
+
+  Args:
+    gcs_path: The GCS path to the YAML configuration file.
+    dag_name: The name of the DAG to extract specific configurations.
+    **overrides: Additional parameters to override default configurations.
+  """
+  config = gcs.load_yaml_from_gcs(gcs_path)
+  known_fields = {f.name for f in dataclasses.fields(JobSet)}
+  merged = {
+      k: v
+      for k, v in config.get("jobset_defaults", {}).items()
+      if k in known_fields
+  }
+  dag_cfg = config.get("dag", {}).get(dag_name, {})
+  dag_id_prefix = dag_cfg.get("dag_id_prefix")
+
+  for k, v in dag_cfg.items():
+    if k in known_fields and v is not None:
+      merged[k] = v
+
+  merged.update({k: v for k, v in overrides.items() if k in known_fields})
+  merged["jobset_name"] = _generate_jobset_name(dag_id_prefix)
+
+  logging.info(
+      f"Final JobSet '{merged['jobset_name']}' created for DAG '{dag_name}'"
+  )
+  return JobSet(**merged)
+
+
+@task
+def run_workload(node_pool: node_pool_info, jobset_config: JobSet) -> TimeUtil:
   """
   Applies the specified YAML file to the GKE cluster.
 
   Args:
     node_pool: Configuration object with cluster details.
-    yaml_config: The JobSet object containing YAML configuration.
-    namespace: The Kubernetes namespace to apply the JobSet.
+    jobset_config: The JobSet object containing YAML configuration.
+  Returns:
+    The UTC time when the workload was started.
   """
   with tempfile.NamedTemporaryFile() as temp_config_file:
     env = os.environ.copy()
     env["KUBECONFIG"] = temp_config_file.name
+    yaml_config = jobset_config.generate_yaml(
+        workload_script=Workload.JAX_TPU_BENCHMARK
+    )
 
     cmd = " && ".join([
         Command.get_credentials_command(node_pool),
         Command.k8s_apply_jobset_command(
-            temp_config_file.name, yaml_config, namespace
+            temp_config_file.name, yaml_config, jobset_config.namespace
         ),
     ])
 
@@ -437,7 +477,7 @@ def run_workload(
 
 
 @task
-def end_workload(node_pool: node_pool_info, jobset_name: str, namespace: str):
+def end_workload(node_pool: node_pool_info, jobset_config: JobSet):
   """
   Deletes all JobSets from the GKE cluster to clean up resources.
 
@@ -457,7 +497,9 @@ def end_workload(node_pool: node_pool_info, jobset_name: str, namespace: str):
     cmd = " && ".join([
         Command.get_credentials_command(node_pool),
         Command.k8s_delete_jobset_command(
-            temp_config_file.name, jobset_name, namespace
+            temp_config_file.name,
+            jobset_config.jobset_name,
+            jobset_config.namespace,
         ),
     ])
 
@@ -466,7 +508,7 @@ def end_workload(node_pool: node_pool_info, jobset_name: str, namespace: str):
 
 @task
 def list_pod_names(
-    node_pool: node_pool_info, jobset_name: str, namespace: str
+    node_pool: node_pool_info, jobset_config: JobSet
 ) -> list[str]:
   """
   Lists the names of all active pods in the specified namespace for a given
@@ -478,8 +520,7 @@ def list_pod_names(
 
   Args:
     node_pool: Configuration object with cluster details.
-    jobset_name: The name of the JobSet to filter pods by.
-    namespace: The Kubernetes namespace to query for pods.
+    jobset_config: The JobSet object containing configuration details.
 
   Returns:
     A list of strings representing the names of the active pods.
@@ -495,7 +536,9 @@ def list_pod_names(
     cmd = " && ".join([
         Command.get_credentials_command(node_pool),
         Command.k8s_get_pod_name_command(
-            temp_config_file.name, jobset_name, namespace
+            temp_config_file.name,
+            jobset_config.jobset_name,
+            jobset_config.namespace,
         ),
     ])
 
@@ -512,8 +555,7 @@ def list_pod_names(
 @task
 def delete_one_random_pod(
     node_pool: node_pool_info,
-    jobset_name,
-    namespace: str = "default",
+    jobset_config: JobSet,
 ):
   """
   Randomly selects and deletes one pod that is currently in the "running" state.
@@ -533,12 +575,16 @@ def delete_one_random_pod(
       namespace.
   """
   running_pods = get_running_pods(
-      node_pool=node_pool, jobset_name=jobset_name, namespace=namespace
+      node_pool=node_pool,
+      jobset_name=jobset_config.jobset_name,
+      namespace=jobset_config.namespace,
   )
   if not running_pods:
-    logging.error("No running pods found in namespace: %s", namespace)
+    logging.error(
+        "No running pods found in namespace: %s", jobset_config.namespace
+    )
     raise AirflowFailException(
-        f"No running pods found in namespace: {namespace}"
+        f"No running pods found in namespace: {jobset_config.namespace}"
     )
 
   target_pod = random.choice(running_pods)
@@ -551,7 +597,7 @@ def delete_one_random_pod(
     cmd = " && ".join([
         Command.get_credentials_command(node_pool),
         Command.k8s_delete_pod_command(
-            temp_config_file.name, target_pod, namespace
+            temp_config_file.name, target_pod, jobset_config.namespace
         ),
     ])
 
@@ -628,7 +674,7 @@ def wait_for_jobset_started(
 
 @task.sensor(poke_interval=60, timeout=3600, mode="poke")
 def wait_for_jobset_ttr_to_be_found(
-    node_pool: node_pool_info, jobset_name: str, start_time: TimeUtil = None
+    node_pool: node_pool_info, jobset_config: JobSet, start_time: TimeUtil = None
 ) -> bool:
   """Polls the jobset time-to-recover metric.
 
@@ -641,7 +687,7 @@ def wait_for_jobset_ttr_to_be_found(
 
   Args:
     node_pool (Info): An instance of the Info class containing GKE metadata.
-    jobset_name (str): The name of the JobSet to monitor.
+    jobset_config: An instance of the JobSet class representing the jobset configuration.
     start_time (TimeUtil, optional): The UTC timestamp to start polling from.
     If not provided, defaults to 60 minutes before the current time.
 
@@ -660,7 +706,7 @@ def wait_for_jobset_ttr_to_be_found(
       filter_str=(
           'metric.type="kubernetes.io/jobset/times_to_recover" '
           f'resource.labels.cluster_name="{node_pool.cluster_name}" '
-          f'resource.labels.entity_name="{jobset_name}"'
+          f'resource.labels.entity_name="{jobset_config.jobset_name}"'
       ),
       start_time=query_start,
       end_time=TimeUtil.from_datetime(now),
@@ -695,12 +741,13 @@ def wait_for_jobset_status_occurrence(
 
 
 @task.sensor(poke_interval=30, timeout=600, mode="poke")
-def wait_for_all_pods_running(
-    num_pods: int, node_pool: node_pool_info, jobset_name: str
-):
+def wait_for_all_pods_running(node_pool: node_pool_info, jobset_config: JobSet):
   num_running = len(
       get_running_pods(
-          node_pool=node_pool, jobset_name=jobset_name, namespace="default"
+          node_pool=node_pool,
+          jobset_name=jobset_config.jobset_name,
+          namespace="default",
       )
   )
+  num_pods = jobset_config.replicas * jobset_config.parallelism
   return num_running == num_pods

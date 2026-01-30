@@ -27,10 +27,11 @@ from dags import composer_env
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import tpu_monitoring_sdk_util as sdk
 from dags.tpu_observability.utils import node_pool_util as node_pool
-from dags.tpu_observability.utils.jobset_util import JobSet, Workload
+from dags.tpu_observability.utils.jobset_util import Workload
 from dags.tpu_observability.configs.common import (
     MachineConfigMap,
     GCS_CONFIG_PATH,
+    GCS_JOBSET_CONFIG_PATH,
 )
 
 
@@ -123,25 +124,9 @@ with models.DAG(
   with TaskGroup(  # pylint: disable=unexpected-keyword-arg
       group_id=f"v{config.tpu_version.value}"
   ):
-    jobset_name = jobset.generate_jobset_name.override(
-        task_id="generate_jobset_name"
-    )(dag_id="tpu_sdk")
-
-    jobset_config = JobSet(
-        jobset_name=jobset_name,
-        namespace="default",
-        max_restarts=5,
-        replicated_job_name="tpu-job-slice",
-        replicas=1,
-        backoff_limit=0,
-        completions=4,
-        parallelism=4,
-        tpu_accelerator_type="tpu-v6e-slice",
-        tpu_topology="4x4",
-        container_name="jax-tpu-worker",
-        image="asia-northeast1-docker.pkg.dev/cienet-cmcs/"
-        "yuna-docker/tpu-info:v0.8.1",
-        tpu_cores_per_pod=4,
+    jobset_config = jobset.build_jobset_from_gcs_yaml(
+        gcs_path=GCS_JOBSET_CONFIG_PATH,
+        dag_name="tpu_sdk_monitoring_validation",
     )
 
     cluster_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
@@ -160,16 +145,12 @@ with models.DAG(
 
     apply_time = jobset.run_workload.override(task_id="run_workload")(
         node_pool=cluster_info,
-        yaml_config=jobset_config.generate_yaml(
-            workload_script=Workload.JAX_TPU_BENCHMARK
-        ),
-        namespace=jobset_config.namespace,
+        jobset_config=jobset_config,
     )
 
     pod_names = jobset.list_pod_names.override(task_id="list_pod_names")(
         node_pool=cluster_info,
-        jobset_name=jobset_name,
-        namespace=jobset_config.namespace,
+        jobset_config=jobset_config,
     )
 
     wait_for_jobset_started = jobset.wait_for_jobset_started.override(
@@ -190,8 +171,7 @@ with models.DAG(
         task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
     )(
         node_pool=cluster_info,
-        jobset_name=jobset_name,
-        namespace=jobset_config.namespace,
+        jobset_config=jobset_config,
     ).as_teardown(
         setups=apply_time
     )
@@ -203,7 +183,7 @@ with models.DAG(
     )
 
     chain(
-        jobset_name,
+        jobset_config,
         cluster_info,
         create_node_pool,
         apply_time,
