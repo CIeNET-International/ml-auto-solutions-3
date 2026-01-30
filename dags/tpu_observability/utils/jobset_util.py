@@ -14,6 +14,7 @@
 
 """Utilities for managing JobSets in GKE clusters for TPU observability."""
 
+import enum
 import dataclasses
 import datetime
 import json
@@ -289,18 +290,6 @@ class Command:
     ])
 
   @staticmethod
-  def k8s_get_pod_name_command(
-      kubeconfig: str, jobset_name: str, namespace: str
-  ) -> str:
-    """Generates a kubectl command to get pod names for a specific JobSet."""
-    return " ".join([
-        f"kubectl --kubeconfig={kubeconfig} get pods",
-        f"-n {namespace}",
-        f"-l jobset.sigs.k8s.io/jobset-name={jobset_name}",
-        "-o jsonpath={.items[*].metadata.name}",
-    ])
-
-  @staticmethod
   def k8s_delete_pod_command(
       kubeconfig: str, pod_name: str, namespace: str
   ) -> str:
@@ -308,6 +297,31 @@ class Command:
         f"kubectl --kubeconfig={kubeconfig} delete pod {pod_name}",
         f"-n {namespace} --wait=false",
     ])
+
+  class K8sGetPodsOutput(enum.Enum):
+    DEFAULT = "json"
+    POD_NAME = "jsonpath={.items[*].metadata.name}"
+
+  @staticmethod
+  def k8s_get_pods(
+      jobset_name: str,
+      namespace: str,
+      output: K8sGetPodsOutput = K8sGetPodsOutput.DEFAULT,
+  ) -> str:
+    """Generates the kubectl command to get pods for a specific JobSet."""
+    # -l filters by the official JobSet label to catch all pods/slices
+    return (
+        f"kubectl get pods -n {namespace} "
+        f"-l jobset.sigs.k8s.io/jobset-name={jobset_name} "
+        f"-o {output.value}"
+    )
+
+  @staticmethod
+  def k8s_get_pod_name_command(jobset_name: str, namespace: str) -> str:
+    """Alias for getting just the names, maintaining existing API."""
+    return Command.k8s_get_pods(
+        jobset_name, namespace, Command.K8sGetPodsOutput.POD_NAME
+    )
 
 
 def get_replica_num(
@@ -380,10 +394,11 @@ def get_running_pods(
     env = os.environ.copy()
     env["KUBECONFIG"] = os.path.join(tmpdir, "kubeconfig")
 
+    get_pods_cmd = Command.k8s_get_pod_name_command(jobset_name, namespace)
+
     cmd = " && ".join([
         Command.get_credentials_command(node_pool),
-        f"kubectl get pods -n {namespace} "
-        f"-l jobset.sigs.k8s.io/jobset-name={jobset_name} -o json",
+        get_pods_cmd,
     ])
 
     stdout = subprocess.run_exec(cmd, env=env)
@@ -546,7 +561,6 @@ def list_pod_names(
     cmd = " && ".join([
         Command.get_credentials_command(node_pool),
         Command.k8s_get_pod_name_command(
-            temp_config_file.name,
             jobset_config.jobset_name,
             jobset_config.namespace,
         ),
