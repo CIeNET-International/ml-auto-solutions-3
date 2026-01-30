@@ -339,32 +339,35 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       """Generates a second node pool name."""
       return f"{node_pool_info.node_pool_name}-2"
 
-    jobset_config = JobSet(
-        jobset_name="tpu-info-format-validation-workload",
-        namespace="default",
-        max_restarts=5,
-        replicated_job_name="tpu-job-slice",
-        replicas=2,
-        backoff_limit=0,
-        completions=4,
-        parallelism=4,
-        tpu_accelerator_type="tpu-v6e-slice",
-        tpu_topology="4x4",
-        container_name="jax-tpu-worker",
-        image=(
-            "asia-northeast1-docker.pkg.dev/cienet-cmcs/yuna-docker/"
-            "tpu-info:v0.8.1"
-        ),
-        tpu_cores_per_pod=4,
-    )
-
-    workload_script = Workload.JAX_TPU_BENCHMARK
-
     # Keyword arguments are generated dynamically at runtime (pylint does not
     # know this signature).
     with TaskGroup(  # pylint: disable=unexpected-keyword-arg
         group_id=f"v{config.tpu_version.value}"
     ):
+      jobset_name = jobset.generate_jobset_name.override(
+          task_id="generate_jobset_name"
+      )(dag_id="tpu_info")
+
+      jobset_config = JobSet(
+          jobset_name=jobset_name,
+          namespace="default",
+          max_restarts=5,
+          replicated_job_name="tpu-job-slice",
+          replicas=2,
+          backoff_limit=0,
+          completions=4,
+          parallelism=4,
+          tpu_accelerator_type="tpu-v6e-slice",
+          tpu_topology="4x4",
+          container_name="jax-tpu-worker",
+          image=(
+              "asia-northeast1-docker.pkg.dev/cienet-cmcs/yuna-docker/"
+              "tpu-info:v0.8.1"
+          ),
+          tpu_cores_per_pod=4,
+      )
+      workload_script = Workload.JAX_TPU_BENCHMARK
+
       cluster_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
           task_id="build_node_pool_info_from_gcs_yaml"
       )(
@@ -375,7 +378,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           tpu_topology=config.tpu_topology,
       )
 
-      cluster_info_2 = node_pool.copy_node_pool_info_with_override(
+      cluster_info_2 = node_pool.copy_node_pool_info_with_override.override(
+          task_id="copy_node_pool_info_with_override"
+      )(
           info=cluster_info,
           node_pool_name=generate_second_node_pool_name(cluster_info),
       )
@@ -399,7 +404,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             node_pool=cluster_info_2,
         )
 
-      apply_time = jobset.run_workload.override(owner=test_owner.YUNA_T)(
+      apply_time = jobset.run_workload.override(
+          owner=test_owner.YUNA_T, task_id="run_workload"
+      )(
           node_pool=cluster_info,
           yaml_config=jobset_config.generate_yaml(
               workload_script=workload_script
@@ -413,7 +420,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           retry_delay=datetime.timedelta(seconds=10),
       )(
           node_pool=cluster_info,
-          jobset_name=jobset_config.jobset_name,
+          jobset_name=jobset_name,
           namespace=jobset_config.namespace,
       )
 
@@ -476,7 +483,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
       )(
           node_pool=cluster_info,
-          jobset_name=jobset_config.jobset_name,
+          jobset_name=jobset_name,
           namespace=jobset_config.namespace,
       ).as_teardown(
           setups=apply_time
@@ -513,11 +520,12 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           ],
       )
 
-      [create_first_node_pool, create_second_node_pool]
+      chain(create_first_node_pool, create_second_node_pool)
 
       chain(cleanup_first_node_pool, cleanup_second_node_pool)
 
       chain(
+          jobset_name,
           cluster_info,
           cluster_info_2,
           create_node_pool,

@@ -390,6 +390,24 @@ def get_running_pods(
 
 
 @task
+def generate_jobset_name(dag_id: str) -> str:
+  """
+  Generates a jobset name.
+
+  Args:
+    dag_id: The DAG ID to use as a prefix for the jobset name.
+    (should be shorter than 40 characters to fit k8s naming 63 characters limit)
+  Returns:
+    A string representing the generated jobset name.
+  """
+  now_utc = datetime.datetime.now(datetime.timezone.utc)
+  timestamp = now_utc.strftime("%Y%m%d%H%M%S")
+  dag_id_prefix = dag_id.replace("_", "-").lower()
+
+  return f"{dag_id_prefix}-workload-{timestamp}"
+
+
+@task
 def run_workload(
     node_pool: node_pool_info, yaml_config: str, namespace: str
 ) -> TimeUtil:

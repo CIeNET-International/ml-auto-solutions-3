@@ -118,8 +118,17 @@ with models.DAG(
   for machine in MachineConfigMap:
     config = machine.value
 
+  # Keyword arguments are generated dynamically at runtime (pylint does not
+  # know this signature).
+  with TaskGroup(  # pylint: disable=unexpected-keyword-arg
+      group_id=f"v{config.tpu_version.value}"
+  ):
+    jobset_name = jobset.generate_jobset_name.override(
+        task_id="generate_jobset_name"
+    )(dag_id="tpu_sdk")
+
     jobset_config = JobSet(
-        jobset_name="sdk-monitoring-v6e-workload",
+        jobset_name=jobset_name,
         namespace="default",
         max_restarts=5,
         replicated_job_name="tpu-job-slice",
@@ -135,11 +144,6 @@ with models.DAG(
         tpu_cores_per_pod=4,
     )
 
-  # Keyword arguments are generated dynamically at runtime (pylint does not
-  # know this signature).
-  with TaskGroup(  # pylint: disable=unexpected-keyword-arg
-      group_id=f"v{config.tpu_version.value}"
-  ):
     cluster_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
         task_id="build_node_pool_info_from_gcs_yaml"
     )(
@@ -164,7 +168,7 @@ with models.DAG(
 
     pod_names = jobset.list_pod_names.override(task_id="list_pod_names")(
         node_pool=cluster_info,
-        jobset_name=jobset_config.jobset_name,
+        jobset_name=jobset_name,
         namespace=jobset_config.namespace,
     )
 
@@ -186,7 +190,7 @@ with models.DAG(
         task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
     )(
         node_pool=cluster_info,
-        jobset_name=jobset_config.jobset_name,
+        jobset_name=jobset_name,
         namespace=jobset_config.namespace,
     ).as_teardown(
         setups=apply_time
@@ -199,6 +203,8 @@ with models.DAG(
     )
 
     chain(
+        jobset_name,
+        cluster_info,
         create_node_pool,
         apply_time,
         pod_names,
