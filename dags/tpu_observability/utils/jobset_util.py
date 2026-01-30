@@ -414,6 +414,8 @@ def get_running_pods(
     env = os.environ.copy()
     env["KUBECONFIG"] = os.path.join(tmpdir, "kubeconfig")
 
+    get_pods_cmd = Command.k8s_get_pod_name_command(jobset_name, namespace)
+
     cmd = " && ".join([
         Command.get_credentials_command(node_pool),
         Command.k8s_get_pod_name_command(
