@@ -20,7 +20,6 @@ import json
 import logging
 import os
 import random
-import re
 import string
 import tempfile
 import textwrap
@@ -36,6 +35,19 @@ from dags.tpu_observability.utils.time_util import TimeUtil
 from google.cloud.monitoring_v3 import types
 import kubernetes
 from xlml.utils import gke
+
+
+def generate_jobset_name(prefix: str) -> str:
+  """Generates a unique jobset name based on execution date.
+
+  Args:
+      prefix: The prefix for the jobset name (e.g., 'tpu-info', 'benchmark').
+
+  Returns:
+      A Jinja template string that will be rendered at task execution time
+      to produce a name in the format: {prefix}-YYYYMMDD-HHMMSS
+  """
+  return f"{prefix}-{{{{ execution_date.strftime('%Y%m%d-%H%M%S') }}}}"
 
 
 class Workload:
@@ -384,12 +396,12 @@ def get_running_pods(
   return running_pods
 
 
-@task(multiple_outputs=True)
+@task
 def run_workload(
     node_pool: node_pool_info,
     yaml_config: str,
     namespace: str,
-) -> dict:
+) -> TimeUtil:
   """
   Applies the specified YAML file to the GKE cluster.
 
@@ -399,12 +411,8 @@ def run_workload(
     namespace: The Kubernetes namespace to apply the JobSet.
 
   Returns:
-    A dict containing 'apply_time' (TimeUtil) and 'jobset_name' (str).
+    TimeUtil: The time when the workload was applied.
   """
-  # Parse jobset_name from yaml_config
-  match = re.search(r"name: (tpu-info-\d+-\d+)", yaml_config)
-  jobset_name = match.group(1) if match else ""
-
   with tempfile.NamedTemporaryFile() as temp_config_file:
     env = os.environ.copy()
     env["KUBECONFIG"] = temp_config_file.name
@@ -419,10 +427,7 @@ def run_workload(
     subprocess.run_exec(cmd, env=env)
 
     current_time_utc = datetime.datetime.now(datetime.timezone.utc)
-    return {
-        "apply_time": TimeUtil.from_datetime(current_time_utc),
-        "jobset_name": jobset_name,
-    }
+    return TimeUtil.from_datetime(current_time_utc)
 
 
 @task

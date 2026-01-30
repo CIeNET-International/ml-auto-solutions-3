@@ -43,7 +43,11 @@ from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.tpu_observability.utils import tpu_info_util as tpu_info
-from dags.tpu_observability.utils.jobset_util import JobSet, Workload
+from dags.tpu_observability.utils.jobset_util import (
+    generate_jobset_name,
+    JobSet,
+    Workload,
+)
 
 
 @task
@@ -340,7 +344,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       return f"{node_pool_info.node_pool_name}-2"
 
     jobset_config = JobSet(
-        jobset_name="tpu-info-{{ ds_nodash }}-{{ ti.job_id }}",
+        jobset_name=generate_jobset_name("tpu-info"),
         namespace="default",
         max_restarts=5,
         replicated_job_name="tpu-job-slice",
@@ -417,7 +421,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       )(
           cluster_info,
           pod_name_list=pod_names,
-          job_apply_time=workload_result["apply_time"],
+          job_apply_time=workload_result,
       )
 
       outputs_of_tpu_info = (
@@ -475,7 +479,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
       )(
           node_pool=cluster_info,
-          jobset_name=workload_result["jobset_name"],
+          jobset_name=jobset_config.jobset_name,
           namespace=jobset_config.namespace,
       ).as_teardown(
           setups=workload_result
