@@ -371,14 +371,17 @@ def get_jobset_pod_names(
     jobset_filter = f"-l jobset.sigs.k8s.io/jobset-name={jobset_name}"
 
     # combine the jobset filter with original pod_name command from command class
-    cmd = " && ".join([Command.get_credentials_command(node_pool),
-                       f"{Command.k8s_get_pod_name_command(temp_config_file.name, namespace)} {jobset_filter}"
-                      ])
+    cmd = " && ".join([
+        Command.get_credentials_command(node_pool),
+        f"{Command.k8s_get_pod_name_command(temp_config_file.name, namespace)} {jobset_filter}"
+    ])
 
     stdout = subprocess.run_exec(cmd, env=env)
 
     if not stdout or not stdout.strip():
-      logging.warning(f"No pods found for JobSet: {jobset_name} in namespace: {namespace}")
+      logging.warning(
+          f"No pods found for JobSet: {jobset_name} in namespace: {namespace}"
+      )
       return []
 
     pod_list = stdout.strip().split()
@@ -668,7 +671,7 @@ def wait_for_jobset_metric_to_be_logged(
       "jobset_healthiness_type": "",
       "interruption_reason": "",
       "pod_name": ""
-    }
+  }
 
   pod_name = get_jobset_pod_names(node_pool, jobset_name)
   jobset_metric["pod_name"] = pod_name
@@ -723,13 +726,13 @@ def wait_for_jobset_metric_to_be_logged(
   interruption_filter = (
     'metric.type="tpu.googleapis.com/instance/interruption_count" AND '
     f'resource.labels.project_id="{node_pool.project_id}"'
-    )
+  )
 
   interruption_results = client.list_time_series(
       name=f"projects/{node_pool.project_id}",
       filter=interruption_filter,
       interval=interval,
-      view=monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.FULL
+      view=monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.FULL,
   )
 
   for series in interruption_results:
