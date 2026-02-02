@@ -689,7 +689,9 @@ def wait_for_jobset_started(
 
 @task.sensor(poke_interval=60, timeout=3600, mode="poke")
 def wait_for_jobset_ttr_to_be_found(
-    node_pool: node_pool_info, jobset_config: JobSet, start_time: TimeUtil = None
+    node_pool: node_pool_info, 
+    jobset_config: JobSet, 
+    start_time: TimeUtil = None,
 ) -> bool:
   """Polls the jobset time-to-recover metric.
 
