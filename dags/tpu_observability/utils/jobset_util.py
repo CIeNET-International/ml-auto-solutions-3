@@ -368,10 +368,8 @@ def get_jobset_pod_names(
     env = os.environ.copy()
     env["KUBECONFIG"] = temp_config_file.name
 
-    # add additional filter to retrive pods related to current jobset
     jobset_filter = f"-l jobset.sigs.k8s.io/jobset-name={jobset_name}"
 
-    # combine the jobset filter with original pod_name command from command class
     cmd = " && ".join([
         Command.get_credentials_command(node_pool),
         f"{Command.k8s_get_pod_name_command(temp_config_file.name, namespace)} {jobset_filter}",
@@ -643,18 +641,19 @@ def wait_for_jobset_metric_to_be_logged(
 ) -> PokeReturnValue:
   """Polls the metric related to the node pools and the current jobset.
 
-  A sensor task which polls the latest jobset metric (when the workload terminated)
-  every 60 seconds for 60 minutes. 60 minutes is used here since this
-  metric does have a long latency before appearing in monitoring, typically
-  between 30-45 minutes. While it may be possible for this latency to be
-  longer than 60 minutes, it would be exceedingly rare, and it would be
-  impractical for the test to run longer. Then jobset metric are logged to the xlml
-  dahsboard.
+  A sensor task which polls the latest jobset metric (when the workload
+  terminated) every 60 seconds for 60 minutes. 60 minutes is used here
+  since this metric does have a long latency before appearing in monitoring,
+  typically between 30-45 minutes. While it may be possible for this
+  latency to be longer than 60 minutes, it would be exceedingly rare, and
+  it would be impractical for the test to run longer. Then jobset metric
+  are logged to the xlml dahsboard.
 
-  The logged metric is the last point in the time series (final state of the jobset
-  before it is terminated). The task can be modified to include the complete
-  time series instead of the last point. The interruption reason may return empty
-  string when there are no interruption event.
+  The logged metric is the last point in the time series (final state
+  of the jobset before it is terminated). The task can be modified to
+  include the complete time series instead of the last point. The
+  interruption reason may return empty string when there are no interruption
+  event.
 
   Current approach is to allow this task to run parallel to the
   "wait_for_jobset_ttr_to_be_found" task.
@@ -740,7 +739,6 @@ def wait_for_jobset_metric_to_be_logged(
   )
 
   for series in interruption_results:
-    node_name = series.resource.labels.get("node_name")
     for point in series.points:
       val = (
           point.value.int64_value
@@ -752,7 +750,7 @@ def wait_for_jobset_metric_to_be_logged(
           latest_interruption_time = point.interval.end_time.timestamp()
           jobset_metric[
               "interruption_reason"
-          ] = reason = series.metric.labels.get("reason", "")
+          ] = series.metric.labels.get("reason", "")
         break
 
   if not jobset_metric["jobset_healthiness_type"]:
