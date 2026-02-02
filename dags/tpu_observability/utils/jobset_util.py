@@ -307,11 +307,11 @@ class Command:
     )
 
   @staticmethod
-  def k8s_get_pod_name_command(jobset_name: str, namespace: str) -> str:
+  def k8s_get_pod_name_command(
+      jobset_name: str, namespace: str, output: K8sGetPodsOutput
+  ) -> str:
     """Alias for getting just the names, maintaining existing API."""
-    return Command.k8s_get_pods(
-        jobset_name, namespace, Command.K8sGetPodsOutput.POD_NAME
-    )
+    return Command.k8s_get_pods(jobset_name, namespace, output)
 
 
 def get_replica_num(
@@ -386,7 +386,9 @@ def get_running_pods(
 
     cmd = " && ".join([
         Command.get_credentials_command(node_pool),
-        Command.k8s_get_pod_name_command(jobset_name, namespace),
+        Command.k8s_get_pod_name_command(
+            jobset_name, namespace, Command.K8sGetPodsOutput.DEFAULT
+        ),
     ])
 
     stdout = subprocess.run_exec(cmd, env=env)
@@ -551,6 +553,7 @@ def list_pod_names(
         Command.k8s_get_pod_name_command(
             jobset_config.jobset_name,
             jobset_config.namespace,
+            Command.K8sGetPodsOutput.POD_NAME,
         ),
     ])
 
