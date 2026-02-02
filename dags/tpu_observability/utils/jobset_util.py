@@ -670,7 +670,7 @@ def wait_for_jobset_metric_to_be_logged(
       "accelerator_type": node_pool.machine_type,
       "jobset_healthiness_type": "",
       "interruption_reason": "",
-      "pod_name": ""
+      "pod_name": "",
   }
 
   pod_name = get_jobset_pod_names(node_pool, jobset_name)
@@ -707,7 +707,7 @@ def wait_for_jobset_metric_to_be_logged(
         name=f"projects/{node_pool.project_id}",
         filter=health_filter,
         interval=interval,
-        view=monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.FULL
+        view=monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.FULL,
     )
 
     health_results = client.list_time_series(request=request)
@@ -724,8 +724,8 @@ def wait_for_jobset_metric_to_be_logged(
             break
 
   interruption_filter = (
-    'metric.type="tpu.googleapis.com/instance/interruption_count" AND '
-    f'resource.labels.project_id="{node_pool.project_id}"'
+      'metric.type="tpu.googleapis.com/instance/interruption_count" AND '
+      f'resource.labels.project_id="{node_pool.project_id}"'
   )
 
   interruption_results = client.list_time_series(
