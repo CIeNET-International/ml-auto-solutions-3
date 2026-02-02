@@ -121,7 +121,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       )
 
       rollback_node_pool = node_pool.rollback(node_pool=cluster_info)
-      wait_for_jobset_metric_to_be_logged = wait_for_jobset_metric_to_be_logged(
+      wait_for_jobset_metric_to_be_logged = jobset.wait_for_jobset_metric_to_be_logged(
           node_pool=cluster_info,
           jobset_name=jobset_config.jobset_name,
       )
