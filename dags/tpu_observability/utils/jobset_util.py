@@ -748,9 +748,9 @@ def wait_for_jobset_metric_to_be_logged(
       if val > 0:
         if point.interval.end_time.timestamp() > latest_interruption_time:
           latest_interruption_time = point.interval.end_time.timestamp()
-          jobset_metric[
-              "interruption_reason"
-          ] = series.metric.labels.get("reason", "")
+          jobset_metric["interruption_reason"] = series.metric.labels.get(
+              "reason", ""
+          )
         break
 
   if not jobset_metric["jobset_healthiness_type"]:
