@@ -346,6 +346,7 @@ def get_replica_num(
 
   return replicas
 
+
 def get_jobset_pod_names(
     node_pool: node_pool_info, jobset_name: str, namespace="default"
 ) -> list[str]:
@@ -387,6 +388,7 @@ def get_jobset_pod_names(
     pod_list = stdout.strip().split()
     return pod_list
 
+
 def get_running_pods(
     node_pool: node_pool_info, namespace="default"
 ) -> list[str]:
@@ -424,6 +426,7 @@ def get_running_pods(
     logging.info("Running pods: %s", running_pods)
 
   return running_pods
+
 
 @task
 def run_workload(
@@ -633,6 +636,7 @@ def wait_for_jobset_started(
 
   return all(p > threshold_value for p in last_n_data_points)
 
+
 @task.sensor(poke_interval=60, timeout=3600, mode="poke")
 def wait_for_jobset_metric_to_be_logged(
     node_pool: node_pool_info, jobset_name: str
@@ -756,6 +760,7 @@ def wait_for_jobset_metric_to_be_logged(
 
   composer.log_metadata_for_xlml_dashboard(jobset_metric)
   return PokeReturnValue(is_done=True)
+
 
 @task.sensor(poke_interval=60, timeout=3600, mode="poke")
 def wait_for_jobset_ttr_to_be_found(
