@@ -121,7 +121,12 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       )
 
       rollback_node_pool = node_pool.rollback(node_pool=cluster_info)
-
+      wait_for_jobset_metric_to_be_logged = (
+          jobset.wait_for_jobset_metric_to_be_logged(
+              node_pool=cluster_info,
+              jobset_name=jobset_config.jobset_name,
+          )
+      )
       wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found(
           node_pool=cluster_info,
           jobset_name=jobset_config.jobset_name,
@@ -149,7 +154,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           start_workload,
           ensure_all_pods_running,
           rollback_node_pool,
-          wait_for_metric_upload,
+          [wait_for_metric_upload, wait_for_jobset_metric_to_be_logged],
           cleanup_workload,
           cleanup_node_pool,
       )
