@@ -23,7 +23,7 @@ import uuid
 
 from absl import logging
 import airflow
-from airflow.decorators import task_group, task
+from airflow.decorators import task, task_group
 from airflow.utils.task_group import TaskGroup
 from airflow.operators.python import get_current_context
 from airflow.models import Variable
@@ -363,8 +363,6 @@ def ssh_tpu(
      only.
    env: environment variables to be pass to the ssh runner session using dict.
   """
-
-
   creds, _ = google.auth.default()
   client = tpu_api.TpuClient(credentials=creds)
 
