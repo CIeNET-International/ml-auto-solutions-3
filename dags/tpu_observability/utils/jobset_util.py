@@ -23,18 +23,21 @@ import random
 import string
 import tempfile
 import textwrap
+import time
+import kubernetes
+import google.cloud.monitoring_v3 as monitoring_v3
 from typing import Final
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
+from airflow.sensors.base import PokeReturnValue
 
 from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.tpu_observability.utils.gcp_util import query_time_series
 from dags.tpu_observability.utils.node_pool_util import Info as node_pool_info
 from dags.tpu_observability.utils.time_util import TimeUtil
 from google.cloud.monitoring_v3 import types
-import kubernetes
-from xlml.utils import gke
+from xlml.utils import gke, composer
 
 
 class Workload:
@@ -343,6 +346,41 @@ def get_replica_num(
 
   return replicas
 
+def get_jobset_pod_names(
+    node_pool: node_pool_info, jobset_name: str, namespace="default"
+) -> list[str]:
+  """
+  Get a list of pods which are related to the current jobset
+
+  Args:
+    node_pool: The Info object containing the cluster information needed for
+      the kubernetes API to connect to it.
+    jobset_name: current jobset
+    namespace: The kubernetes namespace which is being searched for running
+      pods.
+  Returns:
+    A list containing the names of all the pods related to the current jobset as
+      strings.
+  """
+
+  with tempfile.NamedTemporaryFile() as temp_config_file:
+    env = os.environ.copy()
+    env["KUBECONFIG"] = temp_config_file.name
+
+    jobset_filter = f"-l jobset.sigs.k8s.io/jobset-name={jobset_name}"
+
+    cmd = " && ".join([Command.get_credentials_command(node_pool),
+                       f"{Command.k8s_get_pod_name_command(temp_config_file.name, namespace)} {jobset_filter}"
+                      ])
+
+    stdout = subprocess.run_exec(cmd, env=env)
+
+    if not stdout or not stdout.strip():
+      logging.warning(f"No pods found for JobSet: {jobset_name} in namespace: {namespace}")
+      return []
+
+    pod_list = stdout.strip().split()
+    return pod_list
 
 def get_running_pods(
     node_pool: node_pool_info, namespace="default"
@@ -381,74 +419,6 @@ def get_running_pods(
     logging.info("Running pods: %s", running_pods)
 
   return running_pods
-
-
-def get_jobset_metric(node_pool: node_pool_info, jobset_name: str, timeout=30):
-  client = monitoring_v3.MetricServiceClient()
-
-  node_pool_name = {
-      "cluster_project": node_pool.project_id,
-      "region": node_pool.location,
-      "zone": node_pool.node_locations,
-      "cluster_name": node_pool.cluster_name,
-      "node_pool_name": node_pool.node_pool_name,
-      "accelerator_type": node_pool.machine_type,
-  }
-
-  request = monitoring_v3.ListTimeSeriesRequest(
-      name=f"projects/{node_pool.project_id}",
-      filter=(
-          f'metric.type="prometheus/kube_jobset_status_condition/gauge" AND '
-          f'resource.labels.project_id="{node_pool.project_id}" AND '
-          f'resource.labels.cluster_name="{node_pool.cluster_name}" AND '
-      ),
-      interval=monitoring_v3.TimeInterval({
-          "start_time": {"seconds":int(start_time)},
-          "end_time": {"seconds": int(current_time-60)}
-      }),
-      view=monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.FULLvie,
-  )
-
-  start_time = time.time()
-  while(time.time() - start_time < (timeout*60)):
-    current_time = time.time()
-    request.interval = monitoring_v3.TimeInterval({
-          "start_time": {"seconds":int(start_time)},
-          "end_time": {"seconds": int(current_time-60)}
-      })
-
-    results = client.list_time_series(request=request)
-
-    for series in results:
-      status = series.metric.labels.get("condition")
-      val = series.points[0].value.double_value
-
-      # If the gauge is 1, that condition is active
-      if val == 1.0:
-          print(f"[{time.strftime('%H:%M:%S')}] Status: {status}")
-          if status in ["Completed", "Failed"]:
-            print("🏁 Terminal state reached. Exiting monitor.")
-            break
-
-    time.sleep(30)
-
-# # --- EXECUTION ---
-# project_id = "your-project-id"
-
-# # 1. Get JobSet Healthiness (Conditions)
-# health_data = query_gke_metric(project_id, "prometheus.googleapis.com/kube_jobset_status_condition/gauge")
-# for series in health_data:
-#     # 'condition' label represents health type (Ready, Failed, Suspended)
-#     print(f"JobSet: {series.metric.labels['jobset_name']} | Status: {series.metric.labels['condition']}")
-
-# # 2. Get Interruption Reason
-# # Note: This uses the standard kubernetes.io prefix, not Prometheus
-# interruption_data = query_gke_metric(project_id, "kubernetes.io/node/interruption_count")
-# for series in interruption_data:
-#     reason = series.metric.labels.get('interruption_reason', 'Unknown')
-#     print(f"Node: {series.resource.labels['node_name']} | Interruption Reason: {reason}")
-
-
 
 @task
 def run_workload(
@@ -658,6 +628,120 @@ def wait_for_jobset_started(
 
   return all(p > threshold_value for p in last_n_data_points)
 
+@task.sensor(poke_interval=60, timeout=3600, mode="poke")
+def wait_for_jobset_metric_to_be_logged(
+    node_pool: node_pool_info, jobset_name: str
+) -> PokeReturnValue:
+  """Polls the metric related to the node pools and the current jobset.
+
+  A sensor task which polls the latest jobset metric (when the workload terminated)
+  every 60 seconds for 60 minutes. 60 minutes is used here since this
+  metric does have a long latency before appearing in monitoring, typically
+  between 30-45 minutes. While it may be possible for this latency to be
+  longer than 60 minutes, it would be exceedingly rare, and it would be
+  impractical for the test to run longer. Then jobset metric are logged to the xlml
+  dahsboard.
+
+  The logged metric is the last point in the time series (final state of the jobset
+  before it is terminated). The interruption reason may return empty string when
+  there are no interruption event.
+
+  Current approach is to allow this task to run parallel to the
+  "wait_for_jobset_ttr_to_be_found" task.
+
+  Args:
+    node_pool: An instance of the Info class that encapsulates
+      the configuration and metadata of a GKE node pool and workload.
+    jobset_name: The name of the JobSet.
+  """
+
+  jobset_metric = {
+      "cluster_project": node_pool.project_id,
+      "region": node_pool.location,
+      "zone": node_pool.node_locations,
+      "cluster_name": node_pool.cluster_name,
+      "node_pool_name": node_pool.node_pool_name,
+      "accelerator_type": node_pool.machine_type,
+      "jobset_healthiness_type": "",
+      "interruption_reason": "",
+      "pod_name":""
+    }
+
+  pod_name = get_jobset_pod_names(node_pool, jobset_name)
+  jobset_metric["pod_name"] = pod_name
+
+  client = monitoring_v3.MetricServiceClient()
+  current_time = time.time()
+  latest_health_time = 0
+  latest_interruption_time = 0
+
+  interval = monitoring_v3.TimeInterval({
+      "end_time": {"seconds": int(current_time)},
+      "start_time": {"seconds": int(current_time - 600)},
+  })
+
+  health_types = {
+      "kube_jobset_ready_replicas": "READY",
+      "kube_jobset_active_replicas": "ACTIVE",
+      "kube_jobset_succeeded_replicas": "SUCCEEDED",
+      "kube_jobset_failed_replicas": "FAILED",
+      "kube_jobset_specified_replicas": "SPECIFIC",
+      "kube_jobset_suspended_replicas": "SUSPENDED"
+  }
+
+  for health_type in health_types:
+    health_filter=(
+        f'metric.type="prometheus.googleapis.com/{health_type}/gauge" AND '
+        f'resource.type="prometheus_target" AND '
+        f'resource.labels.project_id="{node_pool.project_id}" AND '
+        f'resource.labels.cluster="{node_pool.cluster_name}"'
+    )
+
+    request = monitoring_v3.ListTimeSeriesRequest(
+      name = f"projects/{node_pool.project_id}",
+      filter = health_filter,
+      interval = interval,
+      view=monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.FULL
+    )
+
+    health_results = client.list_time_series(request=request)
+
+    for series in health_results:
+      if series.metric.labels.get("jobset_name") == jobset_name:
+        for point in series.points:
+          if point.value.double_value >= 1.0:
+            if point.interval.end_time.timestamp() > latest_health_time:
+              latest_health_time = point.interval.end_time.timestamp()
+              jobset_metric["jobset_healthiness_type"] = health_types[health_type]
+            break
+
+  interruption_filter = (
+    'metric.type="tpu.googleapis.com/instance/interruption_count" AND '
+    f'resource.labels.project_id="{node_pool.project_id}"'
+    )
+
+  interruption_results = client.list_time_series(
+    name = f"projects/{node_pool.project_id}",
+    filter = interruption_filter,
+    interval = interval,
+    view=monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.FULL
+  )
+
+  for series in interruption_results:
+    node_name = series.resource.labels.get("node_name")
+    for point in series.points:
+      val = point.value.int64_value if point.value.int64_value is not None else point.value.double_value
+      if val > 0:
+        if point.interval.end_time.timestamp() > latest_interruption_time:
+          latest_interruption_time = point.interval.end_time.timestamp()
+          jobset_metric["interruption_reason"] = reason = series.metric.labels.get("reason", "")
+        break
+
+  if not jobset_metric["jobset_healthiness_type"]:
+    return PokeReturnValue(is_done=False)
+
+  composer.log_metadata_for_xlml_dashboard(jobset_metric)
+  return PokeReturnValue(is_done=True)
 
 @task.sensor(poke_interval=60, timeout=3600, mode="poke")
 def wait_for_jobset_ttr_to_be_found(
@@ -692,7 +776,7 @@ def wait_for_jobset_ttr_to_be_found(
 
   # This function checks whether the TTR metric is present;
   # it does not assess its value.
-  logging.info("Time series: %s", time_series)
+  print("Time series: %s", time_series)
   return len(time_series) > 0
 
 

@@ -124,6 +124,10 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           task_id="delete_random_pod"
       )(node_pool=cluster_info, namespace=jobset_config.namespace)
 
+      wait_for_jobset_metric_to_be_logged = jobset.wait_for_jobset_metric_to_be_logged(
+          node_pool=cluster_info,
+          jobset_name=jobset_config.jobset_name,
+      )
       wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
           task_id="wait_for_jobset_ttr_to_be_found"
       )(
@@ -152,7 +156,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           start_workload,
           ensure_all_pods_running,
           delete_random_pod,
-          wait_for_metric_upload,
+          [wait_for_metric_upload,wait_for_jobset_metric_to_be_logged],
           cleanup_workload,
           cleanup_node_pool,
       )
