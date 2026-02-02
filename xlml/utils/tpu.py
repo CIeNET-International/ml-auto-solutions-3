@@ -37,8 +37,6 @@ import google.cloud.tpu_v2alpha1 as tpu_api
 import google.longrunning.operations_pb2 as operations
 import paramiko
 from google.protobuf.duration_pb2 import Duration
-from googleapiclient import discovery
-from typing import Any
 
 TTL = 'ttl'
 
@@ -379,17 +377,14 @@ def ssh_tpu(
   node_metadata = nodes[0].metadata
   is_oslogin_enabled = node_metadata.get('enable-oslogin', '') == 'TRUE'
 
-
+  user = 'ml-auto-solutions'
   if is_oslogin_enabled:
     logging.info("Auto-detected OS Login enabled on node {nodes[0].name}..")
     # get private key from  Airflow Variable
-    private_key_content = Variable.get("os-login-ssh-private-key")
-    target_user = Variable.get("os-login-ssh-user")
-    pkey = paramiko.RSAKey.from_private_key(io.StringIO(private_key_content))
-  else:
-    logging.info("Using legacy ephemeral ssh_keys mode..")
-    target_user = 'ml-auto-solutions'
-    pkey = paramiko.RSAKey.from_private_key(io.StringIO(ssh_keys.private))
+    user = Variable.get("os-login-ssh-user")
+    ssh_keys.private = Variable.get("os-login-ssh-private-key")
+    ssh_keys.public = Variable.get("os-login-ssh-public-key")
+
 
   if all_workers:
     endpoints = itertools.chain.from_iterable(
@@ -407,16 +402,18 @@ def ssh_tpu(
     ip_addresses = [endpoint.ip_address for endpoint in endpoints]
 
   logging.info(f'Connecting to IP addresses of workers: {ip_addresses}')
-
+  pkey = paramiko.RSAKey.from_private_key(io.StringIO(ssh_keys.private))
   ssh_group = fabric.ThreadingGroup(
         *ip_addresses,
         connect_kwargs={
           'auth_strategy': paramiko.auth_strategy.InMemoryPrivateKey(
-              target_user, pkey
+              user, pkey
           ),
           # See https://stackoverflow.com/a/59453832
           'banner_timeout': 200,
       },
+      # Proxy required on Cloudtops to connect to external IPs
+      gateway='corp-ssh-helper %h %p' if use_external_ips else None,
   )
 
   def ssh_group_run(cmds: Iterable[str]):
