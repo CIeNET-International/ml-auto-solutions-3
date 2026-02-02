@@ -373,7 +373,7 @@ def get_jobset_pod_names(
     # combine the jobset filter with original pod_name command from command class
     cmd = " && ".join([
         Command.get_credentials_command(node_pool),
-        f"{Command.k8s_get_pod_name_command(temp_config_file.name, namespace)} {jobset_filter}"
+        f"{Command.k8s_get_pod_name_command(temp_config_file.name, namespace)} {jobset_filter}",
     ])
 
     stdout = subprocess.run_exec(cmd, env=env)
