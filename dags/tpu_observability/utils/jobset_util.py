@@ -367,8 +367,10 @@ def get_jobset_pod_names(
     env = os.environ.copy()
     env["KUBECONFIG"] = temp_config_file.name
 
+    # add additional filter to retrive pods related to current jobset
     jobset_filter = f"-l jobset.sigs.k8s.io/jobset-name={jobset_name}"
 
+    # combine the jobset filter with original pod_name command from command class
     cmd = " && ".join([Command.get_credentials_command(node_pool),
                        f"{Command.k8s_get_pod_name_command(temp_config_file.name, namespace)} {jobset_filter}"
                       ])
@@ -643,8 +645,9 @@ def wait_for_jobset_metric_to_be_logged(
   dahsboard.
 
   The logged metric is the last point in the time series (final state of the jobset
-  before it is terminated). The interruption reason may return empty string when
-  there are no interruption event.
+  before it is terminated). The task can be modified to include the complete
+  time series instead of the last point. The interruption reason may return empty
+  string when there are no interruption event.
 
   Current approach is to allow this task to run parallel to the
   "wait_for_jobset_ttr_to_be_found" task.
