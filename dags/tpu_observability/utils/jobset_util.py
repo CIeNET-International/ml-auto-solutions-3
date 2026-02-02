@@ -219,7 +219,7 @@ class JobSet:
   container_name: str
   image: str
   tpu_cores_per_pod: int
-  workload_type: str
+  workload_type: Workload
 
   def generate_yaml(self, workload_script: Workload) -> str:
     """Generates the final JobSet YAML content.
