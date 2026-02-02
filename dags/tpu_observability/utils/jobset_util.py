@@ -667,7 +667,7 @@ def wait_for_jobset_metric_to_be_logged(
       "accelerator_type": node_pool.machine_type,
       "jobset_healthiness_type": "",
       "interruption_reason": "",
-      "pod_name":""
+      "pod_name": ""
     }
 
   pod_name = get_jobset_pod_names(node_pool, jobset_name)
@@ -689,11 +689,11 @@ def wait_for_jobset_metric_to_be_logged(
       "kube_jobset_succeeded_replicas": "SUCCEEDED",
       "kube_jobset_failed_replicas": "FAILED",
       "kube_jobset_specified_replicas": "SPECIFIC",
-      "kube_jobset_suspended_replicas": "SUSPENDED"
+      "kube_jobset_suspended_replicas": "SUSPENDED",
   }
 
   for health_type in health_types:
-    health_filter=(
+    health_filter = (
         f'metric.type="prometheus.googleapis.com/{health_type}/gauge" AND '
         f'resource.type="prometheus_target" AND '
         f'resource.labels.project_id="{node_pool.project_id}" AND '
@@ -701,10 +701,10 @@ def wait_for_jobset_metric_to_be_logged(
     )
 
     request = monitoring_v3.ListTimeSeriesRequest(
-      name = f"projects/{node_pool.project_id}",
-      filter = health_filter,
-      interval = interval,
-      view=monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.FULL
+        name=f"projects/{node_pool.project_id}",
+        filter=health_filter,
+        interval=interval,
+        view=monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.FULL
     )
 
     health_results = client.list_time_series(request=request)
@@ -715,7 +715,9 @@ def wait_for_jobset_metric_to_be_logged(
           if point.value.double_value >= 1.0:
             if point.interval.end_time.timestamp() > latest_health_time:
               latest_health_time = point.interval.end_time.timestamp()
-              jobset_metric["jobset_healthiness_type"] = health_types[health_type]
+              jobset_metric["jobset_healthiness_type"] = health_types[
+                  health_type
+              ]
             break
 
   interruption_filter = (
@@ -724,20 +726,26 @@ def wait_for_jobset_metric_to_be_logged(
     )
 
   interruption_results = client.list_time_series(
-    name = f"projects/{node_pool.project_id}",
-    filter = interruption_filter,
-    interval = interval,
-    view=monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.FULL
+      name=f"projects/{node_pool.project_id}",
+      filter=interruption_filter,
+      interval=interval,
+      view=monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.FULL
   )
 
   for series in interruption_results:
     node_name = series.resource.labels.get("node_name")
     for point in series.points:
-      val = point.value.int64_value if point.value.int64_value is not None else point.value.double_value
+      val = (
+          point.value.int64_value
+          if point.value.int64_value is not None
+          else point.value.double_value
+      )
       if val > 0:
         if point.interval.end_time.timestamp() > latest_interruption_time:
           latest_interruption_time = point.interval.end_time.timestamp()
-          jobset_metric["interruption_reason"] = reason = series.metric.labels.get("reason", "")
+          jobset_metric[
+              "interruption_reason"
+          ] = reason = series.metric.labels.get("reason", "")
         break
 
   if not jobset_metric["jobset_healthiness_type"]:
