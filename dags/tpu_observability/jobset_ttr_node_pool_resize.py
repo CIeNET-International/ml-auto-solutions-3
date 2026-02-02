@@ -148,11 +148,11 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       chain(
           jobset_config,
           cluster_info,
-          # create_node_pool,
-          # start_workload,
-          # ensure_all_pods_running,
-          # node_pool_resize,
-          # wait_for_metric_upload,
+          create_node_pool,
+          start_workload,
+          ensure_all_pods_running,
+          node_pool_resize,
+          wait_for_metric_upload,
           cleanup_workload,
           cleanup_node_pool,
       )

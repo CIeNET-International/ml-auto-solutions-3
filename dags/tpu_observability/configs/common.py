@@ -25,4 +25,6 @@ GCS_CONFIG_PATH = (
     "gs://ml-auto-solutions-dag-configs/tpu_observability/dag_config.yaml"
 )
 
-GCS_JOBSET_CONFIG_PATH = "gs://ml-auto-solutions-dag-configs/tpu_observability/jobset_config_tony.yaml"
+GCS_JOBSET_CONFIG_PATH = (
+    "gs://ml-auto-solutions-dag-configs/tpu_observability/jobset_config.yaml"
+)
