@@ -123,15 +123,6 @@ class Workload:
       ensure_ascii=False,
   )
 
-  SCRIPTS = {
-      "JAX_TPU_BENCHMARK": JAX_TPU_BENCHMARK,
-  }
-
-  @classmethod
-  def get_script(cls, workload_type: str) -> str:
-    """Returns the script string."""
-    return cls.SCRIPTS.get(workload_type)
-
 
 # pylint: disable=line-too-long
 _TEMPLATE = string.Template(
@@ -219,7 +210,6 @@ class JobSet:
   container_name: str
   image: str
   tpu_cores_per_pod: int
-  workload_type: Workload
 
   def generate_yaml(self, workload_script: Workload) -> str:
     """Generates the final JobSet YAML content.
@@ -394,11 +384,9 @@ def get_running_pods(
     env = os.environ.copy()
     env["KUBECONFIG"] = os.path.join(tmpdir, "kubeconfig")
 
-    get_pods_cmd = Command.k8s_get_pod_name_command(jobset_name, namespace)
-
     cmd = " && ".join([
         Command.get_credentials_command(node_pool),
-        get_pods_cmd,
+        Command.k8s_get_pod_name_command(jobset_name, namespace),
     ])
 
     stdout = subprocess.run_exec(cmd, env=env)
@@ -471,7 +459,9 @@ def build_jobset_from_gcs_yaml(
 
 
 @task
-def run_workload(node_pool: node_pool_info, jobset_config: JobSet) -> TimeUtil:
+def run_workload(
+    node_pool: node_pool_info, jobset_config: JobSet, workload_type: Workload
+) -> TimeUtil:
   """
   Applies the specified YAML file to the GKE cluster.
 
@@ -484,9 +474,7 @@ def run_workload(node_pool: node_pool_info, jobset_config: JobSet) -> TimeUtil:
   with tempfile.NamedTemporaryFile() as temp_config_file:
     env = os.environ.copy()
     env["KUBECONFIG"] = temp_config_file.name
-    yaml_config = jobset_config.generate_yaml(
-        workload_script=jobset_config.workload_type
-    )
+    yaml_config = jobset_config.generate_yaml(workload_script=workload_type)
 
     cmd = " && ".join([
         Command.get_credentials_command(node_pool),

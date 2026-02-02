@@ -390,6 +390,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       )(
           node_pool=cluster_info,
           jobset_config=jobset_config,
+          workload_type=Workload.JAX_TPU_BENCHMARK,
       )
 
       pod_names = jobset.list_pod_names.override(

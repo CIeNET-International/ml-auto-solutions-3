@@ -100,6 +100,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       start_workload = jobset.run_workload.override(task_id="start_workload")(
           node_pool=cluster_info,
           jobset_config=jobset_config,
+          workload_type=Workload.JAX_TPU_BENCHMARK,
       )
 
       ensure_all_pods_running = jobset.wait_for_all_pods_running.override(

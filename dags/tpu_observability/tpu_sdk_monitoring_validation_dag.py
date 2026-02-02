@@ -146,6 +146,7 @@ with models.DAG(
     apply_time = jobset.run_workload.override(task_id="run_workload")(
         node_pool=cluster_info,
         jobset_config=jobset_config,
+        workload_type=Workload.JAX_TPU_BENCHMARK,
     )
 
     pod_names = jobset.list_pod_names.override(task_id="list_pod_names")(
