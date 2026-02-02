@@ -141,15 +141,6 @@ class Workload:
       ensure_ascii=False,
   )
 
-  SCRIPTS = {
-      "JAX_TPU_BENCHMARK": JAX_TPU_BENCHMARK,
-  }
-
-  @classmethod
-  def get_script(cls, workload_type: str) -> str:
-    """Returns the script string."""
-    return cls.SCRIPTS.get(workload_type)
-
 
 # pylint: disable=line-too-long
 _TEMPLATE = string.Template(
@@ -413,8 +404,6 @@ def get_running_pods(
   with tempfile.TemporaryDirectory() as tmpdir:
     env = os.environ.copy()
     env["KUBECONFIG"] = os.path.join(tmpdir, "kubeconfig")
-
-    get_pods_cmd = Command.k8s_get_pod_name_command(jobset_name, namespace)
 
     cmd = " && ".join([
         Command.get_credentials_command(node_pool),
