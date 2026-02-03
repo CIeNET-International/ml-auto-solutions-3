@@ -50,17 +50,6 @@ LOGGING_URL_FORMAT = (
 )
 
 
-# def _set_kubeconfig_env(kubeconfig_path: Optional[str] = None):
-#   """Sets the KUBECONFIG environment variable if provided."""
-#   if kubeconfig_path:
-#     logging.info(f"Using KUBECONFIG: {kubeconfig_path} for Kubernetes client")
-#     os.environ['KUBECONFIG'] = kubeconfig_path
-#   else:
-#     logging.info("kubeconfig_path not provided, Kubernetes client will use default config")
-#     if 'KUBECONFIG' in os.environ:
-#       del os.environ['KUBECONFIG']
-
-
 def get_xpk_setup_cmd(tmpdir, branch: str = MAIN_BRANCH):
   clone_branch = (
       f"git clone --branch {branch} https://github.com/AI-Hypercomputer/xpk"
@@ -596,4 +585,3 @@ def delete_node(
   except Exception as e:  # pylint: disable=broad-exception-caught
     logging.info(f"Error deleting node {node_name}: {e}", file=sys.stderr)
     sys.exit(1)
-
