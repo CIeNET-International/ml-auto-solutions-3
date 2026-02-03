@@ -26,8 +26,8 @@ from dags import composer_env
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils.jobset_util import JobSet, Workload
-from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_PATH
-
+from dags.tpu_observability.configs.common import MachineConfigMap
+from dags.tpu_observability.configs.common import GCS_CONFIG_PATH
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
 # know this signature).
