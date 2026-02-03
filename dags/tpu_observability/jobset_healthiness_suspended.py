@@ -176,7 +176,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
         cleanup_first_node_pool = node_pool.delete.override(
             task_id="cleanup_node_pool_1",
             trigger_rule=TriggerRule.ALL_DONE,
-            retries=2,
         )(node_pool=node_pool_info).as_teardown(
             setups=create_node_pool,
         )
@@ -184,7 +183,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
         cleanup_second_node_pool = node_pool.delete.override(
             task_id="cleanup_node_pool_2",
             trigger_rule=TriggerRule.ALL_DONE,
-            retries=2,
         )(node_pool=node_pool_info_2).as_teardown(
             setups=create_node_pool,
         )
