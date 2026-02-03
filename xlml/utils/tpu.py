@@ -38,6 +38,7 @@ import google.longrunning.operations_pb2 as operations
 import paramiko
 from google.protobuf.duration_pb2 import Duration
 
+
 TTL = 'ttl'
 
 
@@ -50,6 +51,7 @@ def generate_tpu_name(
   if set_env_var:
     Variable.set(base_tpu_name, tpu_name)
   return tpu_name
+
 
 def create_queued_resource(
     tpu_name: airflow.XComArg,
