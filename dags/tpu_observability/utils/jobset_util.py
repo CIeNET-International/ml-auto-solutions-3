@@ -780,13 +780,15 @@ def query_uptime_metrics(
 @task.sensor(poke_interval=30, timeout=3600, mode="reschedule")
 def wait_for_jobset_uptime_data(
     node_pool: node_pool_info,
-    jobset_name: str,
+    jobset_config: JobSet,
     jobset_apply_time: TimeUtil,
 ):
   """Verify uptime data exists after jobset application."""
   start_time = jobset_apply_time.to_datetime()
   end_time = datetime.datetime.now(datetime.timezone.utc)
-  data = query_uptime_metrics(node_pool, jobset_name, start_time, end_time)
+  data = query_uptime_metrics(
+      node_pool, jobset_config.jobset_name, start_time, end_time
+  )
 
   logging.info(f"Uptime data query result: {data}")
   if len(data) > 0:
@@ -797,14 +799,16 @@ def wait_for_jobset_uptime_data(
 @task.sensor(poke_interval=30, timeout=360, mode="reschedule")
 def ensure_no_jobset_uptime_data(
     node_pool: node_pool_info,
-    jobset_name: str,
+    jobset_config: JobSet,
     jobset_clear_time: TimeUtil,
     wait_time_seconds: int,
 ):
   """Ensure no uptime data is recorded after jobset deletion."""
   start_time = jobset_clear_time.to_datetime()
   now = datetime.datetime.now(datetime.timezone.utc)
-  data = query_uptime_metrics(node_pool, jobset_name, start_time, now)
+  data = query_uptime_metrics(
+      node_pool, jobset_config.jobset_name, start_time, now
+  )
 
   logging.info(f"Uptime data query result: {data}")
   if len(data) > 0:
