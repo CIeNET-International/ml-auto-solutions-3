@@ -385,7 +385,6 @@ def ssh_tpu(
     ssh_keys.private = Variable.get('os-login-ssh-private-key')
     ssh_keys.public = Variable.get('os-login-ssh-public-key')
 
-
   if all_workers:
     endpoints = itertools.chain.from_iterable(
         node.network_endpoints for node in nodes
