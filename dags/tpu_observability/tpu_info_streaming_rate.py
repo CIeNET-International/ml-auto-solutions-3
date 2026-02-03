@@ -295,7 +295,7 @@ def validate_streaming_rate_iterations(
 with models.DAG(  # pylint: disable=unexpected-keyword-arg
     dag_id="tpu_info_verify_streaming_rate_dags",
     start_date=datetime.datetime(2025, 8, 10),
-    schedule=None,
+    schedule="0 14 * * *" if composer_env.is_prod_env() else None,
     catchup=False,
     tags=[
         "cloud-ml-auto-solutions",
