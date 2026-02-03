@@ -33,7 +33,7 @@ from dags.common.vm_resource import GpuVersion
 
 # NOTE: This version needs to be pinned to ensure compatibility when using
 # xpk.py for workload creation.
-MAIN_BRANCH = "v1.1.2"
+MAIN_BRANCH = "v0.17.3"
 
 # Duration = past 7 days
 LOGGING_URL_FORMAT = (
@@ -116,7 +116,6 @@ def run_workload(
     run_cmds: str,
     num_slices: int = 1,
     use_vertex_tensorboard: bool = False,
-    experiment_name: str = "",
     use_pathways: bool = False,
     # Directory for enabling emergency checkpointing
     ramdisk_directory: str = "",
@@ -193,8 +192,6 @@ def run_workload(
       workload_create_cmd += " --scheduler=gke.io/topology-aware-auto"
     if use_vertex_tensorboard:
       workload_create_cmd += " --use-vertex-tensorboard"
-      if experiment_name:
-        workload_create_cmd += f" --experiment-name={experiment_name}"
       vertex_ai_dependency = (
           "pip install -U google-cloud-aiplatform cloud-accelerator-diagnostics"
       )
@@ -354,6 +351,9 @@ def wait_for_workload_completion(
 
   if not pods.items:
     logging.info(f"No pods found for workload selector: {workload_id}.")
+
+    # Pathways jobs delete all pods on failure so we must also check if the job
+    # is complete
     batch_api = _get_batch_api_client(project_id, region, cluster_name, kubeconfig_path)
     job = _get_workload_job(batch_api, workload_id)
     if job is None:
@@ -518,7 +518,6 @@ def _find_target_pod_node(
     last_node: bool = False,
 ) -> str:
   """find the node name for the workload."""
-  # KUBECONFIG env var should be set by the caller function
   core_api = _get_core_api_client(project_id, region, cluster_name)
   pods = _list_workload_pods(core_api, workload_id)
   pod_node_pairs = []
@@ -594,7 +593,7 @@ def delete_node(
     logging.info(f"Deletion operation started for node: {node_name}")
     logging.info(f"Operation: {operation.name}")
     logging.info(f"Deletion command executed for node: {node_name}")
-  except Exception as e:
+  except Exception as e:  # pylint: disable=broad-exception-caught
     logging.info(f"Error deleting node {node_name}: {e}", file=sys.stderr)
     sys.exit(1)
 
