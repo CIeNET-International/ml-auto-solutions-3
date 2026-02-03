@@ -47,7 +47,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     dag_id="jobset_uptime_validation",
     start_date=datetime.datetime(2025, 8, 15),
     default_args={"retries": 0},
-    schedule=None,
+    schedule="30 16 * * *" if composer_env.is_prod_env() else None,
     catchup=False,
     tags=[
         "cloud-ml-auto-solutions",
@@ -152,7 +152,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           task_id="ensure_no_jobset_uptime_data"
       )(
           node_pool=cluster_info,
-          jobset_name=jobset_config.jobset_name,
+          jobset_config=jobset_config,
           jobset_clear_time=jobset_clear_time,
           # Wait 5 minutes to confirm no data has been detected.
           wait_time_seconds=300,
