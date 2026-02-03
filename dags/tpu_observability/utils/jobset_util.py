@@ -301,13 +301,6 @@ class Command:
     ])
 
   @staticmethod
-  def k8s_get_pod_name_command(kubeconfig: str, namespace: str) -> str:
-    return " ".join([
-        f"kubectl --kubeconfig={kubeconfig} get pods",
-        f"-n {namespace} -o jsonpath={{.items[*].metadata.name}}",
-    ])
-
-  @staticmethod
   def suspend_jobset(jobset_name: str, namespace: str) -> str:
     patch_content = '{"spec": {"suspend": true}}'
     return (
