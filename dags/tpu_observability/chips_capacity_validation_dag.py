@@ -33,7 +33,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     dag_id="chips_capacity_validation_dag",
     start_date=datetime.datetime(2025, 8, 15),
     default_args={"retries": 0},
-    schedule=None,
+    schedule="30 12 * * *" if composer_env.is_prod_env() else None,
     catchup=False,
     tags=[
         "cloud-ml-auto-solutions",
