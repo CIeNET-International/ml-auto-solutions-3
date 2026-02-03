@@ -379,11 +379,11 @@ def ssh_tpu(
 
   user = 'ml-auto-solutions'
   if is_oslogin_enabled:
-    logging.info("Auto-detected OS Login enabled on node {nodes[0].name}..")
+    logging.info('Auto-detected OS Login enabled on node {nodes[0].name}..')
     # get private key from  Airflow Variable
-    user = Variable.get("os-login-ssh-user")
-    ssh_keys.private = Variable.get("os-login-ssh-private-key")
-    ssh_keys.public = Variable.get("os-login-ssh-public-key")
+    user = Variable.get('os-login-ssh-user')
+    ssh_keys.private = Variable.get('os-login-ssh-private-key')
+    ssh_keys.public = Variable.get('os-login-ssh-public-key')
 
 
   if all_workers:
