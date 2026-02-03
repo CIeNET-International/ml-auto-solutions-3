@@ -33,9 +33,12 @@ from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.tpu_observability.utils.gcp_util import query_time_series
 from dags.tpu_observability.utils.node_pool_util import Info as node_pool_info
 from dags.tpu_observability.utils.time_util import TimeUtil
+from google.cloud import monitoring_v3
 from google.cloud.monitoring_v3 import types
 import kubernetes
+import time
 from xlml.apis import gcs
+from xlml.utils import composer
 from xlml.utils import gke
 
 
@@ -746,3 +749,156 @@ def wait_for_all_pods_running(node_pool: node_pool_info, jobset_config: JobSet):
   )
   num_pods = jobset_config.replicas * jobset_config.parallelism
   return num_running == num_pods
+
+
+def _create_time_interval(lookback_seconds: int = 600):
+  """Creates a TimeInterval for the last N seconds."""
+  current_time = int(time.time())
+  return monitoring_v3.TimeInterval({
+      "end_time": {"seconds": current_time},
+      "start_time": {"seconds": current_time - lookback_seconds},
+  })
+
+
+def _get_jobset_healthiness_type(
+    node_pool: node_pool_info,
+    jobset_name: str,
+) -> str:
+  """Gets the healthiness type of a JobSet by querying Prometheus metrics."""
+  client = monitoring_v3.MetricServiceClient()
+  interval = _create_time_interval()
+  latest_health_time = 0
+  result_type = ""
+
+  health_type_metrics = {
+      "kube_jobset_ready_replicas": "READY",
+      "kube_jobset_active_replicas": "ACTIVE",
+      "kube_jobset_succeeded_replicas": "SUCCEEDED",
+      "kube_jobset_failed_replicas": "FAILED",
+      "kube_jobset_specified_replicas": "SPECIFIED",
+      "kube_jobset_suspended_replicas": "SUSPENDED",
+  }
+
+  for health_metric, health_label in health_type_metrics.items():
+    request = monitoring_v3.ListTimeSeriesRequest(
+        name=f"projects/{node_pool.project_id}",
+        filter=(
+            "metric.type="
+            f'"prometheus.googleapis.com/{health_metric}/gauge" AND '
+            f'resource.type="prometheus_target" AND '
+            f'resource.labels.project_id="{node_pool.project_id}" AND '
+            f'resource.labels.cluster="{node_pool.cluster_name}"'
+        ),
+        interval=interval,
+        view=monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.FULL,
+    )
+
+    for series in client.list_time_series(request=request):
+      if series.metric.labels.get("jobset_name") != jobset_name:
+        continue
+      if not series.points:
+        continue
+      latest_point = series.points[0]
+      if latest_point.value.double_value < 1.0:
+        continue
+      point_time = latest_point.interval.end_time.timestamp()
+      if point_time > latest_health_time:
+        latest_health_time = point_time
+        result_type = health_label
+
+  if result_type:
+    logging.info("Found JobSet healthiness type: %s", result_type)
+  return result_type
+
+
+def _get_interruption_reason(node_pool: node_pool_info) -> str:
+  """Gets the interruption reason by querying TPU interruption metrics."""
+  client = monitoring_v3.MetricServiceClient()
+  request = monitoring_v3.ListTimeSeriesRequest(
+      name=f"projects/{node_pool.project_id}",
+      filter=(
+          'metric.type="tpu.googleapis.com/instance/interruption_count" AND '
+          f'resource.labels.project_id="{node_pool.project_id}"'
+      ),
+      interval=_create_time_interval(),
+      view=monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.FULL,
+  )
+
+  latest_time, result_reason = 0, ""
+  for series in client.list_time_series(request=request):
+    if not series.points:
+      continue
+    point = series.points[0]  # Only check latest point per series
+    val = point.value.int64_value or point.value.double_value
+    if val > 0 and point.interval.end_time.timestamp() > latest_time:
+      latest_time = point.interval.end_time.timestamp()
+      result_reason = series.metric.labels.get("reason", "")
+
+  if result_reason:
+    logging.info("Found interruption reason: %s", result_reason)
+  return result_reason
+
+
+@task.sensor(poke_interval=60, timeout=3600, mode="poke")
+def wait_for_jobset_metric_to_be_logged(
+    node_pool: node_pool_info,
+    jobset_config: JobSet,
+    pod_names: list[str],
+) -> bool:
+  """
+  Polls the metric related to the node pools and the current jobset.
+
+  A sensor task which polls the latest jobset metric (when the workload
+  terminated) every 60 seconds for 60 minutes. 60 minutes is used here
+  since this metric does have a long latency before appearing in monitoring,
+  typically between 30-45 minutes. While it may be possible for this
+  latency to be longer than 60 minutes, it would be exceedingly rare, and
+  it would be impractical for the test to run longer. Then jobset metric
+  are logged to the xlml dashboard.
+
+  The logged metric is the last point in the time series (final state
+  of the jobset before it is terminated). The task can be modified to
+  include the complete time series instead of the last point. The
+  interruption reason may return empty string when there are no interruption
+  event.
+
+  Current approach is to allow this task to run parallel to the
+  "wait_for_jobset_ttr_to_be_found" task.
+
+  Args:
+    node_pool: An instance of the Info class that encapsulates
+      the configuration and metadata of a GKE node pool and workload.
+    jobset_config: An instance of the JobSet class representing the
+      jobset configuration.
+    pod_names: A list of pod names associated with the JobSet.
+
+  Returns:
+    bool: True when metrics have been logged successfully, False otherwise.
+  """
+  jobset_metric = {
+      "cluster_project": node_pool.project_id,
+      "region": getattr(node_pool, "location", node_pool.region),
+      "zone": node_pool.node_locations,
+      "cluster_name": node_pool.cluster_name,
+      "node_pool_name": node_pool.node_pool_name,
+      "accelerator_type": node_pool.machine_type,
+      "jobset_healthiness_type": "",
+      "interruption_reason": "",
+      "pod_name": pod_names,
+  }
+
+  healthiness_type = _get_jobset_healthiness_type(
+      node_pool=node_pool,
+      jobset_name=jobset_config.jobset_name,
+  )
+  jobset_metric["jobset_healthiness_type"] = healthiness_type
+
+  interruption_reason = _get_interruption_reason(node_pool=node_pool)
+  jobset_metric["interruption_reason"] = interruption_reason
+
+  if not jobset_metric["jobset_healthiness_type"]:
+    return False
+
+  composer.log_metadata_for_xlml_dashboard(jobset_metric)
+  logging.info("Logged JobSet metrics to XLML dashboard: %s", jobset_metric)
+  return True
