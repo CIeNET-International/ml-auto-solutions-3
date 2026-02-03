@@ -402,6 +402,7 @@ def ssh_tpu(
     ip_addresses = [endpoint.ip_address for endpoint in endpoints]
 
   logging.info(f'Connecting to IP addresses of workers: {ip_addresses}')
+
   pkey = paramiko.RSAKey.from_private_key(io.StringIO(ssh_keys.private))
   ssh_group = fabric.ThreadingGroup(
       *ip_addresses,
