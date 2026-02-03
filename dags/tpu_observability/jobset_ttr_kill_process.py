@@ -68,7 +68,7 @@ def kill_tpu_pod_workload(info: node_pool.Info, pod_name: str) -> None:
 with models.DAG(  # pylint: disable=unexpected-keyword-arg
     dag_id="jobset_ttr_kill_process",
     start_date=datetime.datetime(2025, 8, 10),
-    schedule=None,
+    schedule="0 15 * * *" if composer_env.is_prod_env() else None,
     catchup=False,
     tags=[
         "cloud-ml-auto-solutions",
