@@ -145,8 +145,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           namespace=jobset_config.namespace,
       )
 
-      suspend_jobset = jobset.suspended_jobset(
-          node_pool=node_pool_info, jobset_name=jobset_config.jobset_name
+      suspend_jobset = jobset.k8s_suspend_jobset_command(
+          jobset_name=jobset_config.jobset_name,
+          namespace=jobset_config.namespace,
       )
 
       validate_suspended_replicas = jobset.validate_jobset_replica_number(

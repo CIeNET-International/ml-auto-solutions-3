@@ -301,7 +301,7 @@ class Command:
     ])
 
   @staticmethod
-  def suspend_jobset(jobset_name: str, namespace: str) -> str:
+  def k8s_suspend_jobset_command(jobset_name: str, namespace: str) -> str:
     patch_content = '{"spec": {"suspend": true}}'
     return (
         f"kubectl patch jobset {jobset_name} -n {namespace} "
