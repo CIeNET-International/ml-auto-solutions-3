@@ -119,6 +119,13 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           jobset_config=jobset_config,
       )
 
+      get_pod_names = jobset.list_pod_names.override(
+          task_id="get_pod_names"
+      )(
+          node_pool=cluster_info,
+          jobset_config=jobset_config,
+      )
+
       rollback_node_pool = node_pool.rollback.override(
           task_id="rollback_node_pool"
       )(node_pool=cluster_info)
@@ -128,6 +135,16 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       )(
           node_pool=cluster_info,
           jobset_config=jobset_config,
+      )
+
+      wait_for_jobset_metric_to_be_logged = (
+          jobset.wait_for_jobset_metric_to_be_logged.override(
+              task_id="wait_for_jobset_metric_to_be_logged"
+          )(
+              node_pool=cluster_info,
+              jobset_config=jobset_config,
+              pod_names=get_pod_names,
+          )
       )
 
       cleanup_workload = jobset.end_workload.override(
@@ -151,8 +168,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           create_node_pool,
           start_workload,
           ensure_all_pods_running,
+          get_pod_names,
           rollback_node_pool,
-          wait_for_metric_upload,
+          [wait_for_metric_upload, wait_for_jobset_metric_to_be_logged],
           cleanup_workload,
           cleanup_node_pool,
       )
