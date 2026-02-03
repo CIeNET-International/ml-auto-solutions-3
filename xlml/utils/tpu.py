@@ -404,8 +404,8 @@ def ssh_tpu(
   logging.info(f'Connecting to IP addresses of workers: {ip_addresses}')
   pkey = paramiko.RSAKey.from_private_key(io.StringIO(ssh_keys.private))
   ssh_group = fabric.ThreadingGroup(
-        *ip_addresses,
-        connect_kwargs={
+      *ip_addresses,
+      connect_kwargs={
           'auth_strategy': paramiko.auth_strategy.InMemoryPrivateKey(
               user, pkey
           ),
