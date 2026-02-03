@@ -20,12 +20,12 @@ import tempfile
 import uuid
 import sys
 import re
-from typing import Tuple
+from typing import Tuple, Optional
 from absl import logging
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from airflow.hooks.subprocess import SubprocessHook
-from kubernetes import client as k8s_client
+from kubernetes import client as k8s_client, config as k8s_config
 from google.cloud import compute_v1
 from xlml.apis import metric_config
 from xlml.utils import gke, composer
@@ -33,7 +33,7 @@ from dags.common.vm_resource import GpuVersion
 
 # NOTE: This version needs to be pinned to ensure compatibility when using
 # xpk.py for workload creation.
-MAIN_BRANCH = "v0.17.3"
+MAIN_BRANCH = "v1.1.2"
 
 # Duration = past 7 days
 LOGGING_URL_FORMAT = (
@@ -48,6 +48,17 @@ LOGGING_URL_FORMAT = (
     + "storageScope=project;duration=P7D?e=13803378&"
     + "mods=allow_workbench_image_override&project={project}"
 )
+
+
+# def _set_kubeconfig_env(kubeconfig_path: Optional[str] = None):
+#   """Sets the KUBECONFIG environment variable if provided."""
+#   if kubeconfig_path:
+#     logging.info(f"Using KUBECONFIG: {kubeconfig_path} for Kubernetes client")
+#     os.environ['KUBECONFIG'] = kubeconfig_path
+#   else:
+#     logging.info("kubeconfig_path not provided, Kubernetes client will use default config")
+#     if 'KUBECONFIG' in os.environ:
+#       del os.environ['KUBECONFIG']
 
 
 def get_xpk_setup_cmd(tmpdir, branch: str = MAIN_BRANCH):
@@ -105,6 +116,7 @@ def run_workload(
     run_cmds: str,
     num_slices: int = 1,
     use_vertex_tensorboard: bool = False,
+    experiment_name: str = "",
     use_pathways: bool = False,
     # Directory for enabling emergency checkpointing
     ramdisk_directory: str = "",
@@ -113,6 +125,7 @@ def run_workload(
     max_restart: int = 0,
     # to avoid workload preemption by manual tests.
     priority: str = "high",
+    kubeconfig_path: Optional[str] = None,
 ):
   """Run workload through xpk tool."""
 
@@ -131,6 +144,7 @@ def run_workload(
   })
 
   with tempfile.TemporaryDirectory() as tmpdir:
+    logging.info(f"Using temp directory for XPK: {tmpdir}")
     if accelerator_type in [
         GpuVersion.XPK_H100.value,
         GpuVersion.XPK_H100_MEGA.value,
@@ -179,15 +193,29 @@ def run_workload(
       workload_create_cmd += " --scheduler=gke.io/topology-aware-auto"
     if use_vertex_tensorboard:
       workload_create_cmd += " --use-vertex-tensorboard"
+      if experiment_name:
+        workload_create_cmd += f" --experiment-name={experiment_name}"
       vertex_ai_dependency = (
           "pip install -U google-cloud-aiplatform cloud-accelerator-diagnostics"
       )
       cmds.append(vertex_ai_dependency)
+
+    check_xpk_path = f"source {tmpdir}/xpk_venv/bin/activate && echo 'Which XPK: $(which xpk)'"
+    cmds.append(check_xpk_path)
     cmds.append(workload_create_cmd)
     hook = SubprocessHook()
+
+    env_vars = {**os.environ}
+    if kubeconfig_path:
+      env_vars["KUBECONFIG"] = kubeconfig_path
+      logging.info(f"Using provided KUBECONFIG for subprocess: {kubeconfig_path}")
+    else:
+      logging.info("Using default KUBECONFIG for subprocess")
+
+    logging.info(f"Running XPK commands from branch: {xpk_branch}")
     result = hook.run_command(
         ["bash", "-c", ";".join(cmds)],
-        env={**os.environ, "KUBECONFIG": os.path.join(tmpdir, "xpk.conf")},
+        env=env_vars,
     )
     assert (
         result.exit_code == 0
@@ -195,14 +223,19 @@ def run_workload(
 
 
 def _get_core_api_client(
-    project_id: str, region: str, cluster_name: str
+    project_id: str, region: str, cluster_name: str, kubeconfig_path: Optional[str] = None
 ) -> k8s_client.CoreV1Api:
   """Create a core API client for the given cluster."""
-  client = gke.get_authenticated_client(project_id, region, cluster_name)
-
-  # Initilize the client
-  core_api = k8s_client.CoreV1Api(client)
-  logging.info("Successful initilize k8s client from cluster response.")
+  try:
+    logging.info(f"Loading KUBECONFIG from: {kubeconfig_path}")
+    k8s_config.load_kube_config(config_file=kubeconfig_path)
+    logging.info(f"Successfully loaded KUBECONFIG from: {kubeconfig_path}")
+  except Exception as e:
+    logging.error(f"Failed to load kubeconfig from {kubeconfig_path}: {e}", exc_info=True)
+    raise
+  api_client = k8s_client.ApiClient()
+  core_api = k8s_client.CoreV1Api(api_client)
+  logging.info("Successfully initialized k8s client from cluster response.")
   return core_api
 
 
@@ -219,16 +252,19 @@ def _list_workload_pods(
 
 
 def _get_batch_api_client(
-    project_id: str, region: str, cluster_name: str
+    project_id: str, region: str, cluster_name: str, kubeconfig_path: Optional[str] = None
 ) -> k8s_client.BatchV1Api:
   """Create a batch API client for the given cluster."""
-  client = gke.get_authenticated_client(project_id, region, cluster_name)
-
-  # Initilize the client
-  batch_api = k8s_client.BatchV1Api(client)
-  logging.info(
-      "Successful initilize k8s batch api client from cluster response."
-  )
+  try:
+    logging.info(f"Loading KUBECONFIG from: {kubeconfig_path}")
+    k8s_config.load_kube_config(config_file=kubeconfig_path)
+    logging.info(f"Successfully loaded KUBECONFIG from: {kubeconfig_path}")
+  except Exception as e:
+    logging.error(f"Failed to load kubeconfig from {kubeconfig_path}: {e}", exc_info=True)
+    raise
+  api_client = k8s_client.ApiClient()
+  batch_api = k8s_client.BatchV1Api(api_client)
+  logging.info("Successfully initialized k8s batch api client from cluster response.")
   return batch_api
 
 
@@ -291,10 +327,12 @@ def _log_workload_pod_statuses(workload_id: str, pods) -> None:
 
 @task.sensor(poke_interval=60, timeout=600, mode="reschedule")
 def wait_for_workload_start(
-    workload_id: str, project_id: str, region: str, cluster_name: str
+    workload_id: str, project_id: str, region: str, cluster_name: str,
+    kubeconfig_path: Optional[str] = None,
 ) -> bool:
   """Check if the workload has started."""
-  core_api = _get_core_api_client(project_id, region, cluster_name)
+  logging.info(f"wait_for_workload_start using KUBECONFIG: {kubeconfig_path}")
+  core_api = _get_core_api_client(project_id, region, cluster_name, kubeconfig_path)
   pods = _list_workload_pods(core_api, workload_id)
 
   _log_workload_pod_statuses(workload_id, pods)
@@ -304,20 +342,19 @@ def wait_for_workload_start(
 
 @task.sensor(poke_interval=60, timeout=600, mode="reschedule")
 def wait_for_workload_completion(
-    workload_id: str, project_id: str, region: str, cluster_name: str
+    workload_id: str, project_id: str, region: str, cluster_name: str,
+    kubeconfig_path: Optional[str] = None,
 ) -> bool:
   """Check the workload status."""
-  core_api = _get_core_api_client(project_id, region, cluster_name)
+  logging.info(f"wait_for_workload_completion using KUBECONFIG: {kubeconfig_path}")
+  core_api = _get_core_api_client(project_id, region, cluster_name, kubeconfig_path)
   pods = _list_workload_pods(core_api, workload_id)
 
   _log_workload_pod_statuses(workload_id, pods)
 
   if not pods.items:
     logging.info(f"No pods found for workload selector: {workload_id}.")
-
-    # Pathways jobs delete all pods on failure so we must also check if the job
-    # is complete
-    batch_api = _get_batch_api_client(project_id, region, cluster_name)
+    batch_api = _get_batch_api_client(project_id, region, cluster_name, kubeconfig_path)
     job = _get_workload_job(batch_api, workload_id)
     if job is None:
       logging.info(
@@ -380,6 +417,7 @@ def clean_up_workload(
     zone: str,
     cluster_name: str,
     xpk_branch: str = MAIN_BRANCH,
+    kubeconfig_path: Optional[str] = None,
 ) -> bool:
   """Delete workload."""
   with tempfile.TemporaryDirectory() as tmpdir:
@@ -393,9 +431,17 @@ def clean_up_workload(
     cmds = get_xpk_setup_cmd(tmpdir, xpk_branch)
     cmds.append(workload_delete_cmd)
     hook = SubprocessHook()
+
+    env_vars = {**os.environ}
+    if kubeconfig_path:
+      env_vars["KUBECONFIG"] = kubeconfig_path
+      logging.info(f"Using provided KUBECONFIG for subprocess: {kubeconfig_path}")
+    else:
+      logging.info("Using default KUBECONFIG for subprocess")
+
     result = hook.run_command(
         ["bash", "-c", ";".join(cmds)],
-        env={**os.environ, "KUBECONFIG": os.path.join(tmpdir, "xpk.conf")},
+        env=env_vars,
     )
     assert (
         result.exit_code == 0
@@ -409,6 +455,7 @@ def wait_for_workload_reach_step(
     cluster_name: str,
     workload_id: str,
     expect_reach_to_step: str,
+    kubeconfig_path: Optional[str] = None,
 ) -> bool:
   """
   Watch any given training pod, check the given step is already reach before
@@ -471,6 +518,7 @@ def _find_target_pod_node(
     last_node: bool = False,
 ) -> str:
   """find the node name for the workload."""
+  # KUBECONFIG env var should be set by the caller function
   core_api = _get_core_api_client(project_id, region, cluster_name)
   pods = _list_workload_pods(core_api, workload_id)
   pod_node_pairs = []
@@ -513,8 +561,10 @@ def delete_node(
     project: str,
     dry_run: bool = False,
     last_node: bool = False,
+    kubeconfig_path: Optional[str] = None,
 ) -> None:
   """Delete node."""
+  k8s_config.load_kube_config(config_file=kubeconfig_path)
   delete_info = _find_target_pod_node(
       project,
       gke.zone_to_region(zone),
@@ -544,6 +594,7 @@ def delete_node(
     logging.info(f"Deletion operation started for node: {node_name}")
     logging.info(f"Operation: {operation.name}")
     logging.info(f"Deletion command executed for node: {node_name}")
-  except Exception as e:  # pylint: disable=broad-exception-caught
+  except Exception as e:
     logging.info(f"Error deleting node {node_name}: {e}", file=sys.stderr)
     sys.exit(1)
+
