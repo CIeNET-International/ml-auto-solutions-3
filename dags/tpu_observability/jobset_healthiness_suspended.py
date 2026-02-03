@@ -20,6 +20,7 @@ from airflow import models
 from airflow.decorators import task
 from airflow.utils.trigger_rule import TriggerRule
 from airflow.utils.task_group import TaskGroup
+from airflow.models.baseoperator import chain
 
 from dags import composer_env
 from dags.tpu_observability.utils import jobset_util as jobset
@@ -188,17 +189,14 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             setups=create_node_pool,
         )
 
-      # Airflow uses >> for task chaining, which is pointless for pylint.
-      # pylint: disable=pointless-statement
-      (
-          node_pool_info
-          >> node_pool_info_2
-          >> create_node_pool
-          >> validate_zero_replicas
-          >> start_workload
-          >> suspend_jobset
-          >> validate_suspended_replicas
-          >> cleanup_workload
-          >> cleanup_node_pool
+      chain(
+          node_pool_info,
+          node_pool_info_2,
+          create_node_pool,
+          validate_zero_replicas,
+          start_workload,
+          suspend_jobset,
+          validate_suspended_replicas,
+          cleanup_workload,
+          cleanup_node_pool,
       )
-      # pylint: enable=pointless-statement
