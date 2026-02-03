@@ -28,7 +28,7 @@ from airflow.decorators import task
 from airflow.operators.empty import EmptyOperator
 
 from dags.common.quarantined_tests import QuarantineTests
-from xlml.utils import gpu, metric, name_format, ssh, xpk, axlearn, gke, tpu
+from xlml.utils import gpu, metric, name_format, ssh, tpu, xpk, axlearn, gke
 from xlml.apis import gcp_config, metric_config, test_config, gcs
 
 
