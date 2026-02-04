@@ -25,9 +25,12 @@ from airflow.models.baseoperator import chain
 from dags import composer_env
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
-from dags.tpu_observability.utils.jobset_util import JobSet, Workload
-from dags.tpu_observability.configs.common import MachineConfigMap
-from dags.tpu_observability.configs.common import GCS_CONFIG_PATH
+from dags.tpu_observability.utils.jobset_util import Workload
+from dags.tpu_observability.configs.common import (
+    MachineConfigMap,
+    GCS_CONFIG_PATH,
+    GCS_JOBSET_CONFIG_PATH,
+)
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
 # know this signature).
@@ -71,32 +74,21 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 
     @task
     def generate_second_node_pool_name(
-        node_pool_info: node_pool.Info,
+        pool_info: node_pool.Info,
     ) -> str:
       """Generates a second node pool name."""
-      return f"{node_pool_info.node_pool_name}-2"
-
-    jobset_config = JobSet(
-        jobset_name="jobset-healthiness-suspended",
-        namespace="default",
-        max_restarts=0,
-        replicated_job_name="tpu-job-jax-v6e-slice",
-        replicas=2,
-        backoff_limit=0,
-        completions=4,
-        parallelism=4,
-        tpu_accelerator_type="tpu-v6e-slice",
-        tpu_topology="4x4",
-        container_name="jax-tpu-worker",
-        image="python:3.11",
-        tpu_cores_per_pod=4,
-    )
+      return f"{pool_info.node_pool_name}-2"
 
     # Keyword arguments are generated dynamically at runtime (pylint does not
     # know this signature).
     with TaskGroup(  # pylint: disable=unexpected-keyword-arg
         group_id=f"v{config.tpu_version.value}"
     ):
+      jobset_config = jobset.build_jobset_from_gcs_yaml(
+          gcs_path=GCS_JOBSET_CONFIG_PATH,
+          dag_name="jobset_healthiness_suspended",
+      )
+
       node_pool_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
           task_id="build_node_pool_info_from_gcs_yaml"
       )(
@@ -119,39 +111,43 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       ) as create_node_pool:
         create_first_node_pool = node_pool.create.override(
             task_id="node_pool_1",
-            retries=2,
         )(
             node_pool=node_pool_info,
         )
 
         create_second_node_pool = node_pool.create.override(
             task_id="node_pool_2",
-            retries=2,
         )(
             node_pool=node_pool_info_2,
         )
 
-      validate_zero_replicas = jobset.validate_jobset_replica_number(
+      validate_zero_replicas = jobset.wait_for_jobset_replica_number.override(
+          task_id="validate_zero_replicas"
+      )(
           node_pool=node_pool_info,
           jobset_config=jobset_config,
           replica_type="suspended",
           correct_replica_num=0,
       )
 
-      start_workload = jobset.run_workload(
+      start_workload = jobset.run_workload.override(task_id="start_workload")(
           node_pool=node_pool_info,
-          yaml_config=jobset_config.generate_yaml(
-              workload_script=Workload.JAX_TPU_BENCHMARK
-          ),
-          namespace=jobset_config.namespace,
+          jobset_config=jobset_config,
+          workload_type=Workload.JAX_TPU_BENCHMARK,
       )
 
-      suspend_jobset = jobset.k8s_suspend_jobset_command(
-          jobset_name=jobset_config.jobset_name,
-          namespace=jobset_config.namespace,
+      suspend_jobset = jobset.suspended_jobset.override(
+        task_id="suspend_jobset"
+      )(
+          node_pool=node_pool_info,
+          jobset_config=jobset_config,
       )
 
-      validate_suspended_replicas = jobset.validate_jobset_replica_number(
+      validate_suspended_replicas = (
+          jobset.wait_for_jobset_replica_number.override(
+              task_id="validate_suspended_replicas"
+          )
+      )(
           node_pool=node_pool_info,
           jobset_config=jobset_config,
           replica_type="suspended",
@@ -161,9 +157,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       cleanup_workload = jobset.end_workload.override(
           task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
       )(
-          node_pool=node_pool_info,
-          jobset_name=jobset_config.jobset_name,
-          namespace=jobset_config.namespace,
+          node_pool=node_pool_info, jobset_config=jobset_config
       ).as_teardown(
           setups=start_workload
       )

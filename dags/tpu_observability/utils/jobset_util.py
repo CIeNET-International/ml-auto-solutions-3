@@ -301,10 +301,13 @@ class Command:
     ])
 
   @staticmethod
-  def k8s_suspend_jobset_command(jobset_name: str, namespace: str) -> str:
+  def k8s_suspend_jobset_command(
+      kubeconfig: str, jobset_name: str, namespace: str
+  ) -> str:
     patch_content = '{"spec": {"suspend": true}}'
     return (
-        f"kubectl patch jobset {jobset_name} -n {namespace} "
+        f"kubectl --kubeconfig={kubeconfig} "
+        f"patch jobset {jobset_name} -n {namespace} "
         f"--type=merge -p '{patch_content}'"
     )
 
@@ -890,3 +893,54 @@ def ensure_no_jobset_uptime_data(
     logging.info("Stability period passed with no data detected.")
     return True
   return False
+@task
+def suspended_jobset(node_pool: node_pool_info, jobset_config: JobSet):
+  """
+  Suspend a jobset from the GKE cluster.
+
+  This task executes a bash script to:
+  1. Authenticate `gcloud` with the specified GKE cluster.
+  2. Suspend a JobSet.
+
+  Args:
+    node_pool: Configuration object with cluster details.
+    jobset_name: The name of the JobSet to delete.
+  """
+  with tempfile.NamedTemporaryFile() as temp_config_file:
+    env = os.environ.copy()
+    env["KUBECONFIG"] = temp_config_file.name
+
+    cmd = " && ".join([
+        Command.get_credentials_command(node_pool),
+        Command.k8s_suspend_jobset_command(
+            temp_config_file.name,
+            jobset_config.jobset_name,
+            jobset_config.namespace,
+        ),
+    ])
+
+    subprocess.run_exec(cmd, env=env)
+
+@task.sensor(poke_interval=30, timeout=900, mode="poke")
+def wait_for_jobset_replica_number(
+    node_pool: node_pool_info,
+    jobset_config: JobSet,
+    replica_type: str,
+    correct_replica_num: int,
+):
+  """
+  A sensor which checks if the correct number jobset replicas in a status type.
+
+  Args:
+    node_pool: Configuration object with cluster details.
+    jobset_config: Configuration of JobSet which is being run.
+    replica_type(str): The name of the type of status being checked for.
+    correct_replica_num(int): The expected number of replicas to be found.
+  """
+  logging.info("Checking for number of replicas of type: %s", replica_type)
+  ready_replicas = get_replica_num(
+      replica_type=replica_type,
+      job_name=jobset_config.replicated_job_name,
+      node_pool=node_pool,
+  )
+  return ready_replicas == correct_replica_num
