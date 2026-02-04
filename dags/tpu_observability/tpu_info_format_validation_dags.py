@@ -290,6 +290,7 @@ def validate_latency_table(tpu_info_output: list[tpu_info.Table]):
 # know this signature).
 with models.DAG(  # pylint: disable=unexpected-keyword-arg
     dag_id="tpu_info_format_validation_dag",
+    dagrun_timeout=datetime.timedelta(hours=1),
     start_date=datetime.datetime(2025, 8, 15),
     default_args={"retries": 0},
     schedule="0 20 * * *" if composer_env.is_prod_env() else None,

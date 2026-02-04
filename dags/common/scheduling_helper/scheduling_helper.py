@@ -69,7 +69,10 @@ class SchedulingHelper:
   DEFAULT_ANCHOR = dt.datetime(2000, 1, 1, 13, 0, 0, tzinfo=dt.timezone.utc)
 
   registry: dict[str, Project] = {
-      "orbax": Project("dags/orbax/", XpkClusters.TPU_V5P_128_CLUSTER),
+      # "orbax": Project("dags/orbax/", XpkClusters.TPU_V5P_128_CLUSTER),
+      "tpu_observability": Project(
+          "dags/tpu_observability/", XpkClusters.TPU_V5P_128_CLUSTER
+      ),
   }
 
   @classmethod
@@ -170,6 +173,7 @@ class SchedulingHelper:
 
 if __name__ == "__main__":
   s = SchedulingHelper.ArrangeScheduleTime(
-      SchedulingHelper.registry["orbax"],
-      "maxtext_regular_restore_with_node_disruption",
+      SchedulingHelper.registry["tpu_observability"],
+      "tpu_info_format_validation_dag",
   )
+  print(s)

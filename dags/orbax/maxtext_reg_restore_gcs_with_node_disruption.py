@@ -23,6 +23,7 @@ SCHEDULE = "15 14 * * *" if composer_env.is_prod_env() else None
 DAG_TEST_NAME = "maxtext_regular_restore_with_node_disruption"
 
 
+
 @task
 def generate_workload_checkpoints_location(gcs_ckpt_location: str) -> str:
   return f"{gcs_ckpt_location}/checkpoints"

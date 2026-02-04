@@ -80,6 +80,7 @@ def validate_monitoring_sdk(info: node_pool.Info, pod_name: str) -> None:
 with models.DAG(
     dag_id="tpu_sdk_monitoring_validation",
     start_date=datetime.datetime(2026, 1, 13),
+    dagrun_timeout=datetime.timedelta(hours=1),
     schedule="0 22 * * *" if composer_env.is_prod_env() else None,
     catchup=False,
     tags=[

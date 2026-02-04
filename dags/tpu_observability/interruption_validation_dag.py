@@ -496,6 +496,7 @@ def create_interruption_dag(
   with models.DAG(
       dag_id=dag_id,
       start_date=datetime.datetime(2025, 7, 20),
+      dagrun_timeout=datetime.timedelta(hours=1),
       schedule=dag_schedule,
       catchup=False,
       tags=[
