@@ -119,9 +119,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           jobset_config=jobset_config,
       )
 
-      get_pod_names = jobset.list_pod_names.override(
-          task_id="get_pod_names"
-      )(
+      get_pod_names = jobset.list_pod_names.override(task_id="get_pod_names")(
           node_pool=cluster_info,
           jobset_config=jobset_config,
       )
