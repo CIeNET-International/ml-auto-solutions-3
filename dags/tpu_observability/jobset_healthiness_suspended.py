@@ -137,7 +137,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       )
 
       suspend_jobset = jobset.suspended_jobset.override(
-        task_id="suspend_jobset"
+          task_id="suspend_jobset"
       )(
           node_pool=node_pool_info,
           jobset_config=jobset_config,
@@ -156,9 +156,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 
       cleanup_workload = jobset.end_workload.override(
           task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
-      )(
-          node_pool=node_pool_info, jobset_config=jobset_config
-      ).as_teardown(
+      )(node_pool=node_pool_info, jobset_config=jobset_config).as_teardown(
           setups=start_workload
       )
 

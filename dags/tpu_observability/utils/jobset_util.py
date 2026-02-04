@@ -767,6 +767,7 @@ def wait_for_all_pods_running(node_pool: node_pool_info, jobset_config: JobSet):
   num_pods = jobset_config.replicas * jobset_config.parallelism
   return num_running == num_pods
 
+
 @task
 def suspended_jobset(node_pool: node_pool_info, jobset_config: JobSet):
   """
@@ -794,6 +795,7 @@ def suspended_jobset(node_pool: node_pool_info, jobset_config: JobSet):
     ])
 
     subprocess.run_exec(cmd, env=env)
+
 
 @task.sensor(poke_interval=30, timeout=900, mode="poke")
 def wait_for_jobset_replica_number(
