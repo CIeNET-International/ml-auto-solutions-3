@@ -32,6 +32,7 @@ from dags.tpu_observability.utils import node_pool_util as node_pool
 # know this signature).
 with models.DAG(  # pylint: disable=unexpected-keyword-arg
     dag_id="gke_node_pool_label_update",
+    dagrun_timeout=datetime.timedelta(hours=1),
     start_date=datetime.datetime(2025, 8, 1),
     schedule="30 20 * * *" if composer_env.is_prod_env() else None,
     catchup=False,

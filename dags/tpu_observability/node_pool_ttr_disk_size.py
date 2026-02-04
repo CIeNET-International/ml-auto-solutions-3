@@ -31,6 +31,7 @@ _DISK_SIZE_INCREMENT = 50
 
 with models.DAG(
     dag_id="node_pool_ttr_disk_size",
+    dagrun_timeout=datetime.timedelta(hours=1),
     start_date=datetime.datetime(2025, 6, 26),
     schedule="0 21 * * *" if composer_env.is_prod_env() else None,
     catchup=False,

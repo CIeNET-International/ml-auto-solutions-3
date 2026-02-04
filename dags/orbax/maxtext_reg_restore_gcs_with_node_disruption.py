@@ -23,6 +23,7 @@ SCHEDULE = "15 14 * * *" if composer_env.is_prod_env() else None
 DAG_TEST_NAME = "maxtext_regular_restore_with_node_disruption"
 
 
+
 @task
 def generate_workload_checkpoints_location(gcs_ckpt_location: str) -> str:
   return f"{gcs_ckpt_location}/checkpoints"
@@ -31,6 +32,7 @@ def generate_workload_checkpoints_location(gcs_ckpt_location: str) -> str:
 with models.DAG(
     dag_id=DAG_TEST_NAME,
     start_date=datetime.datetime(2025, 10, 21),
+    dagrun_timeout=datetime.timedelta(hours=1),
     schedule_interval=SCHEDULE,
     catchup=False,
     tags=[
@@ -42,7 +44,9 @@ with models.DAG(
         "TPU",
         "v5p-128",
     ],
-    description="DAG that verifies MaxText regular checkpointing restoring functionality from GCS bucket .",
+    description="""
+      DAG that verifies MaxText regular checkpointing restoring functionality from GCS bucket .
+    """,
     doc_md="""
       # MaxText Regular Checkpointing Validation DAG
 
@@ -112,8 +116,12 @@ with models.DAG(
             run_name=run_name,
             slice_num=slice_num,
             out_folder=DAG_TEST_NAME,
-            enable_multi_tier_checkpointing=checkpointing.enable_multi_tier_checkpointing,
-            enable_emergency_checkpoint=checkpointing.enable_emergency_checkpoint,
+            enable_multi_tier_checkpointing=(
+                checkpointing.enable_multi_tier_checkpointing
+            ),
+            enable_emergency_checkpoint=(
+                checkpointing.enable_emergency_checkpoint
+            ),
         )
         gcs_location = generate_workload_checkpoints_location.override(
             task_id="gcs_bucket_checkpoints_location"
@@ -182,10 +190,15 @@ with models.DAG(
         )
 
         validate_bucket = validation_util.validate_gcs_checkpoint_files(
-            bucket_path=f"{test_config_util.DEFAULT_BUCKET}/{DAG_TEST_NAME}/{run_name}",
+            bucket_path=(
+                f"{test_config_util.DEFAULT_BUCKET}/"
+                f"{DAG_TEST_NAME}/{run_name}"
+            ),
             steps_to_validate=gcs_steps_to_validate,
         )
 
+        # Airflow uses >> for task chaining, which is pointless for pylint.
+        # pylint: disable=pointless-statement
         (
             run_name
             >> gcs_location
@@ -197,3 +210,4 @@ with models.DAG(
             >> validate_log
             >> validate_bucket
         )
+        # pylint: enable=pointless-statement

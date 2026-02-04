@@ -33,6 +33,7 @@ from dags.tpu_observability.utils import node_pool_util as node_pool
 with models.DAG(  # pylint: disable=unexpected-keyword-arg
     dag_id="gke_node_pool_status",
     start_date=datetime.datetime(2025, 8, 1),
+    dagrun_timeout=datetime.timedelta(hours=1),
     schedule="0 18 * * *" if composer_env.is_prod_env() else None,
     catchup=False,
     tags=["gke", "tpu-observability", "node-pool-status", "TPU", "v6e-16"],

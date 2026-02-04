@@ -35,6 +35,7 @@ from dags.tpu_observability.utils import node_pool_util as node_pool
 with models.DAG(  # pylint: disable=unexpected-keyword-arg
     dag_id="multi-host-availability-rollback",
     start_date=datetime.datetime(2025, 8, 10),
+    dagrun_timeout=datetime.timedelta(hours=1),
     schedule="30 19 * * *" if composer_env.is_prod_env() else None,
     catchup=False,
     tags=[

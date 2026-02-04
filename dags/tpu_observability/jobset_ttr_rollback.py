@@ -35,6 +35,7 @@ from dags.tpu_observability.configs.common import (
 # know this signature).
 with models.DAG(  # pylint: disable=unexpected-keyword-arg
     dag_id="jobset_rollback_ttr",
+    dagrun_timeout=datetime.timedelta(hours=1),
     start_date=datetime.datetime(2025, 8, 10),
     schedule="30 22 * * *" if composer_env.is_prod_env() else None,
     catchup=False,
