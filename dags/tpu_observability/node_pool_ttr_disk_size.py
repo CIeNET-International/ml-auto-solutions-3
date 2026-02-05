@@ -25,14 +25,18 @@ from airflow.utils.trigger_rule import TriggerRule
 from dags import composer_env
 from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_PATH
 from dags.tpu_observability.utils import node_pool_util as node_pool
+from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper
 
 _DISK_SIZE_INCREMENT = 50
-
+SCHEDULE = SchedulingHelper.arrange_schedule_time(
+    project_key="tpu_observability", target_dag_id="node_pool_ttr_disk_size"
+)
 
 with models.DAG(
     dag_id="node_pool_ttr_disk_size",
     start_date=datetime.datetime(2025, 6, 26),
-    schedule="0 21 * * *" if composer_env.is_prod_env() else None,
+    schedule=SCHEDULE,
+    dagrun_timeout=datetime.timedelta(hours=1),
     catchup=False,
     tags=[
         "gke",
