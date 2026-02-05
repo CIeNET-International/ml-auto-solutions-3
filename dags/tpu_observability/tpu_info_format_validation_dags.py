@@ -44,6 +44,7 @@ from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.tpu_observability.utils import tpu_info_util as tpu_info
 from dags.tpu_observability.utils.jobset_util import Workload
+from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper
 
 
 @task
@@ -286,13 +287,19 @@ def validate_latency_table(tpu_info_output: list[tpu_info.Table]):
     )
 
 
+SCHEDULE = SchedulingHelper.arrange_schedule_time(
+    project_key="tpu_observability",
+    target_dag_id="tpu_info_format_validation_dag",
+)
+
 # Keyword arguments are generated dynamically at runtime (pylint does not
 # know this signature).
 with models.DAG(  # pylint: disable=unexpected-keyword-arg
     dag_id="tpu_info_format_validation_dag",
     start_date=datetime.datetime(2025, 8, 15),
     default_args={"retries": 0},
-    schedule="0 20 * * *" if composer_env.is_prod_env() else None,
+    schedule=SCHEDULE,
+    dagrun_timeout=datetime.timedelta(hours=1),
     catchup=False,
     tags=["gke", "tpu-observability", "tpu-info", "TPU", "v6e-16"],
     description=(

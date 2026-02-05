@@ -1,0 +1,79 @@
+# ==============================================================================
+# AIRFLOW DAG SCHEDULE REGISTRY
+# ==============================================================================
+#
+# DESCRIPTION:
+#   This registry serves as the source of truth for deterministic DAG scheduling.
+#   It uses a "bin-packing" logic to serialize execution on shared resources
+#   (e.g., TPU clusters) to prevent resource contention and "thundering herds."
+#
+# HOW TO GENERATE/UPDATE THIS FILE:
+#   1. INITIALIZATION:
+#      Use the `generate_initial_registry(path, key)` utility script. It scans
+#      the project folder and generates a YAML template based on the
+#      `dagrun_timeout` attributes found in the Python DAG files.
+#
+#   2. MAINTENANCE & DEVELOPMENT:
+#      Whenever a NEW DAG is developed or an OLD DAG is maintained, you MUST
+#      update this file to reflect the changes in the schedule:
+#      - Add NEW DAGs to 'require_scheduling' to include them in the timeline.
+#      - Adjust 'timeout' if the DAG execution time changes.
+#      - Move DAGs between 'require_scheduling' and 'no_scheduling_required'
+#        depending on whether they need a managed start time.
+#
+# YAML FORMAT EXPLANATION:
+#   project_key:
+#     schedule_name:  [String] Human-readable project label.
+#     project_path:   [Path]   Source code location of the DAGs.
+#     cluster_name:   [String] Target hardware/cluster metadata.
+#
+#     require_scheduling: [List] ORDER-SENSITIVE queue.
+#       - id:      [String] Must exactly match the Airflow `dag_id`.
+#       - timeout: [HH:MM:SS] The buffer allocated for this DAG.
+#                  The next DAG starts at: (Previous Start + Timeout + 15m).
+#
+#     no_scheduling_required: [List] DAGs that are triggered manually,
+#                             by other DAGs, or don't occupy cluster slots.
+#
+# ==============================================================================
+
+tpu_observability:
+  schedule_name: "Tpu Observability"
+  project_path: "dags/tpu_observability/"
+  cluster_name: "TPU_V5P_128_CLUSTER"
+  require_scheduling:
+    - id: "gke_node_pool_label_update"
+      timeout: "01:00:00"
+    - id: "gke_node_pool_status"
+      timeout: "01:00:00"
+    - id: "jobset_rollback_ttr"
+      timeout: "01:00:00"
+    - id: "jobset_ttr_node_pool_resize"
+      timeout: "01:00:00"
+    - id: "jobset_ttr_pod_delete"
+      timeout: "01:00:00"
+    - id: "multi-host-availability-rollback"
+      timeout: "01:00:00"
+    - id: "node_pool_ttr_disk_size"
+      timeout: "01:00:00"
+    - id: "node_pool_ttr_update_label"
+      timeout: "01:00:00"
+    - id: "tpu_info_format_validation_dag"
+      timeout: "01:00:00"
+    - id: "tpu_sdk_monitoring_validation"
+      timeout: "01:00:00"
+  no_scheduling_required:
+    - "validate_interruption_count_gce_bare_metal_preemption"
+    - "validate_interruption_count_gce_defragmentation"
+    - "validate_interruption_count_gce_eviction"
+    - "validate_interruption_count_gce_host_error"
+    - "validate_interruption_count_gce_hwsw_maintenance"
+    - "validate_interruption_count_gce_migrate_on_hwsw_maintenance"
+    - "validate_interruption_count_gce_other"
+    - "validate_interruption_count_gke_bare_metal_preemption"
+    - "validate_interruption_count_gke_defragmentation"
+    - "validate_interruption_count_gke_eviction"
+    - "validate_interruption_count_gke_host_error"
+    - "validate_interruption_count_gke_hwsw_maintenance"
+    - "validate_interruption_count_gke_migrate_on_hwsw_maintenance"
+    - "validate_interruption_count_gke_other"
