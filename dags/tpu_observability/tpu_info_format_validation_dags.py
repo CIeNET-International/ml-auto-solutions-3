@@ -13,20 +13,19 @@
 # limitations under the License.
 
 """
+tpu_info_format_validation_dag:
 A DAG orchestrates the process of verifying TensorCore utilization metrics.
-
 This is done by comparing data from Cloud Logging and Cloud Monitoring.
+
+tpu_info_cli_validation_dags:
+A DAG to validate the `tpu-info` CLI tool, ensuring help documentation,
+version metadata, and process monitoring are functional inside TPU worker pods.
 """
 
 import datetime
-import os
-import re
-import subprocess
-import tempfile
 
 from airflow import models
 from airflow.decorators import task
-from airflow.exceptions import AirflowFailException
 from airflow.models.baseoperator import chain
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
@@ -35,255 +34,14 @@ from dags import composer_env
 from dags.common import test_owner
 from dags.tpu_observability.configs.common import (
     MachineConfigMap,
-    TpuConfig,
     GCS_CONFIG_PATH,
     GCS_JOBSET_CONFIG_PATH,
 )
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
-from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.tpu_observability.utils import tpu_info_util as tpu_info
+from dags.tpu_observability.utils import tpu_info_format_util as tpu_info_format
 from dags.tpu_observability.utils.jobset_util import Workload
-
-
-@task
-def get_tpu_info_from_pod(info: node_pool.Info, pod_name: str) -> str:
-  """
-  Executes the `tpu-info` command in a specified pod and returns its output.
-
-  This task uses kubectl to run the 'tpu-info' command inside the given pod
-  in the 'default' namespace. The output of the command is captured and
-  returned.
-
-  Args:
-    kubeconfig: The path to the kubeconfig file.
-    pod_name: The name of the pod to execute the command in.
-
-  Returns:
-    The standard output from the 'tpu-info' command.
-  """
-  with tempfile.NamedTemporaryFile() as temp_config_file:
-    env = os.environ.copy()
-    env["KUBECONFIG"] = temp_config_file.name
-
-    cmd = " && ".join([
-        jobset.Command.get_credentials_command(info),
-        f"kubectl exec {pod_name} -n default -- tpu-info",
-    ])
-
-    return subprocess.run_exec(cmd, env=env)
-
-
-@task
-def verify_table_amount(tpu_info_output: list[tpu_info.Table]):
-  """
-  Verifies if all expected tables are present.
-  """
-  expect_table_names = {
-      "TPU Chips",
-      "TPU Runtime Utilization",
-      "TensorCore Utilization",
-      "TPU Buffer Transfer Latency",
-  }
-
-  found_names = {table.name for table in tpu_info_output}
-
-  missing_names = expect_table_names - found_names
-
-  if missing_names:
-    raise AirflowFailException(
-        "Mismatched tpu-info tables; "
-        f"required: {expect_table_names}; got: {found_names}"
-    )
-
-
-@task
-def validate_chips_table(
-    tpu_info_output: list[tpu_info.Table],
-    tpu_config: TpuConfig,
-):
-  """
-  Validates the row count and content for the 'TPU Chips' table.
-  """
-  errors = []
-  content = next(
-      (table for table in tpu_info_output if table.name == "TPU Chips"),
-      None,
-  )
-
-  expected_rows = 4
-  if len(content.body) != expected_rows:
-    raise AirflowFailException(
-        f"Unexpected row count; except: {expected_rows}; got:"
-        f" {len(content.body)}"
-    )
-
-  tpu_type = tpu_config.tpu_version.value
-
-  for row_dict in content.body:
-    for header, data in row_dict.items():
-      match header:
-        case "Chip":
-          if not re.match(r"/dev/vfio/\d+", data):
-            errors.append(
-                f"Unexpected {header}; except: '/dev/vfio/NNN'; got: '{data}'"
-            )
-        case "Type":
-          if tpu_type not in data:
-            errors.append(
-                f"Unexpected {header}; except: string contains '{tpu_type}';"
-                f" got: '{data}'"
-            )
-        case "PID":
-          if not (data.isdigit() and int(data) > 0):
-            errors.append(
-                f"Unexpected {header}; except: a positive integer; got: "
-                f"'{data}'"
-            )
-
-  if errors:
-    error_summary = "\n".join(errors)
-    raise AirflowFailException(
-        f"Validation failed for {content.name} table with {len(errors)} "
-        f"error(s):\n{error_summary}\n\n"
-        f"Raw table output:\n{content.raw_body}"
-    )
-
-
-@task
-def validate_runtime_table(tpu_info_output: list[tpu_info.Table]):
-  """
-  Validates the row count and content of table 'TPU Runtime Utilization'
-  """
-  errors = []
-  content = next(
-      (
-          table
-          for table in tpu_info_output
-          if table.name == "TPU Runtime Utilization"
-      ),
-      None,
-  )
-
-  expected_rows = 4
-  if len(content.body) != expected_rows:
-    raise AirflowFailException(
-        f"Unexpected row count; except: {expected_rows}; got:"
-        f" {len(content.body)}"
-    )
-
-  for row_dict in content.body:
-    for header, data in row_dict.items():
-      match header:
-        case "HBM Usage (GiB)":
-          regex = re.match(r"(\d+\.\d+)\s*GiB\s*/\s*(\d+\.\d+)\s*GiB", data)
-          if regex:
-            used, total = float(regex.group(1)), float(regex.group(2))
-            if used > total:
-              errors.append(
-                  f"Unexpected {header}; expect: 'used HBM <= total HBM'; got:"
-                  f" '{used} GiB > {total} GiB'"
-              )
-          else:
-            errors.append(
-                f"Unexpected {header}; expect: 'N.NN GiB / N.NN GiB'; got:"
-                f" '{data}'"
-            )
-        case "Duty cycle":
-          duty_match = re.match(r"(\d+\.\d+)%", data)
-          if not (duty_match and 0.0 <= float(duty_match.group(1)) <= 100.0):
-            errors.append(
-                f"Unexpected {header}; expect: 'a percentage between"
-                f" 0.0-100.0'; got: '{data}'"
-            )
-  if errors:
-    error_summary = "\n".join(errors)
-    raise AirflowFailException(
-        f"Validation failed for {content.name} table with"
-        f" {len(errors)} error(s):\n{error_summary}\n\nRaw table"
-        f" output:\n{content.raw_body}"
-    )
-
-
-@task
-def validate_tensorcore_table(tpu_info_output: list[tpu_info.Table]):
-  """
-  Validates the row count and content of table 'TensorCore Utilization'
-  """
-  errors = []
-  content = next(
-      (
-          table
-          for table in tpu_info_output
-          if table.name == "TensorCore Utilization"
-      ),
-      None,
-  )
-
-  expected_rows = 4
-  if len(content.body) != expected_rows:
-    raise AirflowFailException(
-        f"Unexpected row count; except: {expected_rows}; got:"
-        f" {len(content.body)}"
-    )
-  for row_dict in content.body:
-    for header, data in row_dict.items():
-      match header:
-        case "TensorCore Utilization":
-          util_match = re.match(r"(\d+\.\d+)%", data)
-          if not (util_match and 0.0 < float(util_match.group(1)) <= 100.0):
-            errors.append(
-                f"Unexpected {header}; expect: 'a percentage > 0.0 and <="
-                f" 100.0'; got: '{data}'"
-            )
-  if errors:
-    error_summary = "\n".join(errors)
-    raise AirflowFailException(
-        f"Validation failed for {content.name} table with"
-        f" {len(errors)} error(s):\n{error_summary}\n\nRaw table"
-        f" output:\n{content.raw_body}"
-    )
-
-
-@task
-def validate_latency_table(tpu_info_output: list[tpu_info.Table]):
-  """
-  Validates the row count and content of table 'TPU Buffer Transfer Latency'
-  """
-  errors = []
-  content = next(
-      (
-          table
-          for table in tpu_info_output
-          if table.name == "TPU Buffer Transfer Latency"
-      ),
-      None,
-  )
-
-  if content.body is None or len(content.body) == 0:
-    raise AirflowFailException(
-        "Unexpected row count; expects at least one data row; got: 0"
-    )
-
-  for row_dict in content.body:
-    for header, data in row_dict.items():
-      match header:
-        case "Buffer Size":
-          continue
-        case "P50" | "P90" | "P95" | "P999":
-          if not (data.endswith(" us") and float(data.replace(" us", "")) > 0):
-            errors.append(
-                f"Unexpected {header}; expect: 'a positive float ending in \""
-                f" us\"'; got: '{data}'"
-            )
-
-  if errors:
-    error_summary = "\n".join(errors)
-    raise AirflowFailException(
-        f"Validation failed for {content.name} table with"
-        f" {len(errors)} error(s):\n{error_summary}\n\nRaw table"
-        f" output:\n{content.raw_body}"
-    )
 
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
@@ -407,7 +165,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       )(cluster_info, pod_name_list=pod_names, job_apply_time=apply_time)
 
       outputs_of_tpu_info = (
-          get_tpu_info_from_pod.override(task_id="get_tpu_info")
+          tpu_info_format.get_tpu_info_from_pod.override(task_id="get_tpu_info")
           .partial(info=cluster_info)
           .expand(pod_name=pod_names)
       )
@@ -426,25 +184,31 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           group_id="verification_group"
       ) as verification_group:
         verify_table_amount_task = (
-            verify_table_amount.override(task_id="verify_table_amount_task")
+            tpu_info_format.verify_table_amount.override(
+                task_id="verify_table_amount_task"
+            )
             .partial()
             .expand(tpu_info_output=output_of_tpu_info)
         )
 
         validate_tpu_chips_metric = (
-            validate_chips_table.override(task_id="validate_tpu_chips_metric")
+            tpu_info_format.validate_chips_table.override(
+                task_id="validate_tpu_chips_metric"
+            )
             .partial(tpu_config=config)
             .expand(tpu_info_output=output_of_tpu_info)
         )
 
         validate_runtime_metric = (
-            validate_runtime_table.override(task_id="validate_runtime_metric")
+            tpu_info_format.validate_runtime_table.override(
+                task_id="validate_runtime_metric"
+            )
             .partial()
             .expand(tpu_info_output=output_of_tpu_info)
         )
 
         validate_tensorcore_metric = (
-            validate_tensorcore_table.override(
+            tpu_info_format.validate_tensorcore_table.override(
                 task_id="validate_tensorcore_metric"
             )
             .partial()
@@ -452,7 +216,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
         )
 
         validate_latency_metric = (
-            validate_latency_table.override(task_id="validate_latency_metric")
+            tpu_info_format.validate_latency_table.override(
+                task_id="validate_latency_metric"
+            )
             .partial()
             .expand(tpu_info_output=output_of_tpu_info)
         )
@@ -515,3 +281,136 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           clean_up_workload,
           cleanup_node_pool,
       )
+      # pylint: enable=pointless-statement
+
+
+# Keyword arguments are generated dynamically at runtime (pylint does not
+# know this signature).
+with models.DAG(  # pylint: disable=unexpected-keyword-arg
+    dag_id="tpu_info_cli_validation_dags",
+    start_date=datetime.datetime(2025, 8, 10),
+    schedule="30 14 * * *" if composer_env.is_prod_env() else None,
+    catchup=False,
+    tags=[
+        "cloud-ml-auto-solutions",
+        "jobset",
+        "time-to-recover",
+        "tpu-observability",
+        "TPU",
+        "v6e-16",
+    ],
+    description=(
+        "Validates tpu-info CLI tool: help documentation, version metadata, "
+        "and process monitoring capabilities inside TPU worker pods."
+    ),
+    doc_md="""
+        ### Description
+        This DAG performs an end-to-end validation of the `tpu-info` observability tool
+        within TPU worker pods. It ensures the CLI tool is correctly installed and
+        functional across different TPU configurations.
+
+        ### Validation Steps:
+        1. **Help Menu Validation**: Verifies `tpu-info -help` displays all required
+           options (streaming, rate, etc.) and specific usage instructions.
+        2. **Process Table Validation**: Confirms `tpu-info --process` can successfully
+           map PIDs to TPU chips.
+        3. **Version Validation**: Ensures `tpu-info --version` correctly reports
+           the tool version, libtpu version, and accelerator type.
+      """,
+) as dag:
+  for machine in MachineConfigMap:
+    config = machine.value
+
+    # Keyword arguments are generated dynamically at runtime (pylint does not
+    # know this signature).
+    with TaskGroup(  # pylint: disable=unexpected-keyword-arg
+        group_id=f"v{config.tpu_version.value}"
+    ):
+      jobset_config = jobset.build_jobset_from_gcs_yaml(
+          gcs_path=GCS_JOBSET_CONFIG_PATH,
+          dag_name="tpu_info_cli_validation_dags",
+      )
+
+      cluster_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
+          task_id="build_node_pool_info_from_gcs_yaml"
+      )(
+          gcs_path=GCS_CONFIG_PATH,
+          dag_name="tpu_info_cli_validation_dags",
+          is_prod=composer_env.is_prod_env(),
+          machine_type=config.machine_version.value,
+          tpu_topology=config.tpu_topology,
+      )
+
+      create_node_pool = node_pool.create.override(task_id="create_node_pool")(
+          node_pool=cluster_info,
+      )
+
+      apply_time = jobset.run_workload.override(task_id="run_workload")(
+          node_pool=cluster_info,
+          jobset_config=jobset_config,
+          workload_type=Workload.JAX_TPU_BENCHMARK,
+      )
+
+      pod_names = jobset.list_pod_names.override(task_id="list_pod_names")(
+          node_pool=cluster_info,
+          jobset_config=jobset_config,
+      )
+
+      wait_for_job_start = jobset.wait_for_jobset_started.override(
+          task_id="wait_for_job_start"
+      )(cluster_info, pod_name_list=pod_names, job_apply_time=apply_time)
+
+      # Keyword arguments are generated dynamically at runtime (pylint does not
+      # know this signature).
+      with TaskGroup(  # pylint: disable=unexpected-keyword-arg
+          group_id="verification_group"
+      ) as verification_group:
+        help_validation = (
+            tpu_info_format.validate_help.override(task_id="validate_help")
+            .partial(info=cluster_info)
+            .expand(pod_name=pod_names)
+        )
+
+        version_validation = (
+            tpu_info_format.validate_version.override(
+                task_id="validate_version"
+            )
+            .partial(info=cluster_info)
+            .expand(pod_name=pod_names)
+        )
+
+        process_validation = (
+            tpu_info_format.validate_process.override(
+                task_id="validate_process"
+            )
+            .partial(info=cluster_info)
+            .expand(pod_name=pod_names)
+        )
+
+      cleanup_workload = jobset.end_workload.override(
+          task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
+      )(
+          node_pool=cluster_info,
+          jobset_config=jobset_config,
+      ).as_teardown(
+          setups=apply_time
+      )
+
+      cleanup_node_pool = node_pool.delete.override(
+          task_id="cleanup_node_pool", trigger_rule=TriggerRule.ALL_DONE
+      )(node_pool=cluster_info).as_teardown(
+          setups=create_node_pool,
+      )
+
+      chain(
+          jobset_config,
+          cluster_info,
+          create_node_pool,
+          apply_time,
+          pod_names,
+          wait_for_job_start,
+          verification_group,
+          cleanup_workload,
+          cleanup_node_pool,
+      )
+      # pylint: enable=pointless-statement
