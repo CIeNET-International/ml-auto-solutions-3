@@ -116,18 +116,49 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           workload_type=Workload.JAX_TPU_BENCHMARK,
       )
 
-      delete_random_pod = jobset.delete_one_random_pod.override(
+      deletion_start_time = jobset.delete_one_random_pod.override(
           task_id="delete_random_pod"
       )(
           node_pool=cluster_info,
           jobset_config=jobset_config,
       )
 
-      wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
-          task_id="wait_for_jobset_ttr_to_be_found"
+      wait_for_recovery = jobset.wait_for_all_pods_running.override(
+          task_id="wait_for_recovery",
+          poke_interval=5
       )(
           node_pool=cluster_info,
           jobset_config=jobset_config,
+      )
+
+      verify_duration = jobset.verify_recovery_duration.override(
+          task_id="verify_recovery_duration"
+      )(
+          start_time=deletion_start_time
+      )
+
+      wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
+          task_id="wait_for_jobset_ttr_to_be_found",
+          trigger_rule=TriggerRule.ALL_DONE
+      )(
+          node_pool=cluster_info,
+          jobset_config=jobset_config,
+          start_time=deletion_start_time,
+      )
+
+      verify_duration = jobset.verify_recovery_duration.override(
+          task_id="verify_recovery_duration"
+      )(
+          start_time=deletion_start_time
+      )
+
+      wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
+          task_id="wait_for_jobset_ttr_to_be_found",
+          trigger_rule=TriggerRule.ALL_DONE
+      )(
+          node_pool=cluster_info,
+          jobset_config=jobset_config,
+          start_time=deletion_start_time,
       )
 
       cleanup_workload = jobset.end_workload.override(
@@ -148,7 +179,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           cluster_info,
           create_node_pool,
           startup.task_group,
-          delete_random_pod,
+          deletion_start_time,
+          wait_for_recovery,
+          verify_duration,
           wait_for_metric_upload,
           cleanup_workload,
           cleanup_node_pool,

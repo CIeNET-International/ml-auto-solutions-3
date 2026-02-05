@@ -681,8 +681,11 @@ def delete_one_random_pod(
         ),
     ])
 
+    current_time_utc = datetime.datetime.now(datetime.timezone.utc)
     subprocess.run_exec(cmd, env=env)
     logging.info("Successfully initiated deletion for pod: %s", target_pod)
+
+    return TimeUtil.from_datetime(current_time_utc)
 
 
 @task.sensor(poke_interval=30, timeout=900, mode="poke")
@@ -747,6 +750,26 @@ def wait_for_jobset_started(
   ]
 
   return all(p > threshold_value for p in last_n_data_points)
+
+
+@task
+def verify_recovery_duration(start_time: TimeUtil):
+  """
+  Checks if the time elapsed since start_timestamp is > 60 seconds.
+  """
+  end_time = TimeUtil.from_datetime(datetime.datetime.now(datetime.timezone.utc))
+  duration = end_time.time - start_time.time
+
+  logging.info(f"Start Time: {start_time.to_iso_string()}")
+  logging.info(f"End Time: {end_time.to_iso_string()}")
+  logging.info(f"Recovery Duration: {duration} seconds")
+
+  if duration < 60:
+    raise AirflowFailException(
+        f"Recovery too fast ({duration}s < 60s). "
+        "The 'jobset_time_to_recover' metric requires > 60s to be recorded. "
+        "Failing fast to avoid waiting for a missing metric."
+    )
 
 
 @task.sensor(poke_interval=60, timeout=3600, mode="poke")
@@ -941,3 +964,4 @@ def ensure_no_jobset_uptime_data(
     logging.info("Stability period passed with no data detected.")
     return True
   return False
+

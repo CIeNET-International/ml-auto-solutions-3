@@ -120,19 +120,38 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           workload_type=Workload.JAX_TPU_BENCHMARK,
       )
 
-      node_pool_resize = node_pool.update.override(task_id="node_pool_resize")(
+      node_pool_resize_start_time = node_pool.update.override(
+          task_id="node_pool_resize"
+      )(
           node_pool=cluster_info,
           spec=node_pool.NodePoolUpdateSpec.DiskSize(
               delta=_DISK_SIZE_INCREMENT
           ),
       )
 
-      wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
-          task_id="wait_for_jobset_ttr_to_be_found"
+      wait_for_recovery = jobset.wait_for_all_pods_running.override(
+          task_id="wait_for_recovery",
+          poke_interval=5
       )(
           node_pool=cluster_info,
           jobset_config=jobset_config,
       )
+
+      verify_duration = jobset.verify_recovery_duration.override(
+          task_id="verify_recovery_duration"
+      )(
+          start_time=node_pool_resize_start_time
+      )
+
+      wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
+          task_id="wait_for_jobset_ttr_to_be_found",
+          trigger_rule=TriggerRule.ALL_DONE
+      )(
+          node_pool=cluster_info,
+          jobset_config=jobset_config,
+          start_time=node_pool_resize_start_time,
+      )
+
 
       cleanup_workload = jobset.end_workload.override(
           task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
@@ -155,7 +174,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           cluster_info,
           create_node_pool,
           startup.task_group,
-          node_pool_resize,
+          node_pool_resize_start_time,
+          wait_for_recovery,
+          verify_duration,
           wait_for_metric_upload,
           cleanup_workload,
           cleanup_node_pool,
