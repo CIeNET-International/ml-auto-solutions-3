@@ -31,8 +31,11 @@ from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
 from dags import composer_env
-from dags.common.vm_resource import Zone, Region
-from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_PATH
+from dags.tpu_observability.configs.common import (
+    MachineConfigMap,
+    GCS_CONFIG_PATH,
+    GCS_JOBSET_CONFIG_PATH,
+)
 from dags.tpu_observability.tpu_info_metric import ALL_METRIC_STRATEGIES
 from dags.tpu_observability.tpu_info_metric import BaseMetricStrategy
 from dags.tpu_observability.utils import jobset_util as jobset
@@ -248,25 +251,15 @@ with models.DAG(
       """Generates a second node pool name."""
       return f"{node_pool_info.node_pool_name}-2"
 
-    jobset_config = jobset.JobSet(
-        jobset_name="tpu-info-v6e-workload",
-        namespace="default",
-        max_restarts=5,
-        replicated_job_name="tpu-job-slice",
-        replicas=2,
-        backoff_limit=0,
-        completions=4,
-        parallelism=4,
-        tpu_accelerator_type="tpu-v6e-slice",
-        tpu_topology="4x4",
-        container_name="jax-tpu-worker",
-        image="asia-northeast1-docker.pkg.dev/cienet-cmcs/yuna-docker/tpu-info:v0.5.1",
-        tpu_cores_per_pod=4,
-    )
-
     workload_script = jobset.Workload.JAX_TPU_BENCHMARK
 
     with TaskGroup(group_id=f"v{config.tpu_version.value}"):
+
+      jobset_config = jobset.build_jobset_from_gcs_yaml(
+          gcs_path=GCS_JOBSET_CONFIG_PATH,
+          dag_name="tpu_info_format_validation_dag",
+      )
+
       cluster_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
           task_id="build_node_pool_info_from_gcs_yaml"
       )(
@@ -299,9 +292,7 @@ with models.DAG(
 
       apply_time = jobset.run_workload(
           node_pool=cluster_info,
-          yaml_config=jobset_config.generate_yaml(
-              workload_script=workload_script
-          ),
+          jobset_config=jobset_config,
           namespace=jobset_config.namespace,
       )
 
@@ -319,6 +310,11 @@ with models.DAG(
 
       for strategy in ALL_METRIC_STRATEGIES:
         group_id = f"verify_{strategy.dag_id_suffix}"
+
+        jobset_config = jobset.build_jobset_from_gcs_yaml(
+            gcs_path=GCS_JOBSET_CONFIG_PATH,
+            dag_name="tpu_info_metrics_dag",
+        )
 
         with TaskGroup(group_id=group_id) as verification_group:
           tpu_info_metric_outputs = (
