@@ -36,6 +36,7 @@ from dags.tpu_observability.utils.time_util import TimeUtil
 from google.cloud.monitoring_v3 import types
 import kubernetes
 from xlml.apis import gcs
+from xlml.utils import composer
 from xlml.utils import gke
 
 
@@ -691,9 +692,10 @@ def wait_for_jobset_started(
 def wait_for_jobset_ttr_to_be_found(
     node_pool: node_pool_info,
     jobset_config: JobSet,
+    pod_names: list[str],
     start_time: TimeUtil = None,
 ) -> bool:
-  """Polls the jobset time-to-recover metric.
+  """Polls the jobset time-to-recover metric and logs metadata on success.
 
   A sensor task which polls the jobset time_between_interruptions metric
   every 60 seconds for 60 minutes. 60 minutes is used here since this
@@ -702,9 +704,14 @@ def wait_for_jobset_ttr_to_be_found(
   longer than 60 minutes, it would be exceedingly rare, and it would be
   impractical for the test to run longer.
 
+  When the TTR metric is found, logs relevant parameters to the XLML dashboard
+  for later metric queries in Cloud Monitoring Console.
+
   Args:
     node_pool (Info): An instance of the Info class containing GKE metadata.
-    jobset_config: An instance of the JobSet class representing the jobset configuration.
+    jobset_config: An instance of the JobSet class representing the jobset
+      configuration.
+    pod_names: A list of pod names associated with the JobSet.
     start_time (TimeUtil, optional): The UTC timestamp to start polling from.
     If not provided, defaults to 60 minutes before the current time.
 
@@ -732,7 +739,21 @@ def wait_for_jobset_ttr_to_be_found(
   # This function checks whether the TTR metric is present;
   # it does not assess its value.
   logging.info("Time series: %s", time_series)
-  return len(time_series) > 0
+
+  if len(time_series) == 0:
+    return False
+
+  # Log metadata for XLML dashboard when TTR is found
+  jobset_metadata = {
+      "project_id": node_pool.project_id,
+      "cluster_name": node_pool.cluster_name,
+      "node_pool_name": node_pool.node_pool_name,
+      "jobset_name": jobset_config.jobset_name,
+      "pod_names": pod_names,
+  }
+  composer.log_metadata_for_xlml_dashboard(jobset_metadata)
+  logging.info("Logged JobSet metadata to XLML dashboard: %s", jobset_metadata)
+  return True
 
 
 @task.sensor(poke_interval=30, timeout=600, mode="poke")
