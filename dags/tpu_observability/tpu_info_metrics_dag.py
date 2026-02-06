@@ -31,6 +31,7 @@ from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
 from dags import composer_env
+
 from dags.tpu_observability.configs.common import (
     MachineConfigMap,
     GCS_CONFIG_PATH,
@@ -44,6 +45,7 @@ from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.tpu_observability.utils import tpu_info_util as tpu_info
 from dags.tpu_observability.utils.node_pool_util import Info
 from dags.tpu_observability.utils.time_util import TimeUtil
+from dags.tpu_observability.utils.jobset_util import Workload
 
 
 SCHEDULE = "0 10 * * *" if composer_env.is_prod_env() else None
@@ -110,7 +112,7 @@ def compare_metric_values(
 
 @task
 def get_tpu_info_metric_from_pod(
-    node_pool: node_pool.Info, pod_name: str, namespace: str, metric_name: str
+    node_pool: node_pool.Info, pod_name: str, jobset_config: jobset, metric_name: str
 ) -> str:
   """Executes the 'tpu-info' command in the specified pod and returns its output."""
   with tempfile.TemporaryDirectory() as tmpdir:
@@ -122,7 +124,7 @@ def get_tpu_info_metric_from_pod(
         jobset.Command.get_credentials_command(node_pool),
         (
             f"kubectl --kubeconfig={kube_dir} "
-            f"exec {pod_name} -n {namespace} "
+            f"exec {pod_name} -n {jobset_config.namespace} "
             f"-- tpu-info --metric {metric_name}"
         ),
     ])
@@ -257,14 +259,14 @@ with models.DAG(
 
       jobset_config = jobset.build_jobset_from_gcs_yaml(
           gcs_path=GCS_JOBSET_CONFIG_PATH,
-          dag_name="tpu_info_format_validation_dag",
+          dag_name="tpu_info_metrics_verification",
       )
 
       cluster_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
           task_id="build_node_pool_info_from_gcs_yaml"
       )(
           gcs_path=GCS_CONFIG_PATH,
-          dag_name="tpu_info_format_validation_dag",
+          dag_name="tpu_info_metrics_verification",
           is_prod=composer_env.is_prod_env(),
           machine_type=config.machine_version.value,
           tpu_topology=config.tpu_topology,
@@ -293,28 +295,27 @@ with models.DAG(
       apply_time = jobset.run_workload(
           node_pool=cluster_info,
           jobset_config=jobset_config,
-          namespace=jobset_config.namespace,
+          workload_type=Workload.JAX_TPU_BENCHMARK,
       )
 
-      active_pods = jobset.list_pod_names.override(task_id="get_active_pod")(
+      pod_names = jobset.list_pod_names.override(
+          task_id="list_pod_names",
+          retries=5,
+          retry_delay=datetime.timedelta(seconds=10),
+      )(
           node_pool=cluster_info,
-          namespace=jobset_config.namespace,
+          jobset_config=jobset_config,
       )
 
       wait_for_job_start = jobset.wait_for_jobset_started.override(
           task_id="wait_for_job_start"
-      )(cluster_info, pod_name_list=active_pods, job_apply_time=apply_time)
+      )(cluster_info, pod_name_list=pod_names, job_apply_time=apply_time)
 
       verification_results = {}
       all_verification_groups = []
 
       for strategy in ALL_METRIC_STRATEGIES:
         group_id = f"verify_{strategy.dag_id_suffix}"
-
-        jobset_config = jobset.build_jobset_from_gcs_yaml(
-            gcs_path=GCS_JOBSET_CONFIG_PATH,
-            dag_name="tpu_info_metrics_dag",
-        )
 
         with TaskGroup(group_id=group_id) as verification_group:
           tpu_info_metric_outputs = (
@@ -323,10 +324,10 @@ with models.DAG(
               )
               .partial(
                   node_pool=cluster_info,
-                  namespace=jobset_config.namespace,
+                  jobset_config=jobset_config,
                   metric_name=strategy.tpu_info_metric_name,
               )
-              .expand(pod_name=active_pods)
+              .expand(pod_name=pod_names)
           )
 
           tpu_info_metric_output = (
@@ -344,7 +345,7 @@ with models.DAG(
                   job_apply_time=apply_time,
                   metric_strategy=strategy,
               )
-              .expand(comparison_data=active_pods.zip(tpu_info_metric_output))
+              .expand(comparison_data=pod_names.zip(tpu_info_metric_output))
           )
 
         all_verification_groups.append(verification_group)
@@ -355,15 +356,14 @@ with models.DAG(
           task_id="summarize_results", trigger_rule=TriggerRule.ALL_DONE
       )(
           verification_results_dict=verification_results,
-          active_pods=active_pods,
+          active_pods=pod_names,
       )
 
       clean_up_workload = jobset.end_workload.override(
           task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
       )(
           node_pool=cluster_info,
-          jobset_name=jobset_config.jobset_name,
-          namespace=jobset_config.namespace,
+          jobset_config=jobset_config,
       ).as_teardown(
           setups=apply_time
       )
@@ -386,9 +386,12 @@ with models.DAG(
         chain(cleanup_first_node_pool, cleanup_second_node_pool)
 
       chain(
+          jobset_config,
+          cluster_info,
+          cluster_info_2,
           create_node_pool,
           apply_time,
-          active_pods,
+          pod_names,
           wait_for_job_start,
           all_verification_groups,
           summary,

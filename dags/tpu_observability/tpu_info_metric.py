@@ -536,8 +536,18 @@ ALL_METRIC_STRATEGIES = [
     MemoryTotalStrategy(),
     DutyCycleStrategy(),
     TensorcoreUtilizationStrategy(),
-    BufferTransferLatencyStrategy(),
-    HostToDeviceTransferLatenciesStrategy(),
-    DeviceToHostTransferLatenciesStrategy(),
-    CollectiveEndToEndLatencyLatenciesStrategy(),
+    # Since the aggregation logic is fundamentally different, direct comparison
+    # of P50/P90/P95/P999 values from the Monitoring API against tpu-info is not
+    # a viable "Source of Truth" for validation.
+    # Consequently, we have commented out all latency-related metrics and will
+    # bypass validation in the current version until a definitive verification
+    # method is established.
+
+    # Bug ticket: b/481177412 - [tpu-info]Follow-up on Latency Metric
+    # Verification Strategy for tpu-info
+
+    # BufferTransferLatencyStrategy(),
+    # HostToDeviceTransferLatenciesStrategy(),
+    # DeviceToHostTransferLatenciesStrategy(),
+    # CollectiveEndToEndLatencyLatenciesStrategy(),
 ]
