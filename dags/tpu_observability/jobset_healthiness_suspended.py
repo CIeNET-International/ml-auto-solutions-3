@@ -79,6 +79,11 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       """Generates a second node pool name."""
       return f"{pool_info.node_pool_name}-2"
 
+    @task
+    def get_jobset_replica_number(jobset_conf: jobset.JobSet) -> int:
+      """Gets the number of replicas for the jobset."""
+      return jobset_conf.replicas
+
     # Keyword arguments are generated dynamically at runtime (pylint does not
     # know this signature).
     with TaskGroup(  # pylint: disable=unexpected-keyword-arg
@@ -151,7 +156,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           node_pool=node_pool_info,
           jobset_config=jobset_config,
           replica_type="suspended",
-          correct_replica_num=jobset_config.replicas,
+          correct_replica_num=get_jobset_replica_number(jobset_config),
       )
 
       cleanup_workload = jobset.end_workload.override(
