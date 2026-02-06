@@ -188,14 +188,12 @@ with models.DAG(
             end_time=end_time,
         )
 
-        validate_bucket = (
-            validation_util.validate_gcs_checkpoint_files(
-                bucket_path=(
-                    f"{test_config_util.DEFAULT_BUCKET}/{DAG_TEST_NAME}/"
-                    f"{run_name}"
-                ),
-                steps_to_validate=gcs_steps_to_validate,
-            )
+        validate_bucket = validation_util.validate_gcs_checkpoint_files(
+            bucket_path=(
+                f"{test_config_util.DEFAULT_BUCKET}/{DAG_TEST_NAME}/"
+                f"{run_name}"
+            ),
+            steps_to_validate=gcs_steps_to_validate,
         )
 
         (
