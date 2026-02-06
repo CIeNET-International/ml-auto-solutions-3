@@ -42,7 +42,10 @@ with models.DAG(
         "TPU",
         "v5p-128",
     ],
-    description="DAG that verifies MaxText regular checkpointing restoring functionality from GCS bucket .",
+    description=(
+        "DAG that verifies MaxText regular checkpointing restoring "
+        "functionality from GCS bucket."
+    ),
     doc_md="""
       # MaxText Regular Checkpointing Validation DAG
 
@@ -112,8 +115,12 @@ with models.DAG(
             run_name=run_name,
             slice_num=slice_num,
             out_folder=DAG_TEST_NAME,
-            enable_multi_tier_checkpointing=checkpointing.enable_multi_tier_checkpointing,
-            enable_emergency_checkpoint=checkpointing.enable_emergency_checkpoint,
+            enable_multi_tier_checkpointing=(
+                checkpointing.enable_multi_tier_checkpointing
+            ),
+            enable_emergency_checkpoint=(
+                checkpointing.enable_emergency_checkpoint
+            ),
         )
         gcs_location = generate_workload_checkpoints_location.override(
             task_id="gcs_bucket_checkpoints_location"
@@ -182,7 +189,10 @@ with models.DAG(
         )
 
         validate_bucket = validation_util.validate_gcs_checkpoint_files(
-            bucket_path=f"{test_config_util.DEFAULT_BUCKET}/{DAG_TEST_NAME}/{run_name}",
+            bucket_path=(
+                f"{test_config_util.DEFAULT_BUCKET}/{DAG_TEST_NAME}/"
+                f"{run_name}"
+            ),
             steps_to_validate=gcs_steps_to_validate,
         )
 
