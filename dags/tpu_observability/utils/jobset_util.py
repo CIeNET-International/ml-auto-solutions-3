@@ -753,8 +753,8 @@ def wait_for_all_pods_running(node_pool: node_pool_info, jobset_config: JobSet):
 def query_uptime_metrics(
     node_pool: node_pool_info,
     jobset_name: str,
-    start_time: TimeUtil,
-    end_time: TimeUtil,
+    start_time: datetime.datetime,
+    end_time: datetime.datetime,
 ):
   """Queries the JobSet's uptime metric from Cloud Monitoring."""
   start_time = TimeUtil.from_datetime(start_time)
