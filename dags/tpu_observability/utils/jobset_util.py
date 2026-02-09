@@ -153,6 +153,7 @@ _TEMPLATE = string.Template(
                     nodeSelector:
                       cloud.google.com/gke-tpu-accelerator: $tpu_accelerator_type
                       cloud.google.com/gke-tpu-topology: $tpu_topology
+                      cloud.google.com/gke-nodepool: $node_pool_name
                     containers:
                     - name: $container_name
                       image: $image
@@ -213,12 +214,15 @@ class JobSet:
   image: str
   tpu_cores_per_pod: int
 
-  def generate_yaml(self, workload_script: Workload) -> str:
+  def generate_yaml(
+      self, workload_script: Workload, node_pool_name: str
+  ) -> str:
     """Generates the final JobSet YAML content.
 
     Args:
         workload_script: A pre-formatted, JSON-escaped string from the Workload
           class.
+        node_pool_name: The name of the GKE node pool to schedule pods on.
 
     Returns:
         A string containing the complete JobSet YAML.
@@ -226,6 +230,7 @@ class JobSet:
     params = dataclasses.asdict(self)
     params["command"] = ["bash", "-c"]
     params["args"] = workload_script
+    params["node_pool_name"] = node_pool_name
 
     return _TEMPLATE.substitute(params)
 
@@ -478,7 +483,10 @@ def run_workload(
   with tempfile.NamedTemporaryFile() as temp_config_file:
     env = os.environ.copy()
     env["KUBECONFIG"] = temp_config_file.name
-    yaml_config = jobset_config.generate_yaml(workload_script=workload_type)
+    yaml_config = jobset_config.generate_yaml(
+        workload_script=workload_type,
+        node_pool_name=node_pool.node_pool_name,
+    )
 
     cmd = " && ".join([
         Command.get_credentials_command(node_pool),
