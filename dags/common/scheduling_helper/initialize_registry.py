@@ -1,9 +1,20 @@
 import os
+import datetime as dt
 
 from airflow.models.dagbag import DagBag
 
 
-def generate_initial_registry(project_path, project_key):
+def format_timeout(timeout_obj) -> str:
+  """Converts a timedelta to HH:MM:SS string or returns a default."""
+  if not isinstance(timeout_obj, dt.timedelta):
+    return "input timeout here"
+  total_seconds = int(timeout_obj.total_seconds())
+  hours, remainder = divmod(total_seconds, 3600)
+  minutes, seconds = divmod(remainder, 60)
+  return f"{hours:02}:{minutes:02}:{seconds:02}"
+
+
+def generate_initial_registry(project_path: str, project_key: str) -> None:
   """
   Generate an initial registry configuration for a project's DAGs in
   YAML format.
@@ -25,11 +36,6 @@ def generate_initial_registry(project_path, project_key):
   Returns:
     None: The function prints the generated YAML configuration to
       stdout and does not return a value.
-
-  Side Effects:
-    - Prints error messages if the project path doesn't exist
-    - Prints the generated YAML configuration to stdout
-    - Prints instructions for manual editing of the configuration
 
   Example:
     >>> generate_initial_registry("/path/to/dags", "my_project")
@@ -53,15 +59,13 @@ def generate_initial_registry(project_path, project_key):
   Note:
     - DAGs are sorted alphabetically in the output
     - The cluster_name field requires manual specification
-    - Users must manually categorize DAGs into require_scheduling or
+    - Users must manually categorize new development DAGs into require_scheduling or
       no_scheduling_required lists
     - Requires Airflow's DagBag to be available for DAG discovery
   """
   if not os.path.exists(project_path):
     print(f"Error: Path '{project_path}' does not exist.")
     return
-
-  print(f"Scanning {project_path} for DAGs...")
 
   # Load DAGs using Airflow's DagBag
   dagbag = DagBag(dag_folder=project_path, include_examples=False)
@@ -70,33 +74,30 @@ def generate_initial_registry(project_path, project_key):
     print("No DAGs found in the specified directory.")
     return
 
-  # Prepare YAML output
   output = []
+
+  # Project Specific Configuration
   output.append(f"{project_key}:")
   output.append(f"  schedule_name: \"{project_key.replace('_', ' ').title()}\"")
   output.append(f'  project_path: "{project_path}"')
-  output.append(
-      '  cluster_name: "please specify cluster name, '
-      'e.g., TPU_V5P_128_CLUSTER"'
-  )
+  output.append('  cluster_name: "TPU_V5P_128_CLUSTER"')
+  output.append('  anchor_time: "08:00:00"')
+  output.append("  margin_minutes: 15")
   output.append("  require_scheduling:")
 
-  # Sort alphabetically for a clean start
+  # Generate DAG list with manual-ready timeout strings
   for dag_id in sorted(dagbag.dags.keys()):
     dag_obj = dagbag.dags[dag_id]
-    timeout = getattr(dag_obj, "dagrun_timeout", "MISSING")
+    # Pull current timeout as a hint, but format as a simple string
+    current_timeout = format_timeout(getattr(dag_obj, "dagrun_timeout", None))
 
-    output.append(f'    - "{dag_id}"  # timeout: {timeout}')
-
+    output.append(f'    - id: "{dag_id}"')
+    output.append(f'      timeout: "{current_timeout}"')
   output.append("  no_scheduling_required: []")
 
-  print("\n--- Copy the content below into schedule_register.yaml ---\n")
+  print("\n--- Project YAML Template Generated ---\n")
   print("\n".join(output))
-  print("\n--------------------------------------------------------")
-  print(
-      "Edit the no_scheduling_required list and "
-      "adjust DAG order as needed before running the scheduling helper."
-  )
+  print("\n---------------------------------------")
 
 
 if __name__ == "__main__":

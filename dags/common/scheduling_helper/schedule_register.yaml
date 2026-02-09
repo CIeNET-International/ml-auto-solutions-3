@@ -4,14 +4,15 @@
 #
 # DESCRIPTION:
 #   This registry serves as the source of truth for deterministic DAG scheduling.
-#   It uses a "bin-packing" logic to serialize execution on shared resources
-#   (e.g., TPU clusters) to prevent resource contention and "thundering herds."
+#   It implements sequential execution logic to prevent overlapping runtimes
+#   on shared resources (e.g., TPU clusters), ensuring cluster stability
+#   by strictly serializing workloads.
 #
 # HOW TO GENERATE/UPDATE THIS FILE:
 #   1. INITIALIZATION:
 #      Use the `generate_initial_registry(path, key)` utility script. It scans
-#      the project folder and generates a YAML template based on the
-#      `dagrun_timeout` attributes found in the Python DAG files.
+#      the project folder and generates a YAML template. Or manually create a
+#      new entry by following the YAML format explained below.
 #
 #   2. MAINTENANCE & DEVELOPMENT:
 #      Whenever a NEW DAG is developed or an OLD DAG is maintained, you MUST
@@ -38,7 +39,7 @@
 # ==============================================================================
 
 # Default values for all projects
-global_settings:
+default_settings:
   anchor_time: "08:00:00"
   margin_minutes: 15
 

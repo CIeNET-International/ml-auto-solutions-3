@@ -76,16 +76,10 @@ class SchedulingHelper:
   DAGs sequentially with configurable margins to prevent overlap.
 
   Class Attributes:
-    DEFAULT_MARGIN (dt.timedelta): Time buffer between
-      consecutive DAG runs (15 minutes).
-    DEFAULT_ANCHOR (dt.datetime): Starting time reference
-      for schedule calculations.
     YAML_PATH (str): Path to the schedule registry configuration file.
     OUTPUT_YAML_PATH (str): Path where generated schedules will be exported.
   """
 
-  DEFAULT_MARGIN = dt.timedelta(minutes=15)
-  DEFAULT_ANCHOR = dt.datetime(2000, 1, 1, 8, 0, 0, tzinfo=dt.timezone.utc)
   YAML_PATH = os.path.join(os.path.dirname(__file__), "schedule_register.yaml")
   OUTPUT_YAML_PATH = os.path.join(
       os.path.dirname(__file__), "generated_schedules.yaml"
@@ -114,23 +108,25 @@ class SchedulingHelper:
       return yaml.safe_load(f)
 
   @classmethod
-  def get_settings(cls, config: dict, project_key: str):
+  def get_settings(
+      cls, config: dict, project_key: str
+  ) -> tuple[dt.datetime, dt.timedelta]:
     """
     Resolves settings with the following priority:
     Project Level > Global Level > System Default
     """
-    global_cfg = config.get("global_settings", {})
+    default_cfg = config.get("default_settings", {})
     project_cfg = config.get(project_key, {})
 
     # 1. Resolve Anchor Time
-    anchor_str = project_cfg.get("anchor_time") or global_cfg.get(
+    anchor_str = project_cfg.get("anchor_time") or default_cfg.get(
         "anchor_time", "08:00:00"
     )
     h, m, s = map(int, anchor_str.split(":"))
     anchor = dt.datetime(2000, 1, 1, h, m, s, tzinfo=dt.timezone.utc)
 
     # 2. Resolve Margin
-    margin_min = project_cfg.get("margin_minutes") or global_cfg.get(
+    margin_min = project_cfg.get("margin_minutes") or default_cfg.get(
         "margin_minutes", 15
     )
     margin = dt.timedelta(minutes=int(margin_min))
@@ -208,16 +204,16 @@ class SchedulingHelper:
       - The target_dag_id is not found in "require_scheduling"
 
     The schedule time is calculated by:
-    1. Starting from DEFAULT_ANCHOR time
+    1. Starting from anchor time
     2. Adding the timeout duration of each DAG that comes before the target DAG
         in the "require_scheduling" list
-    3. Adding DEFAULT_MARGIN between each DAG execution
+    3. Adding margin between each DAG execution
     4. Formatting the result as a cron expression with the specified day_of_week
 
     Example:
-      If DEFAULT_ANCHOR is 00:00:00, and there are two DAGs before the target
+      If anchor is 00:00:00, and there are two DAGs before the target
       with timeouts of "01:30:00" and "02:00:00",
-      with DEFAULT_MARGIN of 10 minutes,
+      with margin of 10 minutes,
       the calculated time would be 03:50:00 (1:30 + 0:10 + 2:00 + 0:10).
     """
     if not os.path.exists(cls.YAML_PATH):
@@ -238,27 +234,16 @@ class SchedulingHelper:
 
     scheduled_list = project_data.get("require_scheduling", [])
     offset = dt.timedelta(0)
-    found = False
 
     for entry in scheduled_list:
       curr_id = entry["id"] if isinstance(entry, dict) else entry
       if curr_id == target_dag_id:
-        found = True
         break
 
-      timeout_str = (
-          entry.get("timeout", "01:00:00")
-          if isinstance(entry, dict)
-          else "01:00:00"
-      )
-      try:
-        h, m, s = map(int, timeout_str.split(":"))
-        duration = dt.timedelta(hours=h, minutes=m, seconds=s)
-      except ValueError:
-        duration = dt.timedelta(hours=1)
+      timeout_str = entry.get("timeout", None)
+      h, m, s = map(int, timeout_str.split(":"))
+      duration = dt.timedelta(hours=h, minutes=m, seconds=s)
       offset += duration + margin
-    if not found:
-      return None
 
     scheduled_time = anchor + offset
     dow_val = (
@@ -267,7 +252,7 @@ class SchedulingHelper:
     return f"{scheduled_time.minute} {scheduled_time.hour} * * {dow_val}"
 
   @classmethod
-  def export_all_schedules(cls):
+  def export_all_schedules(cls) -> str:
     """
     Export all schedules from the registry configuration to a YAML file.
 
@@ -314,13 +299,42 @@ class SchedulingHelper:
       yaml.dump(final_output, f, sort_keys=False, allow_unicode=True)
     return cls.OUTPUT_YAML_PATH
 
+  @classmethod
+  def run_scheduling_test(cls, project_key: str) -> None:
+    """
+    Run an internal test for the SchedulingHelper by exporting all schedules
+    and previewing a specific project's schedule configuration.
 
-# --- Internal Testing & Generation ---
-if __name__ == "__main__":
-  target_key = "tpu_observability"
+    This method performs the following steps:
+    1. Exports all schedules using the SchedulingHelper.export_all_schedules() method
+    2. Loads the generated YAML file and extracts schedules for the specified project
+    3. Prints a formatted preview of DAG IDs and their corresponding cron schedules
 
-  print(f"=== Starting Internal SchedulingHelper Test ({target_key}) ===\n")
-  try:
+    Args:
+      project_key (str): The project identifier to retrieve and display schedules for.
+        This key should correspond to a top-level key in the exported YAML file.
+
+    Returns:
+      None: This method prints results to stdout and does not return a value.
+
+    Raises:
+      FileNotFoundError: If the output file from
+      export_all_schedules() cannot be found.
+      yaml.YAMLError: If the exported file is not valid YAML.
+
+    Example:
+      >>> SchedulingHelper.run_scheduling_test("my_project")
+      === Starting Internal SchedulingHelper Test (my_project) ===
+
+      All schedules calculated and saved to: /path/to/schedules.yaml
+
+      --- Current Schedule Preview ---
+      my_dag_id_1                                        -> 0 0 * * *
+      my_dag_id_2                                        -> 0 12 * * *
+
+      === Test Completed Successfully ===
+    """
+    print(f"=== Starting Internal SchedulingHelper Test ({project_key}) ===\n")
     # 1. Run Export Logic
     output_file = SchedulingHelper.export_all_schedules()
     print(f"All schedules calculated and saved to: {output_file}")
@@ -328,17 +342,18 @@ if __name__ == "__main__":
     # 2. Preview Output
     with open(output_file, "r", encoding="utf-8") as f:
       review_data = yaml.safe_load(f)
-      if target_key in review_data:
-        project_schedules = review_data[target_key]["schedules"]
+      if project_key in review_data:
+        project_schedules = review_data[project_key]["schedules"]
         print("\n--- Current Schedule Preview ---")
         for dag_id, cron in project_schedules.items():
           print(f"{dag_id:<50} -> {cron}")
       else:
-        print(f"Key '{target_key}' not found in generated output.")
+        print(f"Key '{project_key}' not found in generated output.")
 
     print("\n=== Test Completed Successfully ===")
-  except (FileNotFoundError, yaml.YAMLError, OSError, KeyError) as e:
-    import traceback
 
-    print(f"\nInternal Test Failed: {e}")
-    traceback.print_exc()
+
+if __name__ == "__main__":
+  # --- Internal Testing & Generation ---
+  target_key = "tpu_observability"  # Select the project key
+  SchedulingHelper.run_scheduling_test(project_key=target_key)
