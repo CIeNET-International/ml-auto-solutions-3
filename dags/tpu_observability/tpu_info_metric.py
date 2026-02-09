@@ -542,10 +542,8 @@ ALL_METRIC_STRATEGIES = [
     # Consequently, we have commented out all latency-related metrics and will
     # bypass validation in the current version until a definitive verification
     # method is established.
-
     # Bug ticket: b/481177412 - [tpu-info]Follow-up on Latency Metric
     # Verification Strategy for tpu-info
-
     # BufferTransferLatencyStrategy(),
     # HostToDeviceTransferLatenciesStrategy(),
     # DeviceToHostTransferLatenciesStrategy(),

@@ -112,7 +112,10 @@ def compare_metric_values(
 
 @task
 def get_tpu_info_metric_from_pod(
-    node_pool: node_pool.Info, pod_name: str, jobset_config: jobset, metric_name: str
+    node_pool: node_pool.Info,
+    pod_name: str,
+    jobset_config: jobset,
+    metric_name: str,
 ) -> str:
   """Executes the 'tpu-info' command in the specified pod and returns its output."""
   with tempfile.TemporaryDirectory() as tmpdir:
@@ -256,7 +259,6 @@ with models.DAG(
     workload_script = jobset.Workload.JAX_TPU_BENCHMARK
 
     with TaskGroup(group_id=f"v{config.tpu_version.value}"):
-
       jobset_config = jobset.build_jobset_from_gcs_yaml(
           gcs_path=GCS_JOBSET_CONFIG_PATH,
           dag_name="tpu_info_metrics_verification",

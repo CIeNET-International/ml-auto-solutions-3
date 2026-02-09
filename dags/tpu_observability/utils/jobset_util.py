@@ -438,7 +438,7 @@ def _generate_jobset_name(dag_id_prefix: str) -> str:
   timestamp = now_utc.strftime("%Y%m%d%H%M%S")
   dag_id_prefix = dag_id_prefix.replace("_", "-").lower()
 
-  return f"{dag_id_prefix}-workload-{timestamp}"
+  return f"{dag_id_prefix}-{timestamp}"
 
 
 @task
