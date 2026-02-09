@@ -113,6 +113,30 @@ class SchedulingHelper:
       return yaml.safe_load(f)
 
   @classmethod
+  def get_settings(cls, config: dict, project_key: str):
+    """
+    Resolves settings with the following priority:
+    Project Level > Global Level > System Default
+    """
+    global_cfg = config.get("global_settings", {})
+    project_cfg = config.get(project_key, {})
+
+    # 1. Resolve Anchor Time
+    anchor_str = project_cfg.get("anchor_time") or global_cfg.get(
+        "anchor_time", "08:00:00"
+    )
+    h, m, s = map(int, anchor_str.split(":"))
+    anchor = dt.datetime(2000, 1, 1, h, m, s, tzinfo=dt.timezone.utc)
+
+    # 2. Resolve Margin
+    margin_min = project_cfg.get("margin_minutes") or global_cfg.get(
+        "margin_minutes", 15
+    )
+    margin = dt.timedelta(minutes=int(margin_min))
+
+    return anchor, margin
+
+  @classmethod
   def get_all_dags_from_disk(cls, project: Project) -> list[Dag]:
     """Retrieve all DAG configurations from disk for a given project.
 
@@ -217,8 +241,8 @@ class SchedulingHelper:
       return None
 
     try:
-      with open(cls.YAML_PATH, "r", encoding="utf-8") as f:
-        config = yaml.safe_load(f)
+      config = cls.load_registry_config()
+      anchor, margin = cls.get_settings(config, project_key)
     except (yaml.YAMLError, OSError):
       return None
 
@@ -249,13 +273,11 @@ class SchedulingHelper:
         duration = dt.timedelta(hours=h, minutes=m, seconds=s)
       except ValueError:
         duration = dt.timedelta(hours=1)
-      offset += duration + cls.DEFAULT_MARGIN
-
+      offset += duration + margin
     if not found:
       return None
 
-    scheduled_time = cls.DEFAULT_ANCHOR + offset
-    # Ensure we use .value for the enum
+    scheduled_time = anchor + offset
     dow_val = (
         day_of_week.value if isinstance(day_of_week, DayOfWeek) else day_of_week
     )

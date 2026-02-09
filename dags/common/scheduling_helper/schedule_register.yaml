@@ -37,31 +37,40 @@
 #
 # ==============================================================================
 
+# Default values for all projects
+global_settings:
+  anchor_time: "08:00:00"
+  margin_minutes: 15
+
 tpu_observability:
   schedule_name: "Tpu Observability"
   project_path: "dags/tpu_observability/"
   cluster_name: "TPU_V5P_128_CLUSTER"
+  anchor_time: "03:10:00"   # Overrides global 08:00
+  margin_minutes: 10        # Overrides global 15
   require_scheduling:
     - id: "gke_node_pool_label_update"
-      timeout: "01:00:00"
+      timeout: "00:30:00"
     - id: "gke_node_pool_status"
-      timeout: "01:00:00"
+      timeout: "00:30:00"
     - id: "jobset_rollback_ttr"
-      timeout: "01:00:00"
+      timeout: "01:30:00"
     - id: "jobset_ttr_node_pool_resize"
-      timeout: "01:00:00"
+      timeout: "01:30:00"
     - id: "jobset_ttr_pod_delete"
-      timeout: "01:00:00"
+      timeout: "01:30:00"
     - id: "multi-host-availability-rollback"
-      timeout: "01:00:00"
+      timeout: "00:30:00"
     - id: "node_pool_ttr_disk_size"
-      timeout: "01:00:00"
+      timeout: "01:30:00"
     - id: "node_pool_ttr_update_label"
-      timeout: "01:00:00"
+      timeout: "01:30:00"
     - id: "tpu_info_format_validation_dag"
-      timeout: "01:00:00"
+      timeout: "00:30:00"
     - id: "tpu_sdk_monitoring_validation"
-      timeout: "01:00:00"
+      timeout: "00:30:00"
+    - id: "jobset_ttr_kill_process"
+      timeout: "01:30:00"
   no_scheduling_required:
     - "validate_interruption_count_gce_bare_metal_preemption"
     - "validate_interruption_count_gce_defragmentation"
