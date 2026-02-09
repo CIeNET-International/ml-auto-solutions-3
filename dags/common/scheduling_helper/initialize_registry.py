@@ -5,22 +5,26 @@ from airflow.models.dagbag import DagBag
 
 def generate_initial_registry(project_path, project_key):
   """
-  Generate an initial registry configuration for a project's DAGs in YAML format.
+  Generate an initial registry configuration for a project's DAGs in
+  YAML format.
 
-  This function scans a specified project path for Airflow DAGs, extracts their metadata,
-  and generates a YAML-formatted configuration template that can be copied into a
-  schedule_register.yaml file. The output includes the project key, schedule name,
-  project path, cluster name placeholder, and a list of all discovered DAGs with their
-  timeout values.
+  This function scans a specified project path for Airflow DAGs,
+  extracts their metadata, and generates a YAML-formatted
+  configuration template that can be copied into a
+  schedule_register.yaml file. The output includes the project key,
+  schedule name, project path, cluster name placeholder, and a list
+  of all discovered DAGs with their timeout values.
 
   Args:
-    project_path (str): The file system path to the project directory containing DAG files.
-    project_key (str): A unique identifier for the project, used as the top-level key
-      in the YAML output. This will also be converted to a human-readable schedule name.
+    project_path (str): The file system path to the project directory
+      containing DAG files.
+    project_key (str): A unique identifier for the project, used as
+      the top-level key in the YAML output. This will also be
+      converted to a human-readable schedule name.
 
   Returns:
-    None: The function prints the generated YAML configuration to stdout and does not
-      return a value.
+    None: The function prints the generated YAML configuration to
+      stdout and does not return a value.
 
   Side Effects:
     - Prints error messages if the project path doesn't exist
@@ -43,12 +47,14 @@ def generate_initial_registry(project_path, project_key):
       no_scheduling_required: []
 
     --------------------------------------------------------
-    Edit the no_scheduling_required list and adjust DAG order as needed before running the scheduling helper.
+    Edit the no_scheduling_required list and adjust DAG order as
+    needed before running the scheduling helper.
 
   Note:
     - DAGs are sorted alphabetically in the output
     - The cluster_name field requires manual specification
-    - Users must manually categorize DAGs into require_scheduling or no_scheduling_required lists
+    - Users must manually categorize DAGs into require_scheduling or
+      no_scheduling_required lists
     - Requires Airflow's DagBag to be available for DAG discovery
   """
   if not os.path.exists(project_path):

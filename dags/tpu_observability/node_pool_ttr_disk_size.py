@@ -36,7 +36,6 @@ with models.DAG(
     dag_id="node_pool_ttr_disk_size",
     start_date=datetime.datetime(2025, 6, 26),
     schedule=SCHEDULE,
-    dagrun_timeout=datetime.timedelta(hours=1),
     catchup=False,
     tags=[
         "gke",

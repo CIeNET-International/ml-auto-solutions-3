@@ -34,7 +34,6 @@ with models.DAG(
     dag_id="node_pool_ttr_update_label",
     start_date=datetime.datetime(2025, 9, 30),
     schedule=SCHEDULE,
-    dagrun_timeout=datetime.timedelta(hours=1),
     catchup=False,
     tags=[
         "gke",

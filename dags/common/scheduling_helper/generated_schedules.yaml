@@ -6,17 +6,17 @@ tpu_observability:
   schedule_name: Tpu Observability
   project_path: dags/tpu_observability/
   schedules:
-    gke_node_pool_label_update: 10 3 * * *
-    gke_node_pool_status: 50 3 * * *
-    jobset_rollback_ttr: 30 4 * * *
-    jobset_ttr_node_pool_resize: 10 6 * * *
-    jobset_ttr_pod_delete: 50 7 * * *
-    multi-host-availability-rollback: 30 9 * * *
-    node_pool_ttr_disk_size: 10 10 * * *
-    node_pool_ttr_update_label: 50 11 * * *
-    tpu_info_format_validation_dag: 30 13 * * *
-    tpu_sdk_monitoring_validation: 10 14 * * *
-    jobset_ttr_kill_process: 50 14 * * *
+    gke_node_pool_label_update: 20 3 * * *
+    gke_node_pool_status: 0 4 * * *
+    jobset_rollback_ttr: 40 4 * * *
+    jobset_ttr_node_pool_resize: 20 6 * * *
+    jobset_ttr_pod_delete: 0 8 * * *
+    multi-host-availability-rollback: 40 9 * * *
+    node_pool_ttr_disk_size: 20 10 * * *
+    node_pool_ttr_update_label: 0 12 * * *
+    tpu_info_format_validation_dag: 40 13 * * *
+    tpu_sdk_monitoring_validation: 20 14 * * *
+    jobset_ttr_kill_process: 0 15 * * *
     validate_interruption_count_gce_bare_metal_preemption: null
     validate_interruption_count_gce_defragmentation: null
     validate_interruption_count_gce_eviction: null

@@ -11,12 +11,12 @@ from airflow.models.dagbag import DagBag
 @dataclass
 class Project:
   """
-  Represents a project configuration for ML workload scheduling.
+  Represents a project configuration for scheduling.
 
   Attributes:
-    project_path (str): The file system path to the project directory or configuration.
-    cluster (any): The cluster configuration or reference where the project will be executed.
-      The type is flexible to accommodate different cluster implementations.
+    project_path (str): The file system path to the project directory.
+    cluster (any): The cluster configuration or reference
+      where the project will be executed.
   """
 
   project_path: str
@@ -30,7 +30,8 @@ class Dag:
 
   Attributes:
     dag_id (str): Unique identifier for the DAG.
-    dagrun_timeout (dt.datetime): Maximum time allowed for a DAG run to complete before timing out.
+    dagrun_timeout (dt.datetime): Maximum time allowed for
+      a DAG run to complete before timing out.
   """
 
   dag_id: str
@@ -137,53 +138,32 @@ class SchedulingHelper:
     return anchor, margin
 
   @classmethod
-  def get_all_dags_from_disk(cls, project: Project) -> list[Dag]:
-    """Retrieve all DAG configurations from disk for a given project.
-
-    This method scans the project's DAG folder and extracts DAG metadata including
-    DAG IDs and timeout configurations. It is primarily used for CI consistency
-    testing to validate DAG configurations.
-
-    Args:
-      project (Project): The project object containing the path to the DAG folder.
-
-    Returns:
-      list[Dag]: A list of Dag objects, each containing the dag_id and
-        dagrun_timeout (if specified) for each DAG found in the project folder.
-
-    Note:
-      This method uses Airflow's DagBag to parse DAG files and excludes example
-      DAGs from the results.
-    """
-    dagbag = DagBag(dag_folder=project.project_path, include_examples=False)
-    dag_list = []
-    for dag_name, dag_obj in dagbag.dags.items():
-      timeout = getattr(dag_obj, "dagrun_timeout", None)
-      dag_list.append(Dag(dag_id=dag_name, dagrun_timeout=timeout))
-    return dag_list
-
-  @classmethod
   def discover_actual_dags(cls, project_path: str) -> set[str]:
     """
-    Discover and return the set of actual DAG IDs found in the specified project path.
+    Discover and return the set of actual DAG IDs found in the
+    specified project path.
 
-    This method scans the filesystem for DAG files and extracts the actual DAG objects
-    that are defined in them. It suppresses Airflow's DagBag logging to reduce noise
-    during execution.
+    This method scans the filesystem for DAG files and extracts
+    the actual DAG objects that are defined in them. It suppresses
+    Airflow's DagBag logging to reduce noise during execution.
 
     Args:
-      project_path (str): The filesystem path to the folder containing DAG files.
-        This is typically the root directory where Airflow DAG definitions are stored.
+      project_path (str): The filesystem path to the folder
+        containing DAG files. This is typically the root directory
+        where Airflow DAG definitions are stored.
 
     Returns:
-      set[str]: A set of DAG IDs (strings) for all DAGs discovered in the project path.
-        Each ID corresponds to a DAG object's `dag_id` attribute.
+      set[str]: A set of DAG IDs (strings) for all DAGs
+        discovered in the project path. Each ID corresponds to
+        a DAG object's `dag_id` attribute.
 
     Note:
-      - This method temporarily suppresses Airflow DagBag logging at ERROR level
-        to provide cleaner output during CI/testing.
-      - Example DAGs are explicitly excluded from the discovery process.
-      - This is useful for validation and ensuring all DAGs are properly registered.
+      - This method temporarily suppresses Airflow DagBag logging
+        at ERROR level to provide cleaner output during CI/testing.
+      - Example DAGs are explicitly excluded from the discovery
+        process.
+      - This is useful for validation and ensuring all DAGs are
+        properly registered.
     """
     logging.getLogger("airflow.models.dagbag.DagBag").setLevel(logging.ERROR)
 
@@ -210,9 +190,12 @@ class SchedulingHelper:
     a default anchor time.
 
     Args:
-      project_key: The key identifying the project in the YAML configuration file.
-      target_dag_id: The identifier of the DAG for which to calculate the schedule.
-      day_of_week: The day(s) of the week when the DAG should run. Defaults to DayOfWeek.ALL.
+      project_key: The key identifying the project
+        in the YAML configuration file.
+      target_dag_id: The identifier of the DAG for which
+        to calculate the schedule.
+      day_of_week: The day(s) of the week when the DAG should run.
+        Defaults to DayOfWeek.ALL.
 
     Returns:
       A cron schedule string in the format

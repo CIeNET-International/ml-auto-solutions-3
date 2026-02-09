@@ -42,7 +42,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     dag_id="jobset_rollback_ttr",
     start_date=datetime.datetime(2025, 8, 10),
     schedule=SCHEDULE,
-    dagrun_timeout=datetime.timedelta(hours=1),
     catchup=False,
     tags=[
         "cloud-ml-auto-solutions",

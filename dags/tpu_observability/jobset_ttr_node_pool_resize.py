@@ -44,7 +44,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     dag_id="jobset_ttr_node_pool_resize",
     start_date=datetime.datetime(2026, 1, 27),
     schedule=SCHEDULE,
-    dagrun_timeout=datetime.timedelta(hours=1),
     catchup=False,
     tags=[
         "cloud-ml-auto-solutions",

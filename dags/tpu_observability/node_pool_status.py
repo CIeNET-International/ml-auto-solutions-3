@@ -39,7 +39,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     dag_id="gke_node_pool_status",
     start_date=datetime.datetime(2025, 8, 1),
     schedule=SCHEDULE,
-    dagrun_timeout=datetime.timedelta(hours=1),
     catchup=False,
     tags=["gke", "tpu-observability", "node-pool-status", "TPU", "v6e-16"],
     description=(

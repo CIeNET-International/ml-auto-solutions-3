@@ -46,7 +46,7 @@ tpu_observability:
   schedule_name: "Tpu Observability"
   project_path: "dags/tpu_observability/"
   cluster_name: "TPU_V5P_128_CLUSTER"
-  anchor_time: "03:10:00"   # Overrides global 08:00
+  anchor_time: "03:20:00"   # Overrides global 08:00
   margin_minutes: 10        # Overrides global 15
   require_scheduling:
     - id: "gke_node_pool_label_update"
