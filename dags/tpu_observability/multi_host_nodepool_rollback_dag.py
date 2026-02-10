@@ -31,7 +31,7 @@ from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper, Cluster
 
 
-DAG_ID = "multi_host_nodepool_rollback"
+DAG_ID = "multi-host-availability-rollback"
 CLUSTER = Cluster.tpu_obs_prod
 DAGRUN_TIMEOUT = SchedulingHelper.registry[CLUSTER][DAG_ID].dag_run_timeout
 SCHEDULE = SchedulingHelper.arrange_schedule_time(CLUSTER, DAG_ID)

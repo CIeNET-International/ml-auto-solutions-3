@@ -47,7 +47,7 @@ from dags.tpu_observability.utils.jobset_util import Workload
 from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper, Cluster
 
 
-DAG_ID = "tpu_info_format_validation"
+DAG_ID = "tpu_info_format_validation_dag"
 CLUSTER = Cluster.tpu_obs_prod
 DAGRUN_TIMEOUT = SchedulingHelper.registry[CLUSTER][DAG_ID].dag_run_timeout
 SCHEDULE = SchedulingHelper.arrange_schedule_time(CLUSTER, DAG_ID)
