@@ -470,7 +470,6 @@ def build_jobset_from_gcs_yaml(
   return JobSet(**merged)
 
 
-
 @task
 def run_workload(
     node_pool: node_pool_info,
