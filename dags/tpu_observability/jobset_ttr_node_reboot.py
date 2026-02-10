@@ -38,7 +38,7 @@ from dags.tpu_observability.configs.common import (
     GCS_JOBSET_CONFIG_PATH,
 )
 
-from xlml.utils.tpu import add_ssh_key_to_oslogin, get_oslogin_username, delete_ssh_key_from_oslogin
+from xlml.utils.tpu import add_ssh_key_to_oslogin, get_oslogin_username
 from xlml.utils.ssh import SshKeys, generate_ssh_keys
 
 
@@ -145,16 +145,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       resulting in a success, or timeout and failure.
       """,
 ) as dag:
-
-  @task
-  def get_project_id(info: node_pool.Info):
-    return info.project_id
-
-  @task(trigger_rule=TriggerRule.ALL_DONE)
-  def cleanup_ssh_key_task(ssh_keys_obj, project_id):
-    sa_email = "tpu-obs-ml-auto-sa@cienet-cmcs.iam.gserviceaccount.com"
-    delete_ssh_key_from_oslogin(ssh_keys_obj.public, sa_email)
-
   for machine in MachineConfigMap:
     config = machine.value
 
@@ -177,8 +167,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           machine_type=config.machine_version.value,
           tpu_topology=config.tpu_topology,
       )
-
-      project_id_task = get_project_id(cluster_info)
 
       create_node_pool = node_pool.create.override(task_id="create_node_pool")(
           node_pool=cluster_info,
@@ -220,14 +208,10 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           setups=create_node_pool,
       )
 
-      cleanup_key_task = cleanup_ssh_key_task(ssh_keys, project_id_task)
-      cleanup_key_task.as_teardown(setups=node_reboot)
-
       chain(
           jobset_config,
           ssh_keys,
           cluster_info,
-          project_id_task,
           create_node_pool,
           start_workload,
           ensure_all_pods_running,
@@ -235,5 +219,4 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           wait_for_metric_upload,
           cleanup_workload,
           cleanup_node_pool,
-          cleanup_key_task,
       )
