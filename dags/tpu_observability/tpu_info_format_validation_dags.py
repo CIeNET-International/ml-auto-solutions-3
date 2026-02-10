@@ -47,6 +47,7 @@ from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.tpu_observability.utils import tpu_info_util as tpu_info
+from dags.tpu_observability.utils.tpu_cli_util import CLI_VALIDATION_SPEC
 from dags.tpu_observability.utils.jobset_util import Workload
 from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper, get_dag_timeout
 
@@ -309,55 +310,21 @@ def execute_tpu_info_cli_command(info, pod_name: str, tpu_args: str) -> str:
     return subprocess.run_exec(cmd, env=env)
 
 
-def verify_output_contains_patterns(
-    output: str, patterns: list[str], context: str
-):
-  """Helper to verify expected strings in output."""
-  for pattern in patterns:
-    if pattern not in output:
-      raise AssertionError(
-          f"Validation failed for '{context}': Missing '{pattern}'."
-      )
-
-
 @task
-def validate_help(info, pod_name: str) -> str:
-  output = execute_tpu_info_cli_command(info, pod_name, "tpu-info -help")
-  patterns = [
-      "Display TPU info and metrics.",
-      "options:",
-      "-h, --help",
-      "-v, --version",
-      "-p, --process",
-      "--streaming",
-      "--rate RATE",
-      "--list_metrics",
-  ]
-  verify_output_contains_patterns(output, patterns, "tpu-info -help")
-  return output
+def validate_tpu_info_cli(info: node_pool.Info, pod_name: str) -> None:
+  """
+  Validates tpu-info CLI commands inside TPU worker pods.
+  Consolidated version following the SDK validation pattern.
+  """
+  for cmd_enum, patterns in CLI_VALIDATION_SPEC.items():
+    output = execute_tpu_info_cli_command(info, pod_name, cmd_enum.value)
 
-
-@task
-def validate_version(info, pod_name: str) -> str:
-  output = execute_tpu_info_cli_command(info, pod_name, "tpu-info --version")
-  patterns = ["tpu-info version:", "libtpu version:", "accelerator type:"]
-  verify_output_contains_patterns(output, patterns, "tpu-info --version")
-  return output
-
-
-@task
-def validate_process(info, pod_name: str) -> str:
-  output = execute_tpu_info_cli_command(info, pod_name, "tpu-info --process")
-  patterns = [
-      "TPU Process Info",
-      "Chip",
-      "PID",
-      "Process Name",
-      "/dev/vfio/",
-      "python",
-  ]
-  verify_output_contains_patterns(output, patterns, "tpu-info --process")
-  return output
+    for pattern in patterns:
+      if pattern not in output:
+        raise AssertionError(
+            f"Validation failed for '{cmd_enum.value}': "
+            f"Missing expected pattern '{pattern}'."
+        )
 
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
@@ -683,20 +650,8 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       with TaskGroup(  # pylint: disable=unexpected-keyword-arg
           group_id="verification_group"
       ) as verification_group:
-        help_validation = (
-            validate_help.override(task_id="validate_help")
-            .partial(info=cluster_info)
-            .expand(pod_name=pod_names)
-        )
-
-        version_validation = (
-            validate_version.override(task_id="validate_version")
-            .partial(info=cluster_info)
-            .expand(pod_name=pod_names)
-        )
-
-        process_validation = (
-            validate_process.override(task_id="validate_process")
+        cli_validation = (
+            validate_tpu_info_cli.override(task_id="validate_tpu_info_cli")
             .partial(info=cluster_info)
             .expand(pod_name=pod_names)
         )
