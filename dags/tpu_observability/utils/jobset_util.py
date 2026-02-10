@@ -213,6 +213,7 @@ class JobSet:
   container_name: str
   image: str
   tpu_cores_per_pod: int
+  node_pool_group_label_key: str
 
   def generate_yaml(
       self,
@@ -243,7 +244,7 @@ class JobSet:
     if jobset_group:
       params[
           "node_pool_selector"
-      ] = f"tpu-observability/jobset-group: {jobset_group}"
+      ] = f"{self.node_pool_group_label_key}: {jobset_group}"
     elif node_pool_name:
       params[
           "node_pool_selector"
@@ -506,7 +507,7 @@ def build_node_labels_for_jobset_group(jobset_config: JobSet) -> dict:
     A dict of node labels, e.g.
     ``{"tpu-observability/jobset-group": "<jobset_name>"}``.
   """
-  return {"tpu-observability/jobset-group": jobset_config.jobset_name}
+  return {jobset_config.node_pool_group_label_key: jobset_config.jobset_name}
 
 
 @task
