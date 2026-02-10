@@ -133,7 +133,8 @@ def delete_ssh_key_from_oslogin(public_key: str, user_email: str) -> bool:
     logging.error(f'Failed to parse public key, format might be incorrect: {e}')
     return False
 
-  # 2. Construct the resource name: users/user@example.com/sshPublicKeys/fingerprint
+  # 2. Construct the resource name:
+  # users/user@example.com/sshPublicKeys/fingerprint
   user_resource_name = f'users/{user_email}'
   key_resource_name = (
       f'{user_resource_name}/sshPublicKeys/{encoded_fingerprint}'
@@ -530,7 +531,8 @@ def ssh_tpu(
               f'SSH Authentication Failed on {connection.host}: {result}'
           )
           raise AirflowFailException(
-              'SSH Authentication failed on one or more hosts. Check logs for details.'
+              'SSH Authentication failed on one or more hosts. '
+              'Check logs for details.'
           ) from e
       raise
     except paramiko.ssh_exception.AuthenticationException as e:

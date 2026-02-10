@@ -31,7 +31,7 @@ from google.cloud import compute_v1
 from dags import composer_env
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
-from dags.tpu_observability.utils.jobset_util import JobSet, Workload
+from dags.tpu_observability.utils.jobset_util import Workload
 from dags.tpu_observability.configs.common import (
     MachineConfigMap,
     GCS_CONFIG_PATH,
@@ -151,7 +151,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     return info.project_id
 
   @task(trigger_rule=TriggerRule.ALL_DONE)
-  def cleanup_ssh_key_task(ssh_keys_obj, project_id):
+  def cleanup_ssh_key_task(ssh_keys_obj):
     sa_email = "ml-auto-solutions-dev@cloud-ml-auto-solutions"
     delete_ssh_key_from_oslogin(ssh_keys_obj.public, sa_email)
 
@@ -177,8 +177,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           machine_type=config.machine_version.value,
           tpu_topology=config.tpu_topology,
       )
-
-      project_id_task = get_project_id(cluster_info)
 
       create_node_pool = node_pool.create.override(task_id="create_node_pool")(
           node_pool=cluster_info,
@@ -220,14 +218,13 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           setups=create_node_pool,
       )
 
-      cleanup_key_task = cleanup_ssh_key_task(ssh_keys, project_id_task)
+      cleanup_key_task = cleanup_ssh_key_task(ssh_keys)
       cleanup_key_task.as_teardown(setups=node_reboot)
 
       chain(
           jobset_config,
           ssh_keys,
           cluster_info,
-          project_id_task,
           create_node_pool,
           start_workload,
           ensure_all_pods_running,
