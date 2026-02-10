@@ -66,6 +66,27 @@ class SchedulingHelper:
       target_dag_id: str,
       day_of_week: DayOfWeek = DayOfWeek.ALL,
   ) -> str:
+    """
+    Arranges and returns a cron schedule string for a specific DAG
+    within a cluster.
+
+    This method calculates the schedule time for a target DAG by
+    sequentially allocating time slots based on the order of DAGs in
+    the cluster registry. Each DAG is given a time slot equal to its
+    dag_run_timeout plus a default margin. The schedule starts from a
+    default anchor time and increments for each preceding DAG.
+
+    Args:
+      cluster (Cluster): The cluster containing the target DAG.
+      target_dag_id (str): The ID of the DAG to schedule.
+      day_of_week (DayOfWeek, optional): The day(s) of the week to
+        run the DAG. Defaults to DayOfWeek.ALL.
+
+    Returns:
+      str: A cron schedule string in the format
+        "minute hour * * day_of_week". Returns None if the target DAG
+        is not found (though ValueError is raised first).
+    """
     if cluster not in cls.registry:
       raise ValueError(f"Cluster {cluster} is not registered.")
 
