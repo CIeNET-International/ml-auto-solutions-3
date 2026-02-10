@@ -79,16 +79,23 @@ def validate_monitoring_sdk(info: node_pool.Info, pod_name: str) -> None:
         )
 
 
+PROJECT_KEY = "tpu_observability"
+DAG_ID = "tpu_sdk_monitoring_validation"
+DAGRUN_TIMEOUT = SchedulingHelper.get_dagrun_timeout(
+    project_key=PROJECT_KEY,
+    target_dag_id=DAG_ID,
+)
 SCHEDULE = SchedulingHelper.arrange_schedule_time(
-    project_key="tpu_observability",
-    target_dag_id="tpu_sdk_monitoring_validation",
+    project_key=PROJECT_KEY,
+    target_dag_id=DAG_ID,
 )
 
 with models.DAG(
-    dag_id="tpu_sdk_monitoring_validation",
+    dag_id=DAG_ID,
     start_date=datetime.datetime(2026, 1, 13),
     schedule=SCHEDULE,
     catchup=False,
+    dagrun_timeout=DAGRUN_TIMEOUT,
     tags=[
         "cloud-ml-auto-solutions",
         "jobset",

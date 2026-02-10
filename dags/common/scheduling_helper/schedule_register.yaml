@@ -39,7 +39,7 @@
 # ==============================================================================
 
 # Default values for all projects
-default_settings:
+default:
   anchor_time: "08:00:00"
   margin_minutes: 15
 
@@ -50,40 +50,30 @@ tpu_observability:
   anchor_time: "03:20:00"   # Overrides global 08:00
   margin_minutes: 10        # Overrides global 15
   require_scheduling:
-    - id: "gke_node_pool_label_update"
-      timeout: "00:30:00"
-    - id: "gke_node_pool_status"
-      timeout: "00:30:00"
-    - id: "jobset_rollback_ttr"
-      timeout: "01:30:00"
-    - id: "jobset_ttr_node_pool_resize"
-      timeout: "01:30:00"
-    - id: "jobset_ttr_pod_delete"
-      timeout: "01:30:00"
-    - id: "multi-host-availability-rollback"
-      timeout: "00:30:00"
-    - id: "node_pool_ttr_disk_size"
-      timeout: "01:30:00"
-    - id: "node_pool_ttr_update_label"
-      timeout: "01:30:00"
-    - id: "tpu_info_format_validation_dag"
-      timeout: "00:30:00"
-    - id: "tpu_sdk_monitoring_validation"
-      timeout: "00:30:00"
-    - id: "jobset_ttr_kill_process"
-      timeout: "01:30:00"
+    gke_node_pool_label_update: "00:30:00"
+    gke_node_pool_status: "00:30:00"
+    jobset_rollback_ttr: "01:30:00"
+    jobset_ttr_node_pool_resize: "01:30:00"
+    jobset_ttr_pod_delete: "01:30:00"
+    multi-host-availability-rollback: "00:30:00"
+    node_pool_ttr_disk_size: "01:30:00"
+    node_pool_ttr_update_label: "01:30:00"
+    tpu_info_format_validation_dag: "00:30:00"
+    tpu_sdk_monitoring_validation: "00:30:00"
+    jobset_ttr_kill_process: "01:30:00"
+
   no_scheduling_required:
-    - "validate_interruption_count_gce_bare_metal_preemption"
-    - "validate_interruption_count_gce_defragmentation"
-    - "validate_interruption_count_gce_eviction"
-    - "validate_interruption_count_gce_host_error"
-    - "validate_interruption_count_gce_hwsw_maintenance"
-    - "validate_interruption_count_gce_migrate_on_hwsw_maintenance"
-    - "validate_interruption_count_gce_other"
-    - "validate_interruption_count_gke_bare_metal_preemption"
-    - "validate_interruption_count_gke_defragmentation"
-    - "validate_interruption_count_gke_eviction"
-    - "validate_interruption_count_gke_host_error"
-    - "validate_interruption_count_gke_hwsw_maintenance"
-    - "validate_interruption_count_gke_migrate_on_hwsw_maintenance"
-    - "validate_interruption_count_gke_other"
+    validate_interruption_count_gce_bare_metal_preemption: null
+    validate_interruption_count_gce_defragmentation: null
+    validate_interruption_count_gce_eviction: null
+    validate_interruption_count_gce_host_error: null
+    validate_interruption_count_gce_hwsw_maintenance: null
+    validate_interruption_count_gce_migrate_on_hwsw_maintenance: null
+    validate_interruption_count_gce_other: null
+    validate_interruption_count_gke_bare_metal_preemption: null
+    validate_interruption_count_gke_defragmentation: null
+    validate_interruption_count_gke_eviction: null
+    validate_interruption_count_gke_host_error: null
+    validate_interruption_count_gke_hwsw_maintenance: null
+    validate_interruption_count_gke_migrate_on_hwsw_maintenance: null
+    validate_interruption_count_gke_other: null

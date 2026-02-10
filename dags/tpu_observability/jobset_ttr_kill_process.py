@@ -42,8 +42,16 @@ from dags.tpu_observability.configs.common import (
 from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper
 
 
+PROJECT_KEY = "tpu_observability"
+DAG_ID = "jobset_ttr_kill_process"
+DAGRUN_TIMEOUT = SchedulingHelper.get_dagrun_timeout(
+    project_key=PROJECT_KEY,
+    target_dag_id=DAG_ID,
+)
+DAGRUN_TIMEOUT = datetime.timedelta(minutes=90)
 SCHEDULE = SchedulingHelper.arrange_schedule_time(
-    project_key="tpu_observability", target_dag_id="jobset_ttr_kill_process"
+    project_key=PROJECT_KEY,
+    target_dag_id=DAG_ID,
 )
 
 
@@ -76,9 +84,10 @@ def kill_tpu_pod_workload(info: node_pool.Info, pod_name: str) -> None:
 # Keyword arguments are generated dynamically at runtime (pylint does not
 # know this signature).
 with models.DAG(  # pylint: disable=unexpected-keyword-arg
-    dag_id="jobset_ttr_kill_process",
+    dag_id=DAG_ID,
     start_date=datetime.datetime(2025, 8, 10),
     schedule=SCHEDULE,
+    dagrun_timeout=DAGRUN_TIMEOUT,
     catchup=False,
     tags=[
         "cloud-ml-auto-solutions",

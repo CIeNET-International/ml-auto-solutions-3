@@ -26,13 +26,22 @@ from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_P
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper
 
+
+PROJECT_KEY = "tpu_observability"
+DAG_ID = "node_pool_ttr_update_label"
+DAGRUN_TIMEOUT = SchedulingHelper.get_dagrun_timeout(
+    project_key=PROJECT_KEY,
+    target_dag_id=DAG_ID,
+)
 SCHEDULE = SchedulingHelper.arrange_schedule_time(
-    project_key="tpu_observability", target_dag_id="node_pool_ttr_update_label"
+    project_key=PROJECT_KEY,
+    target_dag_id=DAG_ID,
 )
 
 with models.DAG(
-    dag_id="node_pool_ttr_update_label",
+    dag_id=DAG_ID,
     start_date=datetime.datetime(2025, 9, 30),
+    dagrun_timeout=DAGRUN_TIMEOUT,
     schedule=SCHEDULE,
     catchup=False,
     tags=[

@@ -38,30 +38,6 @@ class Dag:
   dagrun_timeout: dt.datetime
 
 
-class DayOfWeek(enum.Enum):
-  """Enum representing days of the week for scheduling purposes.
-
-  This enum provides convenient constants for specifying which days of the week
-  a scheduled task should run.
-
-  Attributes:
-    ALL: Represents all days of the week (every day). Value: "*"
-    WEEK_DAY: Represents weekdays (Monday through Friday). Value: "1-5"
-    WEEKEND: Represents weekend days (Sunday and Saturday). Value: "0,6"
-
-  Note:
-    The values follow cron expression syntax where:
-    - 0 represents Sunday
-    - 1-5 represents Monday through Friday
-    - 6 represents Saturday
-    - "*" represents all days
-  """
-
-  ALL = "*"
-  WEEK_DAY = "1-5"
-  WEEKEND = "0,6"
-
-
 class SchedulingHelper:
   """Helper class for managing DAG scheduling and registry configuration.
 
@@ -167,89 +143,135 @@ class SchedulingHelper:
     return set(dagbag.dags.keys())
 
   @classmethod
+  def get_dagrun_timeout(
+      cls, project_key: str, target_dag_id: str
+  ) -> dt.timedelta:
+    """Retrieves the timeout for a specific DAG from the registry."""
+    config = cls.load_registry_config()
+    project_data = config.get(project_key, {})
+    scheduling_dict = project_data.get("require_scheduling", {})
+    print(f"Scheduling Dict for project '{project_key}': {scheduling_dict}")
+    timeout = scheduling_dict[target_dag_id]
+
+    h, m, s = map(int, timeout.split(":"))
+    return dt.timedelta(hours=h, minutes=m, seconds=s)
+
+  @classmethod
   def arrange_schedule_time(
       cls,
       project_key: str,
       target_dag_id: str,
-      day_of_week: DayOfWeek = DayOfWeek.ALL,
   ) -> str:
-    """
-    Calculates and returns a cron schedule
-    string for a target DAG based on project configuration.
+    """Calculates cron string based on sequential offsets in the registry."""
+    config = cls.load_registry_config()
+    anchor, margin = cls.get_settings(config, project_key)
 
-    This method reads a YAML configuration
-    file to determine the scheduling requirements
-    for a specific DAG within a project.
-    It calculates the scheduled time by accumulating
-    timeout durations of all DAGs that should run
-    before the target DAG, starting from
-    a default anchor time.
+    project_data = config.get(project_key, {})
+    scheduling_dict = project_data.get("require_scheduling", {})
 
-    Args:
-      project_key: The key identifying the project
-        in the YAML configuration file.
-      target_dag_id: The identifier of the DAG for which
-        to calculate the schedule.
-      day_of_week: The day(s) of the week when the DAG should run.
-        Defaults to DayOfWeek.ALL.
-
-    Returns:
-      A cron schedule string in the format
-      "minute hour * * day_of_week" if the DAG
-      requires scheduling, or None if:
-      - The YAML configuration file doesn't exist
-      - The YAML file cannot be parsed
-      - The project_key is not found in the configuration
-      - The target_dag_id is listed in "no_scheduling_required"
-      - The target_dag_id is not found in "require_scheduling"
-
-    The schedule time is calculated by:
-    1. Starting from anchor time
-    2. Adding the timeout duration of each DAG that comes before the target DAG
-        in the "require_scheduling" list
-    3. Adding margin between each DAG execution
-    4. Formatting the result as a cron expression with the specified day_of_week
-
-    Example:
-      If anchor is 00:00:00, and there are two DAGs before the target
-      with timeouts of "01:30:00" and "02:00:00",
-      with margin of 10 minutes,
-      the calculated time would be 03:50:00 (1:30 + 0:10 + 2:00 + 0:10).
-    """
-    if not os.path.exists(cls.YAML_PATH):
-      return None
-
-    try:
-      config = cls.load_registry_config()
-      anchor, margin = cls.get_settings(config, project_key)
-    except (yaml.YAMLError, OSError):
-      return None
-
-    project_data = config.get(project_key)
-    if not project_data:
-      return None
-
-    if target_dag_id in project_data.get("no_scheduling_required", []):
-      return None
-
-    scheduled_list = project_data.get("require_scheduling", [])
     offset = dt.timedelta(0)
+    found = False
 
-    for entry in scheduled_list:
-      curr_id = entry["id"] if isinstance(entry, dict) else entry
-      if curr_id == target_dag_id:
+    # Iterate through the dictionary in order
+    for dag_id, timeout in scheduling_dict.items():
+      if dag_id == target_dag_id:
+        found = True
         break
 
-      timeout_str = entry.get("timeout", None)
-      h, m, s = map(int, timeout_str.split(":"))
-      duration = dt.timedelta(hours=h, minutes=m, seconds=s)
-      offset += duration + margin
+      h, m, s = map(int, timeout.split(":"))
+      offset += dt.timedelta(hours=h, minutes=m, seconds=s) + margin
+
+    if not found:
+      return None
 
     scheduled_time = anchor + offset
-    dow_val = (
-        day_of_week.value if isinstance(day_of_week, DayOfWeek) else day_of_week
-    )
-    return f"{scheduled_time.minute} {scheduled_time.hour} * * {dow_val}"
+    return f"{scheduled_time.minute} {scheduled_time.hour} * * *"
+
+  # @classmethod
+  # def arrange_schedule_time(
+  #     cls,
+  #     project_key: str,
+  #     target_dag_id: str,
+  #     dagrun_timeout: dt.timedelta = None,
+  #     day_of_week: DayOfWeek = DayOfWeek.ALL,
+  # ) -> str:
+  #   """
+  #   Calculates and returns a cron schedule
+  #   string for a target DAG based on project configuration.
+
+  #   This method reads a YAML configuration
+  #   file to determine the scheduling requirements
+  #   for a specific DAG within a project.
+  #   It calculates the scheduled time by accumulating
+  #   timeout durations of all DAGs that should run
+  #   before the target DAG, starting from
+  #   a default anchor time.
+
+  #   Args:
+  #     project_key: The key identifying the project
+  #       in the YAML configuration file.
+  #     target_dag_id: The identifier of the DAG for which
+  #       to calculate the schedule.
+  #     day_of_week: The day(s) of the week when the DAG should run.
+  #       Defaults to DayOfWeek.ALL.
+
+  #   Returns:
+  #     A cron schedule string in the format
+  #     "minute hour * * day_of_week" if the DAG
+  #     requires scheduling, or None if:
+  #     - The YAML configuration file doesn't exist
+  #     - The YAML file cannot be parsed
+  #     - The project_key is not found in the configuration
+  #     - The target_dag_id is listed in "no_scheduling_required"
+  #     - The target_dag_id is not found in "require_scheduling"
+
+  #   The schedule time is calculated by:
+  #   1. Starting from anchor time
+  #   2. Adding the timeout duration of each DAG that comes before the target DAG
+  #       in the "require_scheduling" list
+  #   3. Adding margin between each DAG execution
+  #   4. Formatting the result as a cron expression with the specified day_of_week
+
+  #   Example:
+  #     If anchor is 00:00:00, and there are two DAGs before the target
+  #     with timeouts of "01:30:00" and "02:00:00",
+  #     with margin of 10 minutes,
+  #     the calculated time would be 03:50:00 (1:30 + 0:10 + 2:00 + 0:10).
+  #   """
+  #   if not os.path.exists(cls.YAML_PATH):
+  #     return None
+
+  #   try:
+  #     config = cls.load_registry_config()
+  #     anchor, margin = cls.get_settings(config, project_key)
+  #   except (yaml.YAMLError, OSError):
+  #     return None
+
+  #   project_data = config.get(project_key)
+  #   if not project_data:
+  #     return None
+
+  #   if target_dag_id in project_data.get("no_scheduling_required", []):
+  #     return None
+
+  #   scheduled_list = project_data.get("require_scheduling", [])
+  #   offset = dt.timedelta(0)
+
+  #   for entry in scheduled_list:
+  #     curr_id = entry["id"] if isinstance(entry, dict) else entry
+  #     if curr_id == target_dag_id:
+  #       break
+
+  #     timeout_str = entry.get("timeout", None)
+  #     h, m, s = map(int, timeout_str.split(":"))
+  #     duration = dt.timedelta(hours=h, minutes=m, seconds=s)
+  #     offset += duration + margin
+
+  #   scheduled_time = anchor + offset
+  #   dow_val = (
+  #       day_of_week.value if isinstance(day_of_week, DayOfWeek) else day_of_week
+  #   )
+  #   return f"{scheduled_time.minute} {scheduled_time.hour} * * {dow_val}"
 
   @classmethod
   def export_all_schedules(cls) -> str:

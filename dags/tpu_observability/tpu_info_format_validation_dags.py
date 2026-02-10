@@ -287,17 +287,24 @@ def validate_latency_table(tpu_info_output: list[tpu_info.Table]):
     )
 
 
+PROJECT_KEY = "tpu_observability"
+DAG_ID = "tpu_info_format_validation_dag"
+DAGRUN_TIMEOUT = SchedulingHelper.get_dagrun_timeout(
+    project_key=PROJECT_KEY,
+    target_dag_id=DAG_ID,
+)
 SCHEDULE = SchedulingHelper.arrange_schedule_time(
-    project_key="tpu_observability",
-    target_dag_id="tpu_info_format_validation_dag",
+    project_key=PROJECT_KEY,
+    target_dag_id=DAG_ID,
 )
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
 # know this signature).
 with models.DAG(  # pylint: disable=unexpected-keyword-arg
-    dag_id="tpu_info_format_validation_dag",
+    dag_id=DAG_ID,
     start_date=datetime.datetime(2025, 8, 15),
     default_args={"retries": 0},
+    dagrun_timeout=DAGRUN_TIMEOUT,
     schedule=SCHEDULE,
     catchup=False,
     tags=["gke", "tpu-observability", "tpu-info", "TPU", "v6e-16"],

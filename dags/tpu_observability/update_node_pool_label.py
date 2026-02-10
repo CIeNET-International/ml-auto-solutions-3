@@ -30,17 +30,25 @@ from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper
 
 
+PROJECT_KEY = "tpu_observability"
+DAG_ID = "gke_node_pool_label_update"
+DAGRUN_TIMEOUT = SchedulingHelper.get_dagrun_timeout(
+    project_key=PROJECT_KEY,
+    target_dag_id=DAG_ID,
+)
 SCHEDULE = SchedulingHelper.arrange_schedule_time(
-    project_key="tpu_observability", target_dag_id="gke_node_pool_label_update"
+    project_key=PROJECT_KEY,
+    target_dag_id=DAG_ID,
 )
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
 # know this signature).
 with models.DAG(  # pylint: disable=unexpected-keyword-arg
-    dag_id="gke_node_pool_label_update",
+    dag_id=DAG_ID,
     start_date=datetime.datetime(2025, 8, 1),
     schedule=SCHEDULE,
     catchup=False,
+    dagrun_timeout=DAGRUN_TIMEOUT,
     tags=["gke", "tpu-observability", "node-pool-status", "TPU", "v6e-16"],
     description=(
         "This DAG tests whether the status of a GKE node pool changes as "
