@@ -158,11 +158,13 @@ _TEMPLATE = string.Template(
         spec:
           failurePolicy:
             maxRestarts: $max_restarts
+            restartStrategy: BlockingRecreate
           replicatedJobs:
           - name: $replicated_job_name
             replicas: $replicas
             template:
               spec:
+                terminationGracePeriodSeconds: 300
                 backoffLimit: $backoff_limit
                 completions: $completions
                 parallelism: $parallelism
@@ -175,6 +177,10 @@ _TEMPLATE = string.Template(
                     containers:
                     - name: $container_name
                       image: $image
+                      lifecycle:
+                        preStop:
+                          exec:
+                            command: ["/bin/sh", "-c", "sleep 240"]
                       command: $command
                       args:
                         - $args
