@@ -231,9 +231,9 @@ class JobSet:
     params = dataclasses.asdict(self)
     params["command"] = ["bash", "-c"]
     params["args"] = workload_script
-    params["node_pool_selector"] = (
-        f"{self.node_pool_group_label_key}: {self.jobset_name}"
-    )
+    params[
+        "node_pool_selector"
+    ] = f"{self.node_pool_group_label_key}: {self.jobset_name}"
 
     return _TEMPLATE.substitute(params)
 
