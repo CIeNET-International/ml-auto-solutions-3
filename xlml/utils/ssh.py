@@ -49,6 +49,7 @@ def generate_ssh_keys() -> SshKeys:
 
   return SshKeys(private=private_key.decode(), public=public_key.decode())
 
+
 @task
 def get_custom_ssh_keys() -> SshKeys:
   return SshKeys(
