@@ -123,9 +123,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           spec=NodeOperationSpec.Drain(),
       )
 
-      uncordon_node = node_pool.uncordon_node.override(
-          task_id="uncordon_node"
-      )(
+      uncordon_node = node_pool.uncordon_node.override(task_id="uncordon_node")(
           node_pool=cluster_info, node_name=drained_node
       )
 
