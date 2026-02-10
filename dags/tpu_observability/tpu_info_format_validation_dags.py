@@ -580,7 +580,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           ],
       )
 
-      chain(create_first_node_pool, create_second_node_pool)
+      [create_first_node_pool, create_second_node_pool]
 
       chain(cleanup_first_node_pool, cleanup_second_node_pool)
 
