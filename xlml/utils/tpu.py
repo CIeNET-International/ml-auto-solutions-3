@@ -55,7 +55,8 @@ def generate_tpu_name(
 
 
 def add_ssh_key_to_oslogin(ssh_public_key: str, project_id: str):
-  """Adds an SSH public key to the authenticated service account's OS Login profile."""
+  """Adds an SSH public key to the authenticated
+  service account's OS Login profile."""
   try:
     creds, _ = google.auth.default()
     oslogin_service = discovery.build('oslogin', 'v1', credentials=creds)
@@ -78,7 +79,8 @@ def add_ssh_key_to_oslogin(ssh_public_key: str, project_id: str):
 
 
 def get_oslogin_username() -> str:
-  """Retrieves the POSIX username from the OS Login profile for the current user."""
+  """Retrieves the POSIX username from the OS Login
+  profile for the current user."""
   try:
     creds, _ = google.auth.default()
     oslogin_service = discovery.build('oslogin', 'v1', credentials=creds)
@@ -401,7 +403,8 @@ def ssh_tpu(
     all_workers: bool,
     env: Dict[str, str] = None,
 ) -> None:
-  """SSH into TPU Worker(s) and run commands in parallel using Fabric ThreadingGroup.
+  """SSH into TPU Worker(s) and run commands in
+  parallel using Fabric ThreadingGroup.
 
   Args:
     qualified_name: The qualified name of a queued resource.
@@ -447,7 +450,8 @@ def ssh_tpu(
   ]
 
   # 3. Setup OS Login Authentication
-  # Parse project_id from qualified_name: projects/{project}/locations/{zone}/...
+  # Parse project_id from qualified_name:
+  # projects/{project}/locations/{zone}/...
   project_id = qualified_name.split('/')[1]
   add_ssh_key_to_oslogin(ssh_keys.public, project_id)
   oslogin_username = get_oslogin_username()
@@ -474,7 +478,8 @@ def ssh_tpu(
       )
       logging.info(f'Executing commands: {cmd_str}')
 
-      # Use 'warn=True' if you want to handle exit codes manually or for reboot scenarios
+      # Use 'warn=True' if you want to handle exit codes
+      # manually or for reboot scenarios
       ssh_group.run(cmd_str, env=env, warn=True)
     except fabric.group.GroupException as e:
       for connection, result in e.result.items():
