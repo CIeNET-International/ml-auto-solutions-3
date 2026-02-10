@@ -30,16 +30,22 @@ from dags.tpu_observability.configs.common import (
     GCS_CONFIG_PATH,
     GCS_JOBSET_CONFIG_PATH,
 )
+from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper, Cluster
 
 
+DAG_ID = "jobset_ttr_node_pool_resize"
+CLUSTER = Cluster.tpu_obs_prod
+DAGRUN_TIMEOUT = SchedulingHelper.registry[CLUSTER][DAG_ID].dag_run_timeout
+SCHEDULE = SchedulingHelper.arrange_schedule_time(CLUSTER, DAG_ID)
 _DISK_SIZE_INCREMENT = 100
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
 # know this signature).
 with models.DAG(  # pylint: disable=unexpected-keyword-arg
-    dag_id="jobset_ttr_node_pool_resize",
+    dag_id=DAG_ID,
     start_date=datetime.datetime(2026, 1, 27),
-    schedule="30 17 * * *" if composer_env.is_prod_env() else None,
+    schedule=SCHEDULE,
+    dagrun_timeout=DAGRUN_TIMEOUT,
     catchup=False,
     tags=[
         "cloud-ml-auto-solutions",
