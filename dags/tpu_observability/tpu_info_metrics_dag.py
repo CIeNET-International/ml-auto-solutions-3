@@ -132,12 +132,7 @@ def get_tpu_info_metric_from_pod(
         ),
     ])
 
-    result = subprocess.run_exec(
-        cmd,
-        env=env,
-    )
-
-    return result
+    return subprocess.run_exec(cmd=cmd, env=env)
 
 
 @task

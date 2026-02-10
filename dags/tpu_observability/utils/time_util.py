@@ -58,7 +58,7 @@ class TimeUtil:
       return TimeUtil(self.time + int(other.total_seconds()))
     return NotImplemented
 
-  def __sub__(self, other) -> "TimeUtil":
+  def __sub__(self, other: datetime.timedelta) -> "TimeUtil":
     """Allows usage like: TimeUtil(...) - timedelta(minutes=10)."""
     if isinstance(other, datetime.timedelta):
       return TimeUtil(self.time - int(other.total_seconds()))
