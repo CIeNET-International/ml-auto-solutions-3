@@ -88,7 +88,7 @@ def validate_monitoring_sdk(info: node_pool.Info, pod_name: str) -> None:
 with models.DAG(
     dag_id=DAG_ID,
     start_date=datetime.datetime(2026, 1, 13),
-    schedule=SCHEDULE,
+    schedule=SCHEDULE if composer_env.is_prod_env() else None,
     dagrun_timeout=DAGRUN_TIMEOUT,
     catchup=False,
     tags=[

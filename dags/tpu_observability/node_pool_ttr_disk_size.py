@@ -37,7 +37,7 @@ _DISK_SIZE_INCREMENT = 50
 with models.DAG(
     dag_id=DAG_ID,
     start_date=datetime.datetime(2025, 6, 26),
-    schedule=SCHEDULE,
+    schedule=SCHEDULE if composer_env.is_prod_env() else None,
     dagrun_timeout=DAGRUN_TIMEOUT,
     catchup=False,
     tags=[

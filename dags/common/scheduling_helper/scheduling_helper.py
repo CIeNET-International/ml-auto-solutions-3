@@ -89,34 +89,4 @@ class SchedulingHelper:
       if offset >= dt.timedelta(hours=24):
         raise ValueError(f"Schedule exceeds 24h window at {current_dag_id}.")
 
-    return ""
-
-
-if __name__ == "__main__":
-  DAG_ID = "jobset_ttr_pod_delete"
-  CLUSTER = Cluster.tpu_obs_prod
-  DAGRUN_TIMEOUT = SchedulingHelper.registry[CLUSTER][DAG_ID].dag_run_timeout
-  SCHEDULE = SchedulingHelper.arrange_schedule_time(CLUSTER, DAG_ID)
-  print("Test single DAG schedule:")
-  print(f"DAG ID: {DAG_ID}")
-  print(f"Cluster: {CLUSTER}")
-  print(f"DAG Run Timeout: {DAGRUN_TIMEOUT}")
-  print(f"Cron Schedule: {SCHEDULE}")
-
-  print(f"Testing Cluster: {CLUSTER}")
-  print(
-      f"{'DAG ID':<35} | {'Cron Schedule':<15} | "
-      f"{'Start Time':<10} | {'Timeout'}"
-  )
-  print("-" * 80)
-
-  cluster_dags_dict = SchedulingHelper.registry[CLUSTER]
-  for dag_id, dag in cluster_dags_dict.items():
-    dag_timeout = dag.dag_run_timeout
-    schedule_cron = SchedulingHelper.arrange_schedule_time(CLUSTER, dag_id)
-    cron_parts = schedule_cron.split(" ")
-    readable_time = f"{cron_parts[1].zfill(2)}:{cron_parts[0].zfill(2)}"
-    print(
-        f"{dag_id:<35} | {schedule_cron:<15} | "
-        f"{readable_time:<10} | {dag_timeout}"
-    )
+    return None
