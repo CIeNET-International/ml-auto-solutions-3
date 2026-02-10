@@ -126,7 +126,7 @@ def create_queued_resource(
       startup_script_command = startup_script.generate_startup_script(
           main_command
       )
-    user = Variable.get("os-login-ssh-user")
+    user = Variable.get('os-login-ssh-user')
     metadata = {
         'ssh-keys': f'{user}:{ssh_keys.public}',
         'startup-script': startup_script_command,
@@ -375,8 +375,7 @@ def ssh_tpu(
       for node in queued_resource.tpu.node_spec
   ]
 
-  user = Variable.get("os-login-ssh-user")
-  logging.info(f"Using fixed SSH user: {user} from Airflow Variables....")
+  user = Variable.get('os-login-ssh-user')
 
   if all_workers:
     endpoints = itertools.chain.from_iterable(

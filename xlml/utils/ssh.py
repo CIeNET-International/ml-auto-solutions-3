@@ -53,5 +53,5 @@ def generate_ssh_keys() -> SshKeys:
 def get_custom_ssh_keys() -> SshKeys:
     return SshKeys(
         private=Variable.get("os-login-ssh-private-key"),
-        public=Variable.get("os-login-ssh-public-key")
+        public=Variable.get("os-login-ssh-public-key"),
     )
