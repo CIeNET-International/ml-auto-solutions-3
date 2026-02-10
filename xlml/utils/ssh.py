@@ -17,6 +17,7 @@
 import dataclasses
 
 from airflow.decorators import task
+from airflow.models import Variable
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
@@ -47,3 +48,10 @@ def generate_ssh_keys() -> SshKeys:
   )
 
   return SshKeys(private=private_key.decode(), public=public_key.decode())
+
+@task
+def get_custom_ssh_keys() -> SshKeys:
+    return SshKeys(
+        private=Variable.get("os-login-ssh-private-key"),
+        public=Variable.get("os-login-ssh-public-key")
+    )
