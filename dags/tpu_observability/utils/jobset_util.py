@@ -218,41 +218,22 @@ class JobSet:
   def generate_yaml(
       self,
       workload_script: Workload,
-      node_pool_name: str = None,
-      jobset_group: str = None,
   ) -> str:
     """Generates the final JobSet YAML content.
 
     Args:
         workload_script: A pre-formatted, JSON-escaped string from the Workload
           class.
-        node_pool_name: The name of a single GKE node pool to schedule pods on.
-          Mutually exclusive with jobset_group.
-        jobset_group: A shared label value used to schedule pods across
-          multiple node pools. Mutually exclusive with node_pool_name.
 
     Returns:
         A string containing the complete JobSet YAML.
-
-    Raises:
-        ValueError: If neither node_pool_name nor jobset_group is provided.
     """
     params = dataclasses.asdict(self)
     params["command"] = ["bash", "-c"]
     params["args"] = workload_script
-
-    if jobset_group:
-      params[
-          "node_pool_selector"
-      ] = f"{self.node_pool_group_label_key}: {jobset_group}"
-    elif node_pool_name:
-      params[
-          "node_pool_selector"
-      ] = f"cloud.google.com/gke-nodepool: {node_pool_name}"
-    else:
-      raise ValueError(
-          "Either node_pool_name or jobset_group must be provided."
-      )
+    params["node_pool_selector"] = (
+        f"{self.node_pool_group_label_key}: {self.jobset_name}"
+    )
 
     return _TEMPLATE.substitute(params)
 
@@ -489,33 +470,12 @@ def build_jobset_from_gcs_yaml(
   return JobSet(**merged)
 
 
-@task
-def build_node_labels_for_jobset_group(jobset_config: JobSet) -> dict:
-  """Builds node labels that group node pools for shared scheduling.
-
-  When multiple node pools need to serve the same JobSet, this function
-  generates a common label to be applied to all participating node pools
-  via ``--node-labels`` at creation time.  The JobSet template can then
-  use a ``nodeSelector`` with this label to schedule pods across all of
-  them.
-
-  Args:
-    jobset_config: The JobSet configuration whose name is used as the
-      shared group identifier.
-
-  Returns:
-    A dict of node labels, e.g.
-    ``{"tpu-observability/jobset-group": "<jobset_name>"}``.
-  """
-  return {jobset_config.node_pool_group_label_key: jobset_config.jobset_name}
-
 
 @task
 def run_workload(
     node_pool: node_pool_info,
     jobset_config: JobSet,
     workload_type: Workload,
-    use_jobset_group: bool = False,
 ) -> TimeUtil:
   """
   Applies the specified YAML file to the GKE cluster.
@@ -524,25 +484,15 @@ def run_workload(
     node_pool: Configuration object with cluster details.
     jobset_config: The JobSet object containing YAML configuration.
     workload_type: The workload script to execute.
-    use_jobset_group: If True, uses the jobset name as a shared label for
-      scheduling across multiple node pools instead of targeting a single
-      node pool by name.
   Returns:
     The UTC time when the workload was started.
   """
   with tempfile.NamedTemporaryFile() as temp_config_file:
     env = os.environ.copy()
     env["KUBECONFIG"] = temp_config_file.name
-    if use_jobset_group:
-      yaml_config = jobset_config.generate_yaml(
-          workload_script=workload_type,
-          jobset_group=jobset_config.jobset_name,
-      )
-    else:
-      yaml_config = jobset_config.generate_yaml(
-          workload_script=workload_type,
-          node_pool_name=node_pool.node_pool_name,
-      )
+    yaml_config = jobset_config.generate_yaml(
+        workload_script=workload_type,
+    )
 
     cmd = " && ".join([
         Command.get_credentials_command(node_pool),

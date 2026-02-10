@@ -144,6 +144,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 
       create_node_pool = node_pool.create.override(task_id="create_node_pool")(
           node_pool=cluster_info,
+          jobset_config=jobset_config,
       )
 
       apply_time = jobset.run_workload.override(task_id="run_workload")(

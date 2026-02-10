@@ -356,8 +356,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           dag_name="tpu_info_format_validation_dag",
       )
 
-      node_labels = jobset.build_node_labels_for_jobset_group(jobset_config)
-
       cluster_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
           task_id="build_node_pool_info_from_gcs_yaml"
       )(
@@ -366,7 +364,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           is_prod=composer_env.is_prod_env(),
           machine_type=config.machine_version.value,
           tpu_topology=config.tpu_topology,
-          node_labels=node_labels,
       )
 
       cluster_info_2 = node_pool.copy_node_pool_info_with_override.override(
@@ -386,6 +383,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             retries=2,
         )(
             node_pool=cluster_info,
+            jobset_config=jobset_config,
         )
 
         create_second_node_pool = node_pool.create.override(
@@ -393,6 +391,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             retries=2,
         )(
             node_pool=cluster_info_2,
+            jobset_config=jobset_config,
         )
 
       apply_time = jobset.run_workload.override(
@@ -401,7 +400,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           node_pool=cluster_info,
           jobset_config=jobset_config,
           workload_type=Workload.JAX_TPU_BENCHMARK,
-          use_jobset_group=True,
       )
 
       pod_names = jobset.list_pod_names.override(
@@ -514,7 +512,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 
       chain(
           jobset_config,
-          node_labels,
           cluster_info,
           cluster_info_2,
           create_node_pool,

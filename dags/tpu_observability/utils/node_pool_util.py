@@ -71,7 +71,6 @@ class Info:
   num_nodes: int = None
   tpu_topology: str = None
   reservation: str = None
-  node_labels: dict = None
 
 
 @task
@@ -182,9 +181,17 @@ def _node_pool_exists(node_pool: Info) -> bool:
 @task
 def create(
     node_pool: Info,
+    jobset_config=None,
     ignore_failure: bool = False,
 ) -> None:
-  """Creates a GKE node pool by the given node pool information."""
+  """Creates a GKE node pool by the given node pool information.
+
+  Args:
+    node_pool: The node pool configuration.
+    jobset_config: Optional JobSet configuration. If provided, the node pool
+      will be labeled with the jobset group label for shared scheduling.
+    ignore_failure: If True, command failures are ignored.
+  """
 
   composer.log_metadata_for_xlml_dashboard({
       "cluster_project": node_pool.project_id,
@@ -215,9 +222,10 @@ def create(
   if node_pool.reservation:
     command += f" --reservation-affinity=specific --reservation={node_pool.reservation}"
 
-  if node_pool.node_labels:
-    labels_str = ",".join(f"{k}={v}" for k, v in node_pool.node_labels.items())
-    command += f" --node-labels={labels_str}"
+  if jobset_config is not None:
+    label_key = jobset_config.node_pool_group_label_key
+    label_value = jobset_config.jobset_name
+    command += f" --node-labels={label_key}={label_value}"
 
   if ignore_failure:
     command += "2>&1 || true "
