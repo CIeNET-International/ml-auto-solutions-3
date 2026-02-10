@@ -241,13 +241,13 @@ class JobSet:
     params["args"] = workload_script
 
     if jobset_group:
-      params["node_pool_selector"] = (
-          f"tpu-observability/jobset-group: {jobset_group}"
-      )
+      params[
+          "node_pool_selector"
+      ] = f"tpu-observability/jobset-group: {jobset_group}"
     elif node_pool_name:
-      params["node_pool_selector"] = (
-          f"cloud.google.com/gke-nodepool: {node_pool_name}"
-      )
+      params[
+          "node_pool_selector"
+      ] = f"cloud.google.com/gke-nodepool: {node_pool_name}"
     else:
       raise ValueError(
           "Either node_pool_name or jobset_group must be provided."

@@ -216,9 +216,7 @@ def create(
     command += f" --reservation-affinity=specific --reservation={node_pool.reservation}"
 
   if node_pool.node_labels:
-    labels_str = ",".join(
-        f"{k}={v}" for k, v in node_pool.node_labels.items()
-    )
+    labels_str = ",".join(f"{k}={v}" for k, v in node_pool.node_labels.items())
     command += f" --node-labels={labels_str}"
 
   if ignore_failure:
