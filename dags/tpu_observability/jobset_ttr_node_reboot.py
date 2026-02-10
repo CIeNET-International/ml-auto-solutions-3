@@ -35,9 +35,10 @@ from dags.tpu_observability.utils.jobset_util import JobSet, Workload
 from dags.tpu_observability.configs.common import (
     MachineConfigMap,
     GCS_CONFIG_PATH,
+    GCS_JOBSET_CONFIG_PATH,
 )
 
-from xlml.utils.tpu import add_ssh_key_to_oslogin, get_oslogin_username
+from xlml.utils.tpu import add_ssh_key_to_oslogin, get_oslogin_username, delete_ssh_key_from_oslogin
 from xlml.utils.ssh import SshKeys, generate_ssh_keys
 
 
@@ -144,31 +145,27 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       resulting in a success, or timeout and failure.
       """,
 ) as dag:
+
+  @task
+  def get_project_id(info: node_pool.Info):
+    return info.project_id
+
+  @task(trigger_rule=TriggerRule.ALL_DONE)
+  def cleanup_ssh_key_task(ssh_keys_obj, project_id):
+    sa_email = "tpu-obs-ml-auto-sa@cienet-cmcs.iam.gserviceaccount.com"
+    delete_ssh_key_from_oslogin(ssh_keys_obj.public, sa_email)
+
   for machine in MachineConfigMap:
     config = machine.value
-
-    jobset_config = JobSet(
-        jobset_name="ttr-node-reboot-v6e-workload",
-        namespace="default",
-        max_restarts=5,
-        replicated_job_name="tpu-job-slice",
-        replicas=1,
-        backoff_limit=0,
-        completions=4,
-        parallelism=4,
-        tpu_accelerator_type="tpu-v6e-slice",
-        tpu_topology="4x4",
-        container_name="jax-tpu-worker",
-        image="asia-northeast1-docker.pkg.dev/cienet-cmcs/"
-        "yuna-docker/tpu-info:v0.5.1",
-        tpu_cores_per_pod=4,
-    )
 
     # Keyword arguments are generated dynamically at runtime (pylint does not
     # know this signature).
     with TaskGroup(  # pylint: disable=unexpected-keyword-arg
         group_id=f"v{config.tpu_version.value}"
     ):
+      jobset_config = jobset.build_jobset_from_gcs_yaml(
+          gcs_path=GCS_JOBSET_CONFIG_PATH, dag_name="jobset_ttr_node_reboot"
+      )
       ssh_keys = generate_ssh_keys.override(task_id="generate_ssh_keys")()
 
       cluster_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
@@ -181,23 +178,23 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           tpu_topology=config.tpu_topology,
       )
 
+      project_id_task = get_project_id(cluster_info)
+
       create_node_pool = node_pool.create.override(task_id="create_node_pool")(
           node_pool=cluster_info,
       )
 
       start_workload = jobset.run_workload.override(task_id="start_workload")(
           node_pool=cluster_info,
-          yaml_config=jobset_config.generate_yaml(
-              workload_script=Workload.JAX_TPU_BENCHMARK
-          ),
-          namespace=jobset_config.namespace,
+          jobset_config=jobset_config,
+          workload_type=Workload.JAX_TPU_BENCHMARK,
       )
 
       ensure_all_pods_running = jobset.wait_for_all_pods_running.override(
           task_id="ensure_all_pods_running"
       )(
-          num_pods=(jobset_config.replicas * jobset_config.parallelism),
           node_pool=cluster_info,
+          jobset_config=jobset_config,
       )
 
       node_reboot = random_node_reboot.override(task_id="random_node_reboot")(
@@ -208,16 +205,12 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           task_id="wait_for_jobset_ttr_to_be_found"
       )(
           node_pool=cluster_info,
-          jobset_name=jobset_config.jobset_name,
+          jobset_config=jobset_config,
       )
 
       cleanup_workload = jobset.end_workload.override(
           task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
-      )(
-          node_pool=cluster_info,
-          jobset_name=jobset_config.jobset_name,
-          namespace=jobset_config.namespace,
-      ).as_teardown(
+      )(node_pool=cluster_info, jobset_config=jobset_config).as_teardown(
           setups=start_workload
       )
 
@@ -227,8 +220,14 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           setups=create_node_pool,
       )
 
+      cleanup_key_task = cleanup_ssh_key_task(ssh_keys, project_id_task)
+      cleanup_key_task.as_teardown(setups=node_reboot)
+
       chain(
+          jobset_config,
           ssh_keys,
+          cluster_info,
+          project_id_task,
           create_node_pool,
           start_workload,
           ensure_all_pods_running,
@@ -236,4 +235,5 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           wait_for_metric_upload,
           cleanup_workload,
           cleanup_node_pool,
+          cleanup_key_task,
       )
