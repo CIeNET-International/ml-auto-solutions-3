@@ -44,11 +44,11 @@ from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.tpu_observability.utils import tpu_info_util as tpu_info
 from dags.tpu_observability.utils.jobset_util import Workload
-from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper
+from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper, get_dag_timeout
 
 
 DAG_ID = "tpu_info_format_validation_dag"
-DAGRUN_TIMEOUT = SchedulingHelper.get_dag_timeout(DAG_ID)
+DAGRUN_TIMEOUT = get_dag_timeout(DAG_ID)
 SCHEDULE = SchedulingHelper.arrange_schedule_time(DAG_ID)
 
 
