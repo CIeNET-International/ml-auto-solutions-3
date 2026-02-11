@@ -44,13 +44,12 @@ from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.tpu_observability.utils import tpu_info_util as tpu_info
 from dags.tpu_observability.utils.jobset_util import Workload
-from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper, Cluster
+from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper
 
 
 DAG_ID = "tpu_info_format_validation_dag"
-CLUSTER = Cluster.tpu_obs_prod
-DAGRUN_TIMEOUT = SchedulingHelper.registry[CLUSTER][DAG_ID].dag_run_timeout
-SCHEDULE = SchedulingHelper.arrange_schedule_time(CLUSTER, DAG_ID)
+DAGRUN_TIMEOUT = SchedulingHelper.get_dag_timeout(DAG_ID)
+SCHEDULE = SchedulingHelper.arrange_schedule_time(DAG_ID)
 
 
 @task

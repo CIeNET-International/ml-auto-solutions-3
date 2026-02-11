@@ -88,6 +88,14 @@ class SchedulingHelper:
         )
     return None
 
+  @classmethod
+  def get_dag_timeout(cls, target_dag_id: str) -> dt.timedelta:
+    """Searches the registry and returns the specific timeout for a DAG."""
+    for dags in cls.dag_to_timeout.values():
+      if target_dag_id in dags:
+        return dags[target_dag_id]
+    raise ValueError(f"DAG '{target_dag_id}' not found in registry.")
+
 
 if __name__ == "__main__":
   # Verification
@@ -95,3 +103,4 @@ if __name__ == "__main__":
   print(
       f"Schedule for {TEST_DAG}: {SchedulingHelper.arrange_schedule_time(TEST_DAG)}"
   )
+  print(f"Timeout for {TEST_DAG}: {SchedulingHelper.get_dag_timeout(TEST_DAG)}")

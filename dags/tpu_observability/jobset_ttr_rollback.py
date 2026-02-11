@@ -30,13 +30,12 @@ from dags.tpu_observability.configs.common import (
     GCS_CONFIG_PATH,
     GCS_JOBSET_CONFIG_PATH,
 )
-from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper, Cluster
+from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper
 
 
 DAG_ID = "jobset_rollback_ttr"
-CLUSTER = Cluster.tpu_obs_prod
-DAGRUN_TIMEOUT = SchedulingHelper.registry[CLUSTER][DAG_ID].dag_run_timeout
-SCHEDULE = SchedulingHelper.arrange_schedule_time(CLUSTER, DAG_ID)
+DAGRUN_TIMEOUT = SchedulingHelper.get_dag_timeout(DAG_ID)
+SCHEDULE = SchedulingHelper.arrange_schedule_time(DAG_ID)
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
 # know this signature).
