@@ -236,7 +236,20 @@ def create(
   if ignore_failure:
     command += "2>&1 || true "
 
-  subprocess.run_exec(command)
+  try:
+    subprocess.run_exec(command)
+  except Exception as e:
+    debug_cmd = (
+        "gcloud container operations list "
+        f"--project={node_pool.project_id} "
+        f"--region={node_pool.location} "
+        f"--format=json(name,status)"
+    )
+    debug_res = subprocess.run_exec(debug_cmd)
+
+    raise AirflowFailException(
+        f"Primary task failed. Current operations:\n{debug_res}"
+    ) from e
 
 
 @task
