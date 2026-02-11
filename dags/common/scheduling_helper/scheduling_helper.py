@@ -19,8 +19,6 @@ import enum
 from xlml.apis.xpk_cluster_config import XpkClusterConfig
 from dags.common.vm_resource import TpuVersion, Zone
 
-DagTimeoutRegistry = dict[str, dict[str, dt.timedelta]]
-
 
 class DayOfWeek(enum.Enum):
   ALL = "*"
@@ -44,7 +42,7 @@ class SchedulingHelper:
   DEFAULT_MARGIN = dt.timedelta(minutes=15)
   DEFAULT_ANCHOR = dt.datetime(2000, 1, 1, 8, 0, 0, tzinfo=dt.timezone.utc)
 
-  registry: DagTimeoutRegistry = {
+  dag_to_timeout: dict[str, dict[str, dt.timedelta]] = {
       TPU_OBS_MOCK_CLUSTER.name: {
           "gke_node_pool_label_update": dt.timedelta(minutes=30),
           "gke_node_pool_status": dt.timedelta(minutes=30),
@@ -68,12 +66,12 @@ class SchedulingHelper:
   ) -> str:
     """Calculates a cron schedule by stacking timeouts and margins."""
     found_cluster_name = None
-    for cluster_name, dags in cls.registry.items():
+    for cluster_name, dags in cls.dag_to_timeout.items():
       if dag_id in dags:
         found_cluster_name = cluster_name
         break
 
-    cluster_dags = cls.registry[found_cluster_name]
+    cluster_dags = cls.dag_to_timeout[found_cluster_name]
     anchor = cls.DEFAULT_ANCHOR
     offset = dt.timedelta(0)
 
@@ -89,3 +87,11 @@ class SchedulingHelper:
             f"Schedule exceeds 24h window at {dag_id} in {found_cluster_name}."
         )
     return None
+
+
+if __name__ == "__main__":
+  # Verification
+  TEST_DAG = "jobset_ttr_pod_delete"
+  print(
+      f"Schedule for {TEST_DAG}: {SchedulingHelper.arrange_schedule_time(TEST_DAG)}"
+  )
