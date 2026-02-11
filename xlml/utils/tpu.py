@@ -375,7 +375,6 @@ def ssh_tpu(
       for node in queued_resource.tpu.node_spec
   ]
 
-  user = ssh_keys.user
   if all_workers:
     endpoints = itertools.chain.from_iterable(
         node.network_endpoints for node in nodes
@@ -398,7 +397,7 @@ def ssh_tpu(
       *ip_addresses,
       connect_kwargs={
           'auth_strategy': paramiko.auth_strategy.InMemoryPrivateKey(
-              user, pkey
+              ssh_keys.user, pkey
           ),
           # See https://stackoverflow.com/a/59453832
           'banner_timeout': 200,
