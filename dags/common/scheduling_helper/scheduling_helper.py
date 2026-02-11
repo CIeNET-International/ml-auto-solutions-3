@@ -87,11 +87,8 @@ class SchedulingHelper:
       offset = dt.timedelta(0)
       for current_dag_id, timeout in dags.items():
         if current_dag_id == dag_id:
-          schedule_time = anchor + offset
-          return (
-              f"{schedule_time.minute} {schedule_time.hour} * * "
-              f"{day_of_week.value}"
-          )
+          schedule = anchor + offset
+          return f"{schedule.minute} {schedule.hour} * * {day_of_week.value}"
         offset += timeout + cls.DEFAULT_MARGIN
 
         if offset >= dt.timedelta(hours=24):
