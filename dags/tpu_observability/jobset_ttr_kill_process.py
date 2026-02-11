@@ -146,29 +146,27 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           node_pool=cluster_info,
       )
 
-      apply_time = jobset.run_workload.override(task_id="run_workload")(
+      start_workload = jobset.run_workload.override(task_id="start_workload")(
           node_pool=cluster_info,
           jobset_config=jobset_config,
           workload_type=Workload.JAX_TPU_BENCHMARK,
       )
 
-      pod_names = jobset.list_pod_names.override(task_id="list_pod_names")(
+      ensure_all_pods_running = jobset.wait_for_all_pods_running.override(
+          task_id="ensure_all_pods_running"
+      )(
           node_pool=cluster_info,
           jobset_config=jobset_config,
       )
 
-      wait_for_job_start = jobset.wait_for_jobset_started.override(
-          task_id="wait_for_job_start"
-      )(cluster_info, pod_name_list=pod_names, job_apply_time=apply_time)
-
       kill_tasks = (
           kill_tpu_pod_workload.override(task_id="kill_tpu_pod_workload")
           .partial(info=cluster_info)
-          .expand(pod_name=pod_names)
+          .expand(pod_name=ensure_all_pods_running)
       )
 
       wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
-          task_id="wait_for_metric_upload"
+          task_id="wait_for_jobset_ttr_to_be_found"
       )(
           node_pool=cluster_info,
           jobset_config=jobset_config,
@@ -180,7 +178,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           node_pool=cluster_info,
           jobset_config=jobset_config,
       ).as_teardown(
-          setups=apply_time
+          setups=start_workload
       )
 
       cleanup_node_pool = node_pool.delete.override(
@@ -193,9 +191,8 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           jobset_config,
           cluster_info,
           create_node_pool,
-          apply_time,
-          pod_names,
-          wait_for_job_start,
+          start_workload,
+          ensure_all_pods_running,
           kill_tasks,
           wait_for_metric_upload,
           cleanup_workload,
