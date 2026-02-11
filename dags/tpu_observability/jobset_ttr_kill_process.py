@@ -152,7 +152,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           workload_type=Workload.JAX_TPU_BENCHMARK,
       )
 
-      ensure_all_pods_running = jobset.wait_for_all_pods_running.override(
+      running_pods = jobset.wait_for_all_pods_running.override(
           task_id="ensure_all_pods_running"
       )(
           node_pool=cluster_info,
@@ -162,7 +162,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       kill_tasks = (
           kill_tpu_pod_workload.override(task_id="kill_tpu_pod_workload")
           .partial(info=cluster_info)
-          .expand(pod_name=ensure_all_pods_running)
+          .expand(pod_name=running_pods)
       )
 
       wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
@@ -192,7 +192,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           cluster_info,
           create_node_pool,
           start_workload,
-          ensure_all_pods_running,
+          running_pods,
           kill_tasks,
           wait_for_metric_upload,
           cleanup_workload,
