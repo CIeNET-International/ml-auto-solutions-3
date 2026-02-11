@@ -24,7 +24,7 @@ import random
 import string
 import tempfile
 import textwrap
-from typing import Final
+from typing import Final, Tuple
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
@@ -39,6 +39,31 @@ from google.cloud.monitoring_v3 import types
 import kubernetes
 from xlml.apis import gcs
 from xlml.utils import gke
+
+
+@task
+def generate_node_pool_selector(prefix: str) -> dict:
+  """Generates a unique node_pool_selector for both gcloud and JobSet YAML.
+
+  This task creates a consistent label that can be used to:
+  1. Tag node pools via `gcloud --node-labels` (key=value format)
+  2. Select nodes in JobSet YAML nodeSelector (key: value format)
+
+  Args:
+    prefix: An identifier for the workload type (e.g., "resize", "rollback").
+
+  Returns:
+    A dict with keys:
+      - "gcloud": Format "key=value" for gcloud --node-labels flag
+      - "yaml": Format "key: value" for JobSet nodeSelector YAML
+  """
+  node_pool_selector_label_key = "tpu-observability/workload"
+  run_id = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+  label_value = f"{prefix}-{run_id}"
+  return {
+      "gcloud": f"{node_pool_selector_label_key}={label_value}",
+      "yaml": f"{node_pool_selector_label_key}: {label_value}",
+  }
 
 
 class Workload:
@@ -213,7 +238,7 @@ class JobSet:
   container_name: str
   image: str
   tpu_cores_per_pod: int
-  node_pool_group_label_key: str
+  node_pool_selector: str
 
   def generate_yaml(
       self,
@@ -231,9 +256,7 @@ class JobSet:
     params = dataclasses.asdict(self)
     params["command"] = ["bash", "-c"]
     params["args"] = workload_script
-    params[
-        "node_pool_selector"
-    ] = f"{self.node_pool_group_label_key}: {self.jobset_name}"
+    params["node_pool_selector"] = self.node_pool_selector or ""
 
     return _TEMPLATE.substitute(params)
 
