@@ -51,7 +51,7 @@ def generate_ssh_keys() -> SshKeys:
   return SshKeys(
       private=private_key.decode(),
       public=public_key.decode(),
-      user='ml-auto-solutions',
+      user="ml-auto-solutions",
   )
 
 
