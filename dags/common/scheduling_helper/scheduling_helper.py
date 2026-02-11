@@ -16,15 +16,10 @@
 import datetime as dt
 import enum
 
+from xlml.apis.xpk_cluster_config import XpkClusterConfig
+from dags.common.vm_resource import TpuVersion, Zone
 
-class Dag:
-  """Represents an Airflow DAG with its identification and expected runtime."""
-
-  def __init__(
-      self,
-      dag_run_timeout: dt.timedelta = dt.timedelta(minutes=60),
-  ):
-    self.dag_run_timeout = dag_run_timeout
+DagTimeoutRegistry = dict[str, dict[str, dt.timedelta]]
 
 
 class DayOfWeek(enum.Enum):
@@ -33,8 +28,14 @@ class DayOfWeek(enum.Enum):
   WEEKEND = "0,6"
 
 
-class Cluster:
-  tpu_obs_prod = "tpu-observability-automation-prod"
+# Mock cluster to group TPU Observability DAGs
+TPU_OBS_MOCK_CLUSTER = XpkClusterConfig(
+    name="tpu-observability-automation-prod",
+    device_version=TpuVersion.TRILLIUM,
+    core_count=16,
+    project="cienet-cmcs",
+    zone=Zone.US_CENTRAL1_B.value,
+)
 
 
 class SchedulingHelper:
@@ -43,71 +44,48 @@ class SchedulingHelper:
   DEFAULT_MARGIN = dt.timedelta(minutes=15)
   DEFAULT_ANCHOR = dt.datetime(2000, 1, 1, 8, 0, 0, tzinfo=dt.timezone.utc)
 
-  registry: dict[Cluster, dict[str, Dag]] = {
-      Cluster.tpu_obs_prod: {
-          "gke_node_pool_label_update": Dag(dt.timedelta(minutes=30)),
-          "gke_node_pool_status": Dag(dt.timedelta(minutes=30)),
-          "jobset_rollback_ttr": Dag(dt.timedelta(minutes=90)),
-          "jobset_ttr_node_pool_resize": Dag(dt.timedelta(minutes=90)),
-          "jobset_ttr_pod_delete": Dag(dt.timedelta(minutes=90)),
-          "multi-host-availability-rollback": Dag(dt.timedelta(minutes=30)),
-          "node_pool_ttr_disk_size": Dag(dt.timedelta(minutes=90)),
-          "node_pool_ttr_update_label": Dag(dt.timedelta(minutes=90)),
-          "tpu_info_format_validation_dag": Dag(dt.timedelta(minutes=30)),
-          "tpu_sdk_monitoring_validation": Dag(dt.timedelta(minutes=30)),
-          "jobset_ttr_kill_process": Dag(dt.timedelta(minutes=90)),
+  registry: DagTimeoutRegistry = {
+      TPU_OBS_MOCK_CLUSTER.name: {
+          "gke_node_pool_label_update": dt.timedelta(minutes=30),
+          "gke_node_pool_status": dt.timedelta(minutes=30),
+          "jobset_rollback_ttr": dt.timedelta(minutes=90),
+          "jobset_ttr_node_pool_resize": dt.timedelta(minutes=90),
+          "jobset_ttr_pod_delete": dt.timedelta(minutes=90),
+          "multi-host-availability-rollback": dt.timedelta(minutes=30),
+          "node_pool_ttr_disk_size": dt.timedelta(minutes=90),
+          "node_pool_ttr_update_label": dt.timedelta(minutes=90),
+          "tpu_info_format_validation_dag": dt.timedelta(minutes=30),
+          "tpu_sdk_monitoring_validation": dt.timedelta(minutes=30),
+          "jobset_ttr_kill_process": dt.timedelta(minutes=90),
       },
   }
 
   @classmethod
   def arrange_schedule_time(
       cls,
-      cluster: Cluster,
-      target_dag_id: str,
+      dag_id: str,
       day_of_week: DayOfWeek = DayOfWeek.ALL,
   ) -> str:
-    """
-    Arranges and returns a cron schedule string for a specific DAG
-    within a cluster.
+    """Calculates a cron schedule by stacking timeouts and margins."""
+    found_cluster_name = None
+    for cluster_name, dags in cls.registry.items():
+      if dag_id in dags:
+        found_cluster_name = cluster_name
+        break
 
-    This method calculates the schedule time for a target DAG by
-    sequentially allocating time slots based on the order of DAGs in
-    the cluster registry. Each DAG is given a time slot equal to its
-    dag_run_timeout plus a default margin. The schedule starts from a
-    default anchor time and increments for each preceding DAG.
-
-    Args:
-      cluster (Cluster): The cluster containing the target DAG.
-      target_dag_id (str): The ID of the DAG to schedule.
-      day_of_week (DayOfWeek, optional): The day(s) of the week to
-        run the DAG. Defaults to DayOfWeek.ALL.
-
-    Returns:
-      str: A cron schedule string in the format
-        "minute hour * * day_of_week". Returns None if the target DAG
-        is not found (though ValueError is raised first).
-    """
-    if cluster not in cls.registry:
-      raise ValueError(f"Cluster {cluster} is not registered.")
-
-    cluster_dags = cls.registry[cluster]
-    if target_dag_id not in cluster_dags:
-      raise ValueError(f"DAG '{target_dag_id}' not found in registry.")
-
+    cluster_dags = cls.registry[found_cluster_name]
     anchor = cls.DEFAULT_ANCHOR
     offset = dt.timedelta(0)
 
-    for current_dag_id, dag in cluster_dags.items():
-      if target_dag_id == current_dag_id:
+    for current_dag_id, timeout in cluster_dags.items():
+      if current_dag_id == dag_id:
         schedule_time = anchor + offset
-        return (
-            f"{schedule_time.minute} {schedule_time.hour} * * "
-            f"{day_of_week.value}"
-        )
+        return f"{schedule_time.minute} {schedule_time.hour} * * {day_of_week.value}"
 
-      offset += dag.dag_run_timeout + cls.DEFAULT_MARGIN
+      offset += timeout + cls.DEFAULT_MARGIN
 
       if offset >= dt.timedelta(hours=24):
-        raise ValueError(f"Schedule exceeds 24h window at {current_dag_id}.")
-
+        raise ValueError(
+            f"Schedule exceeds 24h window at {dag_id} in {found_cluster_name}."
+        )
     return None
