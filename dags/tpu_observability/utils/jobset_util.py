@@ -41,20 +41,21 @@ from xlml.apis import gcs
 from xlml.utils import gke
 
 
+_NODE_POOL_SELECTOR_KEY = "tpu-observability/workload"
+
+
 @task
-def generate_node_pool_selector(prefix: str) -> dict[str, str]:
-  """Generates a unique node_pool_selector label.
+def generate_node_pool_selector(prefix: str) -> str:
+  """Generates a unique node_pool_selector value.
 
   Args:
     prefix: An identifier for the workload type (e.g., "resize", "rollback").
 
   Returns:
-    A dict with a single entry {key: value}.
+    The selector value string (e.g., "rollback-20260212123456").
   """
-  label_key = "tpu-observability/workload"
   run_id = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-  label_value = f"{prefix}-{run_id}"
-  return {label_key: label_value}
+  return f"{prefix}-{run_id}"
 
 
 class Workload:
@@ -247,7 +248,11 @@ class JobSet:
     params = dataclasses.asdict(self)
     params["command"] = ["bash", "-c"]
     params["args"] = workload_script
-    params["node_pool_selector"] = self.node_pool_selector or ""
+    params["node_pool_selector"] = (
+        f"{_NODE_POOL_SELECTOR_KEY}: {self.node_pool_selector}"
+        if self.node_pool_selector
+        else ""
+    )
 
     return _TEMPLATE.substitute(params)
 
@@ -446,22 +451,6 @@ def _generate_jobset_name(dag_id_prefix: str) -> str:
   return f"{dag_id_prefix}-workload-{timestamp}"
 
 
-def _normalize_field_value(field_name: str, value):
-  """Normalize field values to expected types.
-
-  Args:
-    field_name: The name of the field being processed.
-    value: The value to normalize.
-
-  Returns:
-    The normalized value.
-  """
-  if field_name == "node_pool_selector" and isinstance(value, dict):
-    k, v = list(value.items())[0]
-    return f"{k}: {v}"
-  return value
-
-
 @task
 def build_jobset_from_gcs_yaml(
     gcs_path: str,
@@ -480,7 +469,7 @@ def build_jobset_from_gcs_yaml(
   config = gcs.load_yaml_from_gcs(gcs_path)
   known_fields = {f.name for f in dataclasses.fields(JobSet)}
   merged = {
-      k: _normalize_field_value(k, v)
+      k: v
       for k, v in config.get("jobset_defaults", {}).items()
       if k in known_fields
   }
@@ -489,15 +478,9 @@ def build_jobset_from_gcs_yaml(
 
   for k, v in dag_cfg.items():
     if k in known_fields and v is not None:
-      merged[k] = _normalize_field_value(k, v)
+      merged[k] = v
 
-  merged.update(
-      {
-          k: _normalize_field_value(k, v)
-          for k, v in overrides.items()
-          if k in known_fields
-      }
-  )
+  merged.update({k: v for k, v in overrides.items() if k in known_fields})
   merged["jobset_name"] = _generate_jobset_name(dag_id_prefix)
 
   logging.info(

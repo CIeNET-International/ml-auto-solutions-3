@@ -33,6 +33,9 @@ from xlml.apis import gcs
 from xlml.utils import composer
 
 
+_NODE_POOL_SELECTOR_KEY = "tpu-observability/workload"
+
+
 class Status(enum.Enum):
   """Enum for GKE node pool status."""
 
@@ -104,13 +107,6 @@ def build_node_pool_info_from_gcs_yaml(
 
   known_fields = {f.name for f in dataclasses.fields(Info)}
 
-  def normalize_field_value(field_name: str, value):
-    """Normalize field values to expected types."""
-    if field_name == "node_pool_selector" and isinstance(value, dict):
-      k, v = list(value.items())[0]
-      return f"{k}={v}"
-    return value
-
   def warn_unknown(name: str, d: dict) -> None:
     unknown = [k for k in d.keys() if k not in known_fields]
     if unknown:
@@ -127,21 +123,17 @@ def build_node_pool_info_from_gcs_yaml(
   # 3. 'overrides' dict: Code-level overrides passed into the task.
 
   # Initialize with lowest priority: Environment-level defaults
-  merged = {
-      k: normalize_field_value(k, v)
-      for k, v in env_cfg.items()
-      if k in known_fields
-  }
+  merged = {k: v for k, v in env_cfg.items() if k in known_fields}
 
   # Apply medium priority: DAG-specific config (overwrites env-level values)
   for k, v in dag_cfg.items():
     if k in known_fields and v is not None:
-      merged[k] = normalize_field_value(k, v)
+      merged[k] = v
 
   # Apply highest priority: Manual task overrides (overwrites both above)
   for k, v in overrides.items():
     if k in known_fields and v is not None:
-      merged[k] = normalize_field_value(k, v)
+      merged[k] = v
 
   return Info(**merged)
 
@@ -232,7 +224,7 @@ def create(
     command += f" --reservation-affinity=specific --reservation={node_pool.reservation}"
 
   if node_pool.node_pool_selector:
-    command += f" --node-labels={node_pool.node_pool_selector}"
+    command += f" --node-labels={_NODE_POOL_SELECTOR_KEY}={node_pool.node_pool_selector}"
 
   if ignore_failure:
     command += "2>&1 || true "
