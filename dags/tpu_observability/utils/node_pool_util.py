@@ -104,6 +104,13 @@ def build_node_pool_info_from_gcs_yaml(
 
   known_fields = {f.name for f in dataclasses.fields(Info)}
 
+  def normalize_field_value(field_name: str, value):
+    """Normalize field values to expected types."""
+    if field_name == "node_pool_selector" and isinstance(value, dict):
+      k, v = list(value.items())[0]
+      return f"{k}={v}"
+    return value
+
   def warn_unknown(name: str, d: dict) -> None:
     unknown = [k for k in d.keys() if k not in known_fields]
     if unknown:
@@ -120,21 +127,21 @@ def build_node_pool_info_from_gcs_yaml(
   # 3. 'overrides' dict: Code-level overrides passed into the task.
 
   # Initialize with lowest priority: Environment-level defaults
-  merged = {k: v for k, v in env_cfg.items() if k in known_fields}
+  merged = {
+      k: normalize_field_value(k, v)
+      for k, v in env_cfg.items()
+      if k in known_fields
+  }
 
   # Apply medium priority: DAG-specific config (overwrites env-level values)
   for k, v in dag_cfg.items():
     if k in known_fields and v is not None:
-      merged[k] = v
+      merged[k] = normalize_field_value(k, v)
 
   # Apply highest priority: Manual task overrides (overwrites both above)
   for k, v in overrides.items():
     if k in known_fields and v is not None:
-      merged[k] = v
-
-  if isinstance(merged.get("node_pool_selector"), dict):
-    k, v = list(merged["node_pool_selector"].items())[0]
-    merged["node_pool_selector"] = f"{k}={v}"
+      merged[k] = normalize_field_value(k, v)
 
   return Info(**merged)
 

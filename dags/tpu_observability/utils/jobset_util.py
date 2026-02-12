@@ -446,6 +446,22 @@ def _generate_jobset_name(dag_id_prefix: str) -> str:
   return f"{dag_id_prefix}-workload-{timestamp}"
 
 
+def _normalize_field_value(field_name: str, value):
+  """Normalize field values to expected types.
+
+  Args:
+    field_name: The name of the field being processed.
+    value: The value to normalize.
+
+  Returns:
+    The normalized value.
+  """
+  if field_name == "node_pool_selector" and isinstance(value, dict):
+    k, v = list(value.items())[0]
+    return f"{k}: {v}"
+  return value
+
+
 @task
 def build_jobset_from_gcs_yaml(
     gcs_path: str,
@@ -464,7 +480,7 @@ def build_jobset_from_gcs_yaml(
   config = gcs.load_yaml_from_gcs(gcs_path)
   known_fields = {f.name for f in dataclasses.fields(JobSet)}
   merged = {
-      k: v
+      k: _normalize_field_value(k, v)
       for k, v in config.get("jobset_defaults", {}).items()
       if k in known_fields
   }
@@ -473,14 +489,14 @@ def build_jobset_from_gcs_yaml(
 
   for k, v in dag_cfg.items():
     if k in known_fields and v is not None:
-      merged[k] = v
+      merged[k] = _normalize_field_value(k, v)
 
-  merged.update({k: v for k, v in overrides.items() if k in known_fields})
+  merged.update({
+      k: _normalize_field_value(k, v)
+      for k, v in overrides.items()
+      if k in known_fields
+  })
   merged["jobset_name"] = _generate_jobset_name(dag_id_prefix)
-
-  if isinstance(merged.get("node_pool_selector"), dict):
-    k, v = list(merged["node_pool_selector"].items())[0]
-    merged["node_pool_selector"] = f"{k}: {v}"
 
   logging.info(
       f"Final JobSet '{merged['jobset_name']}' created for DAG '{dag_name}'"
@@ -490,9 +506,7 @@ def build_jobset_from_gcs_yaml(
 
 @task
 def run_workload(
-    node_pool: node_pool_info,
-    jobset_config: JobSet,
-    workload_type: Workload,
+    node_pool: node_pool_info, jobset_config: JobSet, workload_type: Workload
 ) -> TimeUtil:
   """
   Applies the specified YAML file to the GKE cluster.
@@ -507,9 +521,7 @@ def run_workload(
   with tempfile.NamedTemporaryFile() as temp_config_file:
     env = os.environ.copy()
     env["KUBECONFIG"] = temp_config_file.name
-    yaml_config = jobset_config.generate_yaml(
-        workload_script=workload_type,
-    )
+    yaml_config = jobset_config.generate_yaml(workload_script=workload_type)
 
     cmd = " && ".join([
         Command.get_credentials_command(node_pool),
