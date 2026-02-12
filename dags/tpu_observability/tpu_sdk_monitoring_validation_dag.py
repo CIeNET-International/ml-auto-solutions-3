@@ -163,6 +163,14 @@ with models.DAG(
         jobset_config=jobset_config,
     )
 
+    wait_for_workload_started = jobset.wait_for_jobset_started.override(
+        task_id="wait_for_workload_started"
+    )(
+        cluster_info,
+        pod_name_list=ensure_all_pods_running,
+        job_apply_time=start_workload,
+    )
+
     sdk_validation = (
         validate_monitoring_sdk.override(task_id="sdk_validation")
         .partial(info=cluster_info)
@@ -190,6 +198,7 @@ with models.DAG(
         create_node_pool,
         start_workload,
         ensure_all_pods_running,
+        wait_for_workload_started,
         sdk_validation,
         cleanup_workload,
         cleanup_node_pool,

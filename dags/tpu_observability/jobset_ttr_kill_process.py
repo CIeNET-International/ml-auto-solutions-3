@@ -159,6 +159,14 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           jobset_config=jobset_config,
       )
 
+      wait_for_workload_started = jobset.wait_for_jobset_started.override(
+          task_id="wait_for_workload_started"
+      )(
+          cluster_info,
+          pod_name_list=running_pods,
+          job_apply_time=start_workload,
+      )
+
       kill_tasks = (
           kill_tpu_pod_workload.override(task_id="kill_tpu_pod_workload")
           .partial(info=cluster_info)
@@ -193,6 +201,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           create_node_pool,
           start_workload,
           running_pods,
+          wait_for_workload_started,
           kill_tasks,
           wait_for_metric_upload,
           cleanup_workload,

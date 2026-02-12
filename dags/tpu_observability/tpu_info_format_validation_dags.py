@@ -407,6 +407,14 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           jobset_config=jobset_config,
       )
 
+      wait_for_workload_started = jobset.wait_for_jobset_started.override(
+          task_id="wait_for_workload_started"
+      )(
+          cluster_info,
+          pod_name_list=ensure_all_pods_running,
+          job_apply_time=start_workload,
+      )
+
       outputs_of_tpu_info = (
           get_tpu_info_from_pod.override(task_id="get_tpu_info")
           .partial(info=cluster_info)
@@ -509,6 +517,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           create_node_pool,
           start_workload,
           ensure_all_pods_running,
+          wait_for_workload_started,
           outputs_of_tpu_info,
           output_of_tpu_info,
           verification_group,
