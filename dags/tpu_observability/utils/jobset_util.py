@@ -36,8 +36,6 @@ from dags.tpu_observability.utils.gcp_util import query_time_series
 from dags.tpu_observability.utils.node_pool_util import Info as node_pool_info
 from dags.tpu_observability.utils.node_pool_util import NODE_POOL_SELECTOR_KEY
 from dags.tpu_observability.utils.time_util import TimeUtil
-from google.cloud.monitoring_v3 import types
-import kubernetes
 from xlml.apis import gcs
 from xlml.utils import gke
 
