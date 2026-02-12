@@ -33,7 +33,8 @@ from xlml.apis import gcs
 from xlml.utils import composer
 
 
-_NODE_POOL_SELECTOR_KEY = "tpu-observability/workload"
+NODE_POOL_SELECTOR_KEY = "tpu-observability/workload"
+"""The label key used for node pool selector to bind workloads to specific node pools."""
 
 
 class Status(enum.Enum):
@@ -224,7 +225,7 @@ def create(
     command += f" --reservation-affinity=specific --reservation={node_pool.reservation}"
 
   if node_pool.node_pool_selector:
-    command += f" --node-labels={_NODE_POOL_SELECTOR_KEY}={node_pool.node_pool_selector}"
+    command += f" --node-labels={NODE_POOL_SELECTOR_KEY}={node_pool.node_pool_selector}"
 
   if ignore_failure:
     command += "2>&1 || true "

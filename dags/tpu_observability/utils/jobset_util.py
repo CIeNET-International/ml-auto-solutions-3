@@ -34,14 +34,12 @@ import kubernetes
 from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.tpu_observability.utils.gcp_util import query_time_series
 from dags.tpu_observability.utils.node_pool_util import Info as node_pool_info
+from dags.tpu_observability.utils.node_pool_util import NODE_POOL_SELECTOR_KEY
 from dags.tpu_observability.utils.time_util import TimeUtil
 from google.cloud.monitoring_v3 import types
 import kubernetes
 from xlml.apis import gcs
 from xlml.utils import gke
-
-
-_NODE_POOL_SELECTOR_KEY = "tpu-observability/workload"
 
 
 @task
@@ -146,7 +144,7 @@ class Workload:
 # pylint: disable=line-too-long
 _TEMPLATE = string.Template(
     textwrap.dedent(
-        """
+        f"""
         apiVersion: jobset.x-k8s.io/v1alpha2
         kind: JobSet
         metadata:
@@ -170,7 +168,7 @@ _TEMPLATE = string.Template(
                     nodeSelector:
                       cloud.google.com/gke-tpu-accelerator: $tpu_accelerator_type
                       cloud.google.com/gke-tpu-topology: $tpu_topology
-                      $node_pool_selector
+                      {NODE_POOL_SELECTOR_KEY}: $node_pool_selector
                     containers:
                     - name: $container_name
                       image: $image
@@ -248,11 +246,7 @@ class JobSet:
     params = dataclasses.asdict(self)
     params["command"] = ["bash", "-c"]
     params["args"] = workload_script
-    params["node_pool_selector"] = (
-        f"{_NODE_POOL_SELECTOR_KEY}: {self.node_pool_selector}"
-        if self.node_pool_selector
-        else ""
-    )
+    params["node_pool_selector"] = self.node_pool_selector or ""
 
     return _TEMPLATE.substitute(params)
 
