@@ -392,33 +392,33 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             node_pool=cluster_info_2,
         )
 
-      start_workload = jobset.run_workload.override(
-          owner=test_owner.YUNA_T, task_id="start_workload"
+      apply_time = jobset.run_workload.override(
+          owner=test_owner.YUNA_T, task_id="run_workload"
       )(
           node_pool=cluster_info,
           jobset_config=jobset_config,
           workload_type=Workload.JAX_TPU_BENCHMARK,
       )
 
-      ensure_all_pods_running = jobset.wait_for_all_pods_running.override(
+      running_pods = jobset.wait_for_all_pods_running.override(
           task_id="ensure_all_pods_running"
       )(
           node_pool=cluster_info,
           jobset_config=jobset_config,
       )
 
-      wait_for_workload_started = jobset.wait_for_jobset_started.override(
-          task_id="wait_for_workload_started"
+      wait_for_job_start = jobset.wait_for_jobset_started.override(
+          task_id="wait_for_job_start"
       )(
           cluster_info,
-          pod_name_list=ensure_all_pods_running,
-          job_apply_time=start_workload,
+          pod_name_list=running_pods,
+          job_apply_time=apply_time,
       )
 
       outputs_of_tpu_info = (
           get_tpu_info_from_pod.override(task_id="get_tpu_info")
           .partial(info=cluster_info)
-          .expand(pod_name=ensure_all_pods_running)
+          .expand(pod_name=running_pods)
       )
 
       output_of_tpu_info = (
@@ -466,13 +466,13 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             .expand(tpu_info_output=output_of_tpu_info)
         )
 
-      cleanup_workload = jobset.end_workload.override(
-          task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
+      clean_up_workload = jobset.end_workload.override(
+          task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
       )(
           node_pool=cluster_info,
           jobset_config=jobset_config,
       ).as_teardown(
-          setups=start_workload
+          setups=apply_time
       )
 
       # Keyword arguments are generated dynamically at runtime (pylint does not
@@ -515,12 +515,12 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           cluster_info,
           cluster_info_2,
           create_node_pool,
-          start_workload,
-          ensure_all_pods_running,
-          wait_for_workload_started,
+          apply_time,
+          running_pods,
+          wait_for_job_start,
           outputs_of_tpu_info,
           output_of_tpu_info,
           verification_group,
-          cleanup_workload,
+          clean_up_workload,
           cleanup_node_pool,
       )

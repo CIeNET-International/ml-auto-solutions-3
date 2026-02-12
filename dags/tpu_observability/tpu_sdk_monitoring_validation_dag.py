@@ -150,31 +150,31 @@ with models.DAG(
         node_pool=cluster_info,
     )
 
-    start_workload = jobset.run_workload.override(task_id="start_workload")(
+    apply_time = jobset.run_workload.override(task_id="run_workload")(
         node_pool=cluster_info,
         jobset_config=jobset_config,
         workload_type=Workload.JAX_TPU_BENCHMARK,
     )
 
-    ensure_all_pods_running = jobset.wait_for_all_pods_running.override(
+    running_pods = jobset.wait_for_all_pods_running.override(
         task_id="ensure_all_pods_running"
     )(
         node_pool=cluster_info,
         jobset_config=jobset_config,
     )
 
-    wait_for_workload_started = jobset.wait_for_jobset_started.override(
-        task_id="wait_for_workload_started"
+    wait_for_jobset_started = jobset.wait_for_jobset_started.override(
+        task_id="wait_for_jobset_started"
     )(
         cluster_info,
-        pod_name_list=ensure_all_pods_running,
-        job_apply_time=start_workload,
+        pod_name_list=running_pods,
+        job_apply_time=apply_time,
     )
 
     sdk_validation = (
         validate_monitoring_sdk.override(task_id="sdk_validation")
         .partial(info=cluster_info)
-        .expand(pod_name=ensure_all_pods_running)
+        .expand(pod_name=running_pods)
     )
 
     cleanup_workload = jobset.end_workload.override(
@@ -183,7 +183,7 @@ with models.DAG(
         node_pool=cluster_info,
         jobset_config=jobset_config,
     ).as_teardown(
-        setups=start_workload
+        setups=apply_time
     )
 
     cleanup_node_pool = node_pool.delete.override(
@@ -196,9 +196,9 @@ with models.DAG(
         jobset_config,
         cluster_info,
         create_node_pool,
-        start_workload,
-        ensure_all_pods_running,
-        wait_for_workload_started,
+        apply_time,
+        running_pods,
+        wait_for_jobset_started,
         sdk_validation,
         cleanup_workload,
         cleanup_node_pool,
