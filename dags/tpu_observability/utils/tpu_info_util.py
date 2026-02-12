@@ -15,6 +15,7 @@ from dags.tpu_observability.utils import subprocess_util as subprocess
 class TpuInfoCmd(Enum):
   """Defines the available tpu-info CLI commands."""
 
+  TPU_INFO = "tpu-info"
   HELP = "tpu-info -help"
   VERSION = "tpu-info --version"
   PROCESS = "tpu-info --process"
@@ -36,7 +37,8 @@ class Table:
     """Parses the raw_body string to populate the structured body attribute."""
 
     class TableLineIndex(IntEnum):
-      """Below is an example of the text returned by tpu-info, formatted as a table.
+      """Below is an example of the text returned by tpu-info,
+      formatted as a table.
 
       TPU Chips
       ┏━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━┓
@@ -109,21 +111,15 @@ def parse_tpu_info_output(output: str) -> list[Table]:
   return parsed_tables
 
 
-@task
-def get_tpu_info_from_pod(info: node_pool.Info, pod_name: str) -> str:
+def get_tpu_info_from_pod(
+    info: node_pool.Info, pod_name: str, cmd_str: str
+) -> str:
   """
-  Executes the `tpu-info` command in a specified pod and returns its output.
+  Executes a command (default: tpu-info) in a specified pod
+  and returns its output.
 
-  This task uses kubectl to run the 'tpu-info' command inside the given pod
-  in the 'default' namespace. The output of the command is captured and
-  returned.
-
-  Args:
-    kubeconfig: The path to the kubeconfig file.
-    pod_name: The name of the pod to execute the command in.
-
-  Returns:
-    The standard output from the 'tpu-info' command.
+  Consolidated version that handles both standard tpu-info calls and
+  specific CLI flag validation.
   """
   with tempfile.NamedTemporaryFile() as temp_config_file:
     env = os.environ.copy()
@@ -131,10 +127,18 @@ def get_tpu_info_from_pod(info: node_pool.Info, pod_name: str) -> str:
 
     cmd = " && ".join([
         jobset.Command.get_credentials_command(info),
-        f"kubectl exec {pod_name} -n default -- tpu-info",
+        f"kubectl exec {pod_name} -n default -- {cmd_str}",
     ])
 
     return subprocess.run_exec(cmd, env=env)
+
+
+@task
+def get_tpu_info_from_pod_task(
+    info: node_pool.Info, pod_name: str, cmd_str: str
+) -> str:
+  """Airflow task wrapper for get_tpu_info_from_pod."""
+  return get_tpu_info_from_pod(info, pod_name, cmd_str)
 
 
 if __name__ == "__main__":
