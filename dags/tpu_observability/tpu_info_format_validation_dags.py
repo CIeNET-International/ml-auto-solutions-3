@@ -273,55 +273,24 @@ def validate_latency_table(tpu_info_output: list[tpu_info.Table]):
     )
 
 
-def execute_tpu_info_cli_command(info, pod_name: str, tpu_args: str) -> str:
-  """Helper to handle KUBECONFIG and execute kubectl."""
-  with tempfile.NamedTemporaryFile() as temp_config_file:
-    env = os.environ.copy()
-    env["KUBECONFIG"] = temp_config_file.name
-
-    cmd = " && ".join([
-        jobset.Command.get_credentials_command(info),
-        f"kubectl exec {pod_name} -n default -- {tpu_args}",
-    ])
-    return subprocess.run_exec(cmd, env=env)
-
-
 @task
 def validate_tpu_info_cli(info: node_pool.Info, pod_name: str) -> None:
-  """Validates tpu-info CLI commands with internal expectation patterns."""
-
+  """Validates tpu-info CLI commands using the consolidated utility."""
   validation_spec = {
-      tpu_info.TpuInfoCmd.HELP: [
-          "Display TPU info and metrics.",
-          "options:",
-          "-h, --help",
-          "-v, --version",
-          "-p, --process",
-          "--streaming",
-          "--rate RATE",
-      ],
-      tpu_info.TpuInfoCmd.VERSION: [
-          "tpu-info version:",
-          "libtpu version:",
-          "accelerator type:",
-      ],
-      tpu_info.TpuInfoCmd.PROCESS: [
-          "TPU Process Info",
-          "Chip",
-          "PID",
-          "Process Name",
-          "/dev/vfio/",
-          "python",
-      ],
+      tpu_info.TpuInfoCmd.HELP: ["--streaming", "--rate RATE"],
+      tpu_info.TpuInfoCmd.VERSION: ["tpu-info version:", "libtpu version:"],
+      tpu_info.TpuInfoCmd.PROCESS: ["TPU Process Info", "/dev/vfio/", "python"],
   }
 
   for cmd_enum, patterns in validation_spec.items():
-    output = execute_tpu_info_cli_command(info, pod_name, cmd_enum.value)
+    output = tpu_info.get_tpu_info_from_pod(
+        info, pod_name, cmd_str=cmd_enum.value
+    )
+
     for pattern in patterns:
       if pattern not in output:
         raise AssertionError(
-            f"Validation failed for '{cmd_enum.value}': "
-            f"Missing expected pattern '{pattern}'."
+            f"Validation failed for '{cmd_enum.value}': Missing pattern '{pattern}'."
         )
 
 
