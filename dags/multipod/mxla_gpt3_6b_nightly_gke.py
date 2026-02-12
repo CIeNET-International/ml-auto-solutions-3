@@ -123,7 +123,7 @@ with models.DAG(
       >> gpt3_6b_nightly_8slice_v4_8
   )
 
-  (
+  _ = (
       gpt3_6b_nightly_1slice_v5p_8
       >> gpt3_6b_nightly_2slice_v5p_8
       >> gpt3_6b_nightly_4slice_v5p_8
