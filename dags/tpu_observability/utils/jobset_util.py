@@ -24,7 +24,7 @@ import random
 import string
 import tempfile
 import textwrap
-from typing import Final, Tuple
+from typing import Final
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
@@ -230,10 +230,7 @@ class JobSet:
   tpu_cores_per_pod: int
   node_pool_selector: str
 
-  def generate_yaml(
-      self,
-      workload_script: Workload,
-  ) -> str:
+  def generate_yaml(self, workload_script: Workload) -> str:
     """Generates the final JobSet YAML content.
 
     Args:

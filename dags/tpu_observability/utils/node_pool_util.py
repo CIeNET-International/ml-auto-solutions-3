@@ -34,7 +34,13 @@ from xlml.utils import composer
 
 
 NODE_POOL_SELECTOR_KEY = "tpu-observability/workload"
-"""The label key used for node pool selector to bind workloads to specific node pools."""
+"""The label key for binding JobSet workloads to specific GKE node pools.
+
+This key is used as a Kubernetes node label to ensure pods are scheduled
+on the correct node pool. It is applied to both:
+- GKE node pools via `--node-labels` during creation
+- JobSet YAML via `nodeSelector` to target the labeled nodes
+"""
 
 
 class Status(enum.Enum):
