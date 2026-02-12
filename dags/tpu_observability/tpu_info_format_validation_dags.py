@@ -13,13 +13,18 @@
 # limitations under the License.
 
 """
-tpu_info_format_validation_dag:
-A DAG orchestrates the process of verifying TensorCore utilization metrics.
-This is done by comparing data from Cloud Logging and Cloud Monitoring.
+tpu_info_validation_dag:
+A comprehensive DAG that orchestrates the end-to-end validation of the
+`tpu-info` observability tool. It performs two primary types of
+verification:
 
-tpu_info_cli_validation_dags:
-A DAG to validate the `tpu-info` CLI tool, ensuring help documentation,
-version metadata, and process monitoring are functional inside TPU worker pods.
+1. Format Validation: Parses the tool's raw output into structured tables
+   (TPU Chips, Runtime Utilization, TensorCore Utilization, and Latency)
+   and validates row counts and data integrity using regex.
+
+2. CLI Validation: Verifies command-line options (`-help`, `--version`,
+   `--process`) to ensure metadata, help documentation, and
+   process-to-chip mapping are functional inside live TPU worker pods.
 """
 
 import datetime
