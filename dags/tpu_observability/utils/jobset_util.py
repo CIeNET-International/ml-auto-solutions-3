@@ -42,28 +42,19 @@ from xlml.utils import gke
 
 
 @task
-def generate_node_pool_selector(prefix: str) -> dict:
-  """Generates a unique node_pool_selector for both gcloud and JobSet YAML.
-
-  This task creates a consistent label that can be used to:
-  1. Tag node pools via `gcloud --node-labels` (key=value format)
-  2. Select nodes in JobSet YAML nodeSelector (key: value format)
+def generate_node_pool_selector(prefix: str) -> dict[str, str]:
+  """Generates a unique node_pool_selector label.
 
   Args:
     prefix: An identifier for the workload type (e.g., "resize", "rollback").
 
   Returns:
-    A dict with keys:
-      - "gcloud": Format "key=value" for gcloud --node-labels flag
-      - "yaml": Format "key: value" for JobSet nodeSelector YAML
+    A dict with a single entry {key: value}.
   """
-  node_pool_selector_label_key = "tpu-observability/workload"
+  label_key = "tpu-observability/workload"
   run_id = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
   label_value = f"{prefix}-{run_id}"
-  return {
-      "gcloud": f"{node_pool_selector_label_key}={label_value}",
-      "yaml": f"{node_pool_selector_label_key}: {label_value}",
-  }
+  return {label_key: label_value}
 
 
 class Workload:
@@ -486,6 +477,10 @@ def build_jobset_from_gcs_yaml(
 
   merged.update({k: v for k, v in overrides.items() if k in known_fields})
   merged["jobset_name"] = _generate_jobset_name(dag_id_prefix)
+
+  if isinstance(merged.get("node_pool_selector"), dict):
+    k, v = list(merged["node_pool_selector"].items())[0]
+    merged["node_pool_selector"] = f"{k}: {v}"
 
   logging.info(
       f"Final JobSet '{merged['jobset_name']}' created for DAG '{dag_name}'"

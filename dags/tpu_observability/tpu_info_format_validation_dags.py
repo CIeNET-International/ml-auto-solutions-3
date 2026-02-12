@@ -358,7 +358,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       jobset_config = jobset.build_jobset_from_gcs_yaml(
           gcs_path=GCS_JOBSET_CONFIG_PATH,
           dag_name="tpu_info_format_validation_dag",
-          node_pool_selector=selector["yaml"],
+          node_pool_selector=selector,
       )
 
       cluster_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
@@ -369,7 +369,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           is_prod=composer_env.is_prod_env(),
           machine_type=config.machine_version.value,
           tpu_topology=config.tpu_topology,
-          node_pool_selector=selector["gcloud"],
+          node_pool_selector=selector,
       )
 
       cluster_info_2 = node_pool.copy_node_pool_info_with_override.override(

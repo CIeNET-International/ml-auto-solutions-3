@@ -132,6 +132,10 @@ def build_node_pool_info_from_gcs_yaml(
     if k in known_fields and v is not None:
       merged[k] = v
 
+  if isinstance(merged.get("node_pool_selector"), dict):
+    k, v = list(merged["node_pool_selector"].items())[0]
+    merged["node_pool_selector"] = f"{k}={v}"
+
   return Info(**merged)
 
 
