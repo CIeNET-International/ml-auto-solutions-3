@@ -491,11 +491,13 @@ def build_jobset_from_gcs_yaml(
     if k in known_fields and v is not None:
       merged[k] = _normalize_field_value(k, v)
 
-  merged.update({
-      k: _normalize_field_value(k, v)
-      for k, v in overrides.items()
-      if k in known_fields
-  })
+  merged.update(
+      {
+          k: _normalize_field_value(k, v)
+          for k, v in overrides.items()
+          if k in known_fields
+      }
+  )
   merged["jobset_name"] = _generate_jobset_name(dag_id_prefix)
 
   logging.info(
