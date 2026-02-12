@@ -116,7 +116,7 @@ with models.DAG(
       test_owner=test_owner.TONY_C,
   ).run_with_quarantine(quarantine_task_group)
 
-  (
+  _ = (
       gpt3_6b_nightly_1slice_v4_8
       >> gpt3_6b_nightly_2slice_v4_8
       >> gpt3_6b_nightly_4slice_v4_8
