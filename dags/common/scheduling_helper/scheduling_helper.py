@@ -51,6 +51,7 @@ REGISTERED_DAGS: dict[str, DagIdToTimeout] = {
         "tpu_info_format_validation_dag": dt.timedelta(minutes=30),
         "tpu_sdk_monitoring_validation": dt.timedelta(minutes=30),
         "jobset_ttr_kill_process": dt.timedelta(minutes=90),
+        "jobset_uptime_validation": dt.timedelta(minutes=90),
     },
 }
 
