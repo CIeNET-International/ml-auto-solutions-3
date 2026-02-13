@@ -274,24 +274,24 @@ def validate_latency_table(tpu_info_output: list[tpu_info.Table]):
 
 
 @task
-def validate_tpu_info_cli(info: node_pool.Info, pod_name: str) -> None:
-  """Validates tpu-info CLI commands using the consolidated utility."""
-  validation_spec = {
-      tpu_info.TpuInfoCmd.HELP: ["--streaming", "--rate RATE"],
-      tpu_info.TpuInfoCmd.VERSION: ["tpu-info version:", "libtpu version:"],
-      tpu_info.TpuInfoCmd.PROCESS: ["TPU Process Info", "/dev/vfio/", "python"],
+def validate_tpu_info_patterns(output: str, cmd_name: str):
+  """Matches output against patterns defined in a local spec."""
+  patterns_map = {
+      tpu_info.TpuInfoCmd.HELP.value: ["--streaming", "--rate RATE"],
+      tpu_info.TpuInfoCmd.VERSION.value: [
+          "tpu-info version:",
+          "libtpu version:",
+      ],
+      tpu_info.TpuInfoCmd.PROCESS.value: [
+          "TPU Process Info",
+          "/dev/vfio/",
+          "python",
+      ],
   }
-
-  for cmd_enum, patterns in validation_spec.items():
-    output = tpu_info.get_tpu_info_from_pod(
-        info, pod_name, cmd_str=cmd_enum.value
-    )
-
-    for pattern in patterns:
-      if pattern not in output:
-        raise AssertionError(
-            f"Validation failed for '{cmd_enum.value}': Missing pattern '{pattern}'."
-        )
+  patterns = patterns_map.get(cmd_name, [])
+  for pattern in patterns:
+    if pattern not in output:
+      raise AssertionError(f"Cmd '{cmd_name}' missing pattern: {pattern}")
 
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
@@ -428,7 +428,20 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
               task_id="get_each_metric_table"
           )
           .partial()
-          .expand(output=outputs_of_tpu_info)
+          .expand(output=raw_metric_data.map(lambda x: x["output"]))
+      )
+
+      cli_raw_results = (
+          tpu_info.get_tpu_info_from_pod.override(task_id="get_cli_output")
+          .partial(info=cluster_info)
+          .expand(
+              pod_name=pod_names,
+              cmd_str=[
+                  tpu_info.TpuInfoCmd.HELP.value,
+                  tpu_info.TpuInfoCmd.VERSION.value,
+                  tpu_info.TpuInfoCmd.PROCESS.value,
+              ],
+          )
       )
 
       # Keyword arguments are generated dynamically at runtime (pylint does not
@@ -468,11 +481,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             .expand(tpu_info_output=output_of_tpu_info)
         )
 
-        cli_validation = (
-            validate_tpu_info_cli.override(task_id="validate_tpu_info_cli")
-            .partial(info=cluster_info)
-            .expand(pod_name=pod_names)
-        )
+        cli_validation = validate_tpu_info_patterns.override(
+            task_id="validate_cli_output"
+        ).expand_kwargs(cli_raw_results)
 
       clean_up_workload = jobset.end_workload.override(
           task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
@@ -528,8 +539,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           apply_time,
           running_pods,
           wait_for_job_start,
-          outputs_of_tpu_info,
+          raw_metric_data,
           output_of_tpu_info,
+          cli_raw_results,
           verification_group,
           clean_up_workload,
           cleanup_node_pool,
