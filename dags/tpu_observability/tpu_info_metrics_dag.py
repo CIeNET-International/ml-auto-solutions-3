@@ -46,9 +46,12 @@ from dags.tpu_observability.utils import tpu_info_util as tpu_info
 from dags.tpu_observability.utils.node_pool_util import Info
 from dags.tpu_observability.utils.time_util import TimeUtil
 from dags.tpu_observability.utils.jobset_util import Workload
+from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper, get_dag_timeout
 
 
-SCHEDULE = "0 10 * * *" if composer_env.is_prod_env() else None
+DAG_ID = "tpu_info_metrics_verification"
+DAGRUN_TIMEOUT = get_dag_timeout(DAG_ID)
+SCHEDULE = SchedulingHelper.arrange_schedule_time(DAG_ID)
 
 
 def compare_metric_values(
@@ -231,15 +234,47 @@ def summarize_results(
 # Keyword arguments are generated dynamically at runtime (pylint does not
 # know this signature).
 with models.DAG(
-    dag_id="tpu_info_metrics_verification",
+    dag_id=DAG_ID,
     start_date=datetime.datetime(2025, 8, 15),
     default_args={"retries": 0},
     schedule=SCHEDULE,
     catchup=False,
-    tags=["gke", "tpu-observability", "tpu-info", "unified"],
+    tags=["gke", "tpu-observability", "tpu-info", "TPU", "v6e-16"],
     description=(
-        "Verifies multiple TPU metrics in a single DAG using TaskGroups."
+        "Validates TPU metric consistency between tpu-info CLI and Cloud "
+        "Monitoring API across dynamically provisioned GKE node pools."
     ),
+    doc_md="""
+      # Data Validation DAG
+      # This DAG verifies the data value of the tables in the tpu-info output.
+
+      ### Description
+      This DAG automates the cross-validation of TPU performance data. It
+      ensures that the metrics reported directly from the hardware are
+      consistent with the data ingested into the cloud monitoring pipeline.
+      The verification suite includes metrics such as **TPU Utilization,
+      TensorCore Activity, Memory Usage, and Latency**, and is designed to
+      automatically scale as new metric strategies are added to the validation
+      library.
+
+      ### Prerequisites
+      This test requires an existing GKE cluster.
+      A pre-built Docker image containing the necessary jax, libtpu, and
+      tpu-info packages must also be available in a repository accessible
+      by the GKE cluster.
+
+      ### Procedures
+      The DAG begins by creating temporary GKE TPU node pools for the test.
+      Once the node pools are running, it schedules a Kubernetes JobSet and
+      waits for the pods to become active. It then executes the tpu-info
+      command within these pods to capture the raw text output. This output is
+      parsed into structured tables, performs a point-by-point comparison
+      between the two data sources. A task is marked as successful only if the
+      values fall within a predefined **tolerance percentage**. the DAG cleans
+      up all created resources, including the JobSet and the temporary node
+      pools.
+    """
+
 ) as dag:
   for machine in MachineConfigMap:
     config = machine.value
