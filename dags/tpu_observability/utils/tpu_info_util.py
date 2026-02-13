@@ -1,11 +1,25 @@
 """Utility for parsing the output of the 'tpu-info' command."""
 
-from dataclasses import dataclass
-from enum import auto
-from enum import IntEnum
+import os
 import re
+import tempfile
+from dataclasses import dataclass
+from enum import auto, Enum, IntEnum
 
 from airflow.decorators import task
+from dags.tpu_observability.utils import jobset_util as jobset
+from dags.tpu_observability.utils import node_pool_util as node_pool
+from dags.tpu_observability.utils import subprocess_util as subprocess
+
+
+class TpuInfoCmd(Enum):
+  """Defines the available tpu-info CLI commands."""
+
+  TPU_INFO = "tpu-info"
+  HELP = "tpu-info -help"
+  VERSION = "tpu-info --version"
+  PROCESS = "tpu-info --process"
+
 
 # A type alias for a parsed row, mapping column headers to their values.
 _TableRow = dict[str, str]
@@ -23,7 +37,8 @@ class Table:
     """Parses the raw_body string to populate the structured body attribute."""
 
     class TableLineIndex(IntEnum):
-      """Below is an example of the text returned by tpu-info, formatted as a table.
+      """Below is an example of the text returned by tpu-info,
+      formatted as a table.
 
       TPU Chips
       ┏━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━┓
@@ -94,6 +109,23 @@ def parse_tpu_info_output(output: str) -> list[Table]:
     parsed_tables.append(table)
 
   return parsed_tables
+
+
+@task
+def get_tpu_info_from_pod(
+    info: node_pool.Info, pod_name: str, cmd_str: str
+) -> dict:
+  """Executes command and returns a dict containing metadata."""
+  with tempfile.NamedTemporaryFile() as temp_config_file:
+    env = os.environ.copy()
+    env["KUBECONFIG"] = temp_config_file.name
+    cmd = " && ".join([
+        jobset.Command.get_credentials_command(info),
+        f"kubectl exec {pod_name} -n default -- {cmd_str}",
+    ])
+    output = subprocess.run_exec(cmd, env=env)
+
+    return {"output": output, "cmd_name": cmd_str}
 
 
 if __name__ == "__main__":
