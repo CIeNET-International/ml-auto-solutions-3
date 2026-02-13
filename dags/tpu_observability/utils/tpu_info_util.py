@@ -111,34 +111,21 @@ def parse_tpu_info_output(output: str) -> list[Table]:
   return parsed_tables
 
 
+@task
 def get_tpu_info_from_pod(
     info: node_pool.Info, pod_name: str, cmd_str: str
-) -> str:
-  """
-  Executes a command (default: tpu-info) in a specified pod
-  and returns its output.
-
-  Consolidated version that handles both standard tpu-info calls and
-  specific CLI flag validation.
-  """
+) -> dict:
+  """Executes command and returns a dict containing metadata."""
   with tempfile.NamedTemporaryFile() as temp_config_file:
     env = os.environ.copy()
     env["KUBECONFIG"] = temp_config_file.name
-
     cmd = " && ".join([
         jobset.Command.get_credentials_command(info),
         f"kubectl exec {pod_name} -n default -- {cmd_str}",
     ])
+    output = subprocess.run_exec(cmd, env=env)
 
-    return subprocess.run_exec(cmd, env=env)
-
-
-@task
-def get_tpu_info_from_pod_task(
-    info: node_pool.Info, pod_name: str, cmd_str: str
-) -> str:
-  """Airflow task wrapper for get_tpu_info_from_pod."""
-  return get_tpu_info_from_pod(info, pod_name, cmd_str)
+    return {"output": output, "cmd_name": cmd_str}
 
 
 if __name__ == "__main__":
