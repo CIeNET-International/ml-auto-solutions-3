@@ -875,6 +875,8 @@ def ensure_no_jobset_uptime_data(
     logging.info("Stability period passed with no data detected.")
     return True
   return False
+
+
 @task
 def suspended_jobset(node_pool: node_pool_info, jobset_config: JobSet):
   """
