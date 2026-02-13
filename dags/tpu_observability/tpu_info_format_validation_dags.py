@@ -417,9 +417,11 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           job_apply_time=apply_time,
       )
 
-      outputs_of_tpu_info = (
+      raw_metric_data = (
           tpu_info.get_tpu_info_from_pod.override(task_id="get_tpu_info")
-          .partial(info=cluster_info)
+          .partial(
+              info=cluster_info, cmd_str=tpu_info.TpuInfoCmd.TPU_INFO.value
+          )
           .expand(pod_name=running_pods)
       )
 
@@ -435,7 +437,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           tpu_info.get_tpu_info_from_pod.override(task_id="get_cli_output")
           .partial(info=cluster_info)
           .expand(
-              pod_name=pod_names,
+              pod_name=running_pods,
               cmd_str=[
                   tpu_info.TpuInfoCmd.HELP.value,
                   tpu_info.TpuInfoCmd.VERSION.value,
