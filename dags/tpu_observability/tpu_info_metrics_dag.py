@@ -273,8 +273,7 @@ with models.DAG(
       values fall within a predefined **tolerance percentage**. the DAG cleans
       up all created resources, including the JobSet and the temporary node
       pools.
-    """
-
+    """,
 ) as dag:
   for machine in MachineConfigMap:
     config = machine.value
