@@ -31,6 +31,7 @@ from dags.common.quarantined_tests import QuarantineTests
 from xlml.utils import gpu, metric, name_format, ssh, tpu, xpk, axlearn, gke
 from xlml.apis import gcp_config, metric_config, test_config, gcs
 
+GATEWAY_KUBECONFIG = "/tmp/gateway_kubeconfig"
 
 class BaseTask(abc.ABC):
   """This is a class to set up base tasks."""
@@ -339,6 +340,7 @@ class XpkTask(BaseTask):
       mtc_enabled: bool = False,
       xpk_branch: str = xpk.MAIN_BRANCH,
       max_restart: int = 0,
+      kubeconfig_path: Optional[str] = GATEWAY_KUBECONFIG,  # ADDED
   ) -> DAGNode:
     """Run a test job within a docker image.
 
@@ -360,6 +362,7 @@ class XpkTask(BaseTask):
           mtc_enabled,
           xpk_branch,
           max_restart,
+          kubeconfig_path=kubeconfig_path,  # PASS
       )
       if not skip_post_process:
         _ = run_model >> self.post_process(gcs_path)
@@ -380,6 +383,7 @@ class XpkTask(BaseTask):
       last_node: bool = False,
       max_restart: int = 0,
       check_file_exists: bool = False,
+      kubeconfig_path: Optional[str] = GATEWAY_KUBECONFIG, # ADDED
   ) -> DAGNode:
     """Run a test job within a docker image.
 
@@ -419,6 +423,7 @@ class XpkTask(BaseTask):
           last_node=last_node,
           max_restart=max_restart,
           check_file_exists=check_file_exists,
+          kubeconfig_path=kubeconfig_path, # PASS
       )
       if not skip_post_process:
         _ = run_model >> self.post_process(gcs_path)
@@ -437,6 +442,7 @@ class XpkTask(BaseTask):
       last_node: bool = False,
       max_restart: int = 0,
       check_file_exists: bool = False,
+      kubeconfig_path: Optional[str] = GATEWAY_KUBECONFIG, # ADDED
   ) -> DAGNode:
     """Run the TPU/GPU test in `task_test_config` using xpk.
 
@@ -483,6 +489,7 @@ class XpkTask(BaseTask):
               xpk_branch,
               max_restart,
               check_file_exists,
+              kubeconfig_path=kubeconfig_path, # PASS
           )
       )
 
@@ -495,6 +502,7 @@ class XpkTask(BaseTask):
           workload_id=workload_id,
           dry_run=False,
           last_node=last_node,
+          kubeconfig_path=kubeconfig_path, # PASS
       )
 
       wait_for_workload_completion = xpk.wait_for_workload_completion.override(
@@ -504,6 +512,7 @@ class XpkTask(BaseTask):
           project_id=self.task_gcp_config.project_name,
           region=gke.zone_to_region(self.task_gcp_config.zone),
           cluster_name=self.task_test_config.cluster_name,
+          kubeconfig_path=kubeconfig_path, # PASS
       )
 
       clean_up_workload = xpk.clean_up_workload(
@@ -512,6 +521,7 @@ class XpkTask(BaseTask):
           zone=self.task_gcp_config.zone,
           cluster_name=self.task_test_config.cluster_name,
           xpk_branch=xpk_branch,
+          kubeconfig_path=kubeconfig_path, # PASS
       )
 
       _ = (
@@ -535,6 +545,7 @@ class XpkTask(BaseTask):
       xpk_branch: str = xpk.MAIN_BRANCH,
       max_restart: int = 0,
       check_file_exists: bool = False,
+      kubeconfig_path: Optional[str] = GATEWAY_KUBECONFIG, # ADDED
   ) -> DAGNode:
     """Create the workload and wait for it to provision."""
     with TaskGroup(group_id="launch_workload_with_node_reach_to_step") as group:
@@ -558,6 +569,7 @@ class XpkTask(BaseTask):
           mtc_enabled=mtc_enabled,
           xpk_branch=xpk_branch,
           max_restart=max_restart,
+          kubeconfig_path=kubeconfig_path, # PASS
       )
       wait_for_workload_start = xpk.wait_for_workload_start.override(
           timeout=self.workload_provision_timeout.total_seconds()
@@ -566,6 +578,7 @@ class XpkTask(BaseTask):
           project_id=self.task_gcp_config.project_name,
           region=gke.zone_to_region(self.task_gcp_config.zone),
           cluster_name=self.task_test_config.cluster_name,
+          kubeconfig_path=kubeconfig_path, # PASS
       )
       wait_for_workload_to_reach_step = (
           xpk.wait_for_workload_reach_step.override(
@@ -576,6 +589,7 @@ class XpkTask(BaseTask):
               region=gke.zone_to_region(self.task_gcp_config.zone),
               cluster_name=self.task_test_config.cluster_name,
               expect_reach_to_step=str(expect_reach_to_step),
+              kubeconfig_path=kubeconfig_path, # PASS
           )
       )
 
@@ -642,6 +656,7 @@ class XpkTask(BaseTask):
       xpk_branch: str = xpk.MAIN_BRANCH,
       run_name_env: str = "M_RUN_NAME",
       nested_run_name_in_tb_file_location: bool = True,
+      kubeconfig_path: Optional[str] = GATEWAY_KUBECONFIG, # ADDED
   ) -> DAGNode:
     """Generate a unique run name, tensorboard file location,
     and profile file location (if metric config has profile),
@@ -682,7 +697,8 @@ class XpkTask(BaseTask):
         )
         self.task_metric_config.profile.file_location = profile_file_location
         run_model, gcs_path = self.run_model(
-            use_pathways=use_pathways, xpk_branch=xpk_branch
+            use_pathways=use_pathways, xpk_branch=xpk_branch,
+            kubeconfig_path=kubeconfig_path, # PASS
         )
         _ = (
             run_name
@@ -692,7 +708,8 @@ class XpkTask(BaseTask):
         )
       else:
         run_model, gcs_path = self.run_model(
-            use_pathways=use_pathways, xpk_branch=xpk_branch
+            use_pathways=use_pathways, xpk_branch=xpk_branch,
+            kubeconfig_path=kubeconfig_path, # PASS
         )
         _ = (
             run_name
@@ -711,6 +728,7 @@ class XpkTask(BaseTask):
       mtc_enabled: bool = False,
       xpk_branch: str = xpk.MAIN_BRANCH,
       max_restart: int = 0,
+      kubeconfig_path: Optional[str] = GATEWAY_KUBECONFIG, # ADDED
   ) -> DAGNode:
     """Run the TPU/GPU test in `task_test_config` using xpk.
 
@@ -740,6 +758,7 @@ class XpkTask(BaseTask):
           mtc_enabled,
           xpk_branch,
           max_restart,
+          kubeconfig_path=kubeconfig_path, # PASS
       )
       wait_for_workload_completion = xpk.wait_for_workload_completion.override(
           timeout=int(self.task_test_config.timeout.total_seconds()),
@@ -748,6 +767,7 @@ class XpkTask(BaseTask):
           project_id=self.task_gcp_config.project_name,
           region=gke.zone_to_region(self.task_gcp_config.zone),
           cluster_name=self.task_test_config.cluster_name,
+          kubeconfig_path=kubeconfig_path, # PASS
       )
 
       clean_up_workload = xpk.clean_up_workload(
@@ -756,6 +776,7 @@ class XpkTask(BaseTask):
           zone=self.task_gcp_config.zone,
           cluster_name=self.task_test_config.cluster_name,
           xpk_branch=xpk_branch,
+          kubeconfig_path=kubeconfig_path, # PASS
       )
 
       _ = (
@@ -776,6 +797,7 @@ class XpkTask(BaseTask):
       mtc_enabled: bool = False,
       xpk_branch: str = xpk.MAIN_BRANCH,
       max_restart: int = 0,
+      kubeconfig_path: Optional[str] = GATEWAY_KUBECONFIG, # ADDED
   ) -> DAGNode:
     """Create the workload and wait for it to provision."""
     with TaskGroup(group_id="launch_workload") as group:
@@ -799,6 +821,7 @@ class XpkTask(BaseTask):
           mtc_enabled=mtc_enabled,
           xpk_branch=xpk_branch,
           max_restart=max_restart,
+          kubeconfig_path=kubeconfig_path, # PASS
       )
       wait_for_workload_start = xpk.wait_for_workload_start.override(
           timeout=self.workload_provision_timeout.total_seconds()
@@ -807,6 +830,7 @@ class XpkTask(BaseTask):
           project_id=self.task_gcp_config.project_name,
           region=gke.zone_to_region(self.task_gcp_config.zone),
           cluster_name=self.task_test_config.cluster_name,
+          kubeconfig_path=kubeconfig_path, # PASS
       )
       _ = run_workload >> wait_for_workload_start
       return group
