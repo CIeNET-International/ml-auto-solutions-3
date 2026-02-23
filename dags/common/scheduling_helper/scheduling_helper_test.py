@@ -17,6 +17,7 @@
 import datetime as dt
 from unittest.mock import patch
 from absl.testing import absltest, parameterized
+from airflow.models import DagBag
 
 from dags.common.scheduling_helper import scheduling_helper
 
@@ -178,3 +179,31 @@ class TestFormatIntegrity(TestSchedulingHelperBase):
 
 if __name__ == "__main__":
   absltest.main()
+def run_registration_check(dag_folder: str) -> bool:
+  dagbag = DagBag(dag_folder=dag_folder, include_examples=False)
+
+  registered_ids = set()
+  for dags_dict in scheduling_helper.REGISTERED_DAGS.values():
+    registered_ids.update(dags_dict.keys())
+
+  actual_ids = set(dagbag.dag_ids)
+
+  missing = actual_ids - registered_ids
+  extra = registered_ids - actual_ids
+
+  success = True
+  if missing:
+    print(f"error: missing DAGs in REGISTERED_DAGS: {missing}")
+    success = False
+
+  if extra:
+    print(f"warning: DAGs in REGISTERED_DAGS but not found: {extra}")
+
+  if success:
+    print("success: all DAGs are properly registered.")
+
+  return success
+
+
+if __name__ == "__main__":
+  result = run_registration_check("dags/tpu_observability")
