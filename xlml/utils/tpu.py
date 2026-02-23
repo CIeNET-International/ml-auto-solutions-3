@@ -37,6 +37,7 @@ import google.cloud.tpu_v2alpha1 as tpu_api
 import google.longrunning.operations_pb2 as operations
 import paramiko
 from google.protobuf.duration_pb2 import Duration
+from googleapiclient import discovery
 
 
 TTL = 'ttl'
@@ -51,6 +52,28 @@ def generate_tpu_name(
   if set_env_var:
     Variable.set(base_tpu_name, tpu_name)
   return tpu_name
+
+
+def add_ssh_key_to_oslogin(ssh_public_key: str, project_id: str):
+  """Adds an SSH public key to the authenticated
+  service account's OS Login profile."""
+  try:
+    creds, _ = google.auth.default()
+    oslogin_service = discovery.build('oslogin', 'v1', credentials=creds)
+
+    email = (
+        'ml-auto-solutions@cloud-ml-auto-solutions' '.iam.gserviceaccount.com'
+    )
+    user_parent = f'users/{email}'
+    body = {'key': ssh_public_key}
+
+    request = oslogin_service.users().importSshPublicKey(
+        parent=user_parent, body=body, projectId=project_id
+    )
+    response = request.execute()
+    logging.info(f'Successfully imported SSH key to OS Login profile.')
+  except Exception as e:
+    logging.error(f'Failed to add SSH key to OS Login profile: {e}')
 
 
 def create_queued_resource(
@@ -416,7 +439,8 @@ def ssh_tpu(
               f'SSH Authentication Failed on {connection.host}: {result}'
           )
           raise AirflowFailException(
-              'SSH Authentication failed on one or more hosts. Check logs for details.'
+              'SSH Authentication failed on one or more hosts. '
+              'Check logs for details.'
           ) from e
       raise
     except paramiko.ssh_exception.AuthenticationException as e:
