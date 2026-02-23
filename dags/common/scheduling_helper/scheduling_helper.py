@@ -111,6 +111,7 @@ class SchedulingHelper:
             hours=24
         ):
           raise ScheduleWindowError(
+          raise ValueError(
               f"Schedule exceeds 24h window at '{dag_id} '"
               f"in cluster '{cluster_name}'."
           )
@@ -121,5 +122,6 @@ class SchedulingHelper:
         offset += timeout + cls.DEFAULT_MARGIN
 
     raise UnregisteredDagError(
+    raise ValueError(
         f"DAG '{dag_id}' is not registered. Please add it to REGISTERED_DAGS."
     )
