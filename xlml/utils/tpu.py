@@ -20,8 +20,6 @@ import itertools
 import os
 from typing import Dict, Iterable, Optional, Tuple, Union
 import uuid
-import hashlib
-import base64
 
 from absl import logging
 import airflow
@@ -34,7 +32,6 @@ from xlml.apis import gcp_config, test_config
 from xlml.utils import ssh, startup_script, composer
 import fabric
 import google.api_core.exceptions
-from google.cloud import oslogin_v1
 import google.auth
 import google.cloud.tpu_v2alpha1 as tpu_api
 import google.longrunning.operations_pb2 as operations
@@ -64,10 +61,8 @@ def add_ssh_key_to_oslogin(ssh_public_key: str, project_id: str):
     creds, _ = google.auth.default()
     oslogin_service = discovery.build('oslogin', 'v1', credentials=creds)
 
-    # Use 'users/me' to refer to the authenticated principal (Service Account)
     email = (
-        'ml-auto-solutions-dev@cloud-ml-auto-solutions'
-        '.iam.gserviceaccount.com'
+        'ml-auto-solutions@cloud-ml-auto-solutions' '.iam.gserviceaccount.com'
     )
     user_parent = f'users/{email}'
     body = {'key': ssh_public_key}
@@ -79,83 +74,6 @@ def add_ssh_key_to_oslogin(ssh_public_key: str, project_id: str):
     logging.info(f'Successfully imported SSH key to OS Login profile.')
   except Exception as e:
     logging.error(f'Failed to add SSH key to OS Login profile: {e}')
-
-
-def get_oslogin_username() -> str:
-  """Retrieves the POSIX username from the OS Login
-  profile for the current user."""
-  try:
-    creds, _ = google.auth.default()
-    oslogin_service = discovery.build('oslogin', 'v1', credentials=creds)
-    email = (
-        'ml-auto-solutions-dev@cloud-ml-auto-solutions'
-        '.iam.gserviceaccount.com'
-    )
-    user_name = f'users/{email}'
-    profile = oslogin_service.users().getLoginProfile(name=user_name).execute()
-
-    if profile and profile.get('posixAccounts'):
-      username = profile['posixAccounts'][0]['username']
-      return username
-    else:
-      raise RuntimeError(f'No POSIX account for {user_name}')
-  except Exception as e:
-    logging.error(f'Failed to get OS Login username: {e}')
-    raise
-
-
-def delete_ssh_key_from_oslogin(public_key: str, user_email: str) -> bool:
-  """
-  Deletes a specific SSH public key from the GCP OS Login Profile.
-
-  Args:
-    public_key: The OpenSSH formatted public key string.
-    user_email: The email address of the user or the Service Account email.
-
-  Returns:
-    bool: True if deletion was successful or if the key did not exist;
-          False otherwise.
-  """
-  client = oslogin_v1.OsLoginServiceClient()
-
-  # 1. Parse and calculate the fingerprint of the key
-  # Public key format: "ssh-rsa <key_body> <comment>"
-  try:
-    key_body = public_key.split(' ')[1]
-    key_bytes = base64.b64decode(key_body)
-    fingerprint = hashlib.sha256(key_bytes).digest()
-
-    # OS Login uses base64url encoded fingerprints
-    encoded_fingerprint = (
-        base64.urlsafe_b64encode(fingerprint).decode().strip('=')
-    )
-  except Exception as e:
-    logging.error(f'Failed to parse public key, format might be incorrect: {e}')
-    return False
-
-  # 2. Construct the resource name:
-  # users/user@example.com/sshPublicKeys/fingerprint
-  user_resource_name = f'users/{user_email}'
-  key_resource_name = (
-      f'{user_resource_name}/sshPublicKeys/{encoded_fingerprint}'
-  )
-
-  logging.info(f'Attempting to delete SSH key: {key_resource_name}')
-
-  # 3. Call API to delete the key
-  try:
-    client.delete_ssh_public_key(name=key_resource_name)
-    logging.info('SSH key deleted successfully.')
-    return True
-  except Exception as e:
-    # If the key already does not exist, the API returns 404,
-    # which can generally be treated as successful cleanup.
-    if '404' in str(e):
-      logging.info('Key does not exist, no deletion necessary.')
-      return True
-    else:
-      logging.warning(f'Unknown error while deleting key: {e}')
-      return False
 
 
 def create_queued_resource(
@@ -521,7 +439,8 @@ def ssh_tpu(
               f'SSH Authentication Failed on {connection.host}: {result}'
           )
           raise AirflowFailException(
-              'SSH Authentication failed on one or more hosts. Check logs for details.'
+              'SSH Authentication failed on one or more hosts. '
+              'Check logs for details.'
           ) from e
       raise
     except paramiko.ssh_exception.AuthenticationException as e:
