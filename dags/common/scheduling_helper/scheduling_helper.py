@@ -88,15 +88,18 @@ class SchedulingHelper:
 
       offset = dt.timedelta(0)
       for current_dag_id, timeout in dags.items():
+        if offset >= dt.timedelta(hours=24) or timeout >= dt.timedelta(
+            hours=24
+        ):
+          raise ValueError(
+              f"Schedule exceeds 24h window at '{dag_id} '"
+              f"in cluster '{cluster_name}'."
+          )
+
         if current_dag_id == dag_id:
           schedule = anchor + offset
           return f"{schedule.minute} {schedule.hour} * * {day_of_week.value}"
         offset += timeout + cls.DEFAULT_MARGIN
-
-        if offset >= dt.timedelta(hours=24):
-          raise ValueError(
-              f"Schedule exceeds 24h window at '{dag_id}' in cluster '{cluster_name}'."
-          )
 
     raise ValueError(
         f"DAG '{dag_id}' is not registered. Please add it to REGISTERED_DAGS."
