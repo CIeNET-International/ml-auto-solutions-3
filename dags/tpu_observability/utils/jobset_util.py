@@ -746,8 +746,7 @@ def wait_for_jobset_ttr_to_be_found(
 
   Args:
     node_pool (Info): An instance of the Info class containing GKE metadata.
-    jobset_config: An instance of the JobSet class representing the jobset
-    configuration.
+    jobset_config: An instance of the JobSet class representing the jobset configuration.
     start_time (TimeUtil, optional): The UTC timestamp to start polling from.
     If not provided, defaults to 60 minutes before the current time.
 
