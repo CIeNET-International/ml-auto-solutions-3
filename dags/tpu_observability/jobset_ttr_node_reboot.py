@@ -23,6 +23,7 @@ import io
 
 from airflow import models
 from airflow.models.baseoperator import chain
+from airflow.utils.log.secrets_masker import mask_secret
 from airflow.utils.trigger_rule import TriggerRule
 from airflow.utils.task_group import TaskGroup
 from airflow.decorators import task
@@ -37,19 +38,18 @@ from dags.tpu_observability.configs.common import (
     GCS_CONFIG_PATH,
     GCS_JOBSET_CONFIG_PATH,
 )
-
-from xlml.utils.tpu import add_ssh_key_to_oslogin, get_oslogin_username, delete_ssh_key_from_oslogin
-from xlml.utils.ssh import SshKeys, generate_ssh_keys
+from xlml.utils.tpu import add_ssh_key_to_oslogin
+from xlml.utils.ssh import SshKeys, obtain_persist_ssh_keys
 
 
 @task
-def random_node_reboot(info: node_pool.Info, ssh_key_pair: SshKeys):
+def random_node_reboot(info: node_pool.Info, keys: SshKeys):
   """
   Selects a random node from the node pool and triggers a system reboot via SSH.
 
   Args:
     info: Configuration and metadata of the GKE node pool.
-    ssh_keys: SSH key pair used for authentication.
+    keys: SSH key pair used for authentication.
 
   Returns:
     The name of the node that was rebooted.
@@ -73,11 +73,12 @@ def random_node_reboot(info: node_pool.Info, ssh_key_pair: SshKeys):
 
   # OS Login Setup
   # Register public key and retrieve the POSIX username
-  add_ssh_key_to_oslogin(ssh_key_pair.public, info.project_id)
-  os_user = get_oslogin_username()
+  mask_secret(keys.private)
+  add_ssh_key_to_oslogin(keys.public, info.project_id)
+  os_user = keys.user
 
   # Execute Reboot via Fabric
-  pkey = paramiko.RSAKey.from_private_key(io.StringIO(ssh_key_pair.private))
+  pkey = paramiko.RSAKey.from_private_key(io.StringIO(keys.private))
 
   # Establish connection using the dynamic OS Login username
   conn = fabric.Connection(
@@ -150,11 +151,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
   def get_project_id(info: node_pool.Info):
     return info.project_id
 
-  @task(trigger_rule=TriggerRule.ALL_DONE)
-  def cleanup_ssh_key_task(ssh_keys_obj):
-    sa_email = "ml-auto-solutions-dev@cloud-ml-auto-solutions"
-    delete_ssh_key_from_oslogin(ssh_keys_obj.public, sa_email)
-
   for machine in MachineConfigMap:
     config = machine.value
 
@@ -166,7 +162,8 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       jobset_config = jobset.build_jobset_from_gcs_yaml(
           gcs_path=GCS_JOBSET_CONFIG_PATH, dag_name="jobset_ttr_node_reboot"
       )
-      ssh_keys = generate_ssh_keys.override(task_id="generate_ssh_keys")()
+
+      get_keys = obtain_persist_ssh_keys.override(task_id="get_ssh_keys")()
 
       cluster_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
           task_id="build_node_pool_info_from_gcs_yaml"
@@ -196,7 +193,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       )
 
       node_reboot = random_node_reboot.override(task_id="random_node_reboot")(
-          info=cluster_info, ssh_key_pair=ssh_keys
+          info=cluster_info, keys=get_keys
       )
 
       wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
@@ -218,12 +215,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           setups=create_node_pool,
       )
 
-      cleanup_key_task = cleanup_ssh_key_task(ssh_keys)
-      cleanup_key_task.as_teardown(setups=node_reboot)
-
       chain(
           jobset_config,
-          ssh_keys,
+          get_keys,
           cluster_info,
           create_node_pool,
           start_workload,
@@ -232,5 +226,4 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           wait_for_metric_upload,
           cleanup_workload,
           cleanup_node_pool,
-          cleanup_key_task,
       )
