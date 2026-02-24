@@ -13,6 +13,11 @@ class TimeUtil:
   time: int
 
   @classmethod
+  def now(cls) -> "TimeUtil":
+    """Returns the current time in UTC."""
+    return cls(int(datetime.datetime.now(datetime.timezone.utc).timestamp()))
+
+  @classmethod
   def from_iso_string(cls, time_str: str) -> "TimeUtil":
     """Builds a TimeUtil object from an ISO 8601 formatted string."""
     dt_object = datetime.datetime.fromisoformat(time_str.replace("Z", "+00:00"))
