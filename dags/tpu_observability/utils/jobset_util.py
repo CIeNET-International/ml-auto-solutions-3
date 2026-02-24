@@ -30,6 +30,7 @@ from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from airflow.sensors.base import PokeReturnValue
 from google.cloud.monitoring_v3 import types
+from airflow.models.baseoperator import chain
 import kubernetes
 
 from dags.tpu_observability.utils import subprocess_util as subprocess
@@ -803,6 +804,50 @@ def wait_for_all_pods_running(
     )
     return PokeReturnValue(is_done=True, xcom_value=running_pods)
   return PokeReturnValue(is_done=False)
+
+
+def run_jobset_ttr_validation_flow(
+    node_pool: node_pool_info,
+    jobset_config: JobSet,
+    apply_time: TimeUtil,
+    pod_name_list: list[str],
+    trigger_task,
+):
+  """Unifies the JobSet TTR procedure into a single standard flow.
+
+  This helper function encapsulates the standard 'Procedure of TTR' for JobSets:
+  1. wait_for_jobset_started: Ensures the workload is running stably.
+  2. trigger_task: Executes the provided failure injection task.
+  3. wait_for_jobset_ttr_to_be_found: Verifies the TTR metric is recorded.
+
+  Args:
+    node_pool: Configuration object with cluster details.
+    jobset_config: The JobSet object containing configuration details.
+    apply_time: The UTC time when the workload was started.
+    pod_name_list: A list of active pod names for monitoring.
+    trigger_task: The Airflow task instance that triggers the failure.
+
+  Returns:
+    tuple: A tuple containing (wait_start_task, wait_ttr_task).
+  """
+  wait_start = wait_for_jobset_started.override(
+      task_id="wait_for_jobset_started"
+  )(
+      node_pool=node_pool,
+      pod_name_list=pod_name_list,
+      job_apply_time=apply_time,
+  )
+
+  wait_ttr = wait_for_jobset_ttr_to_be_found.override(
+      task_id="wait_for_jobset_ttr_metric"
+  )(
+      node_pool=node_pool,
+      jobset_config=jobset_config,
+  )
+
+  chain(wait_start, trigger_task, wait_ttr)
+
+  return wait_start, wait_ttr
 
 
 def query_uptime_metrics(

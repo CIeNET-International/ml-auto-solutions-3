@@ -24,6 +24,7 @@ import re
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
+from airflow.models.baseoperator import chain
 from google.cloud import monitoring_v3
 
 from dags.tpu_observability.utils.time_util import TimeUtil
@@ -804,3 +805,44 @@ def update(node_pool: Info, spec: NodePoolUpdateSpec) -> TimeUtil:
 
   subprocess.run_exec(update_cmd)
   return operation_start_time
+
+
+def run_node_pool_ttr_validation_flow(
+    node_pool_info: Info,
+    trigger_task,
+):
+  """Unifies the Node Pool TTR procedure into a single standard flow.
+
+  This helper function encapsulates the standard 'Procedure of TTR' for Node Pools:
+  1. wait_for_node_pool_provisioning: Monitors the initial creation phase.
+  2. wait_for_node_pool_running: Ensures the pool is healthy before update.
+  3. trigger_task: Executes the disruptive operation (e.g., resize, rollback).
+  4. wait_for_node_pool_recovered: Confirms the pool returns to a RUNNING state.
+  5. wait_for_ttr: Verifies the TTR metric is recorded in Cloud Monitoring.
+
+  Args:
+    node_pool_info: An instance of Info class with node pool metadata.
+    trigger_task: The Airflow task instance that triggers the failure or update.
+
+  Returns:
+    tuple: A tuple containing (wait_provisioning_task, wait_ttr_task).
+  """
+  wait_provisioning = wait_for_status.override(
+      task_id="wait_for_node_pool_provisioning"
+  )(node_pool=node_pool_info, status=Status.PROVISIONING)
+
+  wait_running = wait_for_status.override(task_id="wait_for_node_pool_running")(
+      node_pool=node_pool_info, status=Status.RUNNING
+  )
+
+  wait_recovered = wait_for_status.override(
+      task_id="wait_for_node_pool_recovered"
+  )(node_pool=node_pool_info, status=Status.RUNNING)
+
+  wait_ttr = wait_for_ttr(
+      node_pool=node_pool_info, operation_start_time=trigger_task
+  )
+
+  chain(wait_provisioning, wait_running, trigger_task, wait_recovered, wait_ttr)
+
+  return wait_provisioning, wait_ttr
