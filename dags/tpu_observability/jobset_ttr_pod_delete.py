@@ -110,13 +110,13 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           node_pool=cluster_info,
       )
 
-      start_workload = jobset.run_workload.override(task_id="start_workload")(
+      apply_time = jobset.run_workload.override(task_id="start_workload")(
           node_pool=cluster_info,
           jobset_config=jobset_config,
           workload_type=Workload.JAX_TPU_BENCHMARK,
       )
 
-      ensure_all_pods_running = jobset.wait_for_all_pods_running.override(
+      running_pods = jobset.wait_for_all_pods_running.override(
           task_id="ensure_all_pods_running"
       )(
           node_pool=cluster_info,
@@ -130,17 +130,18 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           jobset_config=jobset_config,
       )
 
-      wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
-          task_id="wait_for_jobset_ttr_to_be_found"
-      )(
+      ttr_start, ttr_end = jobset.run_jobset_ttr_validation_flow(
           node_pool=cluster_info,
           jobset_config=jobset_config,
+          apply_time=apply_time,
+          pod_name_list=running_pods,
+          trigger_task=delete_random_pod,
       )
 
       cleanup_workload = jobset.end_workload.override(
           task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
       )(node_pool=cluster_info, jobset_config=jobset_config).as_teardown(
-          setups=start_workload
+          setups=apply_time,
       )
 
       cleanup_node_pool = node_pool.delete.override(
@@ -154,10 +155,10 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           jobset_config,
           cluster_info,
           create_node_pool,
-          start_workload,
-          ensure_all_pods_running,
-          delete_random_pod,
-          wait_for_metric_upload,
+          apply_time,
+          running_pods,
+          ttr_start,
+          ttr_end,
           cleanup_workload,
           cleanup_node_pool,
       )
