@@ -39,6 +39,8 @@ from dags.tpu_observability.configs.common import (
     GCS_JOBSET_CONFIG_PATH,
 )
 from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper, get_dag_timeout
+from dags.tpu_observability.utils.time_util import TimeUtil
+
 
 DAG_ID = "jobset_ttr_kill_process"
 DAGRUN_TIMEOUT = get_dag_timeout(DAG_ID)
@@ -63,6 +65,10 @@ def kill_tpu_pod_workload(info: node_pool.Info, pod_name: str) -> None:
         f"kubectl exec {pod_name} -n default -- pkill -9 -f python",
     ])
 
+    operation_start_time = TimeUtil.from_datetime(
+        datetime.datetime.now(datetime.timezone.utc)
+    )
+
     try:
       subprocess.run_exec(cmd, env=env)
     except subprocess.ProcessKilledException:
@@ -70,6 +76,7 @@ def kill_tpu_pod_workload(info: node_pool.Info, pod_name: str) -> None:
     except Exception as e:
       raise e
 
+  return operation_start_time
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
 # know this signature).
@@ -160,11 +167,18 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           .expand(pod_name=startup.running_pods)
       )
 
+      verify_duration = jobset.verify_recovery_duration.override(
+          task_id="verify_recovery_duration"
+      )(
+          start_time=kill_tasks
+      )
+
       wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
           task_id="wait_for_metric_upload"
       )(
           node_pool=cluster_info,
           jobset_name=jobset_name,
+          start_time=kill_tasks,
       )
 
       cleanup_workload = jobset.end_workload.override(
@@ -189,6 +203,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           create_node_pool,
           *startup.tasks,
           kill_tasks,
+          verify_duration,
           wait_for_metric_upload,
           cleanup_workload,
           cleanup_node_pool,
