@@ -164,12 +164,13 @@ _TEMPLATE = string.Template(
             replicas: $replicas
             template:
               spec:
-                terminationGracePeriodSeconds: 300
                 backoffLimit: $backoff_limit
                 completions: $completions
                 parallelism: $parallelism
                 template:
                   spec:
+                    restartPolicy: Never
+                    terminationGracePeriodSeconds: 300
                     nodeSelector:
                       cloud.google.com/gke-tpu-accelerator: $tpu_accelerator_type
                       cloud.google.com/gke-tpu-topology: $tpu_topology
