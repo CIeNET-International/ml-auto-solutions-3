@@ -68,6 +68,7 @@ class Workload:
   JAX_TPU_BENCHMARK = json.dumps(
       textwrap.dedent(
           """
+          pip install requests
           pip install jax[k8s] libtpu
           python -c '
           import jax
