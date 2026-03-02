@@ -15,28 +15,28 @@ class TimeUtil:
   time: int
 
   @classmethod
-  def now(cls) -> "TimeUtil":
+  def now(cls) -> TimeUtil:
     """Returns the current time in UTC."""
     return cls(int(datetime.datetime.now(datetime.timezone.utc).timestamp()))
 
   @classmethod
-  def from_iso_string(cls, time_str: str) -> "TimeUtil":
+  def from_iso_string(cls, time_str: str) -> TimeUtil:
     """Builds a TimeUtil object from an ISO 8601 formatted string."""
     dt_object = datetime.datetime.fromisoformat(time_str.replace("Z", "+00:00"))
     return cls(int(dt_object.timestamp()))
 
   @classmethod
-  def from_timestamp_pb2(cls, ts_pb: timestamp_pb2.Timestamp) -> "TimeUtil":
+  def from_timestamp_pb2(cls, ts_pb: timestamp_pb2.Timestamp) -> TimeUtil:
     """Builds a TimeUtil object from a Google Protobuf Timestamp."""
     return cls(int(ts_pb.seconds))
 
   @classmethod
-  def from_datetime(cls, dt: datetime.datetime) -> "TimeUtil":
+  def from_datetime(cls, dt: datetime.datetime) -> TimeUtil:
     """Builds a TimeUtil object from a standard datetime object."""
     return cls(int(dt.timestamp()))
 
   @classmethod
-  def from_unix_seconds(cls, unix_seconds: int | float) -> "TimeUtil":
+  def from_unix_seconds(cls, unix_seconds: int | float) -> TimeUtil:
     """Builds a TimeUtil object from a Unix timestamp (seconds)."""
     return cls(int(unix_seconds))
 
@@ -59,13 +59,13 @@ class TimeUtil:
     dt = self.to_datetime()
     return dt.strftime("d'%Y/%m/%d-%H:%M:%S'")
 
-  def __add__(self, other: datetime.timedelta) -> "TimeUtil":
+  def __add__(self, other: datetime.timedelta) -> TimeUtil:
     """Allows usage like: TimeUtil(...) + timedelta(minutes=10)."""
     if isinstance(other, datetime.timedelta):
       return TimeUtil(self.time + int(other.total_seconds()))
     return NotImplemented
 
-  def __sub__(self, other: datetime.timedelta | "TimeUtil") -> "TimeUtil":
+  def __sub__(self, other: datetime.timedelta | TimeUtil) -> TimeUtil:
     """Allows usage like: TimeUtil(...) - timedelta(minutes=10) or TimeUtil(...) - TimeUtil(...)."""
     if isinstance(other, datetime.timedelta):
       return TimeUtil(self.time - int(other.total_seconds()))
