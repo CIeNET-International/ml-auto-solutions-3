@@ -18,6 +18,7 @@ import datetime
 
 from airflow import models
 from airflow.decorators import task
+from airflow.models.baseoperator import chain
 from airflow.utils.trigger_rule import TriggerRule
 from airflow.utils.task_group import TaskGroup
 
@@ -25,15 +26,25 @@ from dags import composer_env
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils.jobset_util import JobSet, Workload
-from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_PATH
+from dags.tpu_observability.configs.common import (
+    MachineConfigMap,
+    GCS_CONFIG_PATH,
+    GCS_JOBSET_CONFIG_PATH,
+)
+from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper, get_dag_timeout
 
+
+DAG_ID = "jobset_healthiness_ready"
+DAGRUN_TIMEOUT = get_dag_timeout(DAG_ID)
+SCHEDULE = SchedulingHelper.arrange_schedule_time(DAG_ID)
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
 # know this signature).
 with models.DAG(  # pylint: disable=unexpected-keyword-arg
-    dag_id="jobset_healthiness_ready",
+    dag_id=DAG_ID,
     start_date=datetime.datetime(2025, 8, 10),
-    schedule="30 19 * * *" if composer_env.is_prod_env() else None,
+    schedule=SCHEDULE if composer_env.is_prod_env() else None,
+    dagrun_timeout=DAGRUN_TIMEOUT,
     catchup=False,
     tags=[
         "cloud-ml-auto-solutions",
@@ -78,35 +89,28 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       """Generates a second node pool name."""
       return f"{node_pool_info.node_pool_name}-2"
 
-    jobset_config = JobSet(
-        jobset_name="jobset-healthiness-ready",
-        namespace="default",
-        max_restarts=0,
-        replicated_job_name="tpu-job-slice",
-        replicas=2,
-        backoff_limit=0,
-        completions=4,
-        parallelism=4,
-        tpu_accelerator_type="tpu-v6e-slice",
-        tpu_topology="4x4",
-        container_name="jax-tpu-worker",
-        image="python:3.11",
-        tpu_cores_per_pod=4,
-    )
-
     # Keyword arguments are generated dynamically at runtime (pylint does not
     # know this signature).
     with TaskGroup(  # pylint: disable=unexpected-keyword-arg
         group_id=f"v{config.tpu_version.value}"
     ):
+      selector = jobset.generate_node_pool_selector("jobset_healthiness_ready")
+
+      jobset_config = jobset.build_jobset_from_gcs_yaml(
+          gcs_path=GCS_JOBSET_CONFIG_PATH,
+          dag_name=DAG_ID,
+          node_pool_selector=selector,
+      )
+
       cluster_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
           task_id="build_node_pool_info_from_gcs_yaml"
       )(
           gcs_path=GCS_CONFIG_PATH,
-          dag_name="jobset_healthiness_ready",
+          dag_name=DAG_ID,
           is_prod=composer_env.is_prod_env(),
           machine_type=config.machine_version.value,
           tpu_topology=config.tpu_topology,
+          node_pool_selector=selector,
       )
 
       cluster_info_2 = node_pool.copy_node_pool_info_with_override(
@@ -182,16 +186,15 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             setups=create_node_pool,
         )
 
-      # Airflow uses >> for task chaining, which is pointless for pylint.
-      # pylint: disable=pointless-statement
-      (
-          cluster_info
-          >> cluster_info_2
-          >> create_node_pool
-          >> validate_zero_replicas
-          >> start_workload
-          >> validate_ready_replicas
-          >> cleanup_workload
-          >> cleanup_node_pool
+      chain(
+          selector,
+          jobset_config,
+          cluster_info,
+          cluster_info_2,
+          create_node_pool,
+          validate_zero_replicas,
+          start_workload,
+          validate_ready_replicas,
+          cleanup_workload,
+          cleanup_node_pool,
       )
-      # pylint: enable=pointless-statement
