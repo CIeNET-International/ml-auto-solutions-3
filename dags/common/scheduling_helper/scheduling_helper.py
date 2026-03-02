@@ -42,6 +42,7 @@ REGISTERED_DAGS: dict[str, DagIdToTimeout] = {
     TPU_OBS_MOCK_CLUSTER.name: {
         "gke_node_pool_label_update": dt.timedelta(minutes=30),
         "gke_node_pool_status": dt.timedelta(minutes=30),
+        "jobset_healthiness_ready": dt.timedelta(minutes=30),
         "jobset_rollback_ttr": dt.timedelta(minutes=90),
         "jobset_ttr_node_pool_resize": dt.timedelta(minutes=90),
         "jobset_ttr_pod_delete": dt.timedelta(minutes=90),
