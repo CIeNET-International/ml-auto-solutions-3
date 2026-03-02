@@ -139,7 +139,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           node_pool=cluster_info,
           jobset_config=jobset_config,
           replica_type="ready",
-          correct_replica_num=0,
+          pre_startup=True,
       )
 
       start_workload = jobset.run_workload(
@@ -152,7 +152,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           node_pool=cluster_info,
           jobset_config=jobset_config,
           replica_type="ready",
-          correct_replica_num=jobset_config.replicas,
+          pre_startup=False,
       )
 
       cleanup_workload = jobset.end_workload.override(

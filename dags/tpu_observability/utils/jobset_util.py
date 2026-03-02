@@ -957,10 +957,12 @@ def validate_jobset_replica_number(
     node_pool: node_pool_info,
     jobset_config: JobSet,
     replica_type: str,
-    correct_replica_num: int,
+    pre_startup: bool,
 ):
   name = jobset_config.replicated_job_name
   found_replica_number = get_replica_num(
       replica_type=replica_type, job_name=name, node_pool=node_pool
   )
-  return found_replica_number == correct_replica_num
+  if pre_startup:
+    return found_replica_number == 0
+  return found_replica_number == jobset_config.replicas
