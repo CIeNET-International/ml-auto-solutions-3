@@ -36,6 +36,8 @@ TPU_OBS_MOCK_CLUSTER = XpkClusterConfig(
     project="cienet-cmcs",
     zone=Zone.US_CENTRAL1_B.value,
 )
+IGNORE_SCHEDULING_IDENTIFIER = "ignore-scheduling-cluster"
+MANUAL_TRIGGER_IDENTIFIER = "manual-trigger-cluster"
 
 DagIdToTimeout: TypeAlias = dict[str, dt.timedelta]
 
@@ -54,7 +56,39 @@ REGISTERED_DAGS: dict[str, DagIdToTimeout] = {
         "jobset_ttr_kill_process": dt.timedelta(minutes=90),
         "jobset_uptime_validation": dt.timedelta(minutes=90),
         "tpu_info_metrics_verification": dt.timedelta(minutes=30),
+        "validate_interruption_count_gce_bare_metal_preemption": dt.timedelta(
+            minutes=30
+        ),
+        "validate_interruption_count_gce_host_error": dt.timedelta(minutes=30),
+        "validate_interruption_count_gke_bare_metal_preemption": dt.timedelta(
+            minutes=30
+        ),
+        "validate_interruption_count_gke_hwsw_maintenance": dt.timedelta(
+            minutes=30
+        ),
+        "validate_interruption_count_gke_defragmentation": dt.timedelta(
+            minutes=30
+        ),
+        "validate_interruption_count_gce_hwsw_maintenance": dt.timedelta(
+            minutes=30
+        ),
+        "validate_interruption_count_gke_host_error": dt.timedelta(minutes=30),
+        "validate_interruption_count_gce_defragmentation": dt.timedelta(
+            minutes=30
+        ),
+        "validate_interruption_count_gce_other": dt.timedelta(minutes=30),
+        "validate_interruption_count_gce_migrate_on_hwsw_maintenance": dt.timedelta(
+            minutes=30
+        ),
+        "validate_interruption_count_gce_eviction": dt.timedelta(minutes=30),
+        "validate_interruption_count_gke_other": dt.timedelta(minutes=30),
+        "validate_interruption_count_gke_migrate_on_hwsw_maintenance": dt.timedelta(
+            minutes=30
+        ),
+        "validate_interruption_count_gke_eviction": dt.timedelta(minutes=30),
     },
+    IGNORE_SCHEDULING_IDENTIFIER: {},
+    MANUAL_TRIGGER_IDENTIFIER: {},
 }
 
 
