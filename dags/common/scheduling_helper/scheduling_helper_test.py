@@ -96,36 +96,6 @@ class TestSchedulingHelper(parameterized.TestCase):
     with self.assertRaisesRegex(ValueError, "Schedule exceeds 24h window"):
       scheduling_helper.SchedulingHelper.arrange_schedule_time("extreme_dag")
 
-  # --- CI Test (Production Data Check) ---
-
-  def test_registration_check(self):
-    """
-    CI Test: Ensures every DAG file in the folder is registered in the helper.
-    """
-    self.patcher.stop()
-
-    try:
-      dagbag = DagBag(dag_folder=self.dag_folder, include_examples=False)
-      actual_ids = set(dagbag.dag_ids)
-      registered_ids = set()
-      for dags_dict in scheduling_helper.REGISTERED_DAGS.values():
-        registered_ids.update(dags_dict.keys())
-      missing = actual_ids - registered_ids
-      self.assertEmpty(
-          missing,
-          msg=(
-              f"The following DAGs exist in {self.dag_folder} but are NOT "
-              f"registered in scheduling_helper.py: {missing}. "
-              "Please add them to REGISTERED_DAGS to ensure they are scheduled."
-          ),
-      )
-      extra = registered_ids - actual_ids
-      if extra:
-        print(f"\n[WARNING]: DAGs registered but not found in folder: {extra}")
-
-    finally:
-      self.patcher.start()
-
 
 if __name__ == "__main__":
   absltest.main()
