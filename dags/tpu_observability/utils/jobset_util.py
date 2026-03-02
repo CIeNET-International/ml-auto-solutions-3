@@ -950,3 +950,17 @@ def ensure_no_jobset_uptime_data(
     logging.info("Stability period passed with no data detected.")
     return True
   return False
+
+
+@task.sensor(poke_interval=30, timeout=900, mode="reschedule")
+def validate_jobset_replica_number(
+    node_pool: node_pool_info,
+    jobset_config: JobSet,
+    replica_type: str,
+    correct_replica_num: int,
+):
+  name = jobset_config.replicated_job_name
+  found_replica_number = get_replica_num(
+      replica_type=replica_type, job_name=name, node_pool=node_pool
+  )
+  return found_replica_number == correct_replica_num

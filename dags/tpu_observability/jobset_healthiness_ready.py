@@ -144,10 +144,8 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 
       start_workload = jobset.run_workload(
           node_pool=cluster_info,
-          yaml_config=jobset_config.generate_yaml(
-              workload_script=Workload.IDLE_READY_TPU_20M
-          ),
-          namespace=jobset_config.namespace,
+          jobset_config=jobset_config,
+          workload_type=Workload.IDLE_READY_TPU_20M,
       )
 
       validate_ready_replicas = jobset.validate_jobset_replica_number(
@@ -161,8 +159,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
       )(
           node_pool=cluster_info,
-          jobset_name=jobset_config.jobset_name,
-          namespace=jobset_config.namespace,
+          jobset_config=jobset_config,
       ).as_teardown(
           setups=start_workload
       )
