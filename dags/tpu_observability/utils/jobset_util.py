@@ -858,7 +858,7 @@ def ensure_no_jobset_uptime_data(
   if len(data) > 0:
     raise AirflowFailException(f"Data detected: {data}")
 
-  if (now.time - start_time.time) >= wait_time_seconds:
+  if (now - start_time).to_unix_seconds() >= wait_time_seconds:
     logging.info("Stability period passed with no data detected.")
     return True
   return False

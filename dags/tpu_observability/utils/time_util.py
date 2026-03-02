@@ -1,5 +1,7 @@
 """Utility class for handling various time representations."""
 
+from __future__ import annotations
+
 import datetime
 from dataclasses import dataclass
 
@@ -63,10 +65,12 @@ class TimeUtil:
       return TimeUtil(self.time + int(other.total_seconds()))
     return NotImplemented
 
-  def __sub__(self, other: datetime.timedelta) -> "TimeUtil":
-    """Allows usage like: TimeUtil(...) - timedelta(minutes=10)."""
+  def __sub__(self, other: datetime.timedelta | "TimeUtil") -> "TimeUtil":
+    """Allows usage like: TimeUtil(...) - timedelta(minutes=10) or TimeUtil(...) - TimeUtil(...)."""
     if isinstance(other, datetime.timedelta):
       return TimeUtil(self.time - int(other.total_seconds()))
+    if isinstance(other, TimeUtil):
+      return TimeUtil(self.time - other.time)
     return NotImplemented
 
 
