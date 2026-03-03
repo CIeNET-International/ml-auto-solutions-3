@@ -24,7 +24,9 @@ import re
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
+from airflow.utils.task_group import TaskGroup
 from airflow.models.baseoperator import chain
+from airflow.models.xcom_arg import XComArg
 from google.cloud import monitoring_v3
 
 from dags.tpu_observability.utils.time_util import TimeUtil
@@ -811,9 +813,11 @@ def run_node_pool_ttr_validation_flow(
     node_pool_info: Info,
     trigger_task,
 ):
-  """Unifies the Node Pool TTR procedure into a single standard flow.
+  """Unifies the Node Pool TTR procedure into a single TaskGroup.
 
-  This helper function encapsulates the standard 'Procedure of TTR' for Node Pools:
+  This helper function encapsulates the standard 'Procedure of TTR' for Node Pools
+  within an Airflow TaskGroup to ensure consistent execution order and cleaner
+  DAG visualization. It handles the following sequence:
   1. wait_for_node_pool_provisioning: Monitors the initial creation phase.
   2. wait_for_node_pool_running: Ensures the pool is healthy before update.
   3. trigger_task: Executes the disruptive operation (e.g., resize, rollback).
@@ -825,24 +829,33 @@ def run_node_pool_ttr_validation_flow(
     trigger_task: The Airflow task instance that triggers the failure or update.
 
   Returns:
-    tuple: A tuple containing (wait_provisioning_task, wait_ttr_task).
+    TaskGroup: A TaskGroup object (DAGNode) representing the unified TTR flow,
+      which can be easily chained with other tasks in the DAG.
   """
-  wait_provisioning = wait_for_status.override(
-      task_id="wait_for_node_pool_provisioning"
-  )(node_pool=node_pool_info, status=Status.PROVISIONING)
+  with TaskGroup(group_id="node_pool_ttr_flow") as ttr_group:
+    wait_provisioning = wait_for_status.override(
+        task_id="wait_for_node_pool_provisioning"
+    )(node_pool=node_pool_info, status=Status.PROVISIONING)
 
-  wait_running = wait_for_status.override(task_id="wait_for_node_pool_running")(
-      node_pool=node_pool_info, status=Status.RUNNING
-  )
+    wait_running = wait_for_status.override(
+        task_id="wait_for_node_pool_running"
+    )(node_pool=node_pool_info, status=Status.RUNNING)
 
-  wait_recovered = wait_for_status.override(
-      task_id="wait_for_node_pool_recovered"
-  )(node_pool=node_pool_info, status=Status.RUNNING)
+    if hasattr(trigger_task, "operator"):
+      ttr_group.add(trigger_task.operator)
+    elif not isinstance(trigger_task, XComArg):
+      ttr_group.add(trigger_task)
 
-  wait_ttr = wait_for_ttr(
-      node_pool=node_pool_info, operation_start_time=trigger_task
-  )
+    wait_recovered = wait_for_status.override(
+        task_id="wait_for_node_pool_recovered"
+    )(node_pool=node_pool_info, status=Status.RUNNING)
 
-  chain(wait_provisioning, wait_running, trigger_task, wait_recovered, wait_ttr)
+    wait_ttr = wait_for_ttr(
+        node_pool=node_pool_info, operation_start_time=trigger_task
+    )
 
-  return wait_provisioning, wait_ttr
+    chain(
+        wait_provisioning, wait_running, trigger_task, wait_recovered, wait_ttr
+    )
+
+  return ttr_group

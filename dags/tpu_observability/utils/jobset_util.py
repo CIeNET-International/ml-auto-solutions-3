@@ -29,8 +29,10 @@ from typing import Final
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from airflow.sensors.base import PokeReturnValue
+from airflow.utils.task_group import TaskGroup
 from google.cloud.monitoring_v3 import types
 from airflow.models.baseoperator import chain
+from airflow.models.xcom_arg import XComArg
 import kubernetes
 
 from dags.tpu_observability.utils import subprocess_util as subprocess
@@ -813,9 +815,11 @@ def run_jobset_ttr_validation_flow(
     pod_name_list: list[str],
     trigger_task,
 ):
-  """Unifies the JobSet TTR procedure into a single standard flow.
+  """Unifies the JobSet TTR procedure into a single TaskGroup.
 
-  This helper function encapsulates the standard 'Procedure of TTR' for JobSets:
+  This helper function encapsulates the standard 'Procedure of TTR' for JobSets
+  within an Airflow TaskGroup to ensure consistent execution order and cleaner
+  DAG visualization. It handles the following sequence:
   1. wait_for_jobset_started: Ensures the workload is running stably.
   2. trigger_task: Executes the provided failure injection task.
   3. wait_for_jobset_ttr_to_be_found: Verifies the TTR metric is recorded.
@@ -828,26 +832,33 @@ def run_jobset_ttr_validation_flow(
     trigger_task: The Airflow task instance that triggers the failure.
 
   Returns:
-    tuple: A tuple containing (wait_start_task, wait_ttr_task).
+    TaskGroup: A TaskGroup object (DAGNode) representing the unified TTR flow,
+      which can be easily chained with other tasks in the DAG.
   """
-  wait_start = wait_for_jobset_started.override(
-      task_id="wait_for_jobset_started"
-  )(
-      node_pool=node_pool,
-      pod_name_list=pod_name_list,
-      job_apply_time=apply_time,
-  )
+  with TaskGroup(group_id="jobset_ttr_flow") as ttr_group:
+    wait_start = wait_for_jobset_started.override(
+        task_id="wait_for_jobset_started"
+    )(
+        node_pool=node_pool,
+        pod_name_list=pod_name_list,
+        job_apply_time=apply_time,
+    )
 
-  wait_ttr = wait_for_jobset_ttr_to_be_found.override(
-      task_id="wait_for_jobset_ttr_metric"
-  )(
-      node_pool=node_pool,
-      jobset_config=jobset_config,
-  )
+    if hasattr(trigger_task, "operator"):
+      ttr_group.add(trigger_task.operator)
+    elif not isinstance(trigger_task, XComArg):
+      ttr_group.add(trigger_task)
 
-  chain(wait_start, trigger_task, wait_ttr)
+    wait_ttr = wait_for_jobset_ttr_to_be_found.override(
+        task_id="wait_for_jobset_ttr_metric"
+    )(
+        node_pool=node_pool,
+        jobset_config=jobset_config,
+    )
 
-  return wait_start, wait_ttr
+    chain(wait_start, trigger_task, wait_ttr)
+
+  return ttr_group
 
 
 def query_uptime_metrics(
