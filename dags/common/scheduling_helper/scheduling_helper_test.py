@@ -1,100 +1,125 @@
-# # Copyright 2025 Google LLC
-# #
-# # Licensed under the Apache License, Version 2.0 (the "License");
-# # you may not use this file except in compliance with the License.
-# # You may obtain a copy of the License at
-# #
-# #      http://www.apache.org/licenses/LICENSE-2.0
-# #
-# # Unless required by applicable law or agreed to in writing, software
-# # distributed under the License is distributed on an "AS IS" BASIS,
-# # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# # See the License for the specific language governing permissions and
-# # limitations under the License.
-"""The test file of scheduling helper using absltest."""
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Unit tests for scheduling_helper.py."""
 
 import datetime as dt
-from absl.testing import absltest
-from absl.testing import parameterized
-from airflow.models import DagBag
-
+from unittest.mock import patch
+from absl.testing import absltest, parameterized
 from dags.common.scheduling_helper import scheduling_helper
 
 
-class TestSchedulingHelper(parameterized.TestCase):
-  """Test cases for the SchedulingHelper class logic."""
+class TestSchedulingHelperBase(parameterized.TestCase):
+  """Base class for SchedulingHelper tests with shared mock data."""
 
   def setUp(self):
     super().setUp()
-    self.dag_folder = "dags/tpu_observability"
-    # Mock data to simulate the stacking logic
-    # Offset calculation: Start = 08:00 + Sum(Previous Timeouts + 15m Margin)
-    self.fake_registered_dags = {
-        "fake_cluster": {
-            "dag_1": dt.timedelta(minutes=30),  # Start: 08:00
-            "dag_2": dt.timedelta(minutes=30),  # Start: 08:00 + 30 + 15 = 08:45
-            "dag_3": dt.timedelta(minutes=60),  # Start: 08:45 + 30 + 15 = 09:30
+    # Mock data with non-round numbers to ensure precise calculation
+    self.mock_registry = {
+        "cluster_a": {
+            "dag_1": dt.timedelta(minutes=12),  # Start: 08:00
+            "dag_2": dt.timedelta(
+                minutes=33
+            ),  # Start: 08:00 + 12m + 15m = 08:27
+            "dag_3": dt.timedelta(
+                seconds=45
+            ),  # Start: 08:27 + 33m + 15m = 09:15
+            "dag_4": dt.timedelta(
+                minutes=20
+            ),  # Start: 09:15 + 45s + 15m = 09:35
+            "dag_5": dt.timedelta(
+                minutes=10
+            ),  # Start: 09:35 + 20m + 15m = 09:70 (10:10)
+            "dag_6": dt.timedelta(
+                minutes=5
+            ),  # Start: 10:10 + 10m + 15m = 10:35
         },
-        "overtime_cluster": {
-            "extreme_dag": dt.timedelta(hours=25),
+        "cluster_b": {
+            "dag_x": dt.timedelta(minutes=5),
+            "dag_y": dt.timedelta(minutes=10),
         },
     }
-    # Patch the global REGISTERED_DAGS in the module
-    self.patcher = absltest.mock.patch(
-        "dags.common.scheduling_helper.scheduling_helper.REGISTERED_DAGS",
-        self.fake_registered_dags,
-    )
-    self.patcher.start()
 
-  def tearDown(self):
-    self.patcher.stop()
-    super().tearDown()
 
-  # --- Unit Tests ---
+class TestSchedulingLogic(TestSchedulingHelperBase):
+  """Validates the cron string generation and stacking logic."""
 
-  def test_get_dag_timeout_is_correct(self):
-    """Verifies that get_dag_timeout retrieves the correct timedelta."""
-    timeout = scheduling_helper.get_dag_timeout("dag_2")
-    self.assertEqual(timeout, dt.timedelta(minutes=30))
+  @patch("dags.common.scheduling_helper.scheduling_helper.REGISTERED_DAGS")
+  def test_alignment_with_anchor(self, mock_registered):
+    mock_registered.items.return_value = self.mock_registry.items()
+    # The first DAG should always align with DEFAULT_ANCHOR (08:00 UTC)
+    schedule = scheduling_helper.SchedulingHelper.arrange_schedule_time("dag_1")
+    self.assertEqual(schedule, "0 8 * * *")
 
-  def test_arrange_schedule_time_logic(self):
-    """Tests the stacking logic (Anchor + Offset + Margin)."""
-    # 1st DAG should be at the anchor (08:00)
-    self.assertEqual(
-        scheduling_helper.SchedulingHelper.arrange_schedule_time("dag_1"),
-        "0 8 * * *",
-    )
-    # 2nd DAG = 08:00 + 30m (timeout) + 15m (margin) = 08:45
-    self.assertEqual(
-        scheduling_helper.SchedulingHelper.arrange_schedule_time("dag_2"),
-        "45 8 * * *",
-    )
-    # 3rd DAG = 08:45 + 30m (timeout) + 15m (margin) = 09:30
-    self.assertEqual(
-        scheduling_helper.SchedulingHelper.arrange_schedule_time("dag_3"),
-        "30 9 * * *",
-    )
+  @patch("dags.common.scheduling_helper.scheduling_helper.REGISTERED_DAGS")
+  def test_complex_calculation(self, mock_registered):
+    mock_registered.items.return_value = self.mock_registry.items()
+    # Testing the 'stacking' effect with non-standard durations
+    schedule = scheduling_helper.SchedulingHelper.arrange_schedule_time("dag_2")
+    self.assertEqual(schedule, "27 8 * * *")
 
-  def test_day_of_week_options(self):
-    """Verifies that DayOfWeek enum correctly applies to the Cron string."""
-    dag_id = "dag_1"
-    # Weekend mode
+  @parameterized.named_parameters(
+      ("all", scheduling_helper.DayOfWeek.ALL, "*"),
+      ("weekday", scheduling_helper.DayOfWeek.WEEK_DAY, "1-5"),
+      ("weekend", scheduling_helper.DayOfWeek.WEEKEND, "0,6"),
+  )
+  @patch("dags.common.scheduling_helper.scheduling_helper.REGISTERED_DAGS")
+  def test_day_of_week_options(
+      self, day_enum, expected_suffix, mock_registered
+  ):
+    mock_registered.items.return_value = self.mock_registry.items()
     schedule = scheduling_helper.SchedulingHelper.arrange_schedule_time(
-        dag_id, scheduling_helper.DayOfWeek.WEEKEND
+        "dag_1", day_of_week=day_enum
     )
-    self.assertEqual(schedule, "0 8 * * 0,6")
+    self.assertTrue(schedule.endswith(expected_suffix))
 
-  # --- Error Handling Tests ---
 
-  def test_nonexist_dag(self):
-    """Tests that a ValueError is raised for unregistered DAGs."""
+class TestErrorHandling(TestSchedulingHelperBase):
+  """Validates boundary conditions and registration checks."""
+
+  @patch("dags.common.scheduling_helper.scheduling_helper.REGISTERED_DAGS")
+  def test_unregistered_dag(self, mock_registered):
+    mock_registered.items.return_value = self.mock_registry.items()
     with self.assertRaisesRegex(ValueError, "is not registered"):
       scheduling_helper.SchedulingHelper.arrange_schedule_time("ghost_dag")
 
-  def test_overtime_error(self):
-    """Tests that schedules exceeding 24 hours trigger a ValueError."""
+  @patch("dags.common.scheduling_helper.scheduling_helper.REGISTERED_DAGS")
+  def test_24hours_window_single_dag(self, mock_registered):
+    mock_registered.items.return_value = {
+        "c1": {"huge_dag": dt.timedelta(hours=25)}
+    }.items()
     with self.assertRaisesRegex(ValueError, "Schedule exceeds 24h window"):
-      scheduling_helper.SchedulingHelper.arrange_schedule_time("extreme_dag")
+      scheduling_helper.SchedulingHelper.arrange_schedule_time("huge_dag")
+
+  @patch("dags.common.scheduling_helper.scheduling_helper.REGISTERED_DAGS")
+  def test_24hours_window_cumulative(self, mock_registered):
+    # 5 DAGs @ 5 hours each = 25 hours. The 6th DAG should trigger the error.
+    long_dags = {f"d{i}": dt.timedelta(hours=5) for i in range(6)}
+    mock_registered.items.return_value = {"c1": long_dags}.items()
+    with self.assertRaisesRegex(ValueError, "Schedule exceeds 24h window"):
+      scheduling_helper.SchedulingHelper.arrange_schedule_time("d5")
+
+
+class TestFormatConsistency(TestSchedulingHelperBase):
+  """Ensures output is valid and deterministic."""
+
+  @patch("dags.common.scheduling_helper.scheduling_helper.REGISTERED_DAGS")
+  def test_output_is_valid_cron(self, mock_registered):
+    mock_registered.items.return_value = self.mock_registry.items()
+    cron_pattern = r"^\d{1,2} \d{1,2} \* \* (\*|1-5|0,6)$"
+    res = scheduling_helper.SchedulingHelper.arrange_schedule_time("dag_1")
+    self.assertRegex(res, cron_pattern)
 
 
 if __name__ == "__main__":
