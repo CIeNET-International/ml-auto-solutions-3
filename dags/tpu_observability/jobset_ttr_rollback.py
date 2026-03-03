@@ -128,7 +128,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           task_id="rollback_node_pool"
       )(node_pool=cluster_info)
 
-      ttr_start, ttr_end = jobset.run_jobset_ttr_validation_flow(
+      ttr_flow = jobset.run_jobset_ttr_validation_flow(
           node_pool=cluster_info,
           jobset_config=jobset_config,
           apply_time=apply_time,
@@ -158,8 +158,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           create_node_pool,
           apply_time,
           running_pods,
-          ttr_start,
-          ttr_end,
+          ttr_flow,
           cleanup_workload,
           cleanup_node_pool,
       )
