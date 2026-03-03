@@ -300,6 +300,15 @@ class Command:
     ])
 
   @staticmethod
+  def k8s_delete_pod_command(
+      kubeconfig: str, pod_name: str, namespace: str
+  ) -> str:
+    return " ".join([
+        f"kubectl --kubeconfig={kubeconfig} delete pod {pod_name}",
+        f"-n {namespace} --wait=false",
+    ])
+
+  @staticmethod
   def k8s_suspend_jobset_command(
       kubeconfig: str, jobset_name: str, namespace: str
   ) -> str:
