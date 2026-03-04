@@ -32,7 +32,6 @@ from airflow.sensors.base import PokeReturnValue
 from airflow.utils.task_group import TaskGroup
 from google.cloud.monitoring_v3 import types
 from airflow.models.baseoperator import chain
-from airflow.models.xcom_arg import XComArg
 import kubernetes
 
 from dags.tpu_observability.utils import subprocess_util as subprocess
@@ -808,57 +807,52 @@ def wait_for_all_pods_running(
   return PokeReturnValue(is_done=False)
 
 
-def run_jobset_ttr_validation_flow(
+def get_jobset_ttr_validation_stages(
     node_pool: node_pool_info,
     jobset_config: JobSet,
     apply_time: TimeUtil,
     pod_name_list: list[str],
-    trigger_task,
-):
-  """Unifies the JobSet TTR procedure into a single TaskGroup.
+) -> tuple[TaskGroup, TaskGroup]:
+  """Provides standardized TTR stages (Prepare and Validate) for JobSets.
 
-  This helper function encapsulates the standard 'Procedure of TTR' for JobSets
-  within an Airflow TaskGroup to ensure consistent execution order and cleaner
-  DAG visualization. It handles the following sequence:
-  1. wait_for_jobset_started: Ensures the workload is running stably.
-  2. trigger_task: Executes the provided failure injection task.
-  3. wait_for_jobset_ttr_to_be_found: Verifies the TTR metric is recorded.
+  This helper follows the 3-stage TTR validation model:
+  1. Prepare (Stage 1): Ensures the JobSet is running stably.
+  2. Action (Stage 2): Disruptive task defined in the main DAG (not included here).
+  3. Validate (Stage 3): Verifies the TTR metric is recorded.
+
+  By returning Stage 1 and Stage 3 separately, this function allows the main DAG
+  to flexibily chain them with any custom Stage 2 action task.
 
   Args:
-    node_pool: Configuration object with cluster details.
-    jobset_config: The JobSet object containing configuration details.
-    apply_time: The UTC time when the workload was started.
-    pod_name_list: A list of active pod names for monitoring.
-    trigger_task: The Airflow task instance that triggers the failure.
+      node_pool: Configuration object with cluster details.
+      jobset_config: The JobSet object containing configuration details.
+      apply_time: The UTC time when the workload was started.
+      pod_name_list: A list of active pod names for monitoring.
 
   Returns:
-    TaskGroup: A TaskGroup object (DAGNode) representing the unified TTR flow,
-      which can be easily chained with other tasks in the DAG.
+      tuple[TaskGroup, TaskGroup]: A tuple containing (prepare_tg, validate_tg),
+          which should be chained in the DAG as:
+          prepare_tg >> action_task >> validate_tg.
   """
-  with TaskGroup(group_id="jobset_ttr_flow") as ttr_group:
-    wait_start = wait_for_jobset_started.override(
-        task_id="wait_for_jobset_started"
-    )(
+
+  # Stage 1: Prepare
+  with TaskGroup(group_id="prepare_ttr") as prepare_tg:
+    wait_for_jobset_started.override(task_id="wait_for_jobset_started")(
         node_pool=node_pool,
         pod_name_list=pod_name_list,
         job_apply_time=apply_time,
     )
 
-    if hasattr(trigger_task, "operator"):
-      ttr_group.add(trigger_task.operator)
-    elif not isinstance(trigger_task, XComArg):
-      ttr_group.add(trigger_task)
-
-    wait_ttr = wait_for_jobset_ttr_to_be_found.override(
+  # Stage 3: Validate
+  with TaskGroup(group_id="validate_ttr") as validate_tg:
+    wait_for_jobset_ttr_to_be_found.override(
         task_id="wait_for_jobset_ttr_metric"
     )(
         node_pool=node_pool,
         jobset_config=jobset_config,
     )
 
-    chain(wait_start, trigger_task, wait_ttr)
-
-  return ttr_group
+  return prepare_tg, validate_tg
 
 
 def query_uptime_metrics(
