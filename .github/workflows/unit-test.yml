@@ -30,4 +30,4 @@ jobs:
     - name: Run tests
       run: |
         python3 -m unittest discover xlml "*_test.py"
-        python3 -m dags.common.scheduling_helper.scheduling_helper_test
+        python3 -m unittest discover dags.common.scheduling_helper "*_test.py"

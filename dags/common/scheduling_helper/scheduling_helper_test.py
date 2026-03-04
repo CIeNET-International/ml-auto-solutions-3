@@ -17,6 +17,7 @@
 import datetime as dt
 from unittest.mock import patch
 from absl.testing import absltest, parameterized
+
 from dags.common.scheduling_helper import scheduling_helper
 
 
@@ -56,16 +57,34 @@ class TestSchedulingLogic(TestSchedulingHelperBase):
   """Validates the cron string generation and stacking logic."""
 
   @patch("dags.common.scheduling_helper.scheduling_helper.REGISTERED_DAGS")
+  def test_stacking_logic_sequence(self, mock_registered):
+    """Verifies multiple DAGs in sequence to ensure cumulative offset is correct."""
+    mock_registered.items.return_value = self.mock_registry.items()
+
+    expected_schedules = {
+        "dag_2": "27 8 * * *",
+        "dag_3": "15 9 * * *",
+        "dag_4": "30 9 * * *",
+        "dag_5": "5 10 * * *",
+        "dag_6": "30 10 * * *",
+    }
+
+    for dag_id, expected_cron in expected_schedules.items():
+      with self.subTest(dag_id=dag_id):
+        actual = scheduling_helper.SchedulingHelper.arrange_schedule_time(
+            dag_id
+        )
+        self.assertEqual(actual, expected_cron, f"Failed schedule for {dag_id}")
+
+  @patch("dags.common.scheduling_helper.scheduling_helper.REGISTERED_DAGS")
   def test_alignment_with_anchor(self, mock_registered):
     mock_registered.items.return_value = self.mock_registry.items()
-    # The first DAG should always align with DEFAULT_ANCHOR (08:00 UTC)
     schedule = scheduling_helper.SchedulingHelper.arrange_schedule_time("dag_1")
     self.assertEqual(schedule, "0 8 * * *")
 
   @patch("dags.common.scheduling_helper.scheduling_helper.REGISTERED_DAGS")
   def test_complex_calculation(self, mock_registered):
     mock_registered.items.return_value = self.mock_registry.items()
-    # Testing the 'stacking' effect with non-standard durations
     schedule = scheduling_helper.SchedulingHelper.arrange_schedule_time("dag_2")
     self.assertEqual(schedule, "27 8 * * *")
 
@@ -80,9 +99,12 @@ class TestSchedulingLogic(TestSchedulingHelperBase):
   ):
     mock_registered.items.return_value = self.mock_registry.items()
     schedule = scheduling_helper.SchedulingHelper.arrange_schedule_time(
-        "dag_1", day_of_week=day_enum
+        "dag_6", day_of_week=day_enum
     )
-    self.assertTrue(schedule.endswith(expected_suffix))
+    self.assertTrue(
+        schedule.endswith(expected_suffix),
+        f"Schedule {schedule} does not end with {expected_suffix}",
+    )
 
 
 class TestErrorHandling(TestSchedulingHelperBase):
