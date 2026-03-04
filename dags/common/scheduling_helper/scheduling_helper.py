@@ -68,6 +68,12 @@ def get_dag_timeout(dag_id: str) -> dt.timedelta:
   )
 
 
+class SchedulingError(ValueError):
+  """Custom exception for scheduling logic errors."""
+
+  pass
+
+
 class SchedulingHelper:
   """Manages DAG scheduling across different clusters."""
 
@@ -92,7 +98,7 @@ class SchedulingHelper:
         if offset >= dt.timedelta(hours=24) or timeout >= dt.timedelta(
             hours=24
         ):
-          raise ValueError(
+          raise SchedulingError(
               f"Schedule exceeds 24h window at '{dag_id} '"
               f"in cluster '{cluster_name}'."
           )
@@ -102,6 +108,6 @@ class SchedulingHelper:
           return f"{schedule.minute} {schedule.hour} * * {day_of_week.value}"
         offset += timeout + cls.DEFAULT_MARGIN
 
-    raise ValueError(
+    raise SchedulingError(
         f"DAG '{dag_id}' is not registered. Please add it to REGISTERED_DAGS."
     )

@@ -62,11 +62,14 @@ class TestSchedulingLogic(TestSchedulingHelperBase):
     mock_registered.items.return_value = self.mock_registry.items()
 
     expected_schedules = {
+        "dag_1": "0 8 * * *",
         "dag_2": "27 8 * * *",
         "dag_3": "15 9 * * *",
         "dag_4": "30 9 * * *",
         "dag_5": "5 10 * * *",
         "dag_6": "30 10 * * *",
+        "dag_x": "0 8 * * *",
+        "dag_y": "20 8 * * *",
     }
 
     for dag_id, expected_cron in expected_schedules.items():
@@ -75,6 +78,19 @@ class TestSchedulingLogic(TestSchedulingHelperBase):
             dag_id
         )
         self.assertEqual(actual, expected_cron, f"Failed schedule for {dag_id}")
+
+  @patch("dags.common.scheduling_helper.scheduling_helper.REGISTERED_DAGS")
+  def test_output_is_invariant(self, mock_registered):
+    """Ensures output is deterministic when configs are unchanged."""
+    mock_registered.items.return_value = self.mock_registry.items()
+
+    # Running the same DAG multiple times should always yield the same result
+    res1 = scheduling_helper.SchedulingHelper.arrange_schedule_time("dag_6")
+    res2 = scheduling_helper.SchedulingHelper.arrange_schedule_time("dag_6")
+    res3 = scheduling_helper.SchedulingHelper.arrange_schedule_time("dag_6")
+
+    self.assertEqual(res1, res2)
+    self.assertEqual(res2, res3)
 
   @patch("dags.common.scheduling_helper.scheduling_helper.REGISTERED_DAGS")
   def test_alignment_with_anchor(self, mock_registered):
@@ -113,24 +129,27 @@ class TestErrorHandling(TestSchedulingHelperBase):
   @patch("dags.common.scheduling_helper.scheduling_helper.REGISTERED_DAGS")
   def test_unregistered_dag(self, mock_registered):
     mock_registered.items.return_value = self.mock_registry.items()
-    with self.assertRaisesRegex(ValueError, "is not registered"):
+    with self.assertRaises(scheduling_helper.SchedulingError) as cm:
       scheduling_helper.SchedulingHelper.arrange_schedule_time("ghost_dag")
+    self.assertIn("is not registered", str(cm.exception))
 
   @patch("dags.common.scheduling_helper.scheduling_helper.REGISTERED_DAGS")
   def test_24hours_window_single_dag(self, mock_registered):
     mock_registered.items.return_value = {
         "c1": {"huge_dag": dt.timedelta(hours=25)}
     }.items()
-    with self.assertRaisesRegex(ValueError, "Schedule exceeds 24h window"):
+    with self.assertRaises(scheduling_helper.SchedulingError) as cm:
       scheduling_helper.SchedulingHelper.arrange_schedule_time("huge_dag")
+    self.assertIn("Schedule exceeds 24h window", str(cm.exception))
 
   @patch("dags.common.scheduling_helper.scheduling_helper.REGISTERED_DAGS")
   def test_24hours_window_cumulative(self, mock_registered):
     # 5 DAGs @ 5 hours each = 25 hours. The 6th DAG should trigger the error.
     long_dags = {f"d{i}": dt.timedelta(hours=5) for i in range(6)}
     mock_registered.items.return_value = {"c1": long_dags}.items()
-    with self.assertRaisesRegex(ValueError, "Schedule exceeds 24h window"):
+    with self.assertRaises(scheduling_helper.SchedulingError) as cm:
       scheduling_helper.SchedulingHelper.arrange_schedule_time("d5")
+    self.assertIn("Schedule exceeds 24h window", str(cm.exception))
 
 
 class TestFormatConsistency(TestSchedulingHelperBase):
