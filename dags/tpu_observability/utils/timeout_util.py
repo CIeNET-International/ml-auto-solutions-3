@@ -1,3 +1,17 @@
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import logging
 import time
 from typing import List
@@ -77,11 +91,11 @@ class TimeoutUtil:
 
     prefix = TimeoutUtil.get_group_prefix(ti.task_id)
     logging.info(f"[CALLBACK] Starting automated cleanup for group: {prefix}")
-    Timeout_count = TimeoutUtil.terminate_group(
+    timeout_count = TimeoutUtil.terminate_group(
         context["dag_run"], prefix, ti.task_id
     )
     logging.info(
-        f"[CALLBACK] Cleanup finished. {Timeout_count} tasks terminated."
+        f"[CALLBACK] Cleanup finished. {timeout_count} tasks terminated."
     )
 
   @staticmethod
@@ -151,12 +165,13 @@ class TimeoutUtil:
           dag_run.dag_id, dag_run.run_id, target_id
       )
       logging.info(
-          f"[MONITOR] Progress: {elapsed}min/{timeout_minutes}min ({progress_pct:.1f}%) | "
+          f"Progress: {elapsed}min/{timeout_minutes}min \({progress_pct:.1f}%)"
+          " | "
           f"Remaining: {remaining}min | Target: {target_id} | States: {states}"
       )
 
       if states:
-        logging.info(f"[MONITOR] {target_id} states: {states}")
+        logging.info(f"{target_id} states: {states}")
         if all(s == "success" for s in states):
           return "Phase Success"
         if any(s in ["failed", "upstream_failed"] for s in states):
@@ -165,9 +180,7 @@ class TimeoutUtil:
       time.sleep(interval * 60)
       elapsed += interval
 
-    logging.error(
-        f"[MONITOR TIMEOUT] Reached limit of {timeout_minutes}min. Triggering cleanup..."
-    )
+    logging.error(f"[MONITOR TIMEOUT] Reached limit of {timeout_minutes}min.")
     raise AirflowTaskTimeout(
-        f"Group {prefix} timed out waiting for {target_id} (Elapsed: {elapsed}min)"
+        f"Group {prefix} timed out waiting for {target_id}"
     )

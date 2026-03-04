@@ -33,7 +33,7 @@ from dags import composer_env
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils import subprocess_util as subprocess
-from dags.tpu_observability.utils.jobset_util import JobSet, Workload
+from dags.tpu_observability.utils.jobset_util import Workload
 from dags.tpu_observability.configs.common import (
     MachineConfigMap,
     GCS_CONFIG_PATH,
@@ -131,7 +131,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     with TaskGroup(  # pylint: disable=unexpected-keyword-arg
         group_id=f"v{config.tpu_version.value}"
     ):
-      with TaskGroup(group_id="pre_test"):
+      with TaskGroup(group_id="pre_test"):  # pylint: disable=unexpected-keyword-arg
         selector = jobset.generate_node_pool_selector("jobset-ttr-kill-process")
 
         jobset_config = jobset.build_jobset_from_gcs_yaml(
@@ -159,7 +159,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 
         pre_timer = TimeoutUtil.monitor_group(timeout_minutes=PRE_TEST_TIMEOUT)
 
-      with TaskGroup(group_id="testing"):
+      with TaskGroup(group_id="testing"):  # pylint: disable=unexpected-keyword-arg
         apply_time = jobset.run_workload.override(task_id="run_workload")(
             node_pool=cluster_info,
             jobset_config=jobset_config,
@@ -198,7 +198,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 
         test_timer = TimeoutUtil.monitor_group(timeout_minutes=TEST_TIMEOUT)
 
-      with TaskGroup(group_id="post_test"):
+      with TaskGroup(group_id="post_test"):  # pylint: disable=unexpected-keyword-arg
         cleanup_workload = jobset.end_workload.override(
             task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
         )(
@@ -218,6 +218,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             timeout_minutes=POST_TEST_TIMEOUT
         )
 
+      # pylint: disable=unexpected-keyword-arg
       [selector, jobset_config, cluster_info] >> create_node_pool
       [selector, jobset_config, cluster_info] >> pre_timer
 
@@ -232,3 +233,4 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 
       wait_for_metric_upload >> [cleanup_workload, post_timer]
       cleanup_workload >> cleanup_node_pool
+      # pylint: disable=unexpected-keyword-arg
