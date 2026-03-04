@@ -145,9 +145,16 @@ class TimeoutUtil:
     elapsed = 0
     interval = 5
     while elapsed < timeout_seconds:
+      remaining = timeout_seconds - elapsed
+      progress_pct = (elapsed / timeout_seconds) * 100
       states = TimeoutUtil.get_fresh_states(
           dag_run.dag_id, dag_run.run_id, target_id
       )
+      logging.info(
+          f"[MONITOR] Progress: {elapsed}s/{timeout_seconds}s ({progress_pct:.1f}%) | "
+          f"Remaining: {remaining}s | Target: {target_id} | States: {states}"
+      )
+
       if states:
         logging.info(f"[MONITOR] {target_id} states: {states}")
         if all(s == "success" for s in states):
@@ -158,6 +165,9 @@ class TimeoutUtil:
       time.sleep(interval)
       elapsed += interval
 
+    logging.error(
+        f"[MONITOR TIMEOUT] Reached limit of {timeout_seconds}s. Triggering cleanup..."
+    )
     raise AirflowTaskTimeout(
-        f"Group {prefix} timed out waiting for {target_id}"
+        f"Group {prefix} timed out waiting for {target_id} (Elapsed: {elapsed}s)"
     )

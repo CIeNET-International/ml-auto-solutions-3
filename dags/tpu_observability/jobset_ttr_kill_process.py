@@ -154,7 +154,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             node_pool=cluster_info,
         )
 
-        pre_timer = TimeoutUtil.monitor_group(timeout_seconds=900)  # 15 min
+        pre_timer = TimeoutUtil.monitor_group(timeout_seconds=60)  # 1 min
 
       with TaskGroup(group_id="testing"):
         apply_time = jobset.run_workload.override(task_id="run_workload")(
@@ -193,7 +193,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             )
         )
 
-        test_timer = TimeoutUtil.monitor_group(timeout_seconds=1200)  # 20 min
+        test_timer = TimeoutUtil.monitor_group(timeout_seconds=600)  # 10 min
 
       with TaskGroup(group_id="post_test"):
         cleanup_workload = jobset.end_workload.override(
@@ -211,7 +211,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             setups=create_node_pool,
         )
 
-        post_timer = TimeoutUtil.monitor_group(timeout_seconds=600)  # 10 min
+        post_timer = TimeoutUtil.monitor_group(timeout_seconds=1200)  # 20 min
 
       chain(
           [selector, jobset_config, cluster_info],
