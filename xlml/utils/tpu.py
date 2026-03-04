@@ -54,28 +54,6 @@ def generate_tpu_name(
   return tpu_name
 
 
-def add_ssh_key_to_oslogin(ssh_public_key: str, project_id: str):
-  """Adds an SSH public key to the authenticated
-  service account's OS Login profile."""
-  try:
-    creds, _ = google.auth.default()
-    oslogin_service = discovery.build('oslogin', 'v1', credentials=creds)
-
-    email = (
-        'ml-auto-solutions@cloud-ml-auto-solutions' '.iam.gserviceaccount.com'
-    )
-    user_parent = f'users/{email}'
-    body = {'key': ssh_public_key}
-
-    request = oslogin_service.users().importSshPublicKey(
-        parent=user_parent, body=body, projectId=project_id
-    )
-    response = request.execute()
-    logging.info(f'Successfully imported SSH key to OS Login profile.')
-  except Exception as e:
-    logging.error(f'Failed to add SSH key to OS Login profile: {e}')
-
-
 def create_queued_resource(
     tpu_name: airflow.XComArg,
     gcp: gcp_config.GCPConfig,
