@@ -35,7 +35,7 @@ with models.DAG(
     dag_id=DAG_ID,
     start_date=datetime.datetime(2025, 9, 30),
     schedule=SCHEDULE if composer_env.is_prod_env() else None,
-    dagrun_timeout=DAGRUN_TIMEOUT,
+    dagrun_timeout=datetime.timedelta(minutes=DAGRUN_TIMEOUT),
     catchup=False,
     tags=[
         "gke",

@@ -129,7 +129,7 @@ class TimeoutUtil:
       if hasattr(cleanup_callback, "__func__")
       else cleanup_callback,
   )
-  def monitor_group(timeout_seconds: int, **context):
+  def monitor_group(timeout_minutes: int, **context):
     """The @task decorated monitor logic for TaskGroups."""
     ti = context["task_instance"]
     dag_obj = context["dag"]
@@ -143,16 +143,16 @@ class TimeoutUtil:
     )
 
     elapsed = 0
-    interval = 5
-    while elapsed < timeout_seconds:
-      remaining = timeout_seconds - elapsed
-      progress_pct = (elapsed / timeout_seconds) * 100
+    interval = 1
+    while elapsed < timeout_minutes:
+      remaining = timeout_minutes - elapsed
+      progress_pct = (elapsed / timeout_minutes) * 100
       states = TimeoutUtil.get_fresh_states(
           dag_run.dag_id, dag_run.run_id, target_id
       )
       logging.info(
-          f"[MONITOR] Progress: {elapsed}s/{timeout_seconds}s ({progress_pct:.1f}%) | "
-          f"Remaining: {remaining}s | Target: {target_id} | States: {states}"
+          f"[MONITOR] Progress: {elapsed}min/{timeout_minutes}min ({progress_pct:.1f}%) | "
+          f"Remaining: {remaining}min | Target: {target_id} | States: {states}"
       )
 
       if states:
@@ -162,12 +162,12 @@ class TimeoutUtil:
         if any(s in ["failed", "upstream_failed"] for s in states):
           return "Phase Failed Early"
 
-      time.sleep(interval)
+      time.sleep(interval * 60)
       elapsed += interval
 
     logging.error(
-        f"[MONITOR TIMEOUT] Reached limit of {timeout_seconds}s. Triggering cleanup..."
+        f"[MONITOR TIMEOUT] Reached limit of {timeout_minutes}min. Triggering cleanup..."
     )
     raise AirflowTaskTimeout(
-        f"Group {prefix} timed out waiting for {target_id} (Elapsed: {elapsed}s)"
+        f"Group {prefix} timed out waiting for {target_id} (Elapsed: {elapsed}min)"
     )

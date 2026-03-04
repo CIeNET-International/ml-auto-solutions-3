@@ -45,6 +45,9 @@ from dags.tpu_observability.utils.timeout_util import TimeoutUtil
 
 DAG_ID = "jobset_ttr_kill_process"
 DAGRUN_TIMEOUT = get_dag_timeout(DAG_ID)
+PRE_TEST_TIMEOUT = 20
+TEST_TIMEOUT = 30
+POST_TEST_TIMEOUT = DAGRUN_TIMEOUT - PRE_TEST_TIMEOUT - TEST_TIMEOUT
 SCHEDULE = SchedulingHelper.arrange_schedule_time(DAG_ID)
 
 
@@ -80,7 +83,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     dag_id=DAG_ID,
     start_date=datetime.datetime(2025, 8, 10),
     schedule=SCHEDULE if composer_env.is_prod_env() else None,
-    dagrun_timeout=DAGRUN_TIMEOUT,
+    dagrun_timeout=datetime.timedelta(minutes=DAGRUN_TIMEOUT),
     catchup=False,
     tags=[
         "cloud-ml-auto-solutions",
@@ -154,7 +157,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             node_pool=cluster_info,
         )
 
-        pre_timer = TimeoutUtil.monitor_group(timeout_seconds=60)  # 1 min
+        pre_timer = TimeoutUtil.monitor_group(timeout_minutes=PRE_TEST_TIMEOUT)
 
       with TaskGroup(group_id="testing"):
         apply_time = jobset.run_workload.override(task_id="run_workload")(
@@ -193,7 +196,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             )
         )
 
-        test_timer = TimeoutUtil.monitor_group(timeout_seconds=600)  # 10 min
+        test_timer = TimeoutUtil.monitor_group(timeout_minutes=TEST_TIMEOUT)
 
       with TaskGroup(group_id="post_test"):
         cleanup_workload = jobset.end_workload.override(
@@ -211,22 +214,21 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             setups=create_node_pool,
         )
 
-        post_timer = TimeoutUtil.monitor_group(timeout_seconds=1200)  # 20 min
+        post_timer = TimeoutUtil.monitor_group(
+            timeout_minutes=POST_TEST_TIMEOUT
+        )
 
-      chain(
-          [selector, jobset_config, cluster_info],
-          [create_node_pool, pre_timer],
+      [selector, jobset_config, cluster_info] >> create_node_pool
+      [selector, jobset_config, cluster_info] >> pre_timer
+
+      create_node_pool >> [apply_time, test_timer]
+      (
+          apply_time
+          >> running_pods
+          >> wait_for_job_start
+          >> kill_tasks
+          >> wait_for_metric_upload
       )
 
-      chain(
-          [apply_time, test_timer],
-          running_pods,
-          wait_for_job_start,
-          kill_tasks,
-          wait_for_metric_upload,
-      )
-
-      chain(cleanup_workload, [cleanup_node_pool, post_timer])
-
-      chain(create_node_pool, apply_time)
-      chain(wait_for_metric_upload, cleanup_workload)
+      wait_for_metric_upload >> [cleanup_workload, post_timer]
+      cleanup_workload >> cleanup_node_pool
