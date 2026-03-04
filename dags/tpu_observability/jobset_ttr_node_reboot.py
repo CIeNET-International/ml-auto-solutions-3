@@ -38,7 +38,6 @@ from dags.tpu_observability.configs.common import (
     GCS_CONFIG_PATH,
     GCS_JOBSET_CONFIG_PATH,
 )
-from xlml.utils.tpu import add_ssh_key_to_oslogin
 from xlml.utils.ssh import SshKeys, obtain_persist_ssh_keys
 
 
@@ -74,7 +73,7 @@ def random_node_reboot(info: node_pool.Info, keys: SshKeys):
   # OS Login Setup
   # Register public key and retrieve the POSIX username
   mask_secret(keys.private)
-  add_ssh_key_to_oslogin(keys.public, info.project_id)
+  logging.info("Using pre-registered OS Login keys for authentication.")
   os_user = keys.user
 
   # Execute Reboot via Fabric
