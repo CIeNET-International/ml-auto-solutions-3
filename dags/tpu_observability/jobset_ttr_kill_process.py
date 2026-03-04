@@ -163,18 +163,17 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           jobset_config=jobset_config,
       )
 
-      kill_tasks = (
-          kill_tpu_pod_workload.override(task_id="kill_tpu_pod_workload")
-          .partial(info=cluster_info)
-          .expand(pod_name=running_pods)
-      )
-
-      ttr_flow = jobset.run_jobset_ttr_validation_flow(
+      prepare_ttr, validate_ttr = jobset.get_jobset_ttr_validation_stages(
           node_pool=cluster_info,
           jobset_config=jobset_config,
           apply_time=apply_time,
           pod_name_list=running_pods,
-          trigger_task=kill_tasks,
+      )
+
+      kill_tasks = (
+          kill_tpu_pod_workload.override(task_id="kill_tpu_pod_workload")
+          .partial(info=cluster_info)
+          .expand(pod_name=running_pods)
       )
 
       cleanup_workload = jobset.end_workload.override(
@@ -199,7 +198,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           create_node_pool,
           apply_time,
           running_pods,
-          ttr_flow,
+          prepare_ttr,
+          kill_tasks,
+          validate_ttr,
           cleanup_workload,
           cleanup_node_pool,
       )

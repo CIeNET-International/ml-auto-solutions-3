@@ -94,9 +94,9 @@ with models.DAG(
           spec=node_pool.NodePoolUpdateSpec.Label(delta=LABELS_TO_UPDATE),
       )
 
-      ttr_flow = node_pool.run_node_pool_ttr_validation_flow(
+      prepare_ttr, validate_ttr = node_pool.get_node_pool_ttr_validation_stages(
           node_pool_info=node_pool_info,
-          trigger_task=update_node_pool_label,
+          operation_start_time=update_node_pool_label,
       )
 
       task_id = "cleanup_node_pool"
@@ -109,6 +109,8 @@ with models.DAG(
       chain(
           node_pool_info,
           create_node_pool,
-          ttr_flow,
+          prepare_ttr,
+          update_node_pool_label,
+          validate_ttr,
           cleanup_node_pool,
       )

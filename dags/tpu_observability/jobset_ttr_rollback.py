@@ -124,17 +124,16 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           jobset_config=jobset_config,
       )
 
-      rollback_node_pool = node_pool.rollback.override(
-          task_id="rollback_node_pool"
-      )(node_pool=cluster_info)
-
-      ttr_flow = jobset.run_jobset_ttr_validation_flow(
+      prepare_ttr, validate_ttr = jobset.get_jobset_ttr_validation_stages(
           node_pool=cluster_info,
           jobset_config=jobset_config,
           apply_time=apply_time,
           pod_name_list=running_pods,
-          trigger_task=rollback_node_pool,
       )
+
+      rollback_node_pool = node_pool.rollback.override(
+          task_id="rollback_node_pool"
+      )(node_pool=cluster_info)
 
       cleanup_workload = jobset.end_workload.override(
           task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
@@ -158,7 +157,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           create_node_pool,
           apply_time,
           running_pods,
-          ttr_flow,
+          prepare_ttr,
+          rollback_node_pool,
+          validate_ttr,
           cleanup_workload,
           cleanup_node_pool,
       )
