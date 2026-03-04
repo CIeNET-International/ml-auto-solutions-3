@@ -95,9 +95,9 @@ with models.DAG(
           ),
       )
 
-      ttr_flow = node_pool.run_node_pool_ttr_validation_flow(
+      prepare_ttr, validate_ttr = node_pool.get_node_pool_ttr_validation_stages(
           node_pool_info=node_pool_info,
-          trigger_task=update_start_time,
+          operation_start_time=update_start_time,
       )
 
       cleanup_node_pool = node_pool.delete.override(
@@ -109,6 +109,8 @@ with models.DAG(
       chain(
           node_pool_info,
           create_node_pool,
-          ttr_flow,
+          prepare_ttr,
+          update_start_time,
+          validate_ttr,
           cleanup_node_pool,
       )

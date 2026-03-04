@@ -127,19 +127,18 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           jobset_config=jobset_config,
       )
 
+      prepare_ttr, validate_ttr = jobset.get_jobset_ttr_validation_stages(
+          node_pool=cluster_info,
+          jobset_config=jobset_config,
+          apply_time=apply_time,
+          pod_name_list=running_pods,
+      )
+
       node_pool_resize = node_pool.update.override(task_id="node_pool_resize")(
           node_pool=cluster_info,
           spec=node_pool.NodePoolUpdateSpec.DiskSize(
               delta=_DISK_SIZE_INCREMENT
           ),
-      )
-
-      ttr_flow = jobset.run_jobset_ttr_validation_flow(
-          node_pool=cluster_info,
-          jobset_config=jobset_config,
-          apply_time=apply_time,
-          pod_name_list=running_pods,
-          trigger_task=node_pool_resize,
       )
 
       cleanup_workload = jobset.end_workload.override(
@@ -164,7 +163,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           create_node_pool,
           apply_time,
           running_pods,
-          ttr_flow,
+          prepare_ttr,
+          node_pool_resize,
+          validate_ttr,
           cleanup_workload,
           cleanup_node_pool,
       )
