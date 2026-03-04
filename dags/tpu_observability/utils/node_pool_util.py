@@ -814,9 +814,23 @@ def get_node_pool_ttr_validation_stages(
 ) -> tuple[TaskGroup, TaskGroup]:
   """Provides standardized TTR stages (Prepare and Validate) for Node Pools.
 
+  This helper follows the 3-stage TTR validation model:
+  1. Prepare (Stage 1): Monitors the initial provisioning and running phase.
+  2. Action (Stage 2): Disruptive task defined in the main DAG (not included here).
+  3. Validate (Stage 3): Confirms recovery and verifies TTR metrics are recorded.
+
+  By returning Stage 1 and Stage 3 separately as TaskGroup objects, this function
+  allows the main DAG to flexibly chain them with any custom Stage 2 action task.
+
   Args:
     node_pool_info: An instance of Info class with node pool metadata.
-    operation_start_time: The task whose completion marks the start of TTR.
+    operation_start_time: The task whose completion marks the start of TTR,
+        used by the TTR sensor in Stage 3 to calculate recovery time.
+
+  Returns:
+    tuple[TaskGroup, TaskGroup]: A tuple containing (prepare_tg, validate_tg),
+        which should be chained in the DAG as:
+        prepare_tg >> action_task >> validate_tg.
   """
 
   # Stage 1: Prepare
