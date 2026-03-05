@@ -67,6 +67,7 @@ class TestBaseSchedulingFeature(TestSchedulingHelperBase):
   @patch("dags.common.scheduling_helper.scheduling_helper.REGISTERED_DAGS")
   def test_stacking_logic_sequence(self, mock_registered):
     """Verifies the cumulative offset for the entire sequence."""
+
     mock_registered.items.return_value = self.mock_registry.items()
     for dag_id, expected_cron in self.expected_schedules.items():
       with self.subTest(dag_id=dag_id):
@@ -78,6 +79,7 @@ class TestBaseSchedulingFeature(TestSchedulingHelperBase):
   @patch("dags.common.scheduling_helper.scheduling_helper.REGISTERED_DAGS")
   def test_output_is_invariant(self, mock_registered):
     """Ensures deterministic output across multiple identical calls."""
+
     mock_registered.items.return_value = self.mock_registry.items()
     for dag_id, expected_cron in self.expected_schedules.items():
       with self.subTest(dag_id=dag_id):
@@ -88,6 +90,8 @@ class TestBaseSchedulingFeature(TestSchedulingHelperBase):
 
   @patch("dags.common.scheduling_helper.scheduling_helper.REGISTERED_DAGS")
   def test_alignment_with_anchor(self, mock_registered):
+    """Validates that all schedules align with the anchor time."""
+
     mock_registered.items.return_value = self.mock_registry.items()
     schedule = scheduling_helper.SchedulingHelper.arrange_schedule_time("dag_1")
     self.assertEqual(schedule, self.expected_schedules["dag_1"])
@@ -101,6 +105,8 @@ class TestBaseSchedulingFeature(TestSchedulingHelperBase):
   def test_day_of_week_options(
       self, day_enum, expected_suffix, mock_registered
   ):
+    """Checks that the correct day-of-week field is set in the cron string."""
+
     mock_registered.items.return_value = self.mock_registry.items()
     schedule = scheduling_helper.SchedulingHelper.arrange_schedule_time(
         "dag_6", day_of_week=day_enum
@@ -116,12 +122,19 @@ class TestUnexpectedCases(TestSchedulingHelperBase):
 
   @patch("dags.common.scheduling_helper.scheduling_helper.REGISTERED_DAGS")
   def test_unregistered_dag(self, mock_registered):
+    """
+    Ensures that requesting a schedule for an unregistered DAG
+    raises the correct error.
+    """
+
     mock_registered.items.return_value = self.mock_registry.items()
     with self.assertRaises(scheduling_helper.UnregisteredDagError):
       scheduling_helper.SchedulingHelper.arrange_schedule_time("ghost_dag")
 
   @patch("dags.common.scheduling_helper.scheduling_helper.REGISTERED_DAGS")
   def test_24hours_window_cumulative(self, mock_registered):
+    """Validates that the cumulative schedule does not exceed 24 hours."""
+
     long_dags = {f"d{i}": dt.timedelta(hours=5) for i in range(6)}
     mock_registered.items.return_value = {"c1": long_dags}.items()
     with self.assertRaises(scheduling_helper.ScheduleWindowError):
@@ -129,6 +142,10 @@ class TestUnexpectedCases(TestSchedulingHelperBase):
 
   @patch("dags.common.scheduling_helper.scheduling_helper.REGISTERED_DAGS")
   def test_24hours_window_single_dag(self, mock_registered):
+    """
+    Ensures that a single DAG with a duration exceeding 24 hours is rejected.
+    """
+
     mock_registered.items.return_value = {
         "c1": {"huge_dag": dt.timedelta(hours=25)}
     }.items()
@@ -142,10 +159,21 @@ class TestFormatIntegrity(TestSchedulingHelperBase):
 
   @patch("dags.common.scheduling_helper.scheduling_helper.REGISTERED_DAGS")
   def test_output_is_valid_cron(self, mock_registered):
+    """Validates that the generated cron string adheres to expected format."""
+
     mock_registered.items.return_value = self.mock_registry.items()
-    cron_pattern = r"^([0-5]?\d) ([0-1]?\d|2[0-3]) \* \* (\*|1-5|0,6)$"
+    # Minute field: matches 0-59 to ensure valid minute range.
+    minute = r"[0-5]?\d"
+    # Hour field: matches 0-23 to ensure valid hour range.
+    hour = r"[0-1]?\d|2[0-3]"
+    # SchedulingHelper currently only supports a once-a-day schedule.
+    fixed = r"\*"
+    # Corresponds to the DayOfWeek Enum.
+    week = r"\*|1-5|0,6"
+    # Final assembled expected cron pattern for validation.
+    pattern = rf"^{minute} {hour} {fixed} {fixed} {week}$"
     res = scheduling_helper.SchedulingHelper.arrange_schedule_time("dag_1")
-    self.assertRegex(res, cron_pattern)
+    self.assertRegex(res, pattern)
 
 
 if __name__ == "__main__":
