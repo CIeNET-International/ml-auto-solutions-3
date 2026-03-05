@@ -79,12 +79,17 @@ def kill_tpu_pod_workload(info: node_pool.Info, pod_name: str) -> None:
 
   return operation_start_time
 
+
+@task
+def pick_first(items):
+  return items[0] if items else None
+
 # Keyword arguments are generated dynamically at runtime (pylint does not
 # know this signature).
 with models.DAG(  # pylint: disable=unexpected-keyword-arg
     dag_id=DAG_ID,
     start_date=datetime.datetime(2025, 8, 10),
-    schedule=SCHEDULE if composer_env.is_prod_env() else None,
+    schedule=SCHEDULE if composer_env.is_prod_env() else "30 10 * * *",
     dagrun_timeout=DAGRUN_TIMEOUT,
     catchup=False,
     tags=[
@@ -168,18 +173,21 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           .expand(pod_name=startup.running_pods)
       )
 
+      single_start_time = pick_first(kill_tasks)
+
       verify_duration = jobset.verify_recovery_duration.override(
           task_id="verify_recovery_duration"
       )(
-          start_time=kill_tasks
+          start_time=single_start_time
       )
 
       wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
-          task_id="wait_for_metric_upload"
+          task_id="wait_for_metric_upload",
+          trigger_rule=TriggerRule.ALL_DONE
       )(
           node_pool=cluster_info,
           jobset_config=jobset_config,
-          start_time=kill_tasks,
+          start_time=single_start_time,
       )
 
       cleanup_workload = jobset.end_workload.override(

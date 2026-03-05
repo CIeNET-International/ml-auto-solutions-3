@@ -43,7 +43,7 @@ _DISK_SIZE_INCREMENT = 100
 with models.DAG(  # pylint: disable=unexpected-keyword-arg
     dag_id=DAG_ID,
     start_date=datetime.datetime(2026, 1, 27),
-    schedule=SCHEDULE if composer_env.is_prod_env() else None,
+    schedule=SCHEDULE if composer_env.is_prod_env() else "15 10 * * *",
     dagrun_timeout=DAGRUN_TIMEOUT,
     catchup=False,
     tags=[
@@ -151,7 +151,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           jobset_config=jobset_config,
           start_time=node_pool_resize_start_time,
       )
-
 
       cleanup_workload = jobset.end_workload.override(
           task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
