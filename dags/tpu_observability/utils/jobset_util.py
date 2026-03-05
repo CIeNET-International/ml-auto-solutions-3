@@ -24,6 +24,7 @@ import random
 import string
 import tempfile
 import textwrap
+import time
 from typing import Final
 
 from airflow.decorators import task
@@ -145,7 +146,7 @@ class Workload:
 # pylint: disable=line-too-long
 _TEMPLATE = string.Template(
     textwrap.dedent(
-        f"""
+        """
         apiVersion: jobset.x-k8s.io/v1alpha2
         kind: JobSet
         metadata:
@@ -172,7 +173,6 @@ _TEMPLATE = string.Template(
                     nodeSelector:
                       cloud.google.com/gke-tpu-accelerator: $tpu_accelerator_type
                       cloud.google.com/gke-tpu-topology: $tpu_topology
-                      {NODE_POOL_SELECTOR_KEY}: $node_pool_selector
                     containers:
                     - name: $container_name
                       image: $image
@@ -340,6 +340,22 @@ class Command:
   ) -> str:
     """Alias for getting just the names, maintaining existing API."""
     return Command.k8s_get_pods(jobset_name, namespace, output)
+
+  @staticmethod
+  def k8s_get_jobset_events_command(
+      jobset_name: str,
+      namespace: str,
+  ) -> str:
+    """Generates the kubectl command to get events for a specific JobSet."""
+
+    columns = "LAST_SEEN:.lastTimestamp,REASON:.reason,MESSAGE:.message"
+    selector = f"involvedObject.kind=JobSet,involvedObject.name={jobset_name}"
+
+    return (
+        f"kubectl get events -n {namespace} "
+        f"--field-selector {selector} "
+        f"-o custom-columns={columns} --no-headers"
+    )
 
 
 def get_replica_num(
@@ -738,7 +754,7 @@ def verify_recovery_duration(start_time: TimeUtil):
   """
   Checks if the time elapsed since start_timestamp is > 60 seconds.
   """
-  end_time = TimeUtil.from_datetime(datetime.datetime.now(datetime.timezone.utc))
+  end_time = TimeUtil.from_iso_string(datetime.datetime.now(datetime.timezone.utc))
   duration = end_time.time - start_time.time
 
   logging.info(f"Start Time: {start_time.to_iso_string()}")
@@ -811,6 +827,7 @@ def wait_for_all_pods_running(
     PokeReturnValue with is_done=True and pod names when all pods are running,
     or is_done=False to continue polling.
   """
+  time.sleep(15)
   running_pods = get_running_pods(
       node_pool=node_pool,
       jobset_name=jobset_config.jobset_name,
@@ -894,3 +911,50 @@ def ensure_no_jobset_uptime_data(
     return True
   return False
 
+
+@task.sensor(poke_interval=30, timeout=600, mode="poke")
+def get_jobset_failure_time(
+    node_pool: node_pool_info, jobset_config: JobSet
+) -> PokeReturnValue:
+  """Executes the event command and extracts the LAST_SEEN timestamp.
+
+  Args:
+    node_pool: Configuration object with cluster details.
+    jobset_config: The JobSet object containing configuration details.
+    namespace: The Kubernetes namespace to query. Defaults to "default".
+
+  Returns:
+    The timestamp string (e.g., '2026-03-04T03:48:47Z') or None if no events
+    found.
+  """
+  with tempfile.TemporaryDirectory() as tmpdir:
+    env = os.environ.copy()
+    env["KUBECONFIG"] = os.path.join(tmpdir, "kubeconfig")
+
+    cmd = " && ".join([
+        Command.get_credentials_command(node_pool),
+        Command.k8s_get_jobset_events_command(
+            jobset_config.jobset_name,
+            jobset_config.namespace,
+        ),
+    ])
+
+    stdout = subprocess.run_exec(cmd, env=env)
+    cmmd = "kubectl config view --minify --output 'jsonpath={..namespace}'"
+    sttdout = subprocess.run_exec(cmmd, env=env)
+    logging.info("Default namespace: %s", sttdout)
+
+    logging.info(stdout)
+    lines = stdout.strip().splitlines()
+    logging.info(lines)
+    if not lines:
+      logging.warning(
+          "No events found for JobSet %s", jobset_config.jobset_name
+      )
+      return PokeReturnValue(is_done=False)
+
+    first_line = lines[0].split()
+    if first_line:
+      end_time = first_line[0]
+      logging.info("Detected JobSet restart time: %s", end_time)
+      return PokeReturnValue(is_done=True, xcom_value=end_time)
