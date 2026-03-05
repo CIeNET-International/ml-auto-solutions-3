@@ -22,9 +22,9 @@ class MachineConfigMap(enum.Enum):
 
 
 GCS_CONFIG_PATH = (
-    "gs://ml-auto-solutions-dag-configs/tpu_observability/dag_config.yaml"
+    "gs://ml-auto-solutions-dag-configs/tpu_observability/dag_config_yuna_automation.yaml"
 )
 
 GCS_JOBSET_CONFIG_PATH = (
-    "gs://ml-auto-solutions-dag-configs/tpu_observability/jobset_config.yaml"
+    "gs://ml-auto-solutions-dag-configs/tpu_observability/jobset_config_yuna.yaml"
 )
