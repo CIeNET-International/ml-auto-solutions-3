@@ -1,17 +1,21 @@
-# # Copyright 2025 Google LLC
-# #
-# # Licensed under the Apache License, Version 2.0 (the "License");
-# # you may not use this file except in compliance with the License.
-# # You may obtain a copy of the License at
-# #
-# #      http://www.apache.org/licenses/LICENSE-2.0
-# #
-# # Unless required by applicable law or agreed to in writing, software
-# # distributed under the License is distributed on an "AS IS" BASIS,
-# # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# # See the License for the specific language governing permissions and
-# # limitations under the License.
-"""The test file of scheduling helper using absltest."""
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""
+Integration test to ensure all DAGs in the folder are registered in the helper.
+"""
+
 
 """Unit tests for scheduling_helper.py."""
 
@@ -20,9 +24,7 @@ from unittest.mock import patch
 from absl.testing import absltest, parameterized
 import datetime as dt
 from absl.testing import absltest
-from absl.testing import parameterized
 from airflow.models import DagBag
-
 from dags.common.scheduling_helper import scheduling_helper
 
 
@@ -189,10 +191,12 @@ class TestSchedulingHelper(parameterized.TestCase):
   """Test cases for the SchedulingHelper class logic."""
 
   # --- CI Test (Production Data Check) ---
+class TestSchedulingHelperIntegration(absltest.TestCase):
+  """Integration tests for the scheduling helper module."""
 
   def test_registration_check(self):
     """
-    CI Test: Ensures every DAG file in the folder is registered in the helper.
+    Ensures every DAG file in the folder is registered in the helper.
     """
     dagbag = DagBag(dag_folder="dags/tpu_observability", include_examples=False)
     actual_ids = set(dagbag.dag_ids)

@@ -36,8 +36,15 @@ TPU_OBS_MOCK_CLUSTER = XpkClusterConfig(
     project="cienet-cmcs",
     zone=Zone.US_CENTRAL1_B.value,
 )
-IGNORE_SCHEDULING_IDENTIFIER = "ignore-scheduling-cluster"
-MANUAL_TRIGGER_IDENTIFIER = "manual-trigger-cluster"
+
+# Mock cluster to group TPU Interruption Validation DAGs
+TPU_INTERRUPTION_MOCK_CLUSTER = XpkClusterConfig(
+    name="tpu-interruption-validation-prod",
+    device_version=TpuVersion.TRILLIUM,
+    core_count=16,
+    project="cienet-cmcs",
+    zone=Zone.US_CENTRAL1_B.value,
+)
 
 DagIdToTimeout: TypeAlias = dict[str, dt.timedelta]
 
@@ -59,6 +66,8 @@ REGISTERED_DAGS: dict[str, DagIdToTimeout] = {
         "validate_interruption_count_gce_bare_metal_preemption": dt.timedelta(
             minutes=30
         ),
+    },
+    TPU_INTERRUPTION_MOCK_CLUSTER.name: {
         "validate_interruption_count_gce_host_error": dt.timedelta(minutes=30),
         "validate_interruption_count_gke_bare_metal_preemption": dt.timedelta(
             minutes=30
@@ -87,8 +96,6 @@ REGISTERED_DAGS: dict[str, DagIdToTimeout] = {
         ),
         "validate_interruption_count_gke_eviction": dt.timedelta(minutes=30),
     },
-    IGNORE_SCHEDULING_IDENTIFIER: {},
-    MANUAL_TRIGGER_IDENTIFIER: {},
 }
 
 
