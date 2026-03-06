@@ -65,25 +65,29 @@ class Status(enum.Enum):
 
 
 class NodeOperationTarget(enum.Enum):
+  """Defines how to deal with target node"""
+
   DELETE = "delete"
   DRAIN = "drain"
 
 
 @dataclasses.dataclass
-class NodeOperationSpec:
-  """Configuration parameters for a random node operation."""
+class NodeOperationUpdateSpec:
+  """Configuration parameters for a random node operation.
+
+  Attributes:
+    target: The specific node operation to perform (e.g., delete or drain).
+  """
 
   target: NodeOperationTarget
 
   @staticmethod
-  def Delete() -> "NodeOperationSpec":
-    """Factory method for a delete operation."""
-    return NodeOperationSpec(target=NodeOperationTarget.DELETE)
+  def Delete() -> "NodeOperationUpdateSpec":
+    return NodeOperationUpdateSpec(target=NodeOperationTarget.DELETE)
 
   @staticmethod
-  def Drain() -> "NodeOperationSpec":
-    """Factory method for a drain operation."""
-    return NodeOperationSpec(target=NodeOperationTarget.DRAIN)
+  def Drain() -> "NodeOperationUpdateSpec":
+    return NodeOperationUpdateSpec(target=NodeOperationTarget.DRAIN)
 
 
 @dataclasses.dataclass
@@ -373,13 +377,13 @@ def list_nodes(node_pool: Info) -> list[str]:
 @task
 def delete_one_random_node(
     node_pool: Info,
-    spec: NodeOperationSpec = NodeOperationSpec.Delete(),
+    spec: NodeOperationUpdateSpec = NodeOperationUpdateSpec.Delete(),
 ) -> str:
   """Performs a random node operation based on the provided specification.
 
   Args:
     node_pool: An instance of the Info class with GKE metadata.
-    spec: A NodeOperationSpec defining the action to perform.
+    spec: A NodeOperationUpdateSpec defining the action to perform.
   """
   nodes_list = list_nodes(node_pool)
   if not nodes_list:
