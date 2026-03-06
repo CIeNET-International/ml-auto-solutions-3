@@ -375,7 +375,7 @@ def list_nodes(node_pool: Info) -> list[str]:
 
 
 @task
-def delete_one_random_node(
+def disable_one_random_node(
     node_pool: Info,
     spec: NodeOperationUpdateSpec = NodeOperationUpdateSpec.Delete(),
 ) -> str:
@@ -384,6 +384,12 @@ def delete_one_random_node(
   Args:
     node_pool: An instance of the Info class with GKE metadata.
     spec: A NodeOperationUpdateSpec defining the action to perform.
+
+  Returns:
+    The name of the node that was operated on.
+
+  Raises:
+    ValueError: If the target is unsupported.
   """
   nodes_list = list_nodes(node_pool)
   if not nodes_list:
