@@ -116,7 +116,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           jobset_config=jobset_config,
       )
 
-      drained_node = node_pool.delete_one_random_node.override(
+      drained_node = node_pool.disable_one_random_node.override(
           task_id="drained_node"
       )(
           node_pool=cluster_info,
