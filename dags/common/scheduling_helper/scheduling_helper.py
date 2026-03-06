@@ -104,7 +104,7 @@ def get_dag_timeout(dag_id: str) -> dt.timedelta:
   for cluster_dags in REGISTERED_DAGS.values():
     if dag_id in cluster_dags:
       return cluster_dags[dag_id]
-  raise ValueError(
+  raise UnregisteredDagError(
       f"DAG '{dag_id}' is not registered. Please add it to REGISTERED_DAGS."
   )
 
@@ -152,7 +152,6 @@ class SchedulingHelper:
             hours=24
         ):
           raise ScheduleWindowError(
-          raise ValueError(
               f"Schedule exceeds 24h window at '{dag_id} '"
               f"in cluster '{cluster_name}'."
           )
@@ -163,6 +162,5 @@ class SchedulingHelper:
         offset += timeout + cls.DEFAULT_MARGIN
 
     raise UnregisteredDagError(
-    raise ValueError(
         f"DAG '{dag_id}' is not registered. Please add it to REGISTERED_DAGS."
     )
