@@ -70,34 +70,33 @@ def random_node_reboot(info: node_pool.Info, keys: SshKeys):
   target_ip = instance.network_interfaces[0].network_i_p
   logging.info(f"Targeting node {target_node_name} at {target_ip} for reboot.")
 
-  # OS Login Setup
-  # Register public key and retrieve the POSIX username
   mask_secret(keys.private)
   logging.info("Using pre-registered OS Login keys for authentication.")
-  os_user = keys.user
 
-  # Execute Reboot via Fabric
+  # Prepare SSH key and establish connection via Fabric
   pkey = paramiko.RSAKey.from_private_key(io.StringIO(keys.private))
 
-  # Establish connection using the dynamic OS Login username
   conn = fabric.Connection(
       host=target_ip,
-      user=os_user,
+      user=keys.user,
       connect_kwargs={"pkey": pkey, "banner_timeout": 200},
   )
 
   try:
+    # --- Execute Reboot via Fabric ---
     logging.info(
-        f"Sending 'sudo reboot' command to {target_ip} as user '{os_user}'..."
+        f"Sending 'sudo reboot' command to {target_ip} as user '{keys.user}'..."
     )
     # Use warn=True because the connection will drop immediately upon reboot,
     # which is expected behavior for this operation.
     conn.run("sudo reboot", warn=True)
-  except Exception as e:  # pylint: disable=broad-exception-caught
-    # Log unexpected errors but allow the task to proceed
-    logging.warning(
-        f"Reboot command issued, but connection closed with error: {e}"
+  except (EOFError, ConnectionResetError):
+    logging.info(
+        f"Connection to {target_ip} closed as expected after reboot command."
     )
+  except Exception as e:
+    logging.error(f"Unexpected error occurred while rebooting {target_ip}: {e}")
+    raise
   finally:
     conn.close()
 
