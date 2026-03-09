@@ -47,54 +47,38 @@ TPU_INTERRUPTION_MOCK_CLUSTER = XpkClusterConfig(
 )
 
 DagIdToTimeout: TypeAlias = dict[str, dt.timedelta]
-
+DefaultTimeout: dt.timedelta = dt.timedelta(minutes=30)
 REGISTERED_DAGS: dict[str, DagIdToTimeout] = {
     TPU_OBS_MOCK_CLUSTER.name: {
-        "gke_node_pool_label_update": dt.timedelta(minutes=30),
-        "gke_node_pool_status": dt.timedelta(minutes=30),
+        "gke_node_pool_label_update": DefaultTimeout,
+        "gke_node_pool_status": DefaultTimeout,
         "jobset_rollback_ttr": dt.timedelta(minutes=90),
         "jobset_ttr_node_pool_resize": dt.timedelta(minutes=90),
         "jobset_ttr_pod_delete": dt.timedelta(minutes=90),
-        "multi_host_nodepool_rollback": dt.timedelta(minutes=30),
+        "multi_host_nodepool_rollback": DefaultTimeout,
         "node_pool_ttr_disk_size": dt.timedelta(minutes=90),
         "node_pool_ttr_update_label": dt.timedelta(minutes=90),
-        "tpu_info_format_validation_dag": dt.timedelta(minutes=30),
-        "tpu_sdk_monitoring_validation": dt.timedelta(minutes=30),
+        "tpu_info_format_validation_dag": DefaultTimeout,
+        "tpu_sdk_monitoring_validation": DefaultTimeout,
         "jobset_ttr_kill_process": dt.timedelta(minutes=90),
         "jobset_uptime_validation": dt.timedelta(minutes=90),
-        "tpu_info_metrics_verification": dt.timedelta(minutes=30),
-        "validate_interruption_count_gce_bare_metal_preemption": dt.timedelta(
-            minutes=30
-        ),
+        "tpu_info_metrics_verification": DefaultTimeout,
     },
     TPU_INTERRUPTION_MOCK_CLUSTER.name: {
-        "validate_interruption_count_gce_host_error": dt.timedelta(minutes=30),
-        "validate_interruption_count_gke_bare_metal_preemption": dt.timedelta(
-            minutes=30
-        ),
-        "validate_interruption_count_gke_hwsw_maintenance": dt.timedelta(
-            minutes=30
-        ),
-        "validate_interruption_count_gke_defragmentation": dt.timedelta(
-            minutes=30
-        ),
-        "validate_interruption_count_gce_hwsw_maintenance": dt.timedelta(
-            minutes=30
-        ),
-        "validate_interruption_count_gke_host_error": dt.timedelta(minutes=30),
-        "validate_interruption_count_gce_defragmentation": dt.timedelta(
-            minutes=30
-        ),
-        "validate_interruption_count_gce_other": dt.timedelta(minutes=30),
-        "validate_interruption_count_gce_migrate_on_hwsw_maintenance": dt.timedelta(
-            minutes=30
-        ),
-        "validate_interruption_count_gce_eviction": dt.timedelta(minutes=30),
-        "validate_interruption_count_gke_other": dt.timedelta(minutes=30),
-        "validate_interruption_count_gke_migrate_on_hwsw_maintenance": dt.timedelta(
-            minutes=30
-        ),
-        "validate_interruption_count_gke_eviction": dt.timedelta(minutes=30),
+        "validate_interruption_count_gce_bare_metal_preemption": DefaultTimeout,
+        "validate_interruption_count_gce_host_error": DefaultTimeout,
+        "validate_interruption_count_gke_bare_metal_preemption": DefaultTimeout,
+        "validate_interruption_count_gke_hwsw_maintenance": DefaultTimeout,
+        "validate_interruption_count_gke_defragmentation": DefaultTimeout,
+        "validate_interruption_count_gce_hwsw_maintenance": DefaultTimeout,
+        "validate_interruption_count_gke_host_error": DefaultTimeout,
+        "validate_interruption_count_gce_defragmentation": DefaultTimeout,
+        "validate_interruption_count_gce_other": DefaultTimeout,
+        "validate_interruption_count_gce_migrate_on_hwsw_maintenance": DefaultTimeout,
+        "validate_interruption_count_gce_eviction": DefaultTimeout,
+        "validate_interruption_count_gke_other": DefaultTimeout,
+        "validate_interruption_count_gke_migrate_on_hwsw_maintenance": DefaultTimeout,
+        "validate_interruption_count_gke_eviction": DefaultTimeout,
     },
 }
 
@@ -123,6 +107,15 @@ class UnregisteredDagError(SchedulingError):
 
 class ScheduleWindowError(SchedulingError):
   """Raised when a schedule exceeds the 24-hour daily window."""
+
+  pass
+
+
+class StaleRegistrationError(SchedulingError):
+  """
+  Raised when a DAG is registered in the helper
+  but does not exist in the DAG folder.
+  """
 
   pass
 
