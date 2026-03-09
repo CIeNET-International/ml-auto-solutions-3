@@ -19,33 +19,46 @@ Integration test to ensure all DAGs in the folder are registered in the helper.
 
 from absl.testing import absltest
 from airflow.models import DagBag
+
 from dags.common.scheduling_helper import scheduling_helper
 
 
 class TestSchedulingHelperIntegration(absltest.TestCase):
   """Integration tests for the scheduling helper module."""
 
+  CHECKED_DAG_FOLDERS = [
+      "dags/tpu_observability",
+  ]
+
   def test_registration_check(self):
     """
     Ensures every DAG file in the folder is registered in the helper.
     """
-    dagbag = DagBag(dag_folder="dags/tpu_observability", include_examples=False)
-    actual_ids = set(dagbag.dag_ids)
+    actual_ids = set()
+    for folder in self.CHECKED_DAG_FOLDERS:
+      dagbag = DagBag(dag_folder=folder, include_examples=False)
+      actual_ids.update(dagbag.dag_ids)
+
     registered_ids = set()
     for dags_dict in scheduling_helper.REGISTERED_DAGS.values():
       registered_ids.update(dags_dict.keys())
+
     missing = actual_ids - registered_ids
     self.assertEmpty(
         missing,
         msg=(
-            f"The following DAGs exist in dags/tpu_observability but are NOT "
-            f"registered in scheduling_helper.py: {missing}. "
-            "Please add them to REGISTERED_DAGS to ensure they are scheduled."
+            f"The following DAGs exist in {self.CHECKED_DAG_FOLDERS} "
+            f"but are not registered in scheduling_helper.py: {missing}."
         ),
     )
+
     extra = registered_ids - actual_ids
     if extra:
-      print(f"\n[WARNING]: DAGs registered but not found in folder: {extra}")
+      raise scheduling_helper.StaleRegistrationError(
+          f"The following DAG IDs are registered in scheduling_helper.py but "
+          f"were not found in {self.CHECKED_DAG_FOLDERS}: {extra}. "
+          "Please remove these stale entries."
+      )
 
 
 if __name__ == "__main__":
