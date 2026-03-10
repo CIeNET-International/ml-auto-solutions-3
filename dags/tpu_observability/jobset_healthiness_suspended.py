@@ -40,7 +40,7 @@ SCHEDULE = SchedulingHelper.arrange_schedule_time(DAG_ID)
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
 # know this signature).
-with models.DAG( # pylint: disable=unexpected-keyword-arg
+with models.DAG(  # pylint: disable=unexpected-keyword-arg
     dag_id=DAG_ID,
     start_date=datetime.datetime(2025, 8, 10),
     schedule=SCHEDULE if composer_env.is_prod_env() else None,
