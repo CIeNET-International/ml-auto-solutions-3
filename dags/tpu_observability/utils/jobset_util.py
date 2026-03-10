@@ -339,11 +339,10 @@ class Command:
   def k8s_suspend_jobset_command(
       kubeconfig: str, jobset_name: str, namespace: str
   ) -> str:
-    patch_content = '{"spec": {"suspend": true}}'
     return (
         f"kubectl --kubeconfig={kubeconfig} "
         f"patch jobset {jobset_name} -n {namespace} "
-        f"--type=merge -p '{patch_content}'"
+        f"--type=merge -p '{{\"spec\": {{\"suspend\": true}}}}'"
     )
 
   class K8sGetPodsOutput(enum.Enum):
@@ -778,7 +777,7 @@ def wait_for_jobset_ttr_to_be_found(
   Args:
     node_pool (Info): An instance of the Info class containing GKE metadata.
     jobset_config: An instance of the JobSet class representing the jobset
-    configuration.
+      configuration.
     start_time (TimeUtil, optional): The UTC timestamp to start polling from.
     If not provided, defaults to 60 minutes before the current time.
 
@@ -988,7 +987,7 @@ def wait_for_jobset_replica_number(
     node_pool: node_pool_info,
     jobset_config: JobSet,
     replica_type: str,
-    correct_replica_num: int,
+    expected_replica_number: int,
 ):
   """
   A sensor which checks if the correct number jobset replicas in a status type.
@@ -997,7 +996,7 @@ def wait_for_jobset_replica_number(
     node_pool: Configuration object with cluster details.
     jobset_config: Configuration of JobSet which is being run.
     replica_type(str): The name of the type of status being checked for.
-    correct_replica_num(int): The expected number of replicas to be found.
+    expected_replica_number(int): The expected number of replicas to be found.
   """
   logging.info("Checking for number of replicas of type: %s", replica_type)
   ready_replicas = get_replica_num(
@@ -1005,4 +1004,4 @@ def wait_for_jobset_replica_number(
       job_name=jobset_config.replicated_job_name,
       node_pool=node_pool,
   )
-  return ready_replicas == correct_replica_num
+  return ready_replicas == expected_replica_number
