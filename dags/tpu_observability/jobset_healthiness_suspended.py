@@ -37,10 +37,10 @@ from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper, ge
 DAG_ID = "jobset_healthiness_suspended"
 DAGRUN_TIMEOUT = get_dag_timeout(DAG_ID)
 SCHEDULE = SchedulingHelper.arrange_schedule_time(DAG_ID)
+
 # Keyword arguments are generated dynamically at runtime (pylint does not
 # know this signature).
-
-with models.DAG(  # pylint: disable=unexpected-keyword-arg
+with models.DAG( # pylint: disable=unexpected-keyword-arg
     dag_id=DAG_ID,
     start_date=datetime.datetime(2025, 8, 10),
     schedule=SCHEDULE if composer_env.is_prod_env() else None,
@@ -111,11 +111,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           tpu_topology=config.tpu_topology,
       )
 
-      node_pool_info_2 = node_pool.copy_node_pool_info_with_override(
-          info=node_pool_info,
-          node_pool_name=generate_second_node_pool_name(node_pool_info),
-      )
-
       # Keyword arguments are generated dynamically at runtime (pylint does not
       # know this signature).
       with TaskGroup(  # pylint: disable=unexpected-keyword-arg
@@ -125,12 +120,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             task_id="node_pool_1",
         )(
             node_pool=node_pool_info,
-        )
-
-        create_second_node_pool = node_pool.create.override(
-            task_id="node_pool_2",
-        )(
-            node_pool=node_pool_info_2,
         )
 
       validate_zero_replicas = jobset.wait_for_jobset_replica_number.override(
@@ -174,26 +163,15 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 
       # Keyword arguments are generated dynamically at runtime (pylint does not
       # know this signature).
-      with TaskGroup(  # pylint: disable=unexpected-keyword-arg
-          group_id="cleanup_node_pool"
-      ) as cleanup_node_pool:
-        cleanup_first_node_pool = node_pool.delete.override(
-            task_id="cleanup_node_pool_1",
-            trigger_rule=TriggerRule.ALL_DONE,
-        )(node_pool=node_pool_info).as_teardown(
-            setups=create_node_pool,
-        )
-
-        cleanup_second_node_pool = node_pool.delete.override(
-            task_id="cleanup_node_pool_2",
-            trigger_rule=TriggerRule.ALL_DONE,
-        )(node_pool=node_pool_info_2).as_teardown(
-            setups=create_node_pool,
-        )
+      cleanup_node_pool = node_pool.delete.override(
+          task_id="cleanup_node_pool",
+          trigger_rule=TriggerRule.ALL_DONE,
+      )(node_pool=node_pool_info).as_teardown(
+          setups=create_node_pool,
+      )
 
       chain(
           node_pool_info,
-          node_pool_info_2,
           create_node_pool,
           validate_zero_replicas,
           start_workload,
