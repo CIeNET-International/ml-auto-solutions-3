@@ -12,19 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Utility class for managing automated TaskGroup timeouts and cleanups."""
+
 import logging
 import time
-from typing import Optional
 
 from airflow import models
 from airflow.decorators import task
 from airflow.exceptions import AirflowTaskTimeout
-from airflow.models import TaskInstance, DAG
+from airflow.models import TaskInstance
 from airflow.utils.session import provide_session
 from airflow.utils.state import State
 from airflow.utils.task_group import TaskGroup
-
-"""Utility class for managing automated TaskGroup timeouts and cleanups."""
 
 
 class TimeoutUtil:
@@ -202,16 +201,9 @@ class TimeoutTaskGroup(TaskGroup):
     self.timeout_minutes = timeout_minutes
 
   def __exit__(self, _type, _value, _tb):
-    # 1. Close the group context first
     super().__exit__(_type, _value, _tb)
 
-    # 2. Add the monitor task WITHOUT using 'with self:'
-    # to avoid triggering __exit__ again.
-    if _type is None:  # Only if no exception occurred in the group
-      from dags.tpu_observability.utils.timeout_util import TimeoutUtil
-
-      # Manually assign the task to this group
-      TimeoutUtil.monitor_group.override(
-          task_id="timeout_guard",
-          task_group=self,  # <--- This is the safe way to add it
-      )(timeout_minutes=self.timeout_minutes)
+    TimeoutUtil.monitor_group.override(
+        task_id="task_group_timer",
+        task_group=self,
+    )(timeout_minutes=self.timeout_minutes)

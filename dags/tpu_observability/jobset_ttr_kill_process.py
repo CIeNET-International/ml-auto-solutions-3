@@ -40,14 +40,14 @@ from dags.tpu_observability.configs.common import (
     GCS_JOBSET_CONFIG_PATH,
 )
 from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper, get_dag_timeout
-from dags.tpu_observability.utils.timeout_util import TimeoutUtil, TimeoutTaskGroup
+from dags.common.timeout_util import TimeoutTaskGroup
 
 
 DAG_ID = "jobset_ttr_kill_process"
 DAGRUN_TIMEOUT = get_dag_timeout(DAG_ID)
 PRE_TEST_TIMEOUT = 20
-TEST_TIMEOUT = 30
-POST_TEST_TIMEOUT = DAGRUN_TIMEOUT - PRE_TEST_TIMEOUT - TEST_TIMEOUT
+TESTING_TIMEOUT = 30
+POST_TEST_TIMEOUT = DAGRUN_TIMEOUT - PRE_TEST_TIMEOUT - TESTING_TIMEOUT
 SCHEDULE = SchedulingHelper.arrange_schedule_time(DAG_ID)
 
 
@@ -133,7 +133,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     ):
       # pylint: disable=unexpected-keyword-arg
       with TimeoutTaskGroup(
-          group_id="pre_test", timeout_minutes=20
+          group_id="pre_test", timeout_minutes=PRE_TEST_TIMEOUT
       ) as pre_test:
         selector = jobset.generate_node_pool_selector("jobset-ttr-kill-process")
 
@@ -161,7 +161,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
         )
 
       # pylint: disable=unexpected-keyword-arg
-      with TimeoutTaskGroup(group_id="testing", timeout_minutes=5) as testing:
+      with TimeoutTaskGroup(
+          group_id="testing", timeout_minutes=TESTING_TIMEOUT
+      ) as testing:
         apply_time = jobset.run_workload.override(task_id="run_workload")(
             node_pool=cluster_info,
             jobset_config=jobset_config,
@@ -216,6 +218,12 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
         )(node_pool=cluster_info).as_teardown(
             setups=create_node_pool,
         )
+
+  chain(
+      pre_test,
+      testing,
+      post_test,
+  )
 
   chain(
       selector,
