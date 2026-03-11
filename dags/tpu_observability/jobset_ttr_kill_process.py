@@ -40,7 +40,7 @@ from dags.tpu_observability.configs.common import (
     GCS_JOBSET_CONFIG_PATH,
 )
 from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper, get_dag_timeout
-from dags.tpu_observability.utils.timeout_util import TimeoutUtil
+from dags.tpu_observability.utils.timeout_util import TimeoutUtil, TimeoutTaskGroup
 
 
 DAG_ID = "jobset_ttr_kill_process"
@@ -131,7 +131,10 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     with TaskGroup(  # pylint: disable=unexpected-keyword-arg
         group_id=f"v{config.tpu_version.value}"
     ):
-      with TaskGroup(group_id="pre_test"):  # pylint: disable=unexpected-keyword-arg
+      # pylint: disable=unexpected-keyword-arg
+      with TimeoutTaskGroup(
+          group_id="pre_test", timeout_minutes=20
+      ) as pre_test:
         selector = jobset.generate_node_pool_selector("jobset-ttr-kill-process")
 
         jobset_config = jobset.build_jobset_from_gcs_yaml(
@@ -157,9 +160,8 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             node_pool=cluster_info,
         )
 
-        pre_timer = TimeoutUtil.monitor_group(timeout_minutes=PRE_TEST_TIMEOUT)
-
-      with TaskGroup(group_id="testing"):  # pylint: disable=unexpected-keyword-arg
+      # pylint: disable=unexpected-keyword-arg
+      with TimeoutTaskGroup(group_id="testing", timeout_minutes=5) as testing:
         apply_time = jobset.run_workload.override(task_id="run_workload")(
             node_pool=cluster_info,
             jobset_config=jobset_config,
@@ -196,9 +198,10 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             )
         )
 
-        test_timer = TimeoutUtil.monitor_group(timeout_minutes=TEST_TIMEOUT)
-
-      with TaskGroup(group_id="post_test"):  # pylint: disable=unexpected-keyword-arg
+      # pylint: disable=unexpected-keyword-arg
+      with TimeoutTaskGroup(
+          group_id="post_test", timeout_minutes=POST_TEST_TIMEOUT
+      ) as post_test:
         cleanup_workload = jobset.end_workload.override(
             task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
         )(
@@ -214,23 +217,16 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             setups=create_node_pool,
         )
 
-        post_timer = TimeoutUtil.monitor_group(
-            timeout_minutes=POST_TEST_TIMEOUT
-        )
-
-      # pylint: disable=unexpected-keyword-arg
-      [selector, jobset_config, cluster_info] >> create_node_pool
-      [selector, jobset_config, cluster_info] >> pre_timer
-
-      create_node_pool >> [apply_time, test_timer]
-      (
-          apply_time
-          >> running_pods
-          >> wait_for_job_start
-          >> kill_tasks
-          >> wait_for_metric_upload
-      )
-
-      wait_for_metric_upload >> [cleanup_workload, post_timer]
-      cleanup_workload >> cleanup_node_pool
-      # pylint: disable=unexpected-keyword-arg
+  chain(
+      selector,
+      jobset_config,
+      cluster_info,
+      create_node_pool,
+      apply_time,
+      running_pods,
+      wait_for_job_start,
+      kill_tasks,
+      wait_for_metric_upload,
+      cleanup_workload,
+      cleanup_node_pool,
+  )

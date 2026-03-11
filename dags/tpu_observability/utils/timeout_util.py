@@ -14,14 +14,15 @@
 
 import logging
 import time
-from typing import List
+from typing import Optional
 
 from airflow import models
 from airflow.decorators import task
 from airflow.exceptions import AirflowTaskTimeout
-from airflow.models import TaskInstance
+from airflow.models import TaskInstance, DAG
 from airflow.utils.session import provide_session
 from airflow.utils.state import State
+from airflow.utils.task_group import TaskGroup
 
 """Utility class for managing automated TaskGroup timeouts and cleanups."""
 
@@ -59,13 +60,20 @@ class TimeoutUtil:
     Returns:
       The count of terminated tasks.
     """
-    active_tis = dag_run.get_task_instances(
-        state=[State.RUNNING, State.QUEUED], session=session
+    session.expire_all()
+    tis = dag_run.get_task_instances(
+        state=[
+            State.RUNNING,
+            State.QUEUED,
+            State.SCHEDULED,
+            State.UP_FOR_RETRY,
+        ],
+        session=session,
     )
     count = 0
-    for ti in active_tis:
+    for ti in tis:
       if ti.task_id.startswith(group_prefix) and ti.task_id != timer_id:
-        logging.info(f"[CLEANUP] Killing task: {ti.task_id}")
+        logging.info(f"[SIGTERM] Setting {ti.task_id} to FAILED")
         ti.state = State.FAILED
         session.merge(ti)
         count += 1
@@ -121,7 +129,7 @@ class TimeoutUtil:
   @provide_session
   def get_fresh_states(
       dag_id: str, run_id: str, task_id: str, session=None
-  ) -> List[str]:
+  ) -> list[str]:
     """Queries Metadata DB for fresh states, bypassing session cache."""
     session.expire_all()
     tis = (
@@ -184,3 +192,26 @@ class TimeoutUtil:
     raise AirflowTaskTimeout(
         f"Group {prefix} timed out waiting for {target_id}"
     )
+
+
+class TimeoutTaskGroup(TaskGroup):
+  """Custom TaskGroup that automatically adds a timeout monitor on exit."""
+
+  def __init__(self, group_id, timeout_minutes, **kwargs):
+    super().__init__(group_id=group_id, **kwargs)
+    self.timeout_minutes = timeout_minutes
+
+  def __exit__(self, _type, _value, _tb):
+    # 1. Close the group context first
+    super().__exit__(_type, _value, _tb)
+
+    # 2. Add the monitor task WITHOUT using 'with self:'
+    # to avoid triggering __exit__ again.
+    if _type is None:  # Only if no exception occurred in the group
+      from dags.tpu_observability.utils.timeout_util import TimeoutUtil
+
+      # Manually assign the task to this group
+      TimeoutUtil.monitor_group.override(
+          task_id="timeout_guard",
+          task_group=self,  # <--- This is the safe way to add it
+      )(timeout_minutes=self.timeout_minutes)
