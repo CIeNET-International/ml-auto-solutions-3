@@ -21,7 +21,6 @@ import json
 import logging
 import random
 import re
-from enum import Enum
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
@@ -30,7 +29,6 @@ from google.cloud import monitoring_v3
 from dags.tpu_observability.utils.time_util import TimeUtil
 from dags.tpu_observability.utils.gcp_util import list_time_series
 from dags.tpu_observability.utils import subprocess_util as subprocess
-from dags.tpu_observability.utils.jobset_util import Command
 from xlml.apis import gcs
 from xlml.utils import composer
 
@@ -400,9 +398,6 @@ def disable_one_random_node(
 
   target_node = random.choice(nodes_list)
 
-  auth_command = Command.get_credentials_command(node_pool)
-  subprocess.run_exec(auth_command)
-
   match spec.target:
     case NodeOperationTarget.DELETE:
       command = (
@@ -554,9 +549,6 @@ def uncordon_node(node_pool: Info, node_name: str) -> None:
   if not node_name:
     logging.warning("No node name provided to uncordon. Skipping.")
     return
-
-  auth_command = Command.get_credentials_command(node_pool)
-  subprocess.run_exec(auth_command)
 
   uncordon_command = f"kubectl uncordon {node_name}"
 
