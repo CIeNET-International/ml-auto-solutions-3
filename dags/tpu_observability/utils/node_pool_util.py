@@ -30,6 +30,7 @@ from google.cloud import monitoring_v3
 from dags.tpu_observability.utils.time_util import TimeUtil
 from dags.tpu_observability.utils.gcp_util import list_time_series
 from dags.tpu_observability.utils import subprocess_util as subprocess
+from dags.tpu_observability.utils.jobset_util import Command
 from xlml.apis import gcs
 from xlml.utils import composer
 
@@ -399,15 +400,11 @@ def disable_one_random_node(
 
   target_node = random.choice(nodes_list)
 
-  auth_command = (
-      f"gcloud container clusters get-credentials {node_pool.cluster_name} "
-      f"--project={node_pool.project_id} --location={node_pool.location}"
-  )
+  auth_command = Command.get_credentials_command(node_pool)
   subprocess.run_exec(auth_command)
 
   match spec.target:
     case NodeOperationTarget.DELETE:
-      logging.info("Selected node for deletion: %s", target_node)
       command = (
           f"gcloud compute instances delete {target_node} "
           f"--project={node_pool.project_id} "
@@ -415,11 +412,6 @@ def disable_one_random_node(
       )
 
     case NodeOperationTarget.DRAIN:
-      logging.info(
-          "Selected node '%s' from pool '%s' to drain.",
-          target_node,
-          node_pool.node_pool_name,
-      )
       command = (
           f"kubectl drain {target_node} "
           "--ignore-daemonsets --delete-emptydir-data"
@@ -427,6 +419,8 @@ def disable_one_random_node(
 
     case _:
       raise AirflowFailException(f"Unsupported action target: {spec.target}")
+
+  logging.info("Select node '%s' to %s", target_node, spec.target.name)
 
   subprocess.run_exec(command)
   return target_node
@@ -561,12 +555,7 @@ def uncordon_node(node_pool: Info, node_name: str) -> None:
     logging.warning("No node name provided to uncordon. Skipping.")
     return
 
-  auth_command = (
-      f"gcloud container clusters get-credentials {node_pool.cluster_name} "
-      f"--project={node_pool.project_id} "
-      f"--location={node_pool.location}"
-  )
-  logging.info("Authenticating kubectl for cluster: %s", node_pool.cluster_name)
+  auth_command = Command.get_credentials_command(node_pool)
   subprocess.run_exec(auth_command)
 
   uncordon_command = f"kubectl uncordon {node_name}"
