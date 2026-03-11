@@ -316,8 +316,7 @@ class Command:
         f"kubectl --kubeconfig={kubeconfig} "
         f"patch jobset {jobset_name} -n {namespace} "
         f"--type=merge -p '"
-        '{{"spec": {{"suspend": true}}}}\''
-        ""
+        f"--type=merge -p '{json.dumps({'spec': {'suspend': True}})}'"
     )
 
   class K8sGetPodsOutput(enum.Enum):
