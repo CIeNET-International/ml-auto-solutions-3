@@ -80,13 +80,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     config = machine.value
 
     @task
-    def generate_second_node_pool_name(
-        pool_info: node_pool.Info,
-    ) -> str:
-      """Generates a second node pool name."""
-      return f"{pool_info.node_pool_name}-2"
-
-    @task
     def get_jobset_replica_number(jobset_conf: jobset.JobSet) -> int:
       """Gets the number of replicas for the jobset."""
       return jobset_conf.replicas
@@ -117,7 +110,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           group_id="create_node_pool"
       ) as create_node_pool:
         create_first_node_pool = node_pool.create.override(
-            task_id="node_pool_1",
+            task_id="node_pool",
         )(
             node_pool=node_pool_info,
         )
@@ -128,7 +121,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           node_pool=node_pool_info,
           jobset_config=jobset_config,
           replica_type="suspended",
-          correct_replica_num=0,
+          expected_replica_number=0,
       )
 
       start_workload = jobset.run_workload.override(task_id="start_workload")(
@@ -152,7 +145,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           node_pool=node_pool_info,
           jobset_config=jobset_config,
           replica_type="suspended",
-          correct_replica_num=get_jobset_replica_number(jobset_config),
+          expected_replica_number=get_jobset_replica_number(jobset_config),
       )
 
       cleanup_workload = jobset.end_workload.override(
