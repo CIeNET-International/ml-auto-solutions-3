@@ -535,7 +535,7 @@ def rollback(node_pool: Info) -> None:
 
 
 @task
-def uncordon_node(node_pool: Info, node_name: str) -> None:
+def uncordon_node(node_name: str) -> None:
   """Restores a node to a schedulable state within a GKE node pool.
 
   This task executes a 'kubectl uncordon' command on the specified node,
