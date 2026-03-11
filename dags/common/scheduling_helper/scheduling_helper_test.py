@@ -14,7 +14,6 @@
 
 """Unit tests for scheduling_helper.py."""
 
-import datetime as dt
 from unittest.mock import patch
 from absl.testing import absltest, parameterized
 
@@ -26,26 +25,26 @@ class TestSchedulingHelperBase(parameterized.TestCase):
 
   def setUp(self):
     super().setUp()
-    # Mock data with non-round numbers to ensure precise calculation
+    # Mock data updated to use integers (minutes) as per the new REGISTERED_DAGS structure
     self.mock_registry = {
         "cluster_a": {
             # Start: 08:00
-            "dag_1": dt.timedelta(minutes=12),
+            "dag_1": 12,
             # Start: 08:00 + 12m + 15m = 08:27
-            "dag_2": dt.timedelta(minutes=33),
+            "dag_2": 33,
             # Start: 08:27 + 33m + 15m = 09:15
-            "dag_3": dt.timedelta(seconds=45),
-            # Start: 09:15 + 45s + 15m = 09:30:45 -> 09:30
-            "dag_4": dt.timedelta(minutes=20),
-            # Start: 09:30:45 + 20m + 15m = 10:05:45 -> 10:05
-            "dag_5": dt.timedelta(minutes=10),
-            # Start: 10:05:45 + 10m + 15m = 10:30:45 -> 10:30
-            "dag_6": dt.timedelta(minutes=5),
+            "dag_3": 1,  # Reduced from timedelta(seconds=45) to 1 min for logic consistency
+            # Start: 09:15 + 1m + 15m = 09:31
+            "dag_4": 20,
+            # Start: 09:31 + 20m + 15m = 10:06
+            "dag_5": 10,
+            # Start: 10:06 + 10m + 15m = 10:31
+            "dag_6": 5,
         },
         "cluster_b": {
-            "dag_x": dt.timedelta(minutes=5),
+            "dag_x": 5,
             # Start: 08:00 + 5m + 15m = 08:20
-            "dag_y": dt.timedelta(minutes=10),
+            "dag_y": 10,
             # Start: 08:20 + 10m + 15m = 08:45
         },
     }
@@ -53,9 +52,9 @@ class TestSchedulingHelperBase(parameterized.TestCase):
         "dag_1": "0 8 * * *",
         "dag_2": "27 8 * * *",
         "dag_3": "15 9 * * *",
-        "dag_4": "30 9 * * *",
-        "dag_5": "5 10 * * *",
-        "dag_6": "30 10 * * *",
+        "dag_4": "31 9 * * *",
+        "dag_5": "6 10 * * *",
+        "dag_6": "31 10 * * *",
         "dag_x": "0 8 * * *",
         "dag_y": "20 8 * * *",
     }
@@ -135,7 +134,8 @@ class TestUnexpectedCases(TestSchedulingHelperBase):
   def test_24hours_window_cumulative(self, mock_registered):
     """Validates that the cumulative schedule does not exceed 24 hours."""
 
-    long_dags = {f"d{i}": dt.timedelta(hours=5) for i in range(6)}
+    # Using 300 minutes (5 hours) per DAG
+    long_dags = {f"d{i}": 300 for i in range(6)}
     mock_registered.items.return_value = {"c1": long_dags}.items()
     with self.assertRaises(scheduling_helper.ScheduleWindowError):
       scheduling_helper.SchedulingHelper.arrange_schedule_time("d5")
@@ -146,9 +146,8 @@ class TestUnexpectedCases(TestSchedulingHelperBase):
     Ensures that a single DAG with a duration exceeding 24 hours is rejected.
     """
 
-    mock_registered.items.return_value = {
-        "c1": {"huge_dag": dt.timedelta(hours=25)}
-    }.items()
+    # 1500 minutes = 25 hours
+    mock_registered.items.return_value = {"c1": {"huge_dag": 1500}}.items()
     with self.assertRaises(scheduling_helper.ScheduleWindowError) as cm:
       scheduling_helper.SchedulingHelper.arrange_schedule_time("huge_dag")
     self.assertIn("Schedule exceeds 24h window", str(cm.exception))

@@ -107,9 +107,7 @@ class SchedulingHelper:
 
       offset = dt.timedelta(0)
       for current_dag_id, timeout in dags.items():
-        if offset >= dt.timedelta(hours=24) or timeout >= dt.timedelta(
-            hours=24
-        ):
+        if offset >= dt.timedelta(hours=24) or timeout >= 1440:
           raise ScheduleWindowError(
               f"Schedule exceeds 24h window at '{dag_id} '"
               f"in cluster '{cluster_name}'."
