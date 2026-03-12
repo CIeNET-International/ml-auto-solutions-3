@@ -17,13 +17,9 @@
 import datetime
 import random
 import logging
-import fabric
-import paramiko
-import io
 
 from airflow import models
 from airflow.models.baseoperator import chain
-from airflow.utils.log.secrets_masker import mask_secret
 from airflow.utils.trigger_rule import TriggerRule
 from airflow.utils.task_group import TaskGroup
 from airflow.decorators import task
@@ -39,68 +35,32 @@ from dags.tpu_observability.configs.common import (
     GCS_JOBSET_CONFIG_PATH,
 )
 from xlml.utils.ssh import SshKeys, obtain_persist_ssh_keys
+from xlml.utils.tpu import ssh_tpu
 
 
 @task
-def random_node_reboot(info: node_pool.Info, keys: SshKeys):
-  """
-  Selects a random node from the node pool and triggers a system reboot via SSH.
-
+def get_target_node_ip(info: node_pool.Info) -> str:
+  """Selects a random node from the pool and retrieves its internal IP.
   Args:
-    info: Configuration and metadata of the GKE node pool.
-    keys: SSH key pair used for authentication.
-
+   info: Configuration and metadata of the GKE node pool.
   Returns:
-    The name of the node that was rebooted.
+   The internal IP address of the selected target node.
   """
   # Retrieve all nodes from the pool and select one at random
   nodes = node_pool.list_nodes(info)
   if not nodes:
     raise RuntimeError(f"No nodes found in node pool {info.node_pool_name}")
 
-  target_node_url = random.choice(nodes)
-  target_node_name = target_node_url.split("/")[-1]
-  logging.info(f"Selected node name: {target_node_name}")
+  target_node_name = random.choice(nodes).split("/")[-1]
+  logging.info(f"Selected node for reboot: {target_node_name}")
 
-  # Get the internal IP address of the instance
-  instance_client = compute_v1.InstancesClient()
-  instance = instance_client.get(
+  # Use Compute Engine API to fetch instance details
+  instance = compute_v1.InstancesClient().get(
       project=info.project_id, zone=info.zone, instance=target_node_name
   )
   target_ip = instance.network_interfaces[0].network_i_p
-  logging.info(f"Targeting node {target_node_name} at {target_ip} for reboot.")
-
-  mask_secret(keys.private)
-  logging.info("Using pre-registered OS Login keys for authentication.")
-
-  # Prepare SSH key and establish connection via Fabric
-  pkey = paramiko.RSAKey.from_private_key(io.StringIO(keys.private))
-
-  conn = fabric.Connection(
-      host=target_ip,
-      user=keys.user,
-      connect_kwargs={"pkey": pkey, "banner_timeout": 200},
-  )
-
-  try:
-    # --- Execute Reboot via Fabric ---
-    logging.info(
-        f"Sending 'sudo reboot' command to {target_ip} as user '{keys.user}'..."
-    )
-    # Use warn=True because the connection will drop immediately upon reboot,
-    # which is expected behavior for this operation.
-    conn.run("sudo reboot", warn=True)
-  except (EOFError, ConnectionResetError):
-    logging.info(
-        f"Connection to {target_ip} closed as expected after reboot command."
-    )
-  except Exception as e:
-    logging.error(f"Unexpected error occurred while rebooting {target_ip}: {e}")
-    raise
-  finally:
-    conn.close()
-
-  return target_node_name
+  logging.info(f"Target node IP: {target_ip}")
+  return target_ip
 
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
@@ -190,8 +150,13 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           jobset_config=jobset_config,
       )
 
-      node_reboot = random_node_reboot.override(task_id="random_node_reboot")(
-          info=cluster_info, keys=get_keys
+      target_ip = get_target_node_ip(cluster_info)
+
+      node_reboot = ssh_tpu.override(task_id="node_reboot")(
+          cmds=["sudo reboot"],
+          ssh_keys=get_keys,
+          all_workers=False,
+          ip_addresses=[target_ip],
       )
 
       wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
@@ -220,6 +185,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           create_node_pool,
           start_workload,
           ensure_all_pods_running,
+          target_ip,
           node_reboot,
           wait_for_metric_upload,
           cleanup_workload,
