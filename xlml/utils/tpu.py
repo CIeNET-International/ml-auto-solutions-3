@@ -350,46 +350,53 @@ def kill_process_by_pid() -> str:
 
 @task
 def ssh_tpu(
-    qualified_name: str,
     cmds: Iterable[str],
     ssh_keys: ssh.SshKeys,
     all_workers: bool,
     env: Dict[str, str] = None,
+    qualified_name: str = None,
+    ip_addresses: Iterable[str] = None,
 ) -> None:
   """SSH TPU and run commands in multi process.
 
   Args:
-   qualified_name: The qualified name of a queued resource.
    cmds: The commands to run on a TPU.
    ssh_keys: The SSH key pair to use for authentication.
-   all_workers: The flag to define if run commands on all workers or worker 0
-     only.
+   all_workers: The flag to define if run commands on all workers or worker 0 only.
    env: environment variables to be pass to the ssh runner session using dict.
+   qualified_name: The qualified name of a queued resource (for QR mode).
+   ip_addresses: A list of IP addresses to connect to directly (for GKE mode).
   """
-  creds, _ = google.auth.default()
-  client = tpu_api.TpuClient(credentials=creds)
-
-  queued_resource = client.get_queued_resource(name=qualified_name)
-
-  nodes = [
-      client.get_node(name=os.path.join(node.parent, 'nodes', node.node_id))
-      for node in queued_resource.tpu.node_spec
-  ]
-
-  if all_workers:
-    endpoints = itertools.chain.from_iterable(
-        node.network_endpoints for node in nodes
-    )
-  else:
-    endpoints = [nodes[0].network_endpoints[0]]
-
   use_external_ips = os.getenv('XLMLTEST_SSH_EXTERNAL_IPS', '0') == '1'
-  if use_external_ips:
-    ip_addresses = [
-        endpoint.access_config.external_ip for endpoint in endpoints
+
+  if not ip_addresses:
+    if not qualified_name:
+      raise ValueError(
+          "Must provide either 'qualified_name' or 'ip_addresses'."
+      )
+
+    creds, _ = google.auth.default()
+    client = tpu_api.TpuClient(credentials=creds)
+    queued_resource = client.get_queued_resource(name=qualified_name)
+
+    nodes = [
+        client.get_node(name=os.path.join(node.parent, 'nodes', node.node_id))
+        for node in queued_resource.tpu.node_spec
     ]
-  else:
-    ip_addresses = [endpoint.ip_address for endpoint in endpoints]
+
+    if all_workers:
+      endpoints = itertools.chain.from_iterable(
+          node.network_endpoints for node in nodes
+      )
+    else:
+      endpoints = [nodes[0].network_endpoints[0]]
+
+    if use_external_ips:
+      ip_addresses = [
+          endpoint.access_config.external_ip for endpoint in endpoints
+      ]
+    else:
+      ip_addresses = [endpoint.ip_address for endpoint in endpoints]
 
   logging.info(f'Connecting to IP addresses of workers: {ip_addresses}')
 
@@ -407,9 +414,9 @@ def ssh_tpu(
       gateway='corp-ssh-helper %h %p' if use_external_ips else None,
   )
 
-  def ssh_group_run(cmds: Iterable[str]):
+  def ssh_group_run(cmd_str: str):
     try:
-      ssh_group.run(cmds, env=env)
+      ssh_group.run(cmd_str, env=env, warn=True)
     except fabric.group.GroupException as e:
       for connection, result in e.result.items():
         if isinstance(result, paramiko.ssh_exception.AuthenticationException):
@@ -441,7 +448,8 @@ def ssh_tpu(
     )
     ssh_group_run(';'.join(kill_process_cmds))
   # run provided commands
-  ssh_group_run(cmds)
+  final_cmd_str = '; '.join(cmds) if not isinstance(cmds, str) else cmds
+  ssh_group_run(final_cmd_str)
 
 
 @task
