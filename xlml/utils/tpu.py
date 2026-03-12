@@ -353,8 +353,8 @@ def ssh_tpu(
     cmds: Iterable[str],
     ssh_keys: ssh.SshKeys,
     all_workers: bool,
-    env: Dict[str, str] = None,
     qualified_name: str = None,
+    env: Dict[str, str] = None,
     ip_addresses: Iterable[str] = None,
 ) -> None:
   """SSH TPU and run commands in multi process.
