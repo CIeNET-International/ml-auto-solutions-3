@@ -345,8 +345,18 @@ class Command:
     return Command.k8s_get_pods(jobset_name, namespace, output)
 
 
+class ReplicaType(enum.Enum):
+  """Defines replica types."""
+
+  READY = "ready"
+  SUSPENDED = "suspended"
+  ACTIVE = "active"
+  FAILED = "failed"
+  SUCCEEDED = "succeeded"
+
+
 def get_replica_num(
-    replica_type: str, job_name: str, node_pool: node_pool_info
+    replica_type: ReplicaType, job_name: str, node_pool: node_pool_info
 ) -> int:
   """
   Get the number of a certain type of replicas from a running jobset.
@@ -380,7 +390,7 @@ def get_replica_num(
   try:
     replica_job_status = jobsets["items"][0]["status"]["replicatedJobsStatus"]
     name = replica_job_status[0]["name"]
-    replicas = replica_job_status[0][replica_type]
+    replicas = replica_job_status[0][replica_type.value]
     logging.info("Found %s replicas", replicas)
 
   except (KeyError, IndexError, TypeError) as e:
@@ -908,7 +918,7 @@ def suspended_jobset(node_pool: node_pool_info, jobset_config: JobSet):
 def wait_for_jobset_replica_number(
     node_pool: node_pool_info,
     jobset_config: JobSet,
-    replica_type: str,
+    replica_type: ReplicaType,
     expected_replica_number: int,
 ):
   """
@@ -917,10 +927,12 @@ def wait_for_jobset_replica_number(
   Args:
     node_pool: Configuration object with cluster details.
     jobset_config: Configuration of JobSet which is being run.
-    replica_type(str): The name of the type of status being checked for.
+    replica_type(ReplicaType): The type of status being checked for.
     expected_replica_number(int): The expected number of replicas to be found.
   """
-  logging.info("Checking for number of replicas of type: %s", replica_type)
+  logging.info(
+      "Checking for number of replicas of type: %s", replica_type.value
+  )
   ready_replicas = get_replica_num(
       replica_type=replica_type,
       job_name=jobset_config.replicated_job_name,
