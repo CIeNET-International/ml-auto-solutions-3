@@ -26,7 +26,7 @@ from dags import composer_env
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils.jobset_util import Workload
-from dags.tpu_observability.utils.jobset_util import ReplicaType
+from dags.tpu_observability.utils.jobset_util import ReplicaStatus
 from dags.tpu_observability.configs.common import (
     MachineConfigMap,
     GCS_CONFIG_PATH,
@@ -121,7 +121,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       )(
           node_pool=node_pool_info,
           jobset_config=jobset_config,
-          replica_type=ReplicaType.SUSPENDED,
+          replica_type=ReplicaStatus.SUSPENDED,
           expected_replica_number=0,
       )
 
@@ -145,7 +145,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       )(
           node_pool=node_pool_info,
           jobset_config=jobset_config,
-          replica_type=ReplicaType.SUSPENDED,
+          replica_type=ReplicaStatus.SUSPENDED,
           expected_replica_number=get_jobset_replica_number(jobset_config),
       )
 
