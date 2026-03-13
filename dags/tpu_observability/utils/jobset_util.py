@@ -345,7 +345,7 @@ class Command:
     return Command.k8s_get_pods(jobset_name, namespace, output)
 
 
-class ReplicaType(enum.Enum):
+class ReplicaStatus(enum.Enum):
   """Defines replica types."""
 
   READY = "ready"
@@ -356,7 +356,7 @@ class ReplicaType(enum.Enum):
 
 
 def get_replica_num(
-    replica_type: ReplicaType, job_name: str, node_pool: node_pool_info
+    replica_type: ReplicaStatus, job_name: str, node_pool: node_pool_info
 ) -> int:
   """
   Get the number of a certain type of replicas from a running jobset.
@@ -918,7 +918,7 @@ def suspended_jobset(node_pool: node_pool_info, jobset_config: JobSet):
 def wait_for_jobset_replica_number(
     node_pool: node_pool_info,
     jobset_config: JobSet,
-    replica_type: ReplicaType,
+    replica_type: ReplicaStatus,
     expected_replica_number: int,
 ):
   """
@@ -927,7 +927,7 @@ def wait_for_jobset_replica_number(
   Args:
     node_pool: Configuration object with cluster details.
     jobset_config: Configuration of JobSet which is being run.
-    replica_type(ReplicaType): The type of status being checked for.
+    replica_type(ReplicaStatus): The type of status being checked for.
     expected_replica_number(int): The expected number of replicas to be found.
   """
   logging.info(
