@@ -57,24 +57,24 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     ],
     description=(
         "This DAG tests the 'Suspended' status of jobset healthiness by "
-        "comparing the number of 'Ready' replicas before and after "
+        "comparing the number of 'suspended' replicas before and after "
         "a jobset is running."
     ),
     doc_md="""
       # JobSet Healthiness Test For the "Suspended" Status
       ### Description
       This DAG automates the process of creating node-pools, ensuring the
-      correct number of "Ready" replicas appear, then launching a jobset on
+      correct number of "Suspended" replicas appear, then launching a jobset on
       multiple replicas to ensure the correct number begin running.
       ### Prerequisites
       This test requires an existing cluster to run.
       ### Procedures
       First two node-pools are created. The validation test is then run to
-      check if the number of "Suspended" replicas is 0. A jobset is then launched
-      which uses 2 replicas. Once the jobset is running the jobs should
-      quickly enter the "Ready" state. Then using command to suspend entire jobset.
-      The number of found replicas is tested against the number of replicas which
-      should be "Suspended". If they match the DAG is a success.
+      check if the number of "Suspended" replicas is 0. Once the jobset is
+      running the jobs should quickly enter the "Ready" state. Then using
+      command to suspend entire jobset. The number of found replicas is
+      tested against the number of replicas which should be "Suspended".
+      If they match the DAG is a success.
       """,
 ) as dag:
   for machine in MachineConfigMap:
