@@ -350,10 +350,10 @@ def kill_process_by_pid() -> str:
 
 @task
 def ssh_tpu(
-    cmds: Iterable[str],
-    ssh_keys: ssh.SshKeys,
-    all_workers: bool,
     qualified_name: str = None,
+    cmds: Iterable[str] = None,
+    ssh_keys: ssh.SshKeys = None,
+    all_workers: bool = True,
     env: Dict[str, str] = None,
     ip_addresses: Iterable[str] = None,
 ) -> None:
@@ -440,7 +440,9 @@ def ssh_tpu(
   if context['task_instance'].try_number > 1:
     # kill TPU process by pid (if any) to avoid `TPU in use` error in retry
     tmp_file = '/tmp/kill_process.sh'
-    accelerator_type = nodes[0].accelerator_type
+    accelerator_type = (
+        nodes[0].accelerator_type if 'nodes' in locals() and nodes else 'v6e'
+    )
     script = kill_process_by_pid()
     kill_process_cmds = (
         f'set -xue; sudo echo "{script}" > {tmp_file}',
