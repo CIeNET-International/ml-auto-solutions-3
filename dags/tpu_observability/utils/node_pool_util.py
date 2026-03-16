@@ -19,8 +19,10 @@ import datetime
 import enum
 import json
 import logging
+import os
 import random
 import re
+import tempfile
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
@@ -439,9 +441,14 @@ def disable_one_random_node(
 
   logging.info("Select node '%s' to %s", target_node, spec.target.name)
 
-  cmd = " && ".join([get_credentials_command(node_pool), command])
+  with tempfile.TemporaryDirectory() as tmpdir:
+    kube_dir = tmpdir + "/kubeconfig"
+    env = os.environ.copy()
+    env["KUBECONFIG"] = kube_dir
 
-  subprocess.run_exec(cmd)
+    cmd = " && ".join([get_credentials_command(node_pool), command])
+    subprocess.run_exec(cmd=cmd, env=env)
+
   return target_node
 
 
@@ -577,9 +584,13 @@ def uncordon_node(node_pool: Info, node_name: str) -> None:
   uncordon_command = f"kubectl uncordon {node_name}"
   logging.info("Executing: %s", uncordon_command)
 
-  cmd = " && ".join([get_credentials_command(node_pool), uncordon_command])
+  with tempfile.TemporaryDirectory() as tmpdir:
+    kube_dir = tmpdir + "/kubeconfig"
+    env = os.environ.copy()
+    env["KUBECONFIG"] = kube_dir
 
-  subprocess.run_exec(cmd)
+    cmd = " && ".join([get_credentials_command(node_pool), uncordon_command])
+    subprocess.run_exec(cmd=cmd, env=env)
 
   logging.info("Node '%s' has been successfully uncordoned.", node_name)
 
