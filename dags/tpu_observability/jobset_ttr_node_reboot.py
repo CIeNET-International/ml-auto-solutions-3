@@ -153,10 +153,10 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       target_ip = get_target_node_ip(cluster_info)
 
       node_reboot = ssh_tpu.override(task_id="node_reboot")(
+          qualified_name=target_ip,
           cmds=["sudo reboot"],
           ssh_keys=get_keys,
           all_workers=False,
-          ip_addresses=[target_ip],
       )
 
       wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(

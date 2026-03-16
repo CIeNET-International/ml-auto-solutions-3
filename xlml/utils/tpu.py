@@ -350,31 +350,27 @@ def kill_process_by_pid() -> str:
 
 @task
 def ssh_tpu(
-    qualified_name: str = None,
-    cmds: Iterable[str] = None,
-    ssh_keys: ssh.SshKeys = None,
-    all_workers: bool = True,
+    qualified_name: str,
+    cmds: Iterable[str],
+    ssh_keys: ssh.SshKeys,
+    all_workers: bool,
     env: Dict[str, str] = None,
-    ip_addresses: Iterable[str] = None,
 ) -> None:
   """SSH into TPU nodes and run commands.
 
   Args:
-   qualified_name: The qualified name of a queued resource (for QR mode).
+   qualified_name: The qualified name of a queued resource.
    cmds: The commands to run on a TPU (can be a string or a list of strings).
    ssh_keys: The SSH key pair to use for authentication.
    all_workers: The flag to define if run commands on all workers or worker 0 only.
    env: Environment variables to be passed to the ssh runner session using dict.
-   ip_addresses: A list of IP addresses to connect to directly (for GKE mode).
   """
   use_external_ips = os.getenv('XLMLTEST_SSH_EXTERNAL_IPS', '0') == '1'
 
-  if not ip_addresses:
-    if not qualified_name:
-      raise ValueError(
-          "Must provide either 'qualified_name' or 'ip_addresses'."
-      )
-
+  if '.' in qualified_name or ':' in qualified_name:
+    ip_addresses = [qualified_name]
+    nodes = []
+  else:
     creds, _ = google.auth.default()
     client = tpu_api.TpuClient(credentials=creds)
     queued_resource = client.get_queued_resource(name=qualified_name)
