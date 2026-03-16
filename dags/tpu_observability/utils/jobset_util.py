@@ -344,8 +344,8 @@ class Command:
     return Command.k8s_get_pods(jobset_name, namespace, output)
 
 
-class ReplicaStatus(enum.Enum):
-  """Defines replica types."""
+class ReplicatedJobStatus(enum.Enum):
+  """Defines status of a replicated job."""
 
   READY = "ready"
   SUSPENDED = "suspended"
@@ -355,7 +355,7 @@ class ReplicaStatus(enum.Enum):
 
 
 def get_replica_num(
-    replica_type: ReplicaStatus, job_name: str, node_pool: node_pool_info
+    job_status: ReplicatedJobStatus, job_name: str, node_pool: node_pool_info
 ) -> int:
   """
   Get the number of a certain type of replicas from a running jobset.
@@ -364,7 +364,7 @@ def get_replica_num(
   the number of replicas in a certain status.
 
   Args:
-    replica_type: The type of replica being searched for.
+    job_status: The status of the replicated job being searched for.
     job_name: The name of the job replica which is run from the jobset.
     node_pool: The Info object containing the cluster information needed for
     the kubernetes API to connect to it.
@@ -389,7 +389,7 @@ def get_replica_num(
   try:
     replica_job_status = jobsets["items"][0]["status"]["replicatedJobsStatus"]
     name = replica_job_status[0]["name"]
-    replicas = replica_job_status[0][replica_type.value]
+    replicas = replica_job_status[0][job_status.value]
     logging.info("Found %s replicas", replicas)
 
   except (KeyError, IndexError, TypeError) as e:
@@ -917,7 +917,7 @@ def suspended_jobset(node_pool: node_pool_info, jobset_config: JobSet):
 def wait_for_jobset_replica_number(
     node_pool: node_pool_info,
     jobset_config: JobSet,
-    replica_type: ReplicaStatus,
+    job_status: ReplicatedJobStatus,
     expected_replica_number: int,
 ):
   """
@@ -926,14 +926,14 @@ def wait_for_jobset_replica_number(
   Args:
     node_pool: Configuration object with cluster details.
     jobset_config: Configuration of JobSet which is being run.
-    replica_type(ReplicaStatus): The type of status being checked for.
+    job_status(ReplicatedJobStatus): The type of status being checked for.
     expected_replica_number(int): The expected number of replicas to be found.
   """
   logging.info(
-      "Checking for number of replicas of type: %s", replica_type.value
+      "Checking for number of replicas of type: %s", job_status.value
   )
   ready_replicas = get_replica_num(
-      replica_type=replica_type,
+      job_status=job_status,
       job_name=jobset_config.replicated_job_name,
       node_pool=node_pool,
   )
