@@ -315,7 +315,6 @@ class Command:
     return (
         f"kubectl --kubeconfig={kubeconfig} "
         f"patch jobset {jobset_name} -n {namespace} "
-        # f"--type=merge -p '{json.dumps({'spec': {'suspend': True}})}'"
         "--type=merge -p '{\"spec\": {\"suspend\": true}}'"
     )
 
