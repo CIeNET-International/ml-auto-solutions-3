@@ -356,7 +356,7 @@ def ssh_tpu(
     all_workers: bool,
     env: Dict[str, str] = None,
 ) -> None:
-  """SSH into TPU nodes and run commands.
+  """SSH TPU and run commands in multi process.
 
   Args:
    qualified_name: The qualified name of a queued resource.
