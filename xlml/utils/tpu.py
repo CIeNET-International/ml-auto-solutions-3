@@ -357,14 +357,14 @@ def ssh_tpu(
     env: Dict[str, str] = None,
     ip_addresses: Iterable[str] = None,
 ) -> None:
-  """SSH TPU and run commands in multi process.
+  """SSH into TPU nodes and run commands.
 
   Args:
-   cmds: The commands to run on a TPU.
+   qualified_name: The qualified name of a queued resource (for QR mode).
+   cmds: The commands to run on a TPU (can be a string or a list of strings).
    ssh_keys: The SSH key pair to use for authentication.
    all_workers: The flag to define if run commands on all workers or worker 0 only.
-   env: environment variables to be pass to the ssh runner session using dict.
-   qualified_name: The qualified name of a queued resource (for QR mode).
+   env: Environment variables to be passed to the ssh runner session using dict.
    ip_addresses: A list of IP addresses to connect to directly (for GKE mode).
   """
   use_external_ips = os.getenv('XLMLTEST_SSH_EXTERNAL_IPS', '0') == '1'
@@ -414,9 +414,10 @@ def ssh_tpu(
       gateway='corp-ssh-helper %h %p' if use_external_ips else None,
   )
 
-  def ssh_group_run(cmd_str: str):
+  def ssh_group_run(cmds: Iterable[str]):
     try:
-      ssh_group.run(cmd_str, env=env, warn=True)
+      cmd_to_run = '; '.join(cmds) if not isinstance(cmds, str) else cmds
+      ssh_group.run(cmd_to_run, env=env)
     except fabric.group.GroupException as e:
       for connection, result in e.result.items():
         if isinstance(result, paramiko.ssh_exception.AuthenticationException):
@@ -424,8 +425,7 @@ def ssh_tpu(
               f'SSH Authentication Failed on {connection.host}: {result}'
           )
           raise AirflowFailException(
-              'SSH Authentication failed on one or more hosts. '
-              'Check logs for details.'
+              'SSH Authentication failed on one or more hosts. Check logs for details.'
           ) from e
       raise
     except paramiko.ssh_exception.AuthenticationException as e:
@@ -450,8 +450,7 @@ def ssh_tpu(
     )
     ssh_group_run(';'.join(kill_process_cmds))
   # run provided commands
-  final_cmd_str = '; '.join(cmds) if not isinstance(cmds, str) else cmds
-  ssh_group_run(final_cmd_str)
+  ssh_group_run(cmds)
 
 
 @task
