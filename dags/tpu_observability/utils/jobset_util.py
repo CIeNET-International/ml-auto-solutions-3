@@ -315,7 +315,7 @@ class Command:
     return (
         f"kubectl --kubeconfig={kubeconfig} "
         f"patch jobset {jobset_name} -n {namespace} "
-        "--type=merge -p '{\"spec\": {\"suspend\": true}}'"
+        '--type=merge -p \'{"spec": {"suspend": true}}\''
     )
 
   class K8sGetPodsOutput(enum.Enum):
@@ -929,9 +929,7 @@ def wait_for_jobset_replica_number(
     job_status(ReplicatedJobStatus): The type of status being checked for.
     expected_replica_number(int): The expected number of replicas to be found.
   """
-  logging.info(
-      "Checking for number of replicas of type: %s", job_status.value
-  )
+  logging.info("Checking for number of replicas of type: %s", job_status.value)
   suspended_replica_number = get_replica_num(
       job_status=job_status,
       job_name=jobset_config.replicated_job_name,
