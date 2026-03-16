@@ -373,6 +373,28 @@ def list_nodes(node_pool: Info) -> list[str]:
   return node_names
 
 
+def get_credentials_command(node_pool: Info) -> str:
+  """
+  Returns the command to authenticate `gcloud` with the specified GKE cluster.
+
+  Args:
+    node_pool: Configuration object with cluster details.
+
+  Returns:
+    A string containing the command to authenticate `gcloud` with the
+      specified GKE cluster.
+  """
+  for attr_name in ["cluster_name", "region", "project_id"]:
+    if not getattr(node_pool, attr_name):
+      raise ValueError(f"{attr_name} must be set in the Info object.")
+
+  return " ".join([
+      "gcloud container clusters",
+      f"get-credentials {node_pool.cluster_name}",
+      f"--region={node_pool.region}",
+      f"--project={node_pool.project_id}",
+  ])
+
 @task
 def disable_one_random_node(
     node_pool: Info,
@@ -417,7 +439,9 @@ def disable_one_random_node(
 
   logging.info("Select node '%s' to %s", target_node, spec.target.name)
 
-  subprocess.run_exec(command)
+  cmd = " && ".join([get_credentials_command(node_pool), command])
+
+  subprocess.run_exec(cmd)
   return target_node
 
 
@@ -535,7 +559,7 @@ def rollback(node_pool: Info) -> None:
 
 
 @task
-def uncordon_node(node_name: str) -> None:
+def uncordon_node(node_pool: Info, node_name: str) -> None:
   """Restores a node to a schedulable state within a GKE node pool.
 
   This task executes a 'kubectl uncordon' command on the specified node,
@@ -551,9 +575,11 @@ def uncordon_node(node_name: str) -> None:
     return
 
   uncordon_command = f"kubectl uncordon {node_name}"
-
   logging.info("Executing: %s", uncordon_command)
-  subprocess.run_exec(uncordon_command)
+
+  cmd = " && ".join([get_credentials_command(node_pool), uncordon_command])
+
+  subprocess.run_exec(cmd)
 
   logging.info("Node '%s' has been successfully uncordoned.", node_name)
 
