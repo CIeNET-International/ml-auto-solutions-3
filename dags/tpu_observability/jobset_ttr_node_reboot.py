@@ -34,7 +34,7 @@ from dags.tpu_observability.configs.common import (
     GCS_CONFIG_PATH,
     GCS_JOBSET_CONFIG_PATH,
 )
-from xlml.utils.ssh import SshKeys, obtain_persist_ssh_keys
+from xlml.utils.ssh import obtain_persist_ssh_keys
 from xlml.utils.tpu import ssh_tpu
 
 
@@ -58,9 +58,9 @@ def get_target_node_ip(info: node_pool.Info) -> str:
   instance = compute_v1.InstancesClient().get(
       project=info.project_id, zone=info.zone, instance=target_node_name
   )
-  target_ip = instance.network_interfaces[0].network_i_p
-  logging.info(f"Target node IP: {target_ip}")
-  return target_ip
+  node_internal_ip = instance.network_interfaces[0].network_i_p
+  logging.info(f"Target node IP: {node_internal_ip}")
+  return node_internal_ip
 
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
