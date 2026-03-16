@@ -396,7 +396,7 @@ def get_replica_num(
     node_pool: The Info object containing the cluster information needed for
     the kubernetes API to connect to it.
   Returns:
-    The number of replicas of the specific type in the jobset.
+    The number of replicas of the specific status in the jobset.
   """
   api_client = gke.get_authenticated_client(
       node_pool.project_id,
@@ -1011,9 +1011,9 @@ def wait_for_jobset_replica_number(
   logging.info(
       "Checking for number of replicas of type: %s", job_status.value
   )
-  ready_replicas = get_replica_num(
+  suspended_replica_number = get_replica_num(
       job_status=job_status,
       job_name=jobset_config.replicated_job_name,
       node_pool=node_pool,
   )
-  return ready_replicas == expected_replica_number
+  return suspended_replica_number == expected_replica_number
