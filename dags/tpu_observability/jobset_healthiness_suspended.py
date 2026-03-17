@@ -80,17 +80,12 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
   for machine in MachineConfigMap:
     config = machine.value
 
-    @task
-    def get_jobset_replica_number(jobset_conf: jobset.JobSet) -> int:
-      """Gets the number of replicas for the jobset."""
-      return jobset_conf.replicas
-
     # Keyword arguments are generated dynamically at runtime (pylint does not
     # know this signature).
     with TaskGroup(  # pylint: disable=unexpected-keyword-arg
         group_id=f"v{config.tpu_version.value}"
     ):
-      jobset_config = jobset.build_jobset_from_gcs_yaml(
+      jobset_config = jobset.build_jobset_dict_from_gcs_yaml(
           gcs_path=GCS_JOBSET_CONFIG_PATH,
           dag_name="jobset_healthiness_suspended",
       )
@@ -146,7 +141,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           node_pool=node_pool_info,
           jobset_config=jobset_config,
           job_status=ReplicatedJobStatus.SUSPENDED,
-          expected_replica_number=get_jobset_replica_number(jobset_config),
+          expected_replica_number=jobset_config.map(lambda x: x["replicas"]),
       )
 
       cleanup_workload = jobset.end_workload.override(
