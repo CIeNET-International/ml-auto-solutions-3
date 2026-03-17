@@ -490,7 +490,7 @@ def _generate_jobset_name(dag_id_prefix: str) -> str:
 
 
 def _build_jobset_config_dict(
-  gcs_path: str, dag_name: str, **overrides
+    gcs_path: str, dag_name: str, **overrides
 ) -> dict:
   """
   Builds a dictionary of JobSet configuration by loading from GCS and applying
@@ -547,9 +547,7 @@ def build_jobset_dict_from_gcs_yaml(
   """
 
   return _build_jobset_config_dict(
-      gcs_path=gcs_path,
-      dag_name=dag_name,
-      **overrides
+      gcs_path=gcs_path, dag_name=dag_name, **overrides
   )
 
 
@@ -573,9 +571,7 @@ def build_jobset_from_gcs_yaml(
   """
 
   jobset_dict = _build_jobset_config_dict(
-      gcs_path=gcs_path,
-      dag_name=dag_name,
-      **overrides
+      gcs_path=gcs_path, dag_name=dag_name, **overrides
   )
   return JobSet(**jobset_dict)
 
@@ -1081,7 +1077,6 @@ def wait_for_jobset_replica_number(
   logging.info("Checking for number of replicas of type: %s", job_status.value)
   suspended_replica_number = get_replica_num(
       job_status=job_status,
-
       job_name=jobset_config.replicated_job_name,
       node_pool=node_pool,
   )
