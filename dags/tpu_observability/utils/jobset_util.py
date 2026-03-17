@@ -462,6 +462,70 @@ def _generate_jobset_name(dag_id_prefix: str) -> str:
   return f"{dag_id_prefix}-{timestamp}"
 
 
+def _build_jobset_config_dict(
+  gcs_path: str, dag_name: str, **overrides
+) -> dict:
+  """
+  Builds a dictionary of JobSet configuration by loading from GCS and applying
+  overrides.
+
+  Args:
+    gcs_path: The GCS path to the YAML configuration file.
+    dag_name: The name of the DAG to extract specific configurations.
+    **overrides: Additional parameters to override default configurations.
+  Returns:
+    A dictionary containing the config_dict JobSet configuration.
+  """
+
+  config = gcs.load_yaml_from_gcs(gcs_path)
+  known_fields = {f.name for f in dataclasses.fields(JobSet)}
+  config_dict = {
+      k: v
+      for k, v in config.get("jobset_defaults", {}).items()
+      if k in known_fields
+  }
+  dag_cfg = config.get("dag", {}).get(dag_name, {})
+  dag_id_prefix = dag_cfg.get("dag_id_prefix")
+
+  for k, v in dag_cfg.items():
+    if k in known_fields and v is not None:
+      config_dict[k] = v
+
+  config_dict.update({k: v for k, v in overrides.items() if k in known_fields})
+  config_dict["jobset_name"] = _generate_jobset_name(dag_id_prefix)
+
+  logging.info(
+      f"Final jobset dictionary '{config_dict['jobset_name']}' "
+      f"created for DAG '{dag_name}'"
+  )
+  return config_dict
+
+
+@task
+def build_jobset_dict_from_gcs_yaml(
+    gcs_path: str,
+    dag_name: str,
+    **overrides,
+) -> dict:
+  """
+  Builds a JobSet configuration dictionary from a GCS YAML file.
+
+  Args:
+    gcs_path: The GCS path to the YAML configuration file.
+    dag_name: The name of the DAG to extract specific configurations.
+    **overrides: Additional parameters to override default configurations.
+
+  Returns:
+    A dictionary containing the JobSet configuration.
+  """
+
+  return _build_jobset_config_dict(
+      gcs_path=gcs_path,
+      dag_name=dag_name,
+      **overrides
+  )
+
+
 @task
 def build_jobset_from_gcs_yaml(
     gcs_path: str,
@@ -476,44 +540,39 @@ def build_jobset_from_gcs_yaml(
     gcs_path: The GCS path to the YAML configuration file.
     dag_name: The name of the DAG to extract specific configurations.
     **overrides: Additional parameters to override default configurations.
+
+  Returns:
+    A JobSet instance with the final configuration ready for use in the DAG.
   """
-  config = gcs.load_yaml_from_gcs(gcs_path)
-  known_fields = {f.name for f in dataclasses.fields(JobSet)}
-  merged = {
-      k: v
-      for k, v in config.get("jobset_defaults", {}).items()
-      if k in known_fields
-  }
-  dag_cfg = config.get("dag", {}).get(dag_name, {})
-  dag_id_prefix = dag_cfg.get("dag_id_prefix")
 
-  for k, v in dag_cfg.items():
-    if k in known_fields and v is not None:
-      merged[k] = v
-
-  merged.update({k: v for k, v in overrides.items() if k in known_fields})
-  merged["jobset_name"] = _generate_jobset_name(dag_id_prefix)
-
-  logging.info(
-      f"Final JobSet '{merged['jobset_name']}' created for DAG '{dag_name}'"
+  jobset_dict = _build_jobset_config_dict(
+      gcs_path=gcs_path,
+      dag_name=dag_name,
+      **overrides
   )
-  return JobSet(**merged)
+  return JobSet(**jobset_dict)
 
 
 @task
 def run_workload(
-    node_pool: node_pool_info, jobset_config: JobSet, workload_type: Workload
+    node_pool: node_pool_info,
+    jobset_config: JobSet | dict,
+    workload_type: Workload,
 ) -> TimeUtil:
   """
   Applies the specified YAML file to the GKE cluster.
 
   Args:
     node_pool: Configuration object with cluster details.
-    jobset_config: The JobSet object containing YAML configuration.
+    jobset_config: The JobSet object or dict containing YAML configuration.
     workload_type: The workload script to execute.
   Returns:
     The UTC time when the workload was started.
   """
+
+  if isinstance(jobset_config, dict):
+    jobset_config = JobSet(**jobset_config)
+
   with tempfile.NamedTemporaryFile() as temp_config_file:
     env = os.environ.copy()
     env["KUBECONFIG"] = temp_config_file.name
@@ -550,7 +609,7 @@ def run_workload(
 
 
 @task
-def end_workload(node_pool: node_pool_info, jobset_config: JobSet):
+def end_workload(node_pool: node_pool_info, jobset_config: JobSet | dict):
   """
   Deletes all JobSets from the GKE cluster to clean up resources.
 
@@ -563,6 +622,10 @@ def end_workload(node_pool: node_pool_info, jobset_config: JobSet):
     jobset_name: The name of the JobSet to delete.
     namespace: The Kubernetes namespace to delete the JobSet from.
   """
+
+  if isinstance(jobset_config, dict):
+    jobset_config = JobSet(**jobset_config)
+
   with tempfile.NamedTemporaryFile() as temp_config_file:
     env = os.environ.copy()
     env["KUBECONFIG"] = temp_config_file.name
@@ -885,7 +948,7 @@ def ensure_no_jobset_uptime_data(
 
 
 @task
-def suspended_jobset(node_pool: node_pool_info, jobset_config: JobSet):
+def suspended_jobset(node_pool: node_pool_info, jobset_config: JobSet | dict):
   """
   Suspend a jobset from the GKE cluster.
 
@@ -897,6 +960,9 @@ def suspended_jobset(node_pool: node_pool_info, jobset_config: JobSet):
     node_pool: Configuration object with cluster details.
     jobset_name: The name of the JobSet to delete.
   """
+  if isinstance(jobset_config, dict):
+    jobset_config = JobSet(**jobset_config)
+
   with tempfile.NamedTemporaryFile() as temp_config_file:
     env = os.environ.copy()
     env["KUBECONFIG"] = temp_config_file.name
@@ -916,7 +982,7 @@ def suspended_jobset(node_pool: node_pool_info, jobset_config: JobSet):
 @task.sensor(poke_interval=30, timeout=900, mode="poke")
 def wait_for_jobset_replica_number(
     node_pool: node_pool_info,
-    jobset_config: JobSet,
+    jobset_config: JobSet | dict,
     job_status: ReplicatedJobStatus,
     expected_replica_number: int,
 ):
@@ -929,9 +995,14 @@ def wait_for_jobset_replica_number(
     job_status(ReplicatedJobStatus): The type of status being checked for.
     expected_replica_number(int): The expected number of replicas to be found.
   """
+
+  if isinstance(jobset_config, dict):
+    jobset_config = JobSet(**jobset_config)
+
   logging.info("Checking for number of replicas of type: %s", job_status.value)
   suspended_replica_number = get_replica_num(
       job_status=job_status,
+
       job_name=jobset_config.replicated_job_name,
       node_pool=node_pool,
   )
