@@ -24,6 +24,8 @@ import re
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
+from airflow.utils.task_group import TaskGroup
+from airflow.models.baseoperator import chain
 from google.cloud import monitoring_v3
 
 from dags.tpu_observability.utils.time_util import TimeUtil
@@ -805,3 +807,56 @@ def update(node_pool: Info, spec: NodePoolUpdateSpec) -> TimeUtil:
 
   subprocess.run_exec(update_cmd)
   return operation_start_time
+
+
+def get_node_pool_ttr_validation_stages(
+    node_pool_info: Info,
+    operation_start_time,
+) -> tuple[TaskGroup, TaskGroup]:
+  """Provides standardized TTR stages (Prepare and Validate) for Node Pools.
+
+  This helper follows the 3-stage TTR validation model:
+  1. Prepare (Stage 1): Monitors the initial provisioning and running phase.
+  2. Action (Stage 2): Disruptive task defined in the main DAG (not included here).
+  3. Validate (Stage 3): Confirms recovery and verifies TTR metrics are recorded.
+
+  By returning Stage 1 and Stage 3 separately as TaskGroup objects, this function
+  allows the main DAG to flexibly chain them with any custom Stage 2 action task.
+
+  Args:
+    node_pool_info: An instance of Info class with node pool metadata.
+    operation_start_time: The task whose completion marks the start of TTR,
+        used by the TTR sensor in Stage 3 to calculate recovery time.
+
+  Returns:
+    tuple[TaskGroup, TaskGroup]: A tuple containing (prepare_tg, validate_tg),
+        which should be chained in the DAG as:
+        prepare_tg >> action_task >> validate_tg.
+  """
+
+  # Stage 1: Prepare
+  with TaskGroup(group_id="prepare_ttr") as prepare_tg:
+    wait_provisioning = wait_for_status.override(
+        task_id="wait_for_node_pool_provisioning"
+    )(node_pool=node_pool_info, status=Status.PROVISIONING)
+
+    wait_running = wait_for_status.override(
+        task_id="wait_for_node_pool_running"
+    )(node_pool=node_pool_info, status=Status.RUNNING)
+
+    chain(wait_provisioning, wait_running)
+
+  # Stage 3: Validate
+  with TaskGroup(group_id="validate_ttr") as validate_tg:
+    wait_recovered = wait_for_status.override(
+        task_id="wait_for_node_pool_recovered"
+    )(node_pool=node_pool_info, status=Status.RUNNING)
+
+    wait_ttr = wait_for_ttr(
+        node_pool=node_pool_info,
+        operation_start_time=operation_start_time,
+    )
+
+    chain(wait_recovered, wait_ttr)
+
+  return prepare_tg, validate_tg

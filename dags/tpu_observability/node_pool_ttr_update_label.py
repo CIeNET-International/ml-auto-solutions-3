@@ -88,30 +88,15 @@ with models.DAG(
           node_pool=node_pool_info,
       )
 
-      task_id = "wait_for_provisioning"
-      wait_for_provisioning = node_pool.wait_for_status.override(
-          task_id=task_id
-      )(node_pool=node_pool_info, status=node_pool.Status.PROVISIONING)
-
-      task_id = "wait_for_running"
-      wait_for_running = node_pool.wait_for_status.override(task_id=task_id)(
-          node_pool=node_pool_info, status=node_pool.Status.RUNNING
-      )
-
       task_id = "update_node_pool_label"
       update_node_pool_label = node_pool.update.override(task_id=task_id)(
           node_pool=node_pool_info,
           spec=node_pool.NodePoolUpdateSpec.Label(delta=LABELS_TO_UPDATE),
       )
 
-      task_id = "wait_for_recovered"
-      wait_for_recovered = node_pool.wait_for_status.override(task_id=task_id)(
-          node_pool=node_pool_info, status=node_pool.Status.RUNNING
-      )
-
-      task_id = "wait_for_ttr"
-      wait_for_ttr = node_pool.wait_for_ttr.override(task_id=task_id)(
-          node_pool=node_pool_info, operation_start_time=update_node_pool_label
+      prepare_ttr, validate_ttr = node_pool.get_node_pool_ttr_validation_stages(
+          node_pool_info=node_pool_info,
+          operation_start_time=update_node_pool_label,
       )
 
       task_id = "cleanup_node_pool"
@@ -124,10 +109,8 @@ with models.DAG(
       chain(
           node_pool_info,
           create_node_pool,
-          wait_for_provisioning,
-          wait_for_running,
+          prepare_ttr,
           update_node_pool_label,
-          wait_for_recovered,
-          wait_for_ttr,
+          validate_ttr,
           cleanup_node_pool,
       )

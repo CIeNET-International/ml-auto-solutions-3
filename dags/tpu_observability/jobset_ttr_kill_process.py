@@ -163,12 +163,11 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           jobset_config=jobset_config,
       )
 
-      wait_for_job_start = jobset.wait_for_jobset_started.override(
-          task_id="wait_for_job_start"
-      )(
-          cluster_info,
+      prepare_ttr, validate_ttr = jobset.get_jobset_ttr_validation_stages(
+          node_pool=cluster_info,
+          jobset_config=jobset_config,
+          apply_time=apply_time,
           pod_name_list=running_pods,
-          job_apply_time=apply_time,
       )
 
       kill_tasks = (
@@ -177,20 +176,13 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           .expand(pod_name=running_pods)
       )
 
-      wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
-          task_id="wait_for_metric_upload"
-      )(
-          node_pool=cluster_info,
-          jobset_config=jobset_config,
-      )
-
       cleanup_workload = jobset.end_workload.override(
           task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
       )(
           node_pool=cluster_info,
           jobset_config=jobset_config,
       ).as_teardown(
-          setups=apply_time
+          setups=apply_time,
       )
 
       cleanup_node_pool = node_pool.delete.override(
@@ -206,9 +198,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           create_node_pool,
           apply_time,
           running_pods,
-          wait_for_job_start,
+          prepare_ttr,
           kill_tasks,
-          wait_for_metric_upload,
+          validate_ttr,
           cleanup_workload,
           cleanup_node_pool,
       )

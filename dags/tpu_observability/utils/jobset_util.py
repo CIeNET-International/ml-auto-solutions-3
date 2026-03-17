@@ -29,7 +29,9 @@ from typing import Final
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from airflow.sensors.base import PokeReturnValue
+from airflow.utils.task_group import TaskGroup
 from google.cloud.monitoring_v3 import types
+from airflow.models.baseoperator import chain
 import kubernetes
 
 from dags.tpu_observability.utils import subprocess_util as subprocess
@@ -795,6 +797,54 @@ def wait_for_all_pods_running(
     )
     return PokeReturnValue(is_done=True, xcom_value=running_pods)
   return PokeReturnValue(is_done=False)
+
+
+def get_jobset_ttr_validation_stages(
+    node_pool: node_pool_info,
+    jobset_config: JobSet,
+    apply_time: TimeUtil,
+    pod_name_list: list[str],
+) -> tuple[TaskGroup, TaskGroup]:
+  """Provides standardized TTR stages (Prepare and Validate) for JobSets.
+
+  This helper follows the 3-stage TTR validation model:
+  1. Prepare (Stage 1): Ensures the JobSet is running stably.
+  2. Action (Stage 2): Disruptive task defined in the main DAG (not included here).
+  3. Validate (Stage 3): Verifies the TTR metric is recorded.
+
+  By returning Stage 1 and Stage 3 separately, this function allows the main DAG
+  to flexibily chain them with any custom Stage 2 action task.
+
+  Args:
+      node_pool: Configuration object with cluster details.
+      jobset_config: The JobSet object containing configuration details.
+      apply_time: The UTC time when the workload was started.
+      pod_name_list: A list of active pod names for monitoring.
+
+  Returns:
+      tuple[TaskGroup, TaskGroup]: A tuple containing (prepare_tg, validate_tg),
+          which should be chained in the DAG as:
+          prepare_tg >> action_task >> validate_tg.
+  """
+
+  # Stage 1: Prepare
+  with TaskGroup(group_id="prepare_ttr") as prepare_tg:
+    wait_for_jobset_started.override(task_id="wait_for_jobset_started")(
+        node_pool=node_pool,
+        pod_name_list=pod_name_list,
+        job_apply_time=apply_time,
+    )
+
+  # Stage 3: Validate
+  with TaskGroup(group_id="validate_ttr") as validate_tg:
+    wait_for_jobset_ttr_to_be_found.override(
+        task_id="wait_for_jobset_ttr_metric"
+    )(
+        node_pool=node_pool,
+        jobset_config=jobset_config,
+    )
+
+  return prepare_tg, validate_tg
 
 
 def query_uptime_metrics(
