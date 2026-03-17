@@ -131,8 +131,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       )
 
       uncordon_node = node_pool.uncordon_node.override(task_id="uncordon_node")(
-          node_pool=cluster_info,
-          node_name=drained_node
+          node_pool=cluster_info, node_name=drained_node
       )
 
       wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(

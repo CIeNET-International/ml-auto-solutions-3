@@ -397,6 +397,7 @@ def get_credentials_command(node_pool: Info) -> str:
       f"--project={node_pool.project_id}",
   ])
 
+
 @task
 def disable_one_random_node(
     node_pool: Info,
