@@ -47,6 +47,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     schedule=SCHEDULE if composer_env.is_prod_env() else None,
     dagrun_timeout=DAGRUN_TIMEOUT,
     catchup=False,
+    render_template_as_native_obj=True,
     tags=[
         "cloud-ml-auto-solutions",
         "jobset",
@@ -141,7 +142,10 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           node_pool=node_pool_info,
           jobset_config=jobset_config,
           job_status=ReplicatedJobStatus.SUSPENDED,
-          expected_replica_number=jobset_config.map(lambda x: x["replicas"]),
+          expected_replica_number=(
+              "{{ ti.xcom_pull(task_ids=ti.task_id.rsplit('.', 1)[0]"
+              "+'.build_jobset_dict_from_gcs_yaml')['replicas'] }}"
+          ),
       )
 
       cleanup_workload = jobset.end_workload.override(
