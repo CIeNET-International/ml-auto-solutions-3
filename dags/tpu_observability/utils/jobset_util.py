@@ -31,6 +31,7 @@ from airflow.exceptions import AirflowFailException
 from airflow.sensors.base import PokeReturnValue
 from google.cloud.monitoring_v3 import types
 import kubernetes
+from kubernetes.stream import stream
 
 from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.tpu_observability.utils.gcp_util import list_time_series
@@ -165,12 +166,15 @@ _TEMPLATE = string.Template(
                 parallelism: $parallelism
                 template:
                   spec:
+                    hostPID: $host_pid
                     nodeSelector:
                       cloud.google.com/gke-tpu-accelerator: $tpu_accelerator_type
                       cloud.google.com/gke-tpu-topology: $tpu_topology
                       {NODE_POOL_SELECTOR_KEY}: $node_pool_selector
                     containers:
                     - name: $container_name
+                      securityContext:
+                        privileged: $privileged
                       image: $image
                       command: $command
                       args:
@@ -229,6 +233,7 @@ class JobSet:
   image: str
   tpu_cores_per_pod: int
   node_pool_selector: str
+  privileged: bool = False
 
   def generate_yaml(self, workload_script: Workload) -> str:
     """Generates the final JobSet YAML content.
@@ -244,6 +249,8 @@ class JobSet:
     params["command"] = ["bash", "-c"]
     params["args"] = workload_script
     params["node_pool_selector"] = self.node_pool_selector or ""
+    params["privileged"] = "true" if self.privileged else "false"
+    params["host_pid"] = "true" if self.privileged else "false"
 
     return _TEMPLATE.substitute(params)
 
@@ -656,6 +663,71 @@ def delete_one_random_pod(
 
     subprocess.run_exec(cmd, env=env)
     logging.info("Successfully initiated deletion for pod: %s", target_pod)
+
+
+@task
+def reboot_one_random_node(
+    node_pool: node_pool_info,
+    jobset_config: JobSet,
+) -> TimeUtil:
+  """Injects a fault by rebooting a node via a privileged Pod.
+
+  This task selects a random running pod associated with the JobSet and
+  executes a forced reboot command on the underlying host node.
+
+  Args:
+      node_pool: Configuration object with cluster details.
+      jobset_config: The JobSet object containing configuration details.
+
+  Returns:
+      The timestamp when the reboot operation was initiated.
+  """
+  running_pods = get_running_pods(
+      node_pool=node_pool,
+      jobset_name=jobset_config.jobset_name,
+      namespace=jobset_config.namespace,
+  )
+
+  if not running_pods:
+    raise AirflowFailException(
+        f"No running pods found for JobSet '{jobset_config.jobset_name}'. "
+        "Cannot proceed with node reboot."
+    )
+  target_pod = random.choice(running_pods)
+  logging.info("Targeting pod '%s' to trigger node reboot.", target_pod)
+
+  api_client = gke.get_authenticated_client(
+      node_pool.project_id,
+      node_pool.region,
+      node_pool.cluster_name,
+  )
+  v1 = kubernetes.client.CoreV1Api(api_client)
+  operation_start_time = TimeUtil.now()
+  reboot_cmd = [
+      "bash",
+      "-c",
+      f"echo 'Airflow is rebooting HOST of pod {target_pod} now...' && "
+      "nsenter -t 1 -m -u -n -i reboot -f",
+  ]
+
+  try:
+    stream(
+        v1.connect_get_namespaced_pod_exec,
+        target_pod,
+        jobset_config.namespace,
+        command=reboot_cmd,
+        stderr=True,
+        stdin=False,
+        stdout=True,
+        tty=False,
+        _preload_content=False,
+    )
+  except Exception as e:
+    # A connection error is expected here because the node reboots
+    # and closes all active connections immediately.
+    logging.info("Reboot command sent. Connection closed as expected: %s", e)
+
+  return operation_start_time
 
 
 @task.sensor(poke_interval=30, timeout=900, mode="poke")

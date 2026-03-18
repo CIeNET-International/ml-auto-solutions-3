@@ -23,7 +23,6 @@ from airflow.models.baseoperator import chain
 from airflow.utils.trigger_rule import TriggerRule
 from airflow.utils.task_group import TaskGroup
 from airflow.decorators import task
-from google.cloud import compute_v1
 
 from dags import composer_env
 from dags.tpu_observability.utils import jobset_util as jobset
@@ -34,41 +33,20 @@ from dags.tpu_observability.configs.common import (
     GCS_CONFIG_PATH,
     GCS_JOBSET_CONFIG_PATH,
 )
-from xlml.utils.ssh import obtain_persist_ssh_keys
-from xlml.utils.tpu import ssh_tpu
+from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper, get_dag_timeout
 
 
-@task
-def get_target_node_ip(info: node_pool.Info) -> str:
-  """Selects a random node from the pool and retrieves its internal IP.
-  Args:
-   info: Configuration and metadata of the GKE node pool.
-  Returns:
-   The internal IP address of the selected target node.
-  """
-  # Retrieve all nodes from the pool and select one at random
-  nodes = node_pool.list_nodes(info)
-  if not nodes:
-    raise RuntimeError(f"No nodes found in node pool {info.node_pool_name}")
-
-  target_node_name = random.choice(nodes).split("/")[-1]
-  logging.info(f"Selected node for reboot: {target_node_name}")
-
-  # Use Compute Engine API to fetch instance details
-  instance = compute_v1.InstancesClient().get(
-      project=info.project_id, zone=info.zone, instance=target_node_name
-  )
-  node_internal_ip = instance.network_interfaces[0].network_i_p
-  logging.info(f"Target node IP: {node_internal_ip}")
-  return node_internal_ip
-
+DAG_ID = "jobset_ttr_node_reboot"
+DAGRUN_TIMEOUT = get_dag_timeout(DAG_ID)
+SCHEDULE = SchedulingHelper.arrange_schedule_time(DAG_ID)
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
 # know this signature).
 with models.DAG(  # pylint: disable=unexpected-keyword-arg
-    dag_id="jobset_ttr_node_reboot",
+    dag_id=DAG_ID,
     start_date=datetime.datetime(2026, 1, 21),
-    schedule="0 18 * * *" if composer_env.is_prod_env() else None,
+    schedule=SCHEDULE if composer_env.is_prod_env() else None,
+    dagrun_timeout=DAGRUN_TIMEOUT,
     catchup=False,
     tags=[
         "cloud-ml-auto-solutions",
@@ -104,11 +82,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       resulting in a success, or timeout and failure.
       """,
 ) as dag:
-
-  @task
-  def get_project_id(info: node_pool.Info):
-    return info.project_id
-
   for machine in MachineConfigMap:
     config = machine.value
 
@@ -117,20 +90,24 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     with TaskGroup(  # pylint: disable=unexpected-keyword-arg
         group_id=f"v{config.tpu_version.value}"
     ):
-      jobset_config = jobset.build_jobset_from_gcs_yaml(
-          gcs_path=GCS_JOBSET_CONFIG_PATH, dag_name="jobset_ttr_node_reboot"
-      )
+      selector = jobset.generate_node_pool_selector("jobset-ttr-node-reboot")
 
-      get_keys = obtain_persist_ssh_keys.override(task_id="get_ssh_keys")()
+      jobset_config = jobset.build_jobset_from_gcs_yaml(
+          gcs_path=GCS_JOBSET_CONFIG_PATH,
+          dag_name=DAG_ID,
+          node_pool_selector=selector,
+          privileged=True,
+      )
 
       cluster_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
           task_id="build_node_pool_info_from_gcs_yaml"
       )(
           gcs_path=GCS_CONFIG_PATH,
-          dag_name="jobset_ttr_node_reboot",
+          dag_name=DAG_ID,
           is_prod=composer_env.is_prod_env(),
           machine_type=config.machine_version.value,
           tpu_topology=config.tpu_topology,
+          node_pool_selector=selector,
       )
 
       create_node_pool = node_pool.create.override(task_id="create_node_pool")(
@@ -150,13 +127,11 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           jobset_config=jobset_config,
       )
 
-      target_ip = get_target_node_ip(cluster_info)
-
-      node_reboot = ssh_tpu.override(task_id="node_reboot")(
-          qualified_name=target_ip,
-          cmds=["sudo reboot"],
-          ssh_keys=get_keys,
-          all_workers=False,
+      reboot_node = jobset.reboot_one_random_node.override(
+          task_id="reboot_one_random_node"
+      )(
+          node_pool=cluster_info,
+          jobset_config=jobset_config,
       )
 
       wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
@@ -164,6 +139,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       )(
           node_pool=cluster_info,
           jobset_config=jobset_config,
+          start_time=reboot_node,
       )
 
       cleanup_workload = jobset.end_workload.override(
@@ -179,14 +155,13 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       )
 
       chain(
+          selector,
           jobset_config,
-          get_keys,
           cluster_info,
           create_node_pool,
           start_workload,
           ensure_all_pods_running,
-          target_ip,
-          node_reboot,
+          reboot_node,
           wait_for_metric_upload,
           cleanup_workload,
           cleanup_node_pool,

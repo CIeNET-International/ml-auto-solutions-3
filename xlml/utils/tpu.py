@@ -360,39 +360,36 @@ def ssh_tpu(
 
   Args:
    qualified_name: The qualified name of a queued resource.
-   cmds: The commands to run on a TPU (can be a string or a list of strings).
+   cmds: The commands to run on a TPU.
    ssh_keys: The SSH key pair to use for authentication.
-   all_workers: The flag to define if run commands on all workers or worker 0 only.
-   env: Environment variables to be passed to the ssh runner session using dict.
+   all_workers: The flag to define if run commands on all workers or worker 0
+     only.
+   env: environment variables to be pass to the ssh runner session using dict.
   """
-  use_external_ips = os.getenv('XLMLTEST_SSH_EXTERNAL_IPS', '0') == '1'
+  creds, _ = google.auth.default()
+  client = tpu_api.TpuClient(credentials=creds)
 
-  if '.' in qualified_name or ':' in qualified_name:
-    ip_addresses = [qualified_name]
-    nodes = []
+  queued_resource = client.get_queued_resource(name=qualified_name)
+
+  nodes = [
+      client.get_node(name=os.path.join(node.parent, 'nodes', node.node_id))
+      for node in queued_resource.tpu.node_spec
+  ]
+
+  if all_workers:
+    endpoints = itertools.chain.from_iterable(
+        node.network_endpoints for node in nodes
+    )
   else:
-    creds, _ = google.auth.default()
-    client = tpu_api.TpuClient(credentials=creds)
-    queued_resource = client.get_queued_resource(name=qualified_name)
+    endpoints = [nodes[0].network_endpoints[0]]
 
-    nodes = [
-        client.get_node(name=os.path.join(node.parent, 'nodes', node.node_id))
-        for node in queued_resource.tpu.node_spec
+  use_external_ips = os.getenv('XLMLTEST_SSH_EXTERNAL_IPS', '0') == '1'
+  if use_external_ips:
+    ip_addresses = [
+        endpoint.access_config.external_ip for endpoint in endpoints
     ]
-
-    if all_workers:
-      endpoints = itertools.chain.from_iterable(
-          node.network_endpoints for node in nodes
-      )
-    else:
-      endpoints = [nodes[0].network_endpoints[0]]
-
-    if use_external_ips:
-      ip_addresses = [
-          endpoint.access_config.external_ip for endpoint in endpoints
-      ]
-    else:
-      ip_addresses = [endpoint.ip_address for endpoint in endpoints]
+  else:
+    ip_addresses = [endpoint.ip_address for endpoint in endpoints]
 
   logging.info(f'Connecting to IP addresses of workers: {ip_addresses}')
 
@@ -412,8 +409,7 @@ def ssh_tpu(
 
   def ssh_group_run(cmds: Iterable[str]):
     try:
-      cmd_to_run = '; '.join(cmds) if not isinstance(cmds, str) else cmds
-      ssh_group.run(cmd_to_run, env=env)
+      ssh_group.run(cmds, env=env)
     except fabric.group.GroupException as e:
       for connection, result in e.result.items():
         if isinstance(result, paramiko.ssh_exception.AuthenticationException):
@@ -436,9 +432,7 @@ def ssh_tpu(
   if context['task_instance'].try_number > 1:
     # kill TPU process by pid (if any) to avoid `TPU in use` error in retry
     tmp_file = '/tmp/kill_process.sh'
-    accelerator_type = (
-        nodes[0].accelerator_type if 'nodes' in locals() and nodes else 'v6e'
-    )
+    accelerator_type = nodes[0].accelerator_type
     script = kill_process_by_pid()
     kill_process_cmds = (
         f'set -xue; sudo echo "{script}" > {tmp_file}',
