@@ -37,7 +37,6 @@ import google.cloud.tpu_v2alpha1 as tpu_api
 import google.longrunning.operations_pb2 as operations
 import paramiko
 from google.protobuf.duration_pb2 import Duration
-from googleapiclient import discovery
 
 
 TTL = 'ttl'
