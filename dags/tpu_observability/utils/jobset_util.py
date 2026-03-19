@@ -217,6 +217,9 @@ class JobSet:
     container_name: The name of the container in the pod.
     image: The container image to use.
     tpu_cores_per_pod: The number of TPU cores requested per pod.
+    privileged: Whether to run the container in privileged mode with hostPID.
+      This is required for fault injection tasks (e.g., node reboot) to allow
+      the pod to interact with the host OS via nsenter. Defaults to False.
   """
 
   jobset_name: str
