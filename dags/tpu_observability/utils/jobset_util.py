@@ -315,6 +315,18 @@ class Command:
         f"-n {namespace} --wait=false",
     ])
 
+  @staticmethod
+  def k8s_reboot_node_command(
+      target_pod: str, delay_seconds: int = 60
+  ) -> list[str]:
+    return [
+        "bash",
+        "-c",
+        f"stdbuf -oL -eL echo 'Rebooting {target_pod} in {delay_seconds}s...' && "
+        f"sleep {delay_seconds} && "
+        "nsenter -t 1 -m -u -n -i reboot -f",
+    ]
+
   class K8sGetPodsOutput(enum.Enum):
     DEFAULT = "json"
     POD_NAME = "jsonpath={.items[*].metadata.name}"
@@ -703,13 +715,7 @@ def reboot_one_random_node(
   )
   v1 = kubernetes.client.CoreV1Api(api_client)
   operation_start_time = TimeUtil.now()
-  reboot_cmd = [
-      "bash",
-      "-c",
-      f"stdbuf -oL -eL echo 'Rebooting {target_pod} in 60s...' && "
-      "sleep 60 && "
-      "nsenter -t 1 -m -u -n -i reboot -f",
-  ]
+  reboot_cmd = Command.k8s_reboot_node_command(target_pod)
 
   try:
     resp = stream(
