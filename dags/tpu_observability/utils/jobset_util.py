@@ -706,12 +706,13 @@ def reboot_one_random_node(
   reboot_cmd = [
       "bash",
       "-c",
-      f"echo 'Airflow is rebooting HOST of pod {target_pod} now...' && "
+      f"stdbuf -oL -eL echo 'Rebooting {target_pod} in 60s...' && "
+      "sleep 60 && "
       "nsenter -t 1 -m -u -n -i reboot -f",
   ]
 
   try:
-    stream(
+    resp = stream(
         v1.connect_get_namespaced_pod_exec,
         target_pod,
         jobset_config.namespace,
@@ -721,7 +722,14 @@ def reboot_one_random_node(
         stdout=True,
         tty=False,
         _preload_content=False,
+        _request_timeout=150,
     )
+    while resp.is_open():
+      resp.update(timeout=1)
+      if resp.peek_stdout():
+        logging.info("POD STDOUT: %s", resp.read_stdout())
+      if resp.peek_stderr():
+        logging.info("POD STDERR: %s", resp.read_stderr())
   except Exception as e:
     # A connection error is expected here because the node reboots
     # and closes all active connections immediately.
