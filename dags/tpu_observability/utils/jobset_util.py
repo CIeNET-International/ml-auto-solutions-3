@@ -32,6 +32,9 @@ from airflow.sensors.base import PokeReturnValue
 from google.cloud.monitoring_v3 import types
 import kubernetes
 from kubernetes.stream import stream
+from kubernetes.client.exceptions import ApiException
+from websocket import WebSocketConnectionClosedException
+from urllib3.exceptions import ProtocolError
 
 from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.tpu_observability.utils.gcp_util import list_time_series
@@ -217,9 +220,11 @@ class JobSet:
     container_name: The name of the container in the pod.
     image: The container image to use.
     tpu_cores_per_pod: The number of TPU cores requested per pod.
-    privileged: Whether to run the container in privileged mode with hostPID.
-      This is required for fault injection tasks (e.g., node reboot) to allow
-      the pod to interact with the host OS via nsenter. Defaults to False.
+    privileged: A test-specific flag to enable privileged mode and hostPID.
+      This unconventional setup is required for E2E validation tasks, such as
+      node-level fault injection (e.g., node reboots), where the pod must
+      interact with the host OS via nsenter. Should remain False for all
+      standard workloads. Defaults to False.
   """
 
   jobset_name: str
@@ -319,15 +324,18 @@ class Command:
     ])
 
   @staticmethod
-  def k8s_reboot_node_command(
-      target_pod: str, delay_seconds: int = 60
-  ) -> list[str]:
+  def reboot_node_command() -> list[str]:
+    """Returns the command to reboot the host node via nsenter."""
     return [
-        "bash",
-        "-c",
-        f"stdbuf -oL -eL echo 'Rebooting {target_pod} in {delay_seconds}s...' && "
-        f"sleep {delay_seconds} && "
-        "nsenter -t 1 -m -u -n -i reboot -f",
+        "nsenter",
+        "-t",
+        "1",
+        "-m",
+        "-u",
+        "-n",
+        "-i",
+        "reboot",
+        "-f",
     ]
 
   class K8sGetPodsOutput(enum.Enum):
@@ -709,7 +717,7 @@ def reboot_one_random_node(
         "Cannot proceed with node reboot."
     )
   target_pod = random.choice(running_pods)
-  logging.info("Targeting pod '%s' to trigger node reboot.", target_pod)
+  logging.info("Initiating node reboot via pod: %s", target_pod)
 
   api_client = gke.get_authenticated_client(
       node_pool.project_id,
@@ -718,7 +726,7 @@ def reboot_one_random_node(
   )
   v1 = kubernetes.client.CoreV1Api(api_client)
   operation_start_time = TimeUtil.now()
-  reboot_cmd = Command.k8s_reboot_node_command(target_pod)
+  reboot_cmd = Command.reboot_node_command()
 
   try:
     resp = stream(
@@ -731,18 +739,39 @@ def reboot_one_random_node(
         stdout=True,
         tty=False,
         _preload_content=False,
-        _request_timeout=150,
+        _request_timeout=30,
     )
     while resp.is_open():
       resp.update(timeout=1)
-      if resp.peek_stdout():
-        logging.info("POD STDOUT: %s", resp.read_stdout())
-      if resp.peek_stderr():
-        logging.info("POD STDERR: %s", resp.read_stderr())
+      stdout = resp.read_stdout()
+      if stdout:
+        logging.info("POD STDOUT: %s", stdout)
+
   except Exception as e:
-    # A connection error is expected here because the node reboots
-    # and closes all active connections immediately.
-    logging.info("Reboot command sent. Connection closed as expected: %s", e)
+    exc_name = type(e).__name__
+    error_msg = str(e)
+
+    expected_types = [
+        "WebSocketConnectionClosedException",
+        "ApiException",
+        "ProtocolError",
+    ]
+    expected_msgs = [
+        "Connection reset",
+        "EOF",
+        "Connection to remote host was lost",
+    ]
+
+    if exc_name in expected_types or any(
+        msg in error_msg for msg in expected_msgs
+    ):
+      logging.info(
+          "Node reboot initiated: connection closed as expected (%s).", exc_name
+      )
+      return operation_start_time
+
+    logging.error("An unexpected %s occurred: %s", exc_name, error_msg)
+    raise
 
   return operation_start_time
 
