@@ -35,9 +35,7 @@ from google.cloud.monitoring_v3 import types
 from airflow.models.baseoperator import chain
 import kubernetes
 from kubernetes.stream import stream
-from kubernetes.client.exceptions import ApiException
 from websocket import WebSocketConnectionClosedException
-from urllib3.exceptions import ProtocolError
 
 from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.tpu_observability.utils.gcp_util import list_time_series
@@ -349,21 +347,6 @@ class Command:
         f"kubectl --kubeconfig={kubeconfig} delete pod {pod_name}",
         f"-n {namespace} --wait=false",
     ])
-
-  @staticmethod
-  def reboot_node_command() -> list[str]:
-    """Returns the command to reboot the host node via nsenter."""
-    return [
-        "nsenter",
-        "-t",
-        "1",
-        "-m",
-        "-u",
-        "-n",
-        "-i",
-        "reboot",
-        "-f",
-    ]
 
   class K8sGetPodsOutput(enum.Enum):
     DEFAULT = "json"
@@ -753,7 +736,17 @@ def reboot_one_random_node(
   )
   v1 = kubernetes.client.CoreV1Api(api_client)
   operation_start_time = TimeUtil.now()
-  reboot_cmd = Command.reboot_node_command()
+  reboot_cmd = [
+      "nsenter",
+      "-t",
+      "1",
+      "-m",
+      "-u",
+      "-n",
+      "-i",
+      "reboot",
+      "-f",
+  ]
 
   try:
     resp = stream(
@@ -774,30 +767,16 @@ def reboot_one_random_node(
       if stdout:
         logging.info("POD STDOUT: %s", stdout)
 
+  except WebSocketConnectionClosedException:
+    logging.info(
+        "Node reboot initiated: WebSocket connection closed as expected."
+    )
+    return operation_start_time
+
   except Exception as e:
-    exc_name = type(e).__name__
-    error_msg = str(e)
-
-    expected_types = [
-        "WebSocketConnectionClosedException",
-        "ApiException",
-        "ProtocolError",
-    ]
-    expected_msgs = [
-        "Connection reset",
-        "EOF",
-        "Connection to remote host was lost",
-    ]
-
-    if exc_name in expected_types or any(
-        msg in error_msg for msg in expected_msgs
-    ):
-      logging.info(
-          "Node reboot initiated: connection closed as expected (%s).", exc_name
-      )
-      return operation_start_time
-
-    logging.error("An unexpected %s occurred: %s", exc_name, error_msg)
+    logging.error(
+        "An unexpected %s occurred during reboot: %s", type(e).__name__, str(e)
+    )
     raise
 
   return operation_start_time
