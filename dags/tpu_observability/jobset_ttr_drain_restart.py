@@ -179,6 +179,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           create_node_pool,
           start_workload,
           ensure_all_pods_running,
+          select_nodes,
           drained_node,
           uncordon_node,
           wait_for_metric_upload,
