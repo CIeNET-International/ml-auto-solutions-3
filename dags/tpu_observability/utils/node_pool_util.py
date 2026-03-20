@@ -476,6 +476,8 @@ def get_node_operation_command(
     node_name: str,
     node_pool: Info,
 ) -> str:
+  """Generates the command to perform a specified operation on a GKE node."""
+
   ctx = NodeOperationContext(node_pool=node_pool, node_name=node_name)
 
   return node_operation.GetCommand(ctx)
