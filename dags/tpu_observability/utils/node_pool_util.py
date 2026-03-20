@@ -414,9 +414,18 @@ class NodeOperationContext:
   node_pool: Info = None
   node_name: str = None
 
+class NodeOperationType(enum.Enum):
+  """Enum for different types of node operations."""
+
+  DELETE = enum.auto()
+  DRAIN = enum.auto()
+  UNCORDON = enum.auto()
+
 
 class NodeOperationInterface(ABC):
   """Interface for defining operations on GKE nodes."""
+
+  OPERATION_TYPE: NodeOperationType
 
   @staticmethod
   @abstractmethod
@@ -426,6 +435,8 @@ class NodeOperationInterface(ABC):
 
 class NodeDeleteOperation(NodeOperationInterface):
   """Implements the node deletion operation."""
+
+  OPERATION_TYPE = NodeOperationType.DELETE
 
   @staticmethod
   def GetCommand(ctx: NodeOperationContext) -> str:
@@ -439,6 +450,8 @@ class NodeDeleteOperation(NodeOperationInterface):
 class NodeDrainOperation(NodeOperationInterface):
   """Implements the node draining operation."""
 
+  OPERATION_TYPE = NodeOperationType.DRAIN
+
   @staticmethod
   def GetCommand(ctx: NodeOperationContext) -> str:
     return (
@@ -449,6 +462,8 @@ class NodeDrainOperation(NodeOperationInterface):
 
 class NodeUncordonOperation(NodeOperationInterface):
   """Implements the node uncordoning operation."""
+
+  OPERATION_TYPE = NodeOperationType.UNCORDON
 
   @staticmethod
   def GetCommand(ctx: NodeOperationContext) -> str:
@@ -487,7 +502,9 @@ def operate_node(
 
   command = get_node_operation_command(operation, node_name, node_pool)
 
-  # logging.info("Select node '%s' to %s", node_name, spec.target.name)
+  logging.info(
+      "Select node '%s' to %s", node_name, operation.OPERATION_TYPE.name
+  )
 
   with tempfile.TemporaryDirectory() as tmpdir:
     kube_dir = tmpdir + "/kubeconfig"
