@@ -414,6 +414,7 @@ class NodeOperationContext:
   node_pool: Info = None
   node_name: str = None
 
+
 class NodeOperationType(enum.Enum):
   """Enum for different types of node operations."""
 
