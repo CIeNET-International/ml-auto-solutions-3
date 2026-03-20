@@ -123,9 +123,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       )
 
       task_id = "select_random_node"
-      select_random_node = node_pool.draw_random_nodes.override(task_id=task_id)(
-          node_pool=node_pool_info, count=1
-      )
+      select_random_node = node_pool.draw_random_nodes.override(
+          task_id=task_id
+      )(node_pool=node_pool_info, count=1)
 
       task_id = "delete_node"
       delete_node = (
