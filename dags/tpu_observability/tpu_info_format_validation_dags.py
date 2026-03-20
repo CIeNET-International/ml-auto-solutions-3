@@ -13,9 +13,18 @@
 # limitations under the License.
 
 """
-A DAG orchestrates the process of verifying TensorCore utilization metrics.
+tpu_info_validation_dag:
+A comprehensive DAG that orchestrates the end-to-end validation of the
+`tpu-info` observability tool. It performs two primary types of
+verification:
 
-This is done by comparing data from Cloud Logging and Cloud Monitoring.
+1. Format Validation: Parses the tool's raw output into structured tables
+   (TPU Chips, Runtime Utilization, TensorCore Utilization, and Latency)
+   and validates row counts and data integrity using regex.
+
+2. CLI Validation: Verifies command-line options (`-help`, `--version`,
+   `--process`) to ensure metadata, help documentation, and
+   process-to-chip mapping are functional inside live TPU worker pods.
 """
 
 import datetime
@@ -50,34 +59,6 @@ from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper, ge
 DAG_ID = "tpu_info_format_validation_dag"
 DAGRUN_TIMEOUT = get_dag_timeout(DAG_ID)
 SCHEDULE = SchedulingHelper.arrange_schedule_time(DAG_ID)
-
-
-@task
-def get_tpu_info_from_pod(info: node_pool.Info, pod_name: str) -> str:
-  """
-  Executes the `tpu-info` command in a specified pod and returns its output.
-
-  This task uses kubectl to run the 'tpu-info' command inside the given pod
-  in the 'default' namespace. The output of the command is captured and
-  returned.
-
-  Args:
-    kubeconfig: The path to the kubeconfig file.
-    pod_name: The name of the pod to execute the command in.
-
-  Returns:
-    The standard output from the 'tpu-info' command.
-  """
-  with tempfile.NamedTemporaryFile() as temp_config_file:
-    env = os.environ.copy()
-    env["KUBECONFIG"] = temp_config_file.name
-
-    cmd = " && ".join([
-        jobset.Command.get_credentials_command(info),
-        f"kubectl exec {pod_name} -n default -- tpu-info",
-    ])
-
-    return subprocess.run_exec(cmd, env=env)
 
 
 @task
@@ -292,6 +273,27 @@ def validate_latency_table(tpu_info_output: list[tpu_info.Table]):
     )
 
 
+@task
+def validate_tpu_info_patterns(output: str, cmd_name: str):
+  """Matches output against patterns defined in a local spec."""
+  patterns_map = {
+      tpu_info.TpuInfoCmd.HELP.value: ["--streaming", "--rate RATE"],
+      tpu_info.TpuInfoCmd.VERSION.value: [
+          "tpu-info version:",
+          "libtpu version:",
+      ],
+      tpu_info.TpuInfoCmd.PROCESS.value: [
+          "TPU Process Info",
+          "/dev/vfio/",
+          "python",
+      ],
+  }
+  patterns = patterns_map.get(cmd_name, [])
+  for pattern in patterns:
+    if pattern not in output:
+      raise AssertionError(f"Cmd '{cmd_name}' missing pattern: {pattern}")
+
+
 # Keyword arguments are generated dynamically at runtime (pylint does not
 # know this signature).
 with models.DAG(  # pylint: disable=unexpected-keyword-arg
@@ -303,37 +305,31 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     catchup=False,
     tags=["gke", "tpu-observability", "tpu-info", "TPU", "v6e-16"],
     description=(
-        "This DAG verifies the format of the tables in the tpu-info output "
-        "using tpu-info CLI tool. It includes 4 tables: TPU Chips, TPU "
-        "Runtime Utilization, TensorCore Utilization, and TPU Buffer Transfer "
-        "Latency."
+        "Validates the tpu-info CLI tool by verifying its command-line options. "
+        "It ensures that help documentation, version metadata, and process "
+        "mapping are functional across TPU worker pods."
     ),
     doc_md="""
-      # Format Validation DAG
-      # This DAG verifies the format of the tables in the tpu-info output.
+      # TPU Info CLI Validation DAG
+      This DAG automates the end-to-end validation of the `tpu-info` observability tool.
 
       ### Description
-      This DAG automates the validation of the tpu-info command-line tool's
-      output format.It verifies the structure and content of key metric tables,
-      including "TPU Chips", "TPU Runtime Utilization", "TensorCore
-      Utilization", and "TPU Buffer Transfer Latency", by running the tool on a
-      live GKE cluster with TPU node pools.
+      The test verifies that the `tpu-info` CLI correctly interprets various **command-line options** (e.g., `-help`, `--version`, `--process`) and returns the expected metadata or
+      metric structures. This ensures the tool is correctly installed and compatible
+      with the current TPU runtime environment.
 
-      ### Prerequisites
-      This test requires an existing GKE cluster.
-      A pre-built Docker image containing the necessary jax, libtpu, and
-      tpu-info packages must also be available in a repository accessible
-      by the GKE cluster.
+      ### Validation Scope
+      The DAG executes the following command options inside the TPU pods:
+      * **Help Option (`-help`)**: Verifies the presence of required flags like `--streaming` and `--rate`.
+      * **Version Option (`--version`)**: Validates that the tool reports the correct version and `libtpu` metadata.
+      * **Process Option (`--process`)**: Ensures that active PIDs can be mapped to specific TPU chips.
 
       ### Procedures
-      The DAG begins by creating temporary GKE TPU node pools for the test.
-      Once the node pools are running, it schedules a Kubernetes JobSet and
-      waits for the pods to become active. It then executes the tpu-info
-      command within these pods to capture the raw text output. This output is
-      parsed into structured tables, and a series of validation tasks check
-      each table for the correct structure, row counts, and data formats.
-      Finally, regardless of the test outcome, the DAG cleans up all created
-      resources, including the JobSet and the temporary node pools.
+      1.  **Environment Setup**: Dynamically creates GKE TPU node pools.
+      2.  **Workload Deployment**: Runs a JAX benchmark JobSet to generate active TPU processes.
+      3.  **CLI Execution**: Iterates through defined `TpuInfoCmd` options within the worker pods.
+      4.  **Pattern Matching**: Performs regex and string validation on the CLI output to ensure accuracy.
+      5.  **Teardown**: Automatically cleans up all Kubernetes resources and node pools to minimize costs.
       """,
 ) as dag:
   for machine in MachineConfigMap:
@@ -421,9 +417,11 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           job_apply_time=apply_time,
       )
 
-      outputs_of_tpu_info = (
-          get_tpu_info_from_pod.override(task_id="get_tpu_info")
-          .partial(info=cluster_info)
+      raw_metric_data = (
+          tpu_info.get_tpu_info_from_pod.override(task_id="get_tpu_info")
+          .partial(
+              info=cluster_info, cmd_str=tpu_info.TpuInfoCmd.TPU_INFO.value
+          )
           .expand(pod_name=running_pods)
       )
 
@@ -432,7 +430,20 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
               task_id="get_each_metric_table"
           )
           .partial()
-          .expand(output=outputs_of_tpu_info)
+          .expand(output=raw_metric_data.map(lambda x: x["output"]))
+      )
+
+      cli_raw_results = (
+          tpu_info.get_tpu_info_from_pod.override(task_id="get_cli_output")
+          .partial(info=cluster_info)
+          .expand(
+              pod_name=running_pods,
+              cmd_str=[
+                  tpu_info.TpuInfoCmd.HELP.value,
+                  tpu_info.TpuInfoCmd.VERSION.value,
+                  tpu_info.TpuInfoCmd.PROCESS.value,
+              ],
+          )
       )
 
       # Keyword arguments are generated dynamically at runtime (pylint does not
@@ -472,6 +483,10 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             .expand(tpu_info_output=output_of_tpu_info)
         )
 
+        cli_validation = validate_tpu_info_patterns.override(
+            task_id="validate_cli_output"
+        ).expand_kwargs(cli_raw_results)
+
       clean_up_workload = jobset.end_workload.override(
           task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
       )(
@@ -509,10 +524,11 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
               validate_runtime_metric,
               validate_tensorcore_metric,
               validate_latency_metric,
+              cli_validation,
           ],
       )
 
-      chain(create_first_node_pool, create_second_node_pool)
+      [create_first_node_pool, create_second_node_pool]
 
       chain(cleanup_first_node_pool, cleanup_second_node_pool)
 
@@ -525,8 +541,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           apply_time,
           running_pods,
           wait_for_job_start,
-          outputs_of_tpu_info,
+          raw_metric_data,
           output_of_tpu_info,
+          cli_raw_results,
           verification_group,
           clean_up_workload,
           cleanup_node_pool,
