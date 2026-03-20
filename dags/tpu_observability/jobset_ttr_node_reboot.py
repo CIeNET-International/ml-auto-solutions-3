@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""A DAG to test jobset time-to-recover metric using a jobset pod delete."""
+"""A DAG to test JobSet Time-To-Recover (TTR) metric by triggering a node reboot."""
 
 import datetime
 import random
@@ -66,20 +66,22 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 
       ### Description
       This DAG verifies that a TPU JobSet can recover from a hardware-level failure.
-      It launches a JobSet, executes a `reboot` command on a random node via SSH,
-      and uses a sensor to confirm that the TTR (Time-To-Recover) metric is recorded.
+      It launches a JobSet, executes a `reboot` command on a random node via a
+      privileged container (using nsenter), and uses a sensor to confirm that
+      the TTR (Time-To-Recover) metric is recorded.
 
       ### Prerequisites
       This test requires an existing cluster to run.
       GKE Cluster with TPU v6e support.
-      SSH access enabled (OS Login).
+      The JobSet must be configured with
+      privileged: True to allow node-level interaction.
 
       ### Procedures
-      First the node-pool is created, a jobset yaml is then launched on the cluster and given a short
-      period of time to initialize. After this, a random node reboot is triggered via SSH to interrupt
-      the jobset by taking one of the TPU nodes offline. A sensor is finally run which will poll
-      Cloud Monitoring to detect that the jobset time-to-recover (TTR) metric has been updated,
-      resulting in a success, or timeout and failure.
+      First the node-pool is created, a jobset yaml is then launched on the cluster.
+      After initialization, a random node reboot is triggered by executing
+      `nsenter` through a privileged pod. This simulates a hardware failure
+      by taking one of the TPU nodes offline. A sensor finally polls Cloud
+      Monitoring to confirm the jobset TTR metric is updated.
       """,
 ) as dag:
   for machine in MachineConfigMap:
