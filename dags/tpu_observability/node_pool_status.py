@@ -122,7 +122,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       )
 
       task_id = "delete_node"
-      delete_node = node_pool.disable_one_random_node.override(task_id=task_id)(
+      delete_node = node_pool.operate_node.override(task_id=task_id)(
           node_pool=node_pool_info
       )
 

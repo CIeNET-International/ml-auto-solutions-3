@@ -24,6 +24,8 @@ import random
 import re
 import tempfile
 
+from abc import ABC, abstractmethod
+
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from google.cloud import monitoring_v3
@@ -63,32 +65,6 @@ class Status(enum.Enum):
       logging.warning("Unknown status: %s", s)
       return Status.UNKNOWN
     return status
-
-
-class NodeOperationTarget(enum.Enum):
-  """Defines how to deal with target node"""
-
-  DELETE = "delete"
-  DRAIN = "drain"
-
-
-@dataclasses.dataclass
-class NodeOperationUpdateSpec:
-  """Configuration parameters for a random node operation.
-
-  Attributes:
-    target: The specific node operation to perform (e.g., delete or drain).
-  """
-
-  target: NodeOperationTarget
-
-  @staticmethod
-  def Delete() -> "NodeOperationUpdateSpec":
-    return NodeOperationUpdateSpec(target=NodeOperationTarget.DELETE)
-
-  @staticmethod
-  def Drain() -> "NodeOperationUpdateSpec":
-    return NodeOperationUpdateSpec(target=NodeOperationTarget.DRAIN)
 
 
 @dataclasses.dataclass
@@ -399,15 +375,108 @@ def get_credentials_command(node_pool: Info) -> str:
 
 
 @task
-def disable_one_random_node(
+def draw_random_nodes(node_pool: Info, count: int) -> str:
+  """Selects random nodes from the specified GKE node pool.
+
+  Args:
+      node_pool: An instance of the Info class that encapsulates the
+        configuration and metadata of a GKE node pool.
+      count: The number of nodes to select.
+  Returns:
+      A list of names of randomly selected nodes from the node pool.
+  Raises:
+      AirflowFailException: If no nodes are found in the node pool.
+  """
+  nodes_list = list_nodes(node_pool)
+
+  if not nodes_list:
+    raise AirflowFailException(
+        f"No nodes found in node pool '{node_pool.node_pool_name}'."
+    )
+
+  if count > len(nodes_list):
+    count = len(nodes_list)
+
+  target_node_list = random.sample(nodes_list, k=count)
+  logging.info(
+      "Randomly selected nodes '%s' from node pool '%s'.",
+      target_node_list,
+      node_pool.node_pool_name,
+  )
+
+  return target_node_list
+
+
+@dataclasses.dataclass
+class NodeOperationContext:
+  """Context for performing operations on a GKE node."""
+
+  node_pool: Info = None
+  node_name: str = None
+
+
+class NodeOperationInterface(ABC):
+  """Interface for defining operations on GKE nodes."""
+
+  @staticmethod
+  @abstractmethod
+  def GetCommand(ctx: NodeOperationContext) -> str:
+    pass
+
+
+class NodeDeleteOperation(NodeOperationInterface):
+  """Implements the node deletion operation."""
+
+  @staticmethod
+  def GetCommand(ctx: NodeOperationContext) -> str:
+    return (
+        f"gcloud compute instances delete {ctx.node_name} "
+        f"--project={ctx.node_pool.project_id} "
+        f"--zone={ctx.node_pool.node_locations} --quiet"
+    )
+
+
+class NodeDrainOperation(NodeOperationInterface):
+  """Implements the node draining operation."""
+
+  @staticmethod
+  def GetCommand(ctx: NodeOperationContext) -> str:
+    return (
+        f"kubectl drain {ctx.node_name} "
+        "--ignore-daemonsets --delete-emptydir-data"
+    )
+
+
+class NodeUncordonOperation(NodeOperationInterface):
+  """Implements the node uncordoning operation."""
+
+  @staticmethod
+  def GetCommand(ctx: NodeOperationContext) -> str:
+    return f"kubectl uncordon {ctx.node_name}"
+
+
+def get_node_operation_command(
+    node_operation: NodeOperationInterface,
+    node_name: str,
     node_pool: Info,
-    spec: NodeOperationUpdateSpec = NodeOperationUpdateSpec.Delete(),
 ) -> str:
-  """Performs a random node operation based on the provided specification.
+  ctx = NodeOperationContext(node_pool=node_pool, node_name=node_name)
+
+  return node_operation.GetCommand(ctx)
+
+
+@task
+def operate_node(
+    node_pool: Info,
+    node_name: str,
+    operation: NodeOperationInterface,
+) -> str:
+  """Performs a node operation based on the provided specification.
 
   Args:
     node_pool: An instance of the Info class with GKE metadata.
-    spec: A NodeOperationUpdateSpec defining the action to perform.
+    node_name: The name of the node to operate on.
+    operation: A NodeOperationInterface defining the action to perform.
 
   Returns:
     The name of the node that was operated on.
@@ -415,32 +484,10 @@ def disable_one_random_node(
   Raises:
     ValueError: If the target is unsupported.
   """
-  nodes_list = list_nodes(node_pool)
-  if not nodes_list:
-    raise AirflowFailException(
-        f"No nodes found in node pool '{node_pool.node_pool_name}'."
-    )
 
-  target_node = random.choice(nodes_list)
+  command = get_node_operation_command(operation, node_name, node_pool)
 
-  match spec.target:
-    case NodeOperationTarget.DELETE:
-      command = (
-          f"gcloud compute instances delete {target_node} "
-          f"--project={node_pool.project_id} "
-          f"--zone={node_pool.node_locations} --quiet"
-      )
-
-    case NodeOperationTarget.DRAIN:
-      command = (
-          f"kubectl drain {target_node} "
-          "--ignore-daemonsets --delete-emptydir-data"
-      )
-
-    case _:
-      raise AirflowFailException(f"Unsupported action target: {spec.target}")
-
-  logging.info("Select node '%s' to %s", target_node, spec.target.name)
+  # logging.info("Select node '%s' to %s", node_name, spec.target.name)
 
   with tempfile.TemporaryDirectory() as tmpdir:
     kube_dir = tmpdir + "/kubeconfig"
@@ -450,7 +497,7 @@ def disable_one_random_node(
     cmd = " && ".join([get_credentials_command(node_pool), command])
     subprocess.run_exec(cmd=cmd, env=env)
 
-  return target_node
+  return node_name
 
 
 def _query_status_metric(node_pool: Info) -> Status:
@@ -564,36 +611,6 @@ def rollback(node_pool: Info) -> None:
   )
 
   subprocess.run_exec(command)
-
-
-@task
-def uncordon_node(node_pool: Info, node_name: str) -> None:
-  """Restores a node to a schedulable state within a GKE node pool.
-
-  This task executes a 'kubectl uncordon' command on the specified node,
-  allowing new pods to be scheduled on it again. This is typically used
-  during cleanup after a drain test.
-
-  Args:
-      node_pool: An instance of the Info class containing node pool metadata.
-      node_name: The name of the node to be uncordoned.
-  """
-  if not node_name:
-    logging.warning("No node name provided to uncordon. Skipping.")
-    return
-
-  uncordon_command = f"kubectl uncordon {node_name}"
-  logging.info("Executing: %s", uncordon_command)
-
-  with tempfile.TemporaryDirectory() as tmpdir:
-    kube_dir = tmpdir + "/kubeconfig"
-    env = os.environ.copy()
-    env["KUBECONFIG"] = kube_dir
-
-    cmd = " && ".join([get_credentials_command(node_pool), uncordon_command])
-    subprocess.run_exec(cmd=cmd, env=env)
-
-  logging.info("Node '%s' has been successfully uncordoned.", node_name)
 
 
 @task.sensor(poke_interval=30, timeout=1200, mode="poke")

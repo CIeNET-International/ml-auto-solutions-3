@@ -24,7 +24,10 @@ from airflow.utils.task_group import TaskGroup
 from dags import composer_env
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
-from dags.tpu_observability.utils.node_pool_util import NodeOperationUpdateSpec
+from dags.tpu_observability.utils.node_pool_util import (
+    NodeUncordonOperation,
+    NodeDrainOperation,
+)
 from dags.tpu_observability.utils.jobset_util import Workload
 from dags.tpu_observability.configs.common import (
     MachineConfigMap,
@@ -123,15 +126,29 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           jobset_config=jobset_config,
       )
 
-      drained_node = node_pool.disable_one_random_node.override(
-          task_id="drained_node"
+      select_nodes = node_pool.draw_random_nodes.override(
+          task_id="select_nodes"
       )(
           node_pool=cluster_info,
-          spec=NodeOperationUpdateSpec.Drain(),
+          count=1,
       )
 
-      uncordon_node = node_pool.uncordon_node.override(task_id="uncordon_node")(
-          node_pool=cluster_info, node_name=drained_node
+      drained_node = (
+          node_pool.operate_node.override(task_id="drained_node")
+          .partial(
+              node_pool=cluster_info,
+              operation=NodeDrainOperation,
+          )
+          .expand(node_name=select_nodes)
+      )
+
+      uncordon_node = (
+          node_pool.operate_node.override(task_id="uncordon_node")
+          .partial(
+              node_pool=cluster_info,
+              operation=NodeUncordonOperation,
+          )
+          .expand(node_name=select_nodes)
       )
 
       wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
