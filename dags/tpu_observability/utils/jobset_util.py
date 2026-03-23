@@ -26,6 +26,7 @@ import tempfile
 import textwrap
 import time
 from typing import Final
+import yaml
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
@@ -174,7 +175,7 @@ _TEMPLATE = string.Template(
                   spec:
                     hostPID: $host_pid
                     restartPolicy: Never
-                    terminationGracePeriodSeconds: 300
+                    terminationGracePeriodSeconds: 350
                     nodeSelector:
                       cloud.google.com/gke-tpu-accelerator: $tpu_accelerator_type
                       cloud.google.com/gke-tpu-topology: $tpu_topology
@@ -186,7 +187,7 @@ _TEMPLATE = string.Template(
                       lifecycle:
                         preStop:
                           exec:
-                            command: ["/bin/sh", "-c", "sleep 240"]
+                            command: $prestop_command
                       command: $command
                       args:
                         - $args
@@ -295,6 +296,7 @@ class JobSet:
       workload_script: Workload,
       jobset_name: str,
       node_pool_selector: str = None,
+      apply_recovery_delay: bool = False,
   ) -> str:
     """Generates the final JobSet YAML content.
 
@@ -303,6 +305,7 @@ class JobSet:
           class.
         jobset_name: The name of the JobSet.
         node_pool_selector: The node pool selector to use.
+        apply_recovery_delay: Whether to apply a recovery delay.
 
     Returns:
         A string containing the complete JobSet YAML.
@@ -314,6 +317,9 @@ class JobSet:
     params["node_pool_selector"] = node_pool_selector or ""
     params["privileged"] = "true" if self.privileged else "false"
     params["host_pid"] = "true" if self.privileged else "false"
+
+    if apply_recovery_delay:
+      params["prestop_command"] = ["/bin/sh", "-c", "sleep 300"]
 
     return _TEMPLATE.substitute(params)
 
@@ -605,6 +611,7 @@ def run_workload(
     workload_type: Workload,
     jobset_name: str,
     node_pool_selector: str = None,
+    apply_recovery_delay: bool = False,
 ) -> TimeUtil:
   """Applies the specified YAML file to the GKE cluster.
 
@@ -614,6 +621,7 @@ def run_workload(
     workload_type: The workload script to execute.
     jobset_name: The name of the JobSet.
     node_pool_selector: The node pool selector to use.
+    apply_recovery_delay: Whether to apply recovery delay.
   Returns:
     The UTC time when the workload was started.
   """
@@ -624,6 +632,7 @@ def run_workload(
         workload_script=workload_type,
         jobset_name=jobset_name,
         node_pool_selector=node_pool_selector,
+        apply_recovery_delay=apply_recovery_delay,
     )
 
     cmd = " && ".join([
@@ -924,11 +933,11 @@ def wait_for_jobset_started(
 
 
 @task
-def verify_recovery_duration(start_time: TimeUtil):
+def verify_recovery_duration(start_time: TimeUtil, end_time: TimeUtil):
   """
   Checks if the time elapsed since start_timestamp is > 60 seconds.
   """
-  end_time = TimeUtil.from_iso_string(datetime.datetime.now(datetime.timezone.utc))
+
   duration = end_time.time - start_time.time
 
   logging.info(f"Start Time: {start_time.to_iso_string()}")
@@ -1168,9 +1177,6 @@ def get_jobset_failure_time(
     ])
 
     stdout = subprocess.run_exec(cmd, env=env)
-    cmmd = "kubectl config view --minify --output 'jsonpath={..namespace}'"
-    sttdout = subprocess.run_exec(cmmd, env=env)
-    logging.info("Default namespace: %s", sttdout)
 
     logging.info(stdout)
     lines = stdout.strip().splitlines()
@@ -1183,6 +1189,6 @@ def get_jobset_failure_time(
 
     first_line = lines[0].split()
     if first_line:
-      end_time = first_line[0]
+      end_time = TimeUtil.from_iso_string(first_line[0])
       logging.info("Detected JobSet restart time: %s", end_time)
       return PokeReturnValue(is_done=True, xcom_value=end_time)
