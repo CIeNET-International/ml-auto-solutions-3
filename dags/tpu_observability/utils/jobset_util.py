@@ -24,7 +24,8 @@ import random
 import string
 import tempfile
 import textwrap
-from typing import Final, Optional
+from typing import Final
+from typing_extensions import override
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
@@ -189,7 +190,7 @@ _TEMPLATE = string.Template(
 
 
 @dataclasses.dataclass
-class JobSet:
+class JobSet(dict):
   """
   Generates YAML configurations for Kubernetes JobSets.
 
@@ -229,6 +230,20 @@ class JobSet:
   image: str
   tpu_cores_per_pod: int
   node_pool_selector: str
+
+  @override
+  def __getitem__(self, key):
+    try:
+      return getattr(self, key)
+    except AttributeError:
+      return super().__getitem__(key)
+
+  @override
+  def __setitem__(self, key, value):
+    if hasattr(self, key):
+      setattr(self, key, value)
+    else:
+      super().__setitem__(key, value)
 
   def generate_yaml(self, workload_script: Workload) -> str:
     """Generates the final JobSet YAML content.
@@ -462,24 +477,24 @@ def _generate_jobset_name(dag_id_prefix: str) -> str:
   return f"{dag_id_prefix}-{timestamp}"
 
 
-def _build_jobset_config_dict(
-    gcs_path: str, dag_name: str, **overrides
+@task.python(multiple_outputs=True)
+def build_jobset_from_gcs_yaml(
+    gcs_path: str,
+    dag_name: str,
+    **overrides,
 ) -> dict:
   """
-  Builds a dictionary of JobSet configuration by loading from GCS and applying
-  overrides.
+  Builds a JobSet instance by merging YAML defaults and generating
+  a timestamped name based on dag_id_prefix.
 
   Args:
     gcs_path: The GCS path to the YAML configuration file.
     dag_name: The name of the DAG to extract specific configurations.
     **overrides: Additional parameters to override default configurations.
-  Returns:
-    A dictionary containing the config_dict JobSet configuration.
   """
-
   config = gcs.load_yaml_from_gcs(gcs_path)
   known_fields = {f.name for f in dataclasses.fields(JobSet)}
-  config_dict = {
+  merged = {
       k: v
       for k, v in config.get("jobset_defaults", {}).items()
       if k in known_fields
@@ -489,64 +504,15 @@ def _build_jobset_config_dict(
 
   for k, v in dag_cfg.items():
     if k in known_fields and v is not None:
-      config_dict[k] = v
+      merged[k] = v
 
-  config_dict.update({k: v for k, v in overrides.items() if k in known_fields})
-  config_dict["jobset_name"] = _generate_jobset_name(dag_id_prefix)
+  merged.update({k: v for k, v in overrides.items() if k in known_fields})
+  merged["jobset_name"] = _generate_jobset_name(dag_id_prefix)
 
   logging.info(
-      f"Final jobset dictionary '{config_dict['jobset_name']}' "
-      f"created for DAG '{dag_name}'"
+      f"Final JobSet '{merged['jobset_name']}' created for DAG '{dag_name}'"
   )
-  return config_dict
-
-
-@task
-def build_jobset_dict_from_gcs_yaml(
-    gcs_path: str,
-    dag_name: str,
-    **overrides,
-) -> dict:
-  """
-  Builds a JobSet configuration dictionary from a GCS YAML file.
-
-  Args:
-    gcs_path: The GCS path to the YAML configuration file.
-    dag_name: The name of the DAG to extract specific configurations.
-    **overrides: Additional parameters to override default configurations.
-
-  Returns:
-    A dictionary containing the JobSet configuration.
-  """
-
-  return _build_jobset_config_dict(
-      gcs_path=gcs_path, dag_name=dag_name, **overrides
-  )
-
-
-@task
-def build_jobset_from_gcs_yaml(
-    gcs_path: str,
-    dag_name: str,
-    **overrides,
-) -> JobSet:
-  """
-  Builds a JobSet instance by merging YAML defaults and generating
-  a timestamped name based on dag_id_prefix.
-
-  Args:
-    gcs_path: The GCS path to the YAML configuration file.
-    dag_name: The name of the DAG to extract specific configurations.
-    **overrides: Additional parameters to override default configurations.
-
-  Returns:
-    A JobSet instance with the final configuration ready for use in the DAG.
-  """
-
-  jobset_dict = _build_jobset_config_dict(
-      gcs_path=gcs_path, dag_name=dag_name, **overrides
-  )
-  return JobSet(**jobset_dict)
+  return JobSet(**merged)
 
 
 @task
@@ -980,8 +946,7 @@ def wait_for_jobset_replica_number(
     node_pool: node_pool_info,
     jobset_config: JobSet | dict,
     job_status: ReplicatedJobStatus,
-    expected_replica_number: Optional[int] = None,
-    xcom_argument: Optional[dict] = None,
+    expected_replica_number: int,
 ):
   """
   A sensor which checks if the correct number jobset replicas in a status type.
@@ -994,15 +959,6 @@ def wait_for_jobset_replica_number(
     xcom_argument(dict): An optional argument to pull the expected replica number
       from an XCom push. Should be in the format {"replicas": int}.
   """
-
-  if (expected_replica_number is None) == (xcom_argument is None):
-    raise ValueError(
-        "Exactly one of expected_replica_number or xcom_argument must be "
-        "provided."
-    )
-
-  if xcom_argument is not None:
-    expected_replica_number = xcom_argument.get("replicas")
 
   if isinstance(jobset_config, dict):
     jobset_config = JobSet(**jobset_config)
