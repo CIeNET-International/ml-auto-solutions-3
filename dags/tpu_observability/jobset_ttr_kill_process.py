@@ -89,7 +89,7 @@ def pick_first(items):
 with models.DAG(  # pylint: disable=unexpected-keyword-arg
     dag_id=DAG_ID,
     start_date=datetime.datetime(2025, 8, 10),
-    schedule=SCHEDULE if composer_env.is_prod_env() else "30 10 * * *",
+    schedule=SCHEDULE if composer_env.is_prod_env() else None,
     dagrun_timeout=DAGRUN_TIMEOUT,
     catchup=False,
     tags=[
@@ -175,15 +175,22 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 
       single_start_time = pick_first(kill_tasks)
 
+      wait_for_recovery = jobset.get_jobset_failure_time.override(
+          task_id="wait_for_recovery"
+      )(
+          node_pool=cluster_info,
+          jobset_config=jobset_config,
+      )
+
       verify_duration = jobset.verify_recovery_duration.override(
           task_id="verify_recovery_duration"
       )(
-          start_time=single_start_time
+          start_time=single_start_time,
+          end_time=wait_for_recovery,
       )
 
       wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
-          task_id="wait_for_metric_upload",
-          trigger_rule=TriggerRule.ALL_DONE
+          task_id="wait_for_jobset_ttr_to_be_found",
       )(
           node_pool=cluster_info,
           jobset_config=jobset_config,
