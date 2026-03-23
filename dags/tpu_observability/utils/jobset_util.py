@@ -1070,6 +1070,8 @@ def wait_for_jobset_replica_number(
     jobset_config: Configuration of JobSet which is being run.
     job_status(ReplicatedJobStatus): The type of status being checked for.
     expected_replica_number(int): The expected number of replicas to be found.
+    xcom_argument(dict): An optional argument to pull the expected replica number
+      from an XCom push. Should be in the format {"replicas": int}.
   """
 
   if (expected_replica_number is None) == (xcom_argument is None):
