@@ -192,7 +192,6 @@ _TEMPLATE = string.Template(
 # pylint: enable=line-too-long
 
 
-@dataclasses.dataclass
 class JobSet(dict):
   """
   Generates YAML configurations for Kubernetes JobSets.
@@ -233,6 +232,11 @@ class JobSet(dict):
   image: str
   tpu_cores_per_pod: int
   node_pool_selector: str
+
+  def __init__(self, *args, **kwargs):
+    super().__init__(*args, **kwargs)
+    for k, v in self.items():
+        setattr(self, k, v)
 
   @override
   def __getitem__(self, key):
