@@ -84,6 +84,7 @@ def kill_tpu_pod_workload(info: node_pool.Info, pod_name: str) -> None:
 def pick_first(items):
   return items[0] if items else None
 
+
 # Keyword arguments are generated dynamically at runtime (pylint does not
 # know this signature).
 with models.DAG(  # pylint: disable=unexpected-keyword-arg

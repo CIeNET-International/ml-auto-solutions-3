@@ -239,7 +239,9 @@ class JobSet:
   tpu_cores_per_pod: int
   node_pool_selector: str
 
-  def generate_yaml(self, workload_script: Workload, apply_recovery_delay: bool = False) -> str:
+  def generate_yaml(
+      self, workload_script: Workload, apply_recovery_delay: bool = False
+  ) -> str:
     """Generates the final JobSet YAML content.
 
     Args:
@@ -510,7 +512,9 @@ def build_jobset_from_gcs_yaml(
 
 @task
 def run_workload(
-    node_pool: node_pool_info, jobset_config: JobSet, workload_type: Workload,
+    node_pool: node_pool_info,
+    jobset_config: JobSet,
+    workload_type: Workload,
     apply_recovery_delay: bool = False,
 ) -> TimeUtil:
   """
@@ -528,9 +532,9 @@ def run_workload(
     env = os.environ.copy()
     env["KUBECONFIG"] = temp_config_file.name
     yaml_config = jobset_config.generate_yaml(
-          workload_script=workload_type,
-          apply_recovery_delay=apply_recovery_delay,
-      )
+        workload_script=workload_type,
+        apply_recovery_delay=apply_recovery_delay,
+    )
 
     cmd = " && ".join([
         Command.get_credentials_command(node_pool),

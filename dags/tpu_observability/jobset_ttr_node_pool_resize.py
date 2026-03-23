@@ -127,7 +127,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           jobset_config=jobset_config,
       )
 
-      node_pool_resize_start_time = node_pool.update.override(task_id="node_pool_resize")(
+      node_pool_resize_start_time = node_pool.update.override(
+          task_id="node_pool_resize"
+      )(
           node_pool=cluster_info,
           spec=node_pool.NodePoolUpdateSpec.DiskSize(
               delta=_DISK_SIZE_INCREMENT
