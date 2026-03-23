@@ -24,7 +24,7 @@ import random
 import string
 import tempfile
 import textwrap
-from typing import Final
+from typing import Final, Optional
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
@@ -1059,7 +1059,8 @@ def wait_for_jobset_replica_number(
     node_pool: node_pool_info,
     jobset_config: JobSet | dict,
     job_status: ReplicatedJobStatus,
-    expected_replica_number: int,
+    expected_replica_number: Optional[int] = None,
+    xcom_argument: Optional[dict] = None,
 ):
   """
   A sensor which checks if the correct number jobset replicas in a status type.
@@ -1070,6 +1071,15 @@ def wait_for_jobset_replica_number(
     job_status(ReplicatedJobStatus): The type of status being checked for.
     expected_replica_number(int): The expected number of replicas to be found.
   """
+
+  if (expected_replica_number is None) == (xcom_argument is None):
+    raise ValueError(
+        "Exactly one of expected_replica_number or xcom_argument must be "
+        "provided."
+    )
+
+  if xcom_argument is not None:
+    expected_replica_number = xcom_argument.get("replicas")
 
   if isinstance(jobset_config, dict):
     jobset_config = JobSet(**jobset_config)
