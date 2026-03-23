@@ -141,7 +141,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           node_pool=node_pool_info,
           jobset_config=jobset_config,
           job_status=ReplicatedJobStatus.SUSPENDED,
-          expected_replica_number="{{ ti.xcom_pull(task_ids=ti.task_id.rsplit('.', 1)[0] + '.build_jobset_dict_from_gcs_yaml')['replicas'] }}",
+          xcom_argument=jobset_config,
       )
 
       cleanup_workload = jobset.end_workload.override(
