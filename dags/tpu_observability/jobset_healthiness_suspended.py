@@ -17,7 +17,6 @@
 import datetime
 
 from airflow import models
-from airflow.decorators import task
 from airflow.utils.trigger_rule import TriggerRule
 from airflow.utils.task_group import TaskGroup
 from airflow.models.baseoperator import chain
