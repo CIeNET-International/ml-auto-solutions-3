@@ -42,7 +42,7 @@ SCHEDULE = SchedulingHelper.arrange_schedule_time(DAG_ID)
 with models.DAG(  # pylint: disable=unexpected-keyword-arg
     dag_id=DAG_ID,
     start_date=datetime.datetime(2026, 1, 8),
-    schedule=SCHEDULE if composer_env.is_prod_env() else "0 4 * * *",
+    schedule=SCHEDULE if composer_env.is_prod_env() else None,
     dagrun_timeout=DAGRUN_TIMEOUT,
     catchup=False,
     tags=[
@@ -130,9 +130,8 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           jobset_config=jobset_config,
       )
 
-      wait_for_recovery = jobset.wait_for_all_pods_running.override(
-          task_id="wait_for_recovery",
-          poke_interval=5
+      wait_for_recovery = jobset.get_jobset_failure_time.override(
+          task_id="wait_for_recovery"
       )(
           node_pool=cluster_info,
           jobset_config=jobset_config,
@@ -141,12 +140,12 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       verify_duration = jobset.verify_recovery_duration.override(
           task_id="verify_recovery_duration"
       )(
-          start_time=deletion_start_time
+          start_time=deletion_start_time,
+          end_time=wait_for_recovery,
       )
 
       wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
           task_id="wait_for_jobset_ttr_to_be_found",
-          trigger_rule=TriggerRule.ALL_DONE
       )(
           node_pool=cluster_info,
           jobset_config=jobset_config,
