@@ -868,7 +868,6 @@ def wait_for_all_pods_running(
     PokeReturnValue with is_done=True and pod names when all pods are running,
     or is_done=False to continue polling.
   """
-  time.sleep(15)
   running_pods = get_running_pods(
       node_pool=node_pool,
       jobset_name=jobset_config.jobset_name,
@@ -1006,7 +1005,7 @@ def ensure_no_jobset_uptime_data(
 
 
 @task.sensor(poke_interval=30, timeout=600, mode="poke")
-def get_jobset_failure_time(
+def wait_for_jobset_recovered(
     node_pool: node_pool_info, jobset_config: JobSet
 ) -> PokeReturnValue:
   """Executes the event command and extracts the LAST_SEEN timestamp.
