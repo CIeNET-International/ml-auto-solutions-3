@@ -15,7 +15,6 @@
 """Utilities for managing JobSets in GKE clusters for TPU observability."""
 
 import enum
-import dataclasses
 from datetime import timedelta
 import json
 import logging
@@ -233,7 +232,7 @@ class JobSet(dict):
   def __init__(self, *args, **kwargs):
     super().__init__(*args, **kwargs)
     for k, v in self.items():
-        setattr(self, k, v)
+      setattr(self, k, v)
 
   @override
   def __getitem__(self, key):
@@ -259,7 +258,7 @@ class JobSet(dict):
     Returns:
         A string containing the complete JobSet YAML.
     """
-    params = dataclasses.asdict(self)
+    params = dict(self)
     params["command"] = ["bash", "-c"]
     params["args"] = workload_script
     params["node_pool_selector"] = self.node_pool_selector or ""
@@ -497,7 +496,7 @@ def build_jobset_from_gcs_yaml(
     **overrides: Additional parameters to override default configurations.
   """
   config = gcs.load_yaml_from_gcs(gcs_path)
-  known_fields = {f.name for f in dataclasses.fields(JobSet)}
+  known_fields = set(JobSet.__annotations__.keys())
   merged = {
       k: v
       for k, v in config.get("jobset_defaults", {}).items()
