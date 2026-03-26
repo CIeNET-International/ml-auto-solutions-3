@@ -111,29 +111,22 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           node_pool=cluster_info,
       )
 
-      apply_time = jobset.run_workload.override(task_id="start_workload")(
+      startup_tg, apply_time, _ = jobset.get_jobset_startup_group(
           node_pool=cluster_info,
           jobset_config=jobset_config,
           workload_type=Workload.JAX_TPU_BENCHMARK,
       )
 
-      running_pods = jobset.wait_for_all_pods_running.override(
-          task_id="ensure_all_pods_running"
+      rollback_node_pool = node_pool.rollback.override(
+          task_id="rollback_node_pool"
+      )(node_pool=cluster_info)
+
+      wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
+          task_id="wait_for_jobset_ttr_to_be_found"
       )(
           node_pool=cluster_info,
           jobset_config=jobset_config,
       )
-
-      prepare_ttr, validate_ttr = jobset.get_jobset_ttr_validation_stages(
-          node_pool=cluster_info,
-          jobset_config=jobset_config,
-          apply_time=apply_time,
-          pod_name_list=running_pods,
-      )
-
-      rollback_node_pool = node_pool.rollback.override(
-          task_id="rollback_node_pool"
-      )(node_pool=cluster_info)
 
       cleanup_workload = jobset.end_workload.override(
           task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
@@ -141,7 +134,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           node_pool=cluster_info,
           jobset_config=jobset_config,
       ).as_teardown(
-          setups=apply_time,
+          setups=apply_time
       )
 
       cleanup_node_pool = node_pool.delete.override(
@@ -155,11 +148,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           jobset_config,
           cluster_info,
           create_node_pool,
-          apply_time,
-          running_pods,
-          prepare_ttr,
+          startup_tg,
           rollback_node_pool,
-          validate_ttr,
+          wait_for_metric_upload,
           cleanup_workload,
           cleanup_node_pool,
       )
