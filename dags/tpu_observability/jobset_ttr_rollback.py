@@ -128,7 +128,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           task_id="rollback_node_pool"
       )(node_pool=cluster_info)
 
-      wait_for_recovery = jobset.get_jobset_failure_time.override(
+      wait_for_recovery = jobset.wait_for_jobset_recovered.override(
           task_id="wait_for_recovery"
       )(
           node_pool=cluster_info,
