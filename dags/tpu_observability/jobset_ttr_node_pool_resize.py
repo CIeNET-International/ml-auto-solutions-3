@@ -129,7 +129,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           ),
       )
 
-      wait_for_recovery = jobset.get_jobset_failure_time.override(
+      wait_for_recovery = jobset.wait_for_jobset_recovered.override(
           task_id="wait_for_recovery"
       )(
           node_pool=cluster_info,
