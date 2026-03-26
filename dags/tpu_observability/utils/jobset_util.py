@@ -29,7 +29,10 @@ from typing import Final
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from airflow.sensors.base import PokeReturnValue
+from airflow.models.xcom_arg import XComArg
+from airflow.utils.task_group import TaskGroup
 from google.cloud.monitoring_v3 import types
+from airflow.models.baseoperator import chain
 import kubernetes
 
 from dags.tpu_observability.utils import subprocess_util as subprocess
@@ -795,6 +798,57 @@ def wait_for_all_pods_running(
     )
     return PokeReturnValue(is_done=True, xcom_value=running_pods)
   return PokeReturnValue(is_done=False)
+
+
+def get_jobset_startup_group(
+    node_pool: node_pool_info,
+    jobset_config: JobSet,
+    workload_type: str = Workload.JAX_TPU_BENCHMARK,
+) -> tuple[TaskGroup, XComArg, XComArg]:
+  """
+  Provides a standardized TaskGroup for JobSet startup and preparation.
+
+  This helper encapsulates the three essential steps for a stable JobSet:
+  1. run_workload: Applies the JobSet YAML to the cluster.
+  2. wait_for_all_pods_running: Polls until all worker pods
+     are in 'Running' state.
+  3. wait_for_job_start: Ensures the JAX/workload initialization is complete.
+
+  Args:
+    node_pool: Configuration object containing cluster and project details.
+    jobset_config: The JobSet object containing YAML and scaling configurations.
+    workload_type: The predefined workload script to execute.
+
+  Returns:
+    A tuple of (startup_tg, apply_time, running_pods):
+      - TaskGroup: The node to be used in the DAG's dependency chain.
+      - XComArg (apply_time): The UTC start time, used for teardown.
+      - XComArg (running_pods): A list of pod names, used for
+        fault injection tasks.
+  """
+  with TaskGroup(group_id="jobset_startup_and_prepare") as tg:
+    apply_time = run_workload.override(task_id="run_workload")(
+        node_pool=node_pool,
+        jobset_config=jobset_config,
+        workload_type=workload_type,
+    )
+
+    running_pods = wait_for_all_pods_running.override(
+        task_id="ensure_all_pods_running"
+    )(
+        node_pool=node_pool,
+        jobset_config=jobset_config,
+    )
+
+    wait_start = wait_for_jobset_started.override(task_id="wait_for_job_start")(
+        node_pool=node_pool,
+        pod_name_list=running_pods,
+        job_apply_time=apply_time,
+    )
+
+    chain(apply_time, running_pods, wait_start)
+
+  return tg, apply_time, running_pods
 
 
 def query_uptime_metrics(

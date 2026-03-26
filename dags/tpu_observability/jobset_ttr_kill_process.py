@@ -150,25 +150,10 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           node_pool=cluster_info,
       )
 
-      apply_time = jobset.run_workload.override(task_id="run_workload")(
+      startup_tg, apply_time, running_pods = jobset.get_jobset_startup_group(
           node_pool=cluster_info,
           jobset_config=jobset_config,
           workload_type=Workload.JAX_TPU_BENCHMARK,
-      )
-
-      running_pods = jobset.wait_for_all_pods_running.override(
-          task_id="ensure_all_pods_running"
-      )(
-          node_pool=cluster_info,
-          jobset_config=jobset_config,
-      )
-
-      wait_for_job_start = jobset.wait_for_jobset_started.override(
-          task_id="wait_for_job_start"
-      )(
-          cluster_info,
-          pod_name_list=running_pods,
-          job_apply_time=apply_time,
       )
 
       kill_tasks = (
@@ -204,9 +189,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           jobset_config,
           cluster_info,
           create_node_pool,
-          apply_time,
-          running_pods,
-          wait_for_job_start,
+          startup_tg,
           kill_tasks,
           wait_for_metric_upload,
           cleanup_workload,
