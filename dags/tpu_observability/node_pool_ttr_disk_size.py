@@ -88,6 +88,14 @@ with models.DAG(
           node_pool=node_pool_info
       )
 
+      wait_for_provisioning = node_pool.wait_for_status.override(
+          task_id="wait_for_provisioning"
+      )(node_pool=node_pool_info, status=node_pool.Status.PROVISIONING)
+
+      wait_for_running = node_pool.wait_for_status.override(
+          task_id="wait_for_running"
+      )(node_pool=node_pool_info, status=node_pool.Status.RUNNING)
+
       update_start_time = node_pool.update.override(task_id="update_node_pool")(
           node_pool=node_pool_info,
           spec=node_pool.NodePoolUpdateSpec.DiskSize(
@@ -95,9 +103,12 @@ with models.DAG(
           ),
       )
 
-      prepare_ttr, validate_ttr = node_pool.get_node_pool_ttr_validation_stages(
-          node_pool_info=node_pool_info,
-          operation_start_time=update_start_time,
+      wait_for_recovered = node_pool.wait_for_status.override(
+          task_id="wait_for_recovered"
+      )(node_pool=node_pool_info, status=node_pool.Status.RUNNING)
+
+      wait_for_ttr = node_pool.wait_for_ttr(
+          node_pool=node_pool_info, operation_start_time=update_start_time
       )
 
       cleanup_node_pool = node_pool.delete.override(
@@ -109,8 +120,10 @@ with models.DAG(
       chain(
           node_pool_info,
           create_node_pool,
-          prepare_ttr,
+          wait_for_provisioning,
+          wait_for_running,
           update_start_time,
-          validate_ttr,
+          wait_for_recovered,
+          wait_for_ttr,
           cleanup_node_pool,
       )
