@@ -188,6 +188,7 @@ _TEMPLATE = string.Template(
 )
 # pylint: enable=line-too-long
 
+
 @dataclasses.dataclass
 class JobSet(dict):
   """
@@ -526,7 +527,7 @@ def build_jobset_from_gcs_yaml(
 @task
 def run_workload(
     node_pool: node_pool_info,
-    jobset_config: JobSet ,
+    jobset_config: JobSet,
     workload_type: Workload,
 ) -> TimeUtil:
   """
