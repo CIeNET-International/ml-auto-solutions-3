@@ -23,6 +23,7 @@ import random
 import string
 import tempfile
 import textwrap
+import dataclasses
 from typing import Final
 from typing_extensions import override
 
@@ -187,7 +188,7 @@ _TEMPLATE = string.Template(
 )
 # pylint: enable=line-too-long
 
-
+@dataclasses.dataclass
 class JobSet(dict):
   """
   Generates YAML configurations for Kubernetes JobSets.
@@ -229,24 +230,28 @@ class JobSet(dict):
   tpu_cores_per_pod: int
   node_pool_selector: str
 
-  def __init__(self, *args, **kwargs):
-    super().__init__(*args, **kwargs)
-    for k, v in self.items():
-      setattr(self, k, v)
-
-  @override
-  def __getitem__(self, key):
-    try:
-      return getattr(self, key)
-    except AttributeError:
-      return super().__getitem__(key)
-
   @override
   def __setitem__(self, key, value):
-    if hasattr(self, key):
-      setattr(self, key, value)
-    else:
-      super().__setitem__(key, value)
+    target_type = self.__annotations__.get(key)
+
+    if target_type is None:
+      raise KeyError(f"Key '{key}' is not a valid JobSet parameter.")
+
+    if not isinstance(value, target_type):
+      raise TypeError(
+          f"Expected value of type {target_type} for key '{key}'"
+          f", got {type(value)}"
+      )
+
+    super().__setitem__(key, value)
+
+  @override
+  def __setattr__(self, key, value):
+    self[key] = value
+
+  @override
+  def __getattr__(self, key):
+    return self[key]
 
   def generate_yaml(self, workload_script: Workload) -> str:
     """Generates the final JobSet YAML content.
@@ -258,7 +263,7 @@ class JobSet(dict):
     Returns:
         A string containing the complete JobSet YAML.
     """
-    params = dict(self)
+    params = self
     params["command"] = ["bash", "-c"]
     params["args"] = workload_script
     params["node_pool_selector"] = self.node_pool_selector or ""
@@ -485,7 +490,7 @@ def build_jobset_from_gcs_yaml(
     gcs_path: str,
     dag_name: str,
     **overrides,
-) -> dict:
+) -> JobSet:
   """
   Builds a JobSet instance by merging YAML defaults and generating
   a timestamped name based on dag_id_prefix.
@@ -521,7 +526,7 @@ def build_jobset_from_gcs_yaml(
 @task
 def run_workload(
     node_pool: node_pool_info,
-    jobset_config: JobSet | dict,
+    jobset_config: JobSet ,
     workload_type: Workload,
 ) -> TimeUtil:
   """
@@ -947,7 +952,7 @@ def suspended_jobset(node_pool: node_pool_info, jobset_config: JobSet | dict):
 @task.sensor(poke_interval=30, timeout=900, mode="poke")
 def wait_for_jobset_replica_number(
     node_pool: node_pool_info,
-    jobset_config: JobSet | dict,
+    jobset_config: JobSet,
     job_status: ReplicatedJobStatus,
     expected_replica_number: int,
 ):
@@ -963,13 +968,10 @@ def wait_for_jobset_replica_number(
       from an XCom push. Should be in the format {"replicas": int}.
   """
 
-  if isinstance(jobset_config, dict):
-    jobset_config = JobSet(**jobset_config)
-
   logging.info("Checking for number of replicas of type: %s", job_status.value)
   suspended_replica_number = get_replica_num(
       job_status=job_status,
-      job_name=jobset_config.replicated_job_name,
+      job_name=jobset_config["replicated_job_name"],
       node_pool=node_pool,
   )
   return suspended_replica_number == expected_replica_number
