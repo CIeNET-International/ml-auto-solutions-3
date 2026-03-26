@@ -15,7 +15,6 @@
 """Utilities for managing JobSets in GKE clusters for TPU observability."""
 
 import enum
-import dataclasses
 from datetime import timedelta
 import json
 import logging
@@ -24,7 +23,9 @@ import random
 import string
 import tempfile
 import textwrap
+import dataclasses
 from typing import Final
+from typing_extensions import override
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
@@ -189,7 +190,7 @@ _TEMPLATE = string.Template(
 
 
 @dataclasses.dataclass
-class JobSet:
+class JobSet(dict):
   """
   Generates YAML configurations for Kubernetes JobSets.
 
@@ -230,6 +231,29 @@ class JobSet:
   tpu_cores_per_pod: int
   node_pool_selector: str
 
+  @override
+  def __setitem__(self, key, value):
+    target_type = self.__annotations__.get(key)
+
+    if target_type is None:
+      raise KeyError(f"Key '{key}' is not a valid JobSet parameter.")
+
+    if not isinstance(value, target_type):
+      raise TypeError(
+          f"Expected value of type {target_type} for key '{key}'"
+          f", got {type(value)}"
+      )
+
+    super().__setitem__(key, value)
+
+  @override
+  def __setattr__(self, key, value):
+    self[key] = value
+
+  @override
+  def __getattr__(self, key):
+    return self[key]
+
   def generate_yaml(self, workload_script: Workload) -> str:
     """Generates the final JobSet YAML content.
 
@@ -240,7 +264,7 @@ class JobSet:
     Returns:
         A string containing the complete JobSet YAML.
     """
-    params = dataclasses.asdict(self)
+    params = self
     params["command"] = ["bash", "-c"]
     params["args"] = workload_script
     params["node_pool_selector"] = self.node_pool_selector or ""
@@ -308,6 +332,16 @@ class Command:
         f"-n {namespace} --wait=false",
     ])
 
+  @staticmethod
+  def k8s_suspend_jobset_command(
+      kubeconfig: str, jobset_name: str, namespace: str
+  ) -> str:
+    return (
+        f"kubectl --kubeconfig={kubeconfig} "
+        f"patch jobset {jobset_name} -n {namespace} "
+        '--type=merge -p \'{"spec": {"suspend": true}}\''
+    )
+
   class K8sGetPodsOutput(enum.Enum):
     DEFAULT = "json"
     POD_NAME = "jsonpath={.items[*].metadata.name}"
@@ -334,8 +368,18 @@ class Command:
     return Command.k8s_get_pods(jobset_name, namespace, output)
 
 
+class ReplicatedJobStatus(enum.Enum):
+  """Defines status of a replicated job."""
+
+  READY = "ready"
+  SUSPENDED = "suspended"
+  ACTIVE = "active"
+  FAILED = "failed"
+  SUCCEEDED = "succeeded"
+
+
 def get_replica_num(
-    replica_type: str, job_name: str, node_pool: node_pool_info
+    job_status: ReplicatedJobStatus, job_name: str, node_pool: node_pool_info
 ) -> int:
   """
   Get the number of a certain type of replicas from a running jobset.
@@ -344,12 +388,12 @@ def get_replica_num(
   the number of replicas in a certain status.
 
   Args:
-    replica_type: The type of replica being searched for.
+    job_status: The status of the replicated job being searched for.
     job_name: The name of the job replica which is run from the jobset.
     node_pool: The Info object containing the cluster information needed for
     the kubernetes API to connect to it.
   Returns:
-    The number of replicas of the specific type in the jobset.
+    The number of replicas of the specific status in the jobset.
   """
   api_client = gke.get_authenticated_client(
       node_pool.project_id,
@@ -369,7 +413,7 @@ def get_replica_num(
   try:
     replica_job_status = jobsets["items"][0]["status"]["replicatedJobsStatus"]
     name = replica_job_status[0]["name"]
-    replicas = replica_job_status[0][replica_type]
+    replicas = replica_job_status[0][job_status.value]
     logging.info("Found %s replicas", replicas)
 
   except (KeyError, IndexError, TypeError) as e:
@@ -442,7 +486,7 @@ def _generate_jobset_name(dag_id_prefix: str) -> str:
   return f"{dag_id_prefix}-{timestamp}"
 
 
-@task
+@task.python(multiple_outputs=True)
 def build_jobset_from_gcs_yaml(
     gcs_path: str,
     dag_name: str,
@@ -458,7 +502,7 @@ def build_jobset_from_gcs_yaml(
     **overrides: Additional parameters to override default configurations.
   """
   config = gcs.load_yaml_from_gcs(gcs_path)
-  known_fields = {f.name for f in dataclasses.fields(JobSet)}
+  known_fields = set(JobSet.__annotations__.keys())
   merged = {
       k: v
       for k, v in config.get("jobset_defaults", {}).items()
@@ -482,18 +526,24 @@ def build_jobset_from_gcs_yaml(
 
 @task
 def run_workload(
-    node_pool: node_pool_info, jobset_config: JobSet, workload_type: Workload
+    node_pool: node_pool_info,
+    jobset_config: JobSet,
+    workload_type: Workload,
 ) -> TimeUtil:
   """
   Applies the specified YAML file to the GKE cluster.
 
   Args:
     node_pool: Configuration object with cluster details.
-    jobset_config: The JobSet object containing YAML configuration.
+    jobset_config: The JobSet object or dict containing YAML configuration.
     workload_type: The workload script to execute.
   Returns:
     The UTC time when the workload was started.
   """
+
+  if isinstance(jobset_config, dict):
+    jobset_config = JobSet(**jobset_config)
+
   with tempfile.NamedTemporaryFile() as temp_config_file:
     env = os.environ.copy()
     env["KUBECONFIG"] = temp_config_file.name
@@ -530,7 +580,7 @@ def run_workload(
 
 
 @task
-def end_workload(node_pool: node_pool_info, jobset_config: JobSet):
+def end_workload(node_pool: node_pool_info, jobset_config: JobSet | dict):
   """
   Deletes all JobSets from the GKE cluster to clean up resources.
 
@@ -543,6 +593,10 @@ def end_workload(node_pool: node_pool_info, jobset_config: JobSet):
     jobset_name: The name of the JobSet to delete.
     namespace: The Kubernetes namespace to delete the JobSet from.
   """
+
+  if isinstance(jobset_config, dict):
+    jobset_config = JobSet(**jobset_config)
+
   with tempfile.NamedTemporaryFile() as temp_config_file:
     env = os.environ.copy()
     env["KUBECONFIG"] = temp_config_file.name
@@ -862,3 +916,63 @@ def ensure_no_jobset_uptime_data(
     logging.info("Stability period passed with no data detected.")
     return True
   return False
+
+
+@task
+def suspended_jobset(node_pool: node_pool_info, jobset_config: JobSet | dict):
+  """
+  Suspend a jobset from the GKE cluster.
+
+  This task executes a bash script to:
+  1. Authenticate `gcloud` with the specified GKE cluster.
+  2. Suspend a JobSet.
+
+  Args:
+    node_pool: Configuration object with cluster details.
+    jobset_name: The name of the JobSet to delete.
+  """
+  if isinstance(jobset_config, dict):
+    jobset_config = JobSet(**jobset_config)
+
+  with tempfile.NamedTemporaryFile() as temp_config_file:
+    env = os.environ.copy()
+    env["KUBECONFIG"] = temp_config_file.name
+
+    cmd = " && ".join([
+        Command.get_credentials_command(node_pool),
+        Command.k8s_suspend_jobset_command(
+            temp_config_file.name,
+            jobset_config.jobset_name,
+            jobset_config.namespace,
+        ),
+    ])
+
+    subprocess.run_exec(cmd, env=env)
+
+
+@task.sensor(poke_interval=30, timeout=900, mode="poke")
+def wait_for_jobset_replica_number(
+    node_pool: node_pool_info,
+    jobset_config: JobSet,
+    job_status: ReplicatedJobStatus,
+    expected_replica_number: int,
+):
+  """
+  A sensor which checks if the correct number jobset replicas in a status type.
+
+  Args:
+    node_pool: Configuration object with cluster details.
+    jobset_config: Configuration of JobSet which is being run.
+    job_status(ReplicatedJobStatus): The type of status being checked for.
+    expected_replica_number(int): The expected number of replicas to be found.
+    xcom_argument(dict): An optional argument to pull the expected replica number
+      from an XCom push. Should be in the format {"replicas": int}.
+  """
+
+  logging.info("Checking for number of replicas of type: %s", job_status.value)
+  suspended_replica_number = get_replica_num(
+      job_status=job_status,
+      job_name=jobset_config["replicated_job_name"],
+      node_pool=node_pool,
+  )
+  return suspended_replica_number == expected_replica_number
