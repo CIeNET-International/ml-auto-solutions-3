@@ -195,7 +195,14 @@ _TEMPLATE = string.Template(
 @dataclasses.dataclass
 class JobSet(dict):
   """
-  Generates YAML configurations for Kubernetes JobSets.
+  Generates YAML configurations for Kubernetes JobSets and serves as a
+  data transfer object specifically for Airflow XCom, 'multiple_outputs', etc.
+
+  This class is specifically designed to encapsulate data for efficient passing
+  between Airflow tasks. As a result, it does not support features that would
+  complicate its role as a serializable carrier, such as 'copy.deepcopy()',
+  'pickle' operations, or the dynamic assignment of fields not defined in the
+  data model.
 
   This class helps in creating JobSet YAMLs by providing a template and allowing
   customization of various parameters like jobset name, replicas, TPU
