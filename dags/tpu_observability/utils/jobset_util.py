@@ -24,8 +24,7 @@ import string
 import tempfile
 import textwrap
 import dataclasses
-from typing import Final
-from typing_extensions import override
+from typing import Final, Any
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
@@ -238,28 +237,31 @@ class JobSet(dict):
   tpu_cores_per_pod: int
   node_pool_selector: str
 
-  @override
-  def __setitem__(self, key, value):
-    target_type = self.__annotations__.get(key)
-
-    if target_type is None:
-      raise KeyError(f"Key '{key}' is not a valid JobSet parameter.")
-
-    if not isinstance(value, target_type):
-      raise TypeError(
-          f"Expected value of type {target_type} for key '{key}'"
-          f", got {type(value)}"
-      )
-
-    super().__setitem__(key, value)
-
-  @override
-  def __setattr__(self, key, value):
+  def __setattr__(self, key: str, value: Any) -> None:
+    if key not in self.__class__.__dataclass_fields__:
+      raise AttributeError(f"'{key}' is not a valid attribute of JobSet.")
     self[key] = value
 
-  @override
-  def __getattr__(self, key):
-    return self[key]
+  def __getattr__(self, key: str) -> Any:
+    if key not in self.__class__.__dataclass_fields__:
+      raise AttributeError(f"'{key}' is not a valid attribute of JobSet.")
+    try:
+      return self[key]
+    except KeyError as e:
+      raise AttributeError(
+          f"'{key}' has not been set for this JobSet instance."
+      ) from e
+
+  def __setitem__(self, key: str, value: Any) -> None:
+    if key not in self.__class__.__dataclass_fields__:
+      raise KeyError(f"Key '{key}' is not a valid JobSet parameter.")
+    super().__setitem__(key, value)
+
+  def __getitem__(self, key: str) -> Any:
+    if key not in self.__class__.__dataclass_fields__:
+      raise KeyError(f"Key '{key}' is not a valid JobSet parameter.")
+    return super().__getitem__(key)
+
 
   def generate_yaml(self, workload_script: Workload) -> str:
     """Generates the final JobSet YAML content.
