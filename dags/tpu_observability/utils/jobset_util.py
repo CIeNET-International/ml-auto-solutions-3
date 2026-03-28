@@ -62,6 +62,15 @@ class Workload:
   Each workload is a JSON-escaped string, ready to be used as a shell argument.
   """
 
+  IDLE_READY_TPU_20M = json.dumps(
+      textwrap.dedent(
+          """
+          sleep 1200
+          """
+      ),
+      ensure_ascii=False,
+  )
+
   JAX_TPU_BENCHMARK = json.dumps(
       textwrap.dedent(
           """
@@ -862,3 +871,19 @@ def ensure_no_jobset_uptime_data(
     logging.info("Stability period passed with no data detected.")
     return True
   return False
+
+
+@task.sensor(poke_interval=30, timeout=900, mode="reschedule")
+def validate_jobset_replica_number(
+    node_pool: node_pool_info,
+    jobset_config: JobSet,
+    replica_type: str,
+    pre_startup: bool,
+):
+  name = jobset_config.replicated_job_name
+  found_replica_number = get_replica_num(
+      replica_type=replica_type, job_name=name, node_pool=node_pool
+  )
+  if pre_startup:
+    return found_replica_number == 0
+  return found_replica_number == jobset_config.replicas
