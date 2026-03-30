@@ -324,7 +324,7 @@ class JobSet:
         "restartStrategy": "",
         "restartPolicy": "",
         "terminationGracePeriodSeconds": "",
-        "container_prestop_command": "command: [\"/bin/sh\", \"-c\", \"true\"]"
+        "container_prestop_command": 'command: ["/bin/sh", "-c", "true"]',
     }
 
     if self.delay_recovery:
