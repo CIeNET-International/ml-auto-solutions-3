@@ -273,7 +273,7 @@ class JobSet(dict):
     Returns:
         A string containing the complete JobSet YAML.
     """
-    params = self
+    params = dict(self)
     params["command"] = ["bash", "-c"]
     params["args"] = workload_script
     params["node_pool_selector"] = self.node_pool_selector or ""
@@ -981,7 +981,7 @@ def wait_for_jobset_replica_number(
   logging.info("Checking for number of replicas of type: %s", job_status.value)
   suspended_replica_number = get_replica_num(
       job_status=job_status,
-      job_name=jobset_config["replicated_job_name"],
+      job_name=jobset_config["replicated_job_name"], #tpu-job-slice
       node_pool=node_pool,
   )
   return suspended_replica_number == expected_replica_number
