@@ -159,7 +159,7 @@ _TEMPLATE = string.Template(
         spec:
           failurePolicy:
             maxRestarts: $max_restarts
-            restartStrategy: BlockingRecreate
+            $restartStrategy
           replicatedJobs:
           - name: $replicated_job_name
             replicas: $replicas
@@ -170,8 +170,8 @@ _TEMPLATE = string.Template(
                 parallelism: $parallelism
                 template:
                   spec:
-                    restartPolicy: Never
-                    terminationGracePeriodSeconds: 350
+                    $restartPolicy
+                    $terminationGracePeriodSeconds
                     nodeSelector:
                       cloud.google.com/gke-tpu-accelerator: $tpu_accelerator_type
                       cloud.google.com/gke-tpu-topology: $tpu_topology
@@ -181,7 +181,7 @@ _TEMPLATE = string.Template(
                       lifecycle:
                         preStop:
                           exec:
-                            command: $prestop_command
+                            $container_prestop_command
                       command: $command
                       args:
                         - $args
@@ -239,10 +239,9 @@ class JobSet:
   image: str
   tpu_cores_per_pod: int
   node_pool_selector: str
+  delay_recovery: bool = False
 
-  def generate_yaml(
-      self, workload_script: Workload, apply_recovery_delay: bool = False
-  ) -> str:
+  def generate_yaml(self, workload_script: Workload) -> str:
     """Generates the final JobSet YAML content.
 
     Args:
@@ -257,8 +256,24 @@ class JobSet:
     params["args"] = workload_script
     params["node_pool_selector"] = self.node_pool_selector or ""
 
-    if apply_recovery_delay:
-      params["prestop_command"] = ["/bin/sh", "-c", "sleep 300"]
+    default_vals = {
+        "restartStrategy": "",
+        "restartPolicy": "",
+        "terminationGracePeriodSeconds": "",
+        "container_prestop_command": "command: [\"/bin/sh\", \"-c\", \"true\"]"
+    }
+
+    if self.delay_recovery:
+      default_vals.update({
+          "restartStrategy": "restartStrategy: BlockingRecreate",
+          "restartPolicy": "restartPolicy: Never",
+          "terminationGracePeriodSeconds": "terminationGracePeriodSeconds: 350",
+          "container_prestop_command": (
+              'command: ["/bin/sh", "-c", "sleep 300"]'
+          ),
+      })
+
+    params.update(default_vals)
 
     return _TEMPLATE.substitute(params)
 
@@ -516,7 +531,6 @@ def run_workload(
     node_pool: node_pool_info,
     jobset_config: JobSet,
     workload_type: Workload,
-    apply_recovery_delay: bool = False,
 ) -> TimeUtil:
   """
   Applies the specified YAML file to the GKE cluster.
@@ -534,7 +548,6 @@ def run_workload(
     env["KUBECONFIG"] = temp_config_file.name
     yaml_config = jobset_config.generate_yaml(
         workload_script=workload_type,
-        apply_recovery_delay=apply_recovery_delay,
     )
 
     cmd = " && ".join([
