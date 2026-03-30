@@ -96,11 +96,10 @@ def trigger_oom_failure(info, pod_name: str, namespace: str):
     try:
       print(f"Blasting {pod_name} memory now...")
       subprocess.run_exec(full_command, env=env)
+    except subprocess.ProcessKilledException:
+      print(f"Success: Pod {pod_name} was OOMKilled.")
     except Exception as e:
-      if "137" in str(e):
-        print(f"Success: Pod {pod_name} was OOMKilled (Exit Code 137).")
-      else:
-        print(f"Connection lost (Possible OOM): {e}")
+      print(f"Connection lost or other error: {e}")
 
 
 @task
