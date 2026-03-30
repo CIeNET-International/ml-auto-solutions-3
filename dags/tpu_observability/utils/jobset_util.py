@@ -265,7 +265,6 @@ class JobSet(dict):
       raise KeyError(f"Key '{key}' is not a valid JobSet parameter.")
     return super().__getitem__(key)
 
-
   def generate_yaml(self, workload_script: Workload) -> str:
     """Generates the final JobSet YAML content.
 
@@ -1060,7 +1059,7 @@ def wait_for_jobset_replica_number(
   logging.info("Checking for number of replicas of type: %s", job_status.value)
   suspended_replica_number = get_replica_num(
       job_status=job_status,
-      job_name=jobset_config["replicated_job_name"], #tpu-job-slice
+      job_name=jobset_config["replicated_job_name"],
       node_pool=node_pool,
   )
   return suspended_replica_number == expected_replica_number
