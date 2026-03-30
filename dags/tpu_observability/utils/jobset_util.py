@@ -163,7 +163,7 @@ _TEMPLATE = string.Template(
         spec:
           failurePolicy:
             maxRestarts: $max_restarts
-            restartStrategy: BlockingRecreate
+            $restartStrategy
           replicatedJobs:
           - name: $replicated_job_name
             replicas: $replicas
@@ -188,7 +188,7 @@ _TEMPLATE = string.Template(
                       lifecycle:
                         preStop:
                           exec:
-                            command: $prestop_command
+                            $container_prestop_command
                       command: $command
                       args:
                         - $args
@@ -291,6 +291,7 @@ class JobSet:
   tpu_cores_per_pod: int
   privileged: bool = False
   dag_id_prefix: str = ""
+  delay_recovery: bool = False
 
   def generate_yaml(
       self,
@@ -319,8 +320,24 @@ class JobSet:
     params["privileged"] = "true" if self.privileged else "false"
     params["host_pid"] = "true" if self.privileged else "false"
 
-    if apply_recovery_delay:
-      params["prestop_command"] = ["/bin/sh", "-c", "sleep 300"]
+    default_vals = {
+        "restartStrategy": "",
+        "restartPolicy": "",
+        "terminationGracePeriodSeconds": "",
+        "container_prestop_command": "command: [\"/bin/sh\", \"-c\", \"true\"]"
+    }
+
+    if self.delay_recovery:
+      default_vals.update({
+          "restartStrategy": "restartStrategy: BlockingRecreate",
+          "restartPolicy": "restartPolicy: Never",
+          "terminationGracePeriodSeconds": "terminationGracePeriodSeconds: 350",
+          "container_prestop_command": (
+              'command: ["/bin/sh", "-c", "sleep 300"]'
+          ),
+      })
+
+    params.update(default_vals)
 
     return _TEMPLATE.substitute(params)
 
