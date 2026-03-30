@@ -149,20 +149,20 @@ with models.DAG(
         ### JobSet Time-To-Recover (TTR) Test Using Random Pod OOM Injection
         ### Description
         This DAG verifies that JobSet can recover from a single pod failure caused by
-        an Out-Of-Memory (OOM) event. It launches a JobSet with memory limits,
-        injects a memory-intensive workload into a running pod, and uses a sensor
-        to confirm that the JobSet controller triggers a recovery and reports the
-        recovery duration.
+        an Out-Of-Memory (OOM) event. It launches a JobSet, injects a memory-intensive
+        Python stressor into a running pod, and uses a sensor to confirm that the
+        JobSet controller triggers a recovery and reports the recovery duration (TTR).
         ### Prerequisites
-        This test requires an existing cluster and a container image containing
-        the `oomkill.py` script to run.
+        This test requires an existing cluster and the ability to execute commands
+        within the pod via `kubectl exec`.
         ### Procedures
-        First, the node pool is created. A JobSet YAML with specific memory constraints
-        is then launched on the cluster and given time for all pods to reach a
-        `Running` state. After this, a random pod is selected and an OOM event is
-        triggered via `kubectl exec` to interrupt the JobSet (expecting Exit Code 137).
-        A sensor is finally run which will poll Cloud Monitoring to detect that the
-        JobSet Time-To-Recover (TTR) metric has been updated, resulting in a success,
+        First, the node pool is created. A JobSet YAML is then launched on the cluster
+        and given time for all pods to reach a `Running` state. After stabilization,
+        a random pod is selected and an OOM event is triggered via `kubectl exec`
+        using a Python-based memory allocator that forces physical RAM commitment
+        until the process is terminated (expecting Exit Code 137). A sensor is
+        finally run which will poll Cloud Monitoring to detect that the JobSet
+        Time-To-Recover (TTR) metric has been updated, resulting in a success,
         or timeout, and fail.
       """,
 ) as dag:
