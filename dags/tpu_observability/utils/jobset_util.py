@@ -566,16 +566,13 @@ def run_workload(
     node_pool: Configuration object with cluster details.
     jobset_config: The JobSet object containing YAML configuration.
     workload_type: The workload script to execute.
-    apply_recovery_delay: Whether to apply recovery delay.
   Returns:
     The UTC time when the workload was started.
   """
   with tempfile.NamedTemporaryFile() as temp_config_file:
     env = os.environ.copy()
     env["KUBECONFIG"] = temp_config_file.name
-    yaml_config = jobset_config.generate_yaml(
-        workload_script=workload_type,
-    )
+    yaml_config = jobset_config.generate_yaml(workload_script=workload_type)
 
     cmd = " && ".join([
         Command.get_credentials_command(node_pool),
