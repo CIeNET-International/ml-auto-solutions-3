@@ -111,7 +111,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           node_pool=cluster_info,
       )
 
-      startup_tg, apply_time, _ = jobset.get_jobset_startup_group(
+      startup = jobset.get_jobset_startup_group(
           node_pool=cluster_info,
           jobset_config=jobset_config,
           workload_type=Workload.JAX_TPU_BENCHMARK,
@@ -134,7 +134,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           node_pool=cluster_info,
           jobset_config=jobset_config,
       ).as_teardown(
-          setups=apply_time
+          setups=startup.jobset_start_time
       )
 
       cleanup_node_pool = node_pool.delete.override(
@@ -148,7 +148,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           jobset_config,
           cluster_info,
           create_node_pool,
-          startup_tg,
+          startup.task_group,
           rollback_node_pool,
           wait_for_metric_upload,
           cleanup_workload,
