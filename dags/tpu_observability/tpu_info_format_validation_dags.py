@@ -401,7 +401,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             node_pool=cluster_info_2,
         )
 
-      startup_tg, apply_time, running_pods = jobset.get_jobset_startup_group(
+      startup = jobset.get_jobset_startup_group(
           node_pool=cluster_info,
           jobset_config=jobset_config,
           workload_type=Workload.JAX_TPU_BENCHMARK,
@@ -410,7 +410,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       outputs_of_tpu_info = (
           get_tpu_info_from_pod.override(task_id="get_tpu_info")
           .partial(info=cluster_info)
-          .expand(pod_name=running_pods)
+          .expand(pod_name=startup.running_pods)
       )
 
       output_of_tpu_info = (
@@ -464,7 +464,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           node_pool=cluster_info,
           jobset_config=jobset_config,
       ).as_teardown(
-          setups=apply_time
+          setups=startup.jobset_start_time
       )
 
       # Keyword arguments are generated dynamically at runtime (pylint does not
@@ -508,7 +508,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           cluster_info,
           cluster_info_2,
           create_node_pool,
-          startup_tg,
+          startup.task_group,
           outputs_of_tpu_info,
           output_of_tpu_info,
           verification_group,

@@ -327,7 +327,7 @@ with models.DAG(
 
         _ = [create_first_node_pool, create_second_node_pool]
 
-      startup_tg, apply_time, active_pods = jobset.get_jobset_startup_group(
+      startup = jobset.get_jobset_startup_group(
           node_pool=cluster_info,
           jobset_config=jobset_config,
           workload_type=Workload.JAX_TPU_BENCHMARK,
@@ -349,7 +349,7 @@ with models.DAG(
                   jobset_config=jobset_config,
                   metric_name=strategy.tpu_info_metric_name,
               )
-              .expand(pod_name=active_pods)
+              .expand(pod_name=startup.running_pods)
           )
 
           tpu_info_metric_output = (
@@ -364,10 +364,14 @@ with models.DAG(
               run_metric_verification.override(task_id="run_verification")
               .partial(
                   node_pool=cluster_info,
-                  job_apply_time=apply_time,
+                  job_apply_time=startup.jobset_start_time,
                   metric_strategy=strategy,
               )
-              .expand(comparison_data=active_pods.zip(tpu_info_metric_output))
+              .expand(
+                  comparison_data=startup.running_pods.zip(
+                      tpu_info_metric_output
+                  )
+              )
           )
 
         all_verification_groups.append(verification_group)
@@ -378,7 +382,7 @@ with models.DAG(
           task_id="summarize_results", trigger_rule=TriggerRule.ALL_DONE
       )(
           verification_results_dict=verification_results,
-          active_pods=active_pods,
+          active_pods=startup.running_pods,
       )
 
       clean_up_workload = jobset.end_workload.override(
@@ -387,7 +391,7 @@ with models.DAG(
           node_pool=cluster_info,
           jobset_config=jobset_config,
       ).as_teardown(
-          setups=apply_time
+          setups=startup.jobset_start_time
       )
 
       with TaskGroup(group_id="cleanup_node_pool") as cleanup_node_pool:
@@ -413,7 +417,7 @@ with models.DAG(
           cluster_info,
           cluster_info_2,
           create_node_pool,
-          startup_tg,
+          startup.task_group,
           all_verification_groups,
           summary,
           clean_up_workload,

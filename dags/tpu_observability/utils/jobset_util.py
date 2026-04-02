@@ -251,6 +251,28 @@ class JobSet:
     return _TEMPLATE.substitute(params)
 
 
+class JobSetStartupOutput:
+  """
+  Output encapsulated from the JobSet startup TaskGroup.
+
+  This dataclass bundles the TaskGroup and its essential XCom outputs,
+  allowing downstream tasks to easily access the startup metadata without
+  relying on manual tuple unpacking.
+
+  Attributes:
+    task_group: The Airflow TaskGroup containing the startup logic (apply,
+      wait for pods, and wait for workload start).
+    running_pods: An XComArg representing the list of pod names that
+      successfully reached the 'Running' state. Useful for fault injection.
+    jobset_start_time: An XComArg containing the UTC timestamp when the
+      JobSet was applied. Used as a baseline for monitoring queries.
+  """
+
+  task_group: TaskGroup
+  running_pods: XComArg
+  jobset_start_time: XComArg
+
+
 class Command:
   """
   A collection of static methods to generate Kubernetes and gcloud commands.
@@ -804,7 +826,7 @@ def get_jobset_startup_group(
     node_pool: node_pool_info,
     jobset_config: JobSet,
     workload_type: str = Workload.JAX_TPU_BENCHMARK,
-) -> tuple[TaskGroup, XComArg, XComArg]:
+) -> JobSetStartupOutput:
   """
   Provides a standardized TaskGroup for JobSet startup and preparation.
 
@@ -820,11 +842,8 @@ def get_jobset_startup_group(
     workload_type: The predefined workload script to execute.
 
   Returns:
-    A tuple of (startup_tg, apply_time, running_pods):
-      - TaskGroup: The node to be used in the DAG's dependency chain.
-      - XComArg (apply_time): The UTC start time, used for teardown.
-      - XComArg (running_pods): A list of pod names, used for
-        fault injection tasks.
+    JobSetStartupOutput: An object containing the TaskGroup and its
+      associated XCom output arguments.
   """
   with TaskGroup(group_id="jobset_startup_and_prepare") as tg:
     apply_time = run_workload.override(task_id="run_workload")(
@@ -848,7 +867,11 @@ def get_jobset_startup_group(
 
     chain(apply_time, running_pods, wait_start)
 
-  return tg, apply_time, running_pods
+  return JobSetStartupOutput(
+      task_group=tg,
+      running_pods=running_pods,
+      jobset_start_time=apply_time,
+  )
 
 
 def query_uptime_metrics(
