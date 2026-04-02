@@ -250,7 +250,7 @@ class JobSet:
 
     return _TEMPLATE.substitute(params)
 
-
+@dataclasses.dataclass
 class JobSetStartupOutput:
   """
   Output encapsulated from the JobSet startup TaskGroup.
