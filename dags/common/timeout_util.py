@@ -15,195 +15,143 @@
 """Utility class for managing automated TaskGroup timeouts and cleanups."""
 
 import logging
-import time
 
 from airflow import models
 from airflow.decorators import task
-from airflow.exceptions import AirflowTaskTimeout
+from airflow.exceptions import AirflowException, AirflowSensorTimeout
 from airflow.models import TaskInstance
 from airflow.utils.session import provide_session
 from airflow.utils.state import State
 from airflow.utils.task_group import TaskGroup
 
 
-class TimeoutUtil:
-  """Utility class for managing automated TaskGroup timeouts and cleanups."""
+@provide_session
+def cleanup_group_callback(context, session=None) -> None:
+    """Callback for cascading cleanup upon task timeout or early failure."""
+    ti = context["task_instance"]
+    exception = context.get("exception")
+    exception_msg = str(exception)
 
-  @staticmethod
-  def get_group_prefix(task_id: str) -> str:
-    """Extracts the TaskGroup prefix from a full task_id.
+    # Condition check: Verify if it's a Sensor Timeout or our custom Failed Early exception
+    is_timeout = isinstance(exception, AirflowSensorTimeout) or "Timeout" in exception_msg
+    is_failed_early = "Failed Early" in exception_msg
 
-    Args:
-      task_id: The full string ID of the task.
+    if not (is_timeout or is_failed_early):
+        logging.info(f"[CALLBACK] {ti.task_id} failed, but not due to timeout or early failure. Skipping cleanup. Exception: {exception_msg}")
+        return
 
-    Returns:
-      A string representing the group prefix (e.g., 'group_1.').
-    """
-    parts = task_id.split(".")
-    prefix = ".".join(parts[:-1]) + "." if len(parts) > 1 else ""
-    return prefix
+    # Retrieve target Group ID via params to eliminate the risk of hardcoded string parsing
+    target_group_id = context["params"].get("target_group_id")
+    if not target_group_id:
+        logging.warning("[CALLBACK] target_group_id not found, cannot execute cleanup.")
+        return
 
-  @staticmethod
-  @provide_session
-  def terminate_group(
-      dag_run, group_prefix: str, timer_id: str, session=None
-  ) -> int:
-    """Forces all active tasks in the group to FAILED state.
+    logging.info(f"[CALLBACK] Initiating automated cleanup for Group: {target_group_id}. Trigger cause: {'Timeout' if is_timeout else 'Failed Early'}")
 
-    Args:
-      dag_run: The current DagRun object.
-      group_prefix: The prefix of the TaskGroup to clean up.
-      timer_id: The ID of the timer task to exclude from termination.
-      session: The SQL Alchemy session.
-
-    Returns:
-      The count of terminated tasks.
-    """
-    session.expire_all()
+    # Retrieve all still-running TaskInstances within the current DAG Run
+    dag_run = context["dag_run"]
     tis = dag_run.get_task_instances(
-        state=[
-            State.RUNNING,
-            State.QUEUED,
-            State.SCHEDULED,
-            State.UP_FOR_RETRY,
-        ],
+        state=[State.RUNNING, State.QUEUED, State.SCHEDULED, State.UP_FOR_RETRY],
         session=session,
     )
+
     count = 0
-    for ti in tis:
-      if ti.task_id.startswith(group_prefix) and ti.task_id != timer_id:
-        logging.info(f"[SIGTERM] Setting {ti.task_id} to FAILED")
-        ti.state = State.FAILED
-        session.merge(ti)
-        count += 1
+    group_prefix = f"{target_group_id}."
+
+    for task_instance in tis:
+        # Ensure the task belongs to the group and is not the monitor itself
+        if task_instance.task_id.startswith(group_prefix) and task_instance.task_id != ti.task_id:
+            logging.warning(f"[SIGTERM] Preparing to forcefully mark {task_instance.task_id} as FAILED")
+            # Use native API to change state, ensuring proper state machine transition
+            task_instance.set_state(State.FAILED, session=session)
+            count += 1
+
     session.commit()
-    return count
+    logging.info(f"[CALLBACK] Cleanup completed. Forcefully terminated {count} tasks in total.")
 
-  @staticmethod
-  def cleanup_callback(context) -> None:
-    """Standard Airflow callback for timeout handling.
 
-    Note: Uses staticmethod to avoid 'classmethod not callable' TypeErrors
-    during Airflow callback execution.
-    """
-    exception = context.get("exception")
-    ti = context["task_instance"]
+class TimeoutUtil:
+    """Utility class focused on state querying to avoid polluting the main logic."""
 
-    if not (
-        isinstance(exception, AirflowTaskTimeout)
-        or "AirflowTaskTimeout" in str(exception)
-    ):
-      logging.info(f"[CALLBACK] {ti.task_id} failed but not due to timeout.")
-      return
-
-    prefix = TimeoutUtil.get_group_prefix(ti.task_id)
-    logging.info(f"[CALLBACK] Starting automated cleanup for group: {prefix}")
-    timeout_count = TimeoutUtil.terminate_group(
-        context["dag_run"], prefix, ti.task_id
-    )
-    logging.info(
-        f"[CALLBACK] Cleanup finished. {timeout_count} tasks terminated."
-    )
-
-  @staticmethod
-  def find_leaf_task(
-      dag_obj: models.DAG, group_prefix: str, timer_id: str
-  ) -> str:
-    """Automatically finds the leaf task (end of chain) in a TaskGroup."""
-    group_tasks = [
-        t
-        for t in dag_obj.tasks
-        if t.task_id.startswith(group_prefix) and t.task_id != timer_id
-    ]
-    leaf_ids = [
-        t.task_id
-        for t in group_tasks
-        if not [d for d in t.downstream_task_ids if d.startswith(group_prefix)]
-    ]
-    if not leaf_ids:
-      raise ValueError(f"No leaf task found in {group_prefix}")
-    return leaf_ids[-1]
-
-  @staticmethod
-  @provide_session
-  def get_fresh_states(
-      dag_id: str, run_id: str, task_id: str, session=None
-  ) -> list[str]:
-    """Queries Metadata DB for fresh states, bypassing session cache."""
-    session.expire_all()
-    tis = (
-        session.query(TaskInstance)
-        .filter(
-            TaskInstance.dag_id == dag_id,
-            TaskInstance.run_id == run_id,
-            TaskInstance.task_id == task_id,
+    @staticmethod
+    @provide_session
+    def check_leaf_states(dag_id: str, run_id: str, leaf_task_ids: list[str], session=None) -> list[str]:
+        """Query the status of the leaf tasks in the Group."""
+        session.expire_all()  # Ensure fetching the latest state from DB, not from cache
+        tis = (
+            session.query(TaskInstance.state)
+            .filter(
+                TaskInstance.dag_id == dag_id,
+                TaskInstance.run_id == run_id,
+                TaskInstance.task_id.in_(leaf_task_ids),
+            )
+            .all()
         )
-        .all()
-    )
-    return [str(ti.state) for ti in tis]
+        # SQLAlchemy returns tuples, need to extract them into a list of strings
+        return [str(ti.state) for ti in tis if ti.state is not None]
 
-  @staticmethod
-  @task(
-      task_id="timer",
-      retries=0,
-      on_failure_callback=cleanup_callback.__func__
-      if hasattr(cleanup_callback, "__func__")
-      else cleanup_callback,
-  )
-  def monitor_group(timeout_minutes: int, **context):
-    """The @task decorated monitor logic for TaskGroups."""
-    ti = context["task_instance"]
-    dag_obj = context["dag"]
+
+
+@task.sensor(poke_interval=60, mode="reschedule", on_failure_callback=cleanup_group_callback)
+def monitor_group_sensor(leaf_task_ids: list[str], **context):
+    """
+    Monitor the progress of leaf tasks.
+    mode="reschedule" means if the condition is not met after each poke,
+    the Worker resource will be immediately released back to the system.
+    """
     dag_run = context["dag_run"]
 
-    prefix = TimeoutUtil.get_group_prefix(ti.task_id)
-    target_id = TimeoutUtil.find_leaf_task(dag_obj, prefix, ti.task_id)
-
-    logging.info(
-        f"[MONITOR] Monitoring group: {prefix} via target: {target_id}"
+    states = TimeoutUtil.check_leaf_states(
+        dag_id=dag_run.dag_id,
+        run_id=dag_run.run_id,
+        leaf_task_ids=leaf_task_ids
     )
 
-    elapsed = 0
-    interval = 1
-    while elapsed < timeout_minutes:
-      remaining = timeout_minutes - elapsed
-      progress_pct = (elapsed / timeout_minutes) * 100
-      states = TimeoutUtil.get_fresh_states(
-          dag_run.dag_id, dag_run.run_id, target_id
-      )
-      logging.info(
-          f"Progress: {elapsed}min/{timeout_minutes}min \({progress_pct:.1f}%)"
-          " | "
-          f"Remaining: {remaining}min | Target: {target_id} | States: {states}"
-      )
+    logging.info(f"[MONITOR] Target: {leaf_task_ids} | Current states: {states}")
 
-      if states:
-        logging.info(f"{target_id} states: {states}")
-        if all(s == "success" for s in states):
-          return "Phase Success"
-        if any(s in ["failed", "upstream_failed"] for s in states):
-          return "Phase Failed Early"
+    if not states:
+        return False  # Tasks haven't generated states yet, go back to sleep and wait for the next minute
 
-      time.sleep(interval * 60)
-      elapsed += interval
+    # Scenario 1: Pass (All successful) -> Return True, Sensor succeeds (green), Callback is not triggered
+    if all(s == State.SUCCESS for s in states):
+        logging.info("[MONITOR] All target tasks succeeded (Pass)!")
+        return True
 
-    logging.error(f"[MONITOR TIMEOUT] Reached limit of {timeout_minutes}min.")
-    raise AirflowTaskTimeout(
-        f"Group {prefix} timed out waiting for {target_id}"
-    )
+    # Scenario 3: Failed Early -> Actively raise a specific exception to force Sensor failure and trigger the cleanup Callback
+    if any(s in [State.FAILED, State.UPSTREAM_FAILED] for s in states):
+        logging.error("[MONITOR] Detected early task failure within the Group, initiating Fail-Fast termination sequence.")
+        raise AirflowException("Failed Early")
+
+    # Scenario 2: Timeout -> Handled by the Sensor's timeout parameter.
+    # As long as time is not up and conditions are unmet, return False to keep waiting;
+    # once time is up, Airflow's underlying system directly raises AirflowSensorTimeout.
+    return False
 
 
 class TimeoutTaskGroup(TaskGroup):
-  """Custom TaskGroup that automatically adds a timeout monitor on exit."""
+    """
+    TaskGroup with lifecycle monitoring capabilities.
+    """
+    def __init__(self, group_id, timeout_minutes, **kwargs):
+        super().__init__(group_id=group_id, **kwargs)
+        self.timeout_minutes = timeout_minutes
 
-  def __init__(self, group_id, timeout_minutes, **kwargs):
-    super().__init__(group_id=group_id, **kwargs)
-    self.timeout_minutes = timeout_minutes
+    def __exit__(self, _type, _value, _tb):
+        # 1. Before adding the Sensor, fetch all leaf tasks under this Group
+        leaf_tasks = self.get_leaves()
+        leaf_task_ids = [t.task_id for t in leaf_tasks]
 
-  def __exit__(self, _type, _value, _tb):
-    super().__exit__(_type, _value, _tb)
+        # 2. Wrap the original TaskGroup execution
+        super().__exit__(_type, _value, _tb)
 
-    TimeoutUtil.monitor_group.override(
-        task_id="task_group_timer",
-        task_group=self,
-    )(timeout_minutes=self.timeout_minutes)
+        if not leaf_task_ids:
+            return
+
+        # 3. Dynamically create the Sensor and mount it under this TaskGroup as a parallel monitor
+        # Note: the timeout parameter unit is in 'seconds', hence * 60
+        monitor_group_sensor.override(
+            task_id="task_group_timer",
+            task_group=self,
+            timeout=self.timeout_minutes * 60,
+            params={"target_group_id": self.group_id}
+        )(leaf_task_ids=leaf_task_ids)
