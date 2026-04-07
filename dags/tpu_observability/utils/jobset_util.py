@@ -823,7 +823,7 @@ def wait_for_all_pods_running(
   return PokeReturnValue(is_done=False)
 
 
-def get_jobset_startup_group(
+def create_jobset_startup_group(
     node_pool: node_pool_info,
     jobset_config: JobSet,
     workload_type: str = Workload.JAX_TPU_BENCHMARK,
