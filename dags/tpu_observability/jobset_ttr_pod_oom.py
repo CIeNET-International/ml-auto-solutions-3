@@ -19,7 +19,7 @@ import datetime
 import tempfile
 import os
 import random
-import time
+import logging
 from typing import List
 
 from airflow import models
@@ -66,11 +66,7 @@ def trigger_oom_failure(info, pod_name: str, namespace: str):
     the expected connection loss during an OOM event.
   """
 
-  wait_time = 60
-  print(
-      f"Waiting {wait_time}s for Pod {pod_name} to stabilize before OOM Test..."
-  )
-  time.sleep(wait_time)
+  logging.info(f"Checking status for Pod {pod_name}...")
 
   python_logic = (
       "import time\n"
@@ -87,19 +83,26 @@ def trigger_oom_failure(info, pod_name: str, namespace: str):
     env["KUBECONFIG"] = temp_config_file.name
 
     credentials_cmd = jobset.Command.get_credentials_command(info)
+
+    wait_cmd = (
+        f"kubectl wait --for=condition=Ready pod/{pod_name} "
+        f"-n {namespace} --timeout=60s"
+    )
+
     exec_cmd = (
         f'kubectl exec {pod_name} -n {namespace} -- python3 -c "{python_logic}"'
     )
 
-    full_command = f"{credentials_cmd} && {exec_cmd}"
+    full_command = f"{credentials_cmd} && {wait_cmd} && {exec_cmd}"
 
     try:
-      print(f"Blasting {pod_name} memory now...")
+      logging.info(f"Blasting {pod_name} memory now...")
       subprocess.run_exec(full_command, env=env)
     except subprocess.ProcessKilledException:
-      print(f"Success: Pod {pod_name} was OOMKilled.")
+      logging.info(f"Success: Pod {pod_name} was OOMKilled.")
     except Exception as e:
-      print(f"Connection lost or other error: {e}")
+      logging.error(f"Connection lost or other error: {e}")
+      raise e
 
 
 @task
@@ -120,7 +123,7 @@ def pick_random_pod(active_pods: List[str]) -> str:
   if not active_pods:
     raise ValueError("No pods found to attack!")
   chosen_pod = random.choice(active_pods)
-  print(f"Randomly selected pod for OOM test: {chosen_pod}")
+  logging.info(f"Randomly selected pod for OOM test: {chosen_pod}")
   return chosen_pod
 
 
