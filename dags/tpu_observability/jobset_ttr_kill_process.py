@@ -40,6 +40,7 @@ from dags.tpu_observability.configs.common import (
     GCS_JOBSET_CONFIG_PATH,
 )
 from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper, get_dag_timeout
+from dags.tpu_observability.utils.time_util import TimeUtil
 
 
 DAG_ID = "jobset_ttr_kill_process"
@@ -65,12 +66,23 @@ def kill_tpu_pod_workload(info: node_pool.Info, pod_name: str) -> None:
         f"kubectl exec {pod_name} -n default -- pkill -9 -f python",
     ])
 
+    operation_start_time = TimeUtil.from_datetime(
+        datetime.datetime.now(datetime.timezone.utc)
+    )
+
     try:
       subprocess.run_exec(cmd, env=env)
     except subprocess.ProcessKilledException:
       logging.info("Process was terminated with SIGKILL")
     except Exception as e:
       raise e
+
+  return operation_start_time
+
+
+@task
+def pick_first(items):
+  return items[0] if items else None
 
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
@@ -177,11 +189,28 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           .expand(pod_name=running_pods)
       )
 
-      wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
-          task_id="wait_for_metric_upload"
+      single_start_time = pick_first(kill_tasks)
+
+      wait_for_recovery = jobset.wait_for_jobset_recovered.override(
+          task_id="wait_for_recovery"
       )(
           node_pool=cluster_info,
           jobset_config=jobset_config,
+      )
+
+      verify_duration = jobset.verify_recovery_duration.override(
+          task_id="verify_recovery_duration"
+      )(
+          start_time=single_start_time,
+          end_time=wait_for_recovery,
+      )
+
+      wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
+          task_id="wait_for_jobset_ttr_to_be_found",
+      )(
+          node_pool=cluster_info,
+          jobset_config=jobset_config,
+          start_time=single_start_time,
       )
 
       cleanup_workload = jobset.end_workload.override(
@@ -208,6 +237,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           running_pods,
           wait_for_job_start,
           kill_tasks,
+          verify_duration,
           wait_for_metric_upload,
           cleanup_workload,
           cleanup_node_pool,

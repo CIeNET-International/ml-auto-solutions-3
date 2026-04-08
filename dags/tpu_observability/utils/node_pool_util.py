@@ -495,7 +495,10 @@ def rollback(node_pool: Info) -> None:
       f"--quiet"
   )
 
+  current_time_utc = datetime.datetime.now(datetime.timezone.utc)
   subprocess.run_exec(command)
+
+  return TimeUtil.from_datetime(current_time_utc)
 
 
 @task.sensor(poke_interval=30, timeout=1200, mode="poke")
