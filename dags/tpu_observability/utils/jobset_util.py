@@ -243,6 +243,8 @@ class JobSet(dict):
   def __setattr__(self, key: str, value: Any) -> None:
     if key not in self.__class__.__dataclass_fields__:
       raise AttributeError(f"'{key}' is not a valid attribute of JobSet.")
+    if value is None:
+      raise ValueError(f"'{key}' cannot be set to None.")
     self[key] = value
 
   def __getattr__(self, key: str) -> Any:
@@ -258,6 +260,8 @@ class JobSet(dict):
   def __setitem__(self, key: str, value: Any) -> None:
     if key not in self.__class__.__dataclass_fields__:
       raise KeyError(f"Key '{key}' is not a valid JobSet parameter.")
+    if value is None:
+      raise ValueError(f"Key '{key}' cannot be set to None.")
     super().__setitem__(key, value)
 
   def __getitem__(self, key: str) -> Any:
@@ -538,25 +542,27 @@ def build_jobset_from_gcs_yaml(
   """
   config = gcs.load_yaml_from_gcs(gcs_path)
   known_fields = set(JobSet.__annotations__.keys())
-  merged = {
-      k: v
-      for k, v in config.get("jobset_defaults", {}).items()
-      if k in known_fields
-  }
+  jobset = JobSet.__new__(JobSet)
+  dict.__init__(jobset, {})
+
   dag_cfg = config.get("dag", {}).get(dag_name, {})
   dag_id_prefix = dag_cfg.get("dag_id_prefix")
 
-  for k, v in dag_cfg.items():
-    if k in known_fields and v is not None:
-      merged[k] = v
+  jobset["jobset_name"] = _generate_jobset_name(dag_id_prefix)
+  jobset.update({
+      k: v
+      for k, v in config.get("jobset_defaults", {}).items()
+      if k in known_fields
+  })
 
-  merged.update({k: v for k, v in overrides.items() if k in known_fields})
-  merged["jobset_name"] = _generate_jobset_name(dag_id_prefix)
+  jobset.update({k: v for k, v in dag_cfg.items() if k in known_fields})
+  jobset.update({k: v for k, v in overrides.items() if k in known_fields})
 
   logging.info(
-      f"Final JobSet '{merged['jobset_name']}' created for DAG '{dag_name}'"
+      f"Final JobSet '{jobset['jobset_name']}' created for DAG '{dag_name}'"
   )
-  return JobSet(**merged)
+
+  return jobset
 
 
 @task
