@@ -549,12 +549,13 @@ def build_jobset_from_gcs_yaml(
   dag_id_prefix = dag_cfg.get("dag_id_prefix")
 
   jobset["jobset_name"] = _generate_jobset_name(dag_id_prefix)
-  jobset.update({
-      k: v
-      for k, v in config.get("jobset_defaults", {}).items()
-      if k in known_fields
-  })
-
+  jobset.update(
+      {
+          k: v
+          for k, v in config.get("jobset_defaults", {}).items()
+          if k in known_fields
+      }
+  )
   jobset.update({k: v for k, v in dag_cfg.items() if k in known_fields})
   jobset.update({k: v for k, v in overrides.items() if k in known_fields})
 
