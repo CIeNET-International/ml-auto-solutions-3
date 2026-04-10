@@ -375,7 +375,7 @@ def get_credentials_command(node_pool: Info) -> str:
 
 
 @task
-def draw_random_nodes(node_pool: Info, count: int) -> str:
+def draw_random_nodes(node_pool: Info, count: int) -> list[str]:
   """Selects random nodes from the specified GKE node pool.
 
   Args:
