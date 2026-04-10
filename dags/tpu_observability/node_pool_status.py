@@ -26,6 +26,7 @@ from dags import composer_env
 from dags.common import test_owner
 from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_PATH
 from dags.tpu_observability.utils import node_pool_util as node_pool
+from dags.tpu_observability.utils.node_pool_util import NodeDeleteOperation
 from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper, get_dag_timeout
 
 
@@ -121,9 +122,19 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           node_pool=node_pool_info, status=node_pool.Status.RUNNING
       )
 
+      task_id = "select_random_node"
+      select_random_node = node_pool.draw_random_nodes.override(
+          task_id=task_id
+      )(node_pool=node_pool_info, count=1)
+
       task_id = "delete_node"
-      delete_node = node_pool.delete_one_random_node.override(task_id=task_id)(
-          node_pool=node_pool_info
+      delete_node = (
+          node_pool.operate_node.override(task_id=task_id)
+          .partial(
+              node_pool=node_pool_info,
+              operation=NodeDeleteOperation,
+          )
+          .expand(node_name=select_random_node)
       )
 
       task_id = "wait_for_repair"
