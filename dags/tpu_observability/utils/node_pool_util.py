@@ -407,87 +407,7 @@ def draw_random_nodes(node_pool: Info, count: int) -> list[str]:
 
   return target_node_list
 
-# --- modifying part ---
-# @dataclasses.dataclass
-# class NodeOperationContext:
-#   """Context for performing operations on a GKE node."""
-#
-#   node_pool: Info = None
-#   node_name: str = None
-#
-#
-# class NodeOperationType(enum.Enum):
-#   """Enum for different types of node operations."""
-#
-#   DELETE = enum.auto()
-#   DRAIN = enum.auto()
-#   UNCORDON = enum.auto()
-#
-#
-# class NodeOperationInterface(ABC):
-#   """Interface for defining operations on GKE nodes."""
-#
-#   OPERATION_TYPE: NodeOperationType
-#
-#   @staticmethod
-#   @abstractmethod
-#   def GetCommand(ctx: NodeOperationContext) -> str:
-#     pass
-#
-#
-# class NodeDeleteOperation(NodeOperationInterface):
-#   """Implements the node deletion operation."""
-#
-#   OPERATION_TYPE = NodeOperationType.DELETE
-#
-#   @staticmethod
-#   def GetCommand(ctx: NodeOperationContext) -> str:
-#     return (
-#         f"gcloud compute instances delete {ctx.node_name} "
-#         f"--project={ctx.node_pool.project_id} "
-#         f"--zone={ctx.node_pool.node_locations} --quiet"
-#     )
-#
-#
-# class NodeDrainOperation(NodeOperationInterface):
-#   """Implements the node draining operation."""
-#
-#   OPERATION_TYPE = NodeOperationType.DRAIN
-#
-#   @staticmethod
-#   def GetCommand(ctx: NodeOperationContext) -> str:
-#     return (
-#         f"kubectl drain {ctx.node_name} "
-#         "--ignore-daemonsets --delete-emptydir-data"
-#     )
-#
-#
-# class NodeUncordonOperation(NodeOperationInterface):
-#   """Implements the node uncordoning operation."""
-#
-#   OPERATION_TYPE = NodeOperationType.UNCORDON
-#
-#   @staticmethod
-#   def GetCommand(ctx: NodeOperationContext) -> str:
-#     return f"kubectl uncordon {ctx.node_name}"
-#
-#
-# def get_node_operation_command(
-#     node_operation: NodeOperationInterface,
-#     node_name: str,
-#     node_pool: Info,
-# ) -> str:
-#   """Generates the command to perform a specified operation on a GKE node."""
-#
-#   ctx = NodeOperationContext(node_pool=node_pool, node_name=node_name)
-#
-#   return node_operation.GetCommand(ctx)
-#
-# # --- modifying part end ---
 
-
-
-# test code start here
 class NodeOperation(enum.Enum):
   """Enum for different types of node operations."""
 
@@ -496,15 +416,20 @@ class NodeOperation(enum.Enum):
   UNCORDON = enum.auto()
   REBOOT = enum.auto()
 
+
 class NodeOperationApproach(enum.Enum):
   """Enum for different approaches to perform node operations."""
 
   K8S_CLI = enum.auto()
   GCP_CLI = enum.auto()
 
+
 @dataclasses.dataclass
 class NodeOperationSpec:
-  """Defines the specification for a node operation, including type and approach."""
+  """
+  Defines the specification for a node operation, including type
+  and approach.
+  """
 
   target: NodeOperation
   approach: NodeOperationApproach
@@ -527,21 +452,21 @@ class NodeOperationSpec:
   @staticmethod
   def Drain() -> "NodeOperationSpec":
     return NodeOperationSpec(
-        target = NodeOperation.DRAIN,
-        approach = NodeOperationApproach.K8S_CLI,
-        command_template = (
+        target=NodeOperation.DRAIN,
+        approach=NodeOperationApproach.K8S_CLI,
+        command_template=(
             "kubectl drain {node_name}"
             "--ignore-daemonsets --delete-emptydir-data"
         ),
-        extra_flags = "--ignore-daemonsets --delete-emptydir-data"
+        extra_flags="--ignore-daemonsets --delete-emptydir-data",
     )
 
   @staticmethod
   def Uncordon() -> "NodeOperationSpec":
     return NodeOperationSpec(
-        target = NodeOperation.UNCORDON,
-        approach = NodeOperationApproach.K8S_CLI,
-        command_template = "kubectl uncordon {node_name}",
+        target=NodeOperation.UNCORDON,
+        approach=NodeOperationApproach.K8S_CLI,
+        command_template="kubectl uncordon {node_name}",
         extra_flags="",
     )
 
@@ -557,7 +482,6 @@ class NodeOperationSpec:
         ),
     )
 
-  # test code till here
 
 @task
 def operate_node(
