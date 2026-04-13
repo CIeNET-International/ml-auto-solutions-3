@@ -456,7 +456,6 @@ class NodeOperationSpec:
         approach=NodeOperationApproach.K8S_CLI,
         command_template=(
             "kubectl drain {node_name}"
-            "--ignore-daemonsets --delete-emptydir-data"
         ),
         extra_flags="--ignore-daemonsets --delete-emptydir-data",
     )
