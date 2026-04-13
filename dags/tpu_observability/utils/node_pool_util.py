@@ -454,9 +454,7 @@ class NodeOperationSpec:
     return NodeOperationSpec(
         target=NodeOperation.DRAIN,
         approach=NodeOperationApproach.K8S_CLI,
-        command_template=(
-            "kubectl drain {node_name}"
-        ),
+        command_template=("kubectl drain {node_name}"),
         extra_flags="--ignore-daemonsets --delete-emptydir-data",
     )
 
@@ -506,9 +504,7 @@ def operate_node(
       node_name=node_name, node_pool=node_pool
   )
 
-  logging.info(
-      "Select node '%s' to %s", node_name, operation.OPERATION_TYPE.name
-  )
+  logging.info("Select node '%s' to %s", node_name, operation.target.name)
 
   with tempfile.TemporaryDirectory() as tmpdir:
     kube_dir = tmpdir + "/kubeconfig"
