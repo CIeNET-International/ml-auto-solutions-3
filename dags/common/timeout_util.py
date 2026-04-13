@@ -16,7 +16,6 @@
 
 import logging
 
-from airflow import models
 from airflow.decorators import task
 from airflow.exceptions import AirflowException, AirflowSensorTimeout
 from airflow.models import TaskInstance
@@ -40,7 +39,8 @@ def cleanup_group_callback(context, session=None) -> None:
 
   if not (is_timeout or is_failed_early):
     logging.info(
-        f"[CALLBACK] {ti.task_id} failed, but not due to timeout or early failure. Skipping cleanup. Exception: {exception_msg}"
+        f"[CALLBACK] {ti.task_id} failed, but not due to timeout or early failure."
+        f"Skipping cleanup. Exception: {exception_msg}"
     )
     return
 
@@ -53,7 +53,8 @@ def cleanup_group_callback(context, session=None) -> None:
     return
 
   logging.info(
-      f"[CALLBACK] Initiating automated cleanup for Group: {target_group_id}. Trigger cause: {'Timeout' if is_timeout else 'Failed Early'}"
+      f"[CALLBACK] Initiating automated cleanup for Group: {target_group_id},"
+      f"Trigger cause: {'Timeout' if is_timeout else 'Failed Early'}"
   )
 
   # Retrieve all still-running TaskInstances within the current DAG Run
@@ -157,13 +158,13 @@ class TimeoutTaskGroup(TaskGroup):
     super().__init__(group_id=group_id, **kwargs)
     self.timeout_minutes = timeout_minutes
 
-  def __exit__(self, _type, _value, _tb):
+  def __exit__(self, exc_type, exc_val, exc_tb):
     # 1. Before adding the Sensor, fetch all leaf tasks under this Group
     leaf_tasks = self.get_leaves()
     leaf_task_ids = [t.task_id for t in leaf_tasks]
 
     # 2. Wrap the original TaskGroup execution
-    super().__exit__(_type, _value, _tb)
+    super().__exit__(exc_type, exc_val, exc_tb)
 
     if not leaf_task_ids:
       return
