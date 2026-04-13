@@ -25,7 +25,9 @@ from absl import logging
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from airflow.hooks.subprocess import SubprocessHook
-from kubernetes import client as k8s_client
+
+# 🟢 [Gateway Modification] Added the import of config as k8s_config to read local VIP credentials
+from kubernetes import client as k8s_client, config as k8s_config
 from google.cloud import compute_v1
 from xlml.apis import metric_config
 from xlml.utils import gke, composer
@@ -116,6 +118,10 @@ def run_workload(
 ):
   """Run workload through xpk tool."""
 
+  logging.info("=" * 80)
+  logging.info("[GATEWAY-PATCH] SUCCESS: Running the UPDATED xpk utility file!")
+  logging.info("=" * 80)
+
   # Log required info for XLML PLX Dashboard
   composer.log_metadata_for_xlml_dashboard({
       "cluster_project": cluster_project,
@@ -184,10 +190,16 @@ def run_workload(
       )
       cmds.append(vertex_ai_dependency)
     cmds.append(workload_create_cmd)
+
     hook = SubprocessHook()
+
+    # 🟢 [Gateway Modification] Intercept XPK_USE_GATEWAY_KUBECONFIG and force override KUBECONFIG
+    gateway_kubeconfig = os.environ.get('XPK_USE_GATEWAY_KUBECONFIG')
+    target_kubeconfig = gateway_kubeconfig if gateway_kubeconfig else os.path.join(tmpdir, "xpk.conf")
+
     result = hook.run_command(
         ["bash", "-c", ";".join(cmds)],
-        env={**os.environ, "KUBECONFIG": os.path.join(tmpdir, "xpk.conf")},
+        env={**os.environ, "KUBECONFIG": target_kubeconfig},
     )
     assert (
         result.exit_code == 0
@@ -198,6 +210,13 @@ def _get_core_api_client(
     project_id: str, region: str, cluster_name: str
 ) -> k8s_client.CoreV1Api:
   """Create a core API client for the given cluster."""
+  # 🟢 [Gateway Modification] Enable the Python K8s Client to read Gateway VIP credentials
+  gateway_kubeconfig = os.environ.get('XPK_USE_GATEWAY_KUBECONFIG')
+  if gateway_kubeconfig and os.path.exists(gateway_kubeconfig):
+      k8s_config.load_kube_config(config_file=gateway_kubeconfig)
+      logging.info(f"Successful initialize k8s client from Gateway KUBECONFIG: {gateway_kubeconfig}")
+      return k8s_client.CoreV1Api()
+
   client = gke.get_authenticated_client(project_id, region, cluster_name)
 
   # Initilize the client
@@ -222,6 +241,13 @@ def _get_batch_api_client(
     project_id: str, region: str, cluster_name: str
 ) -> k8s_client.BatchV1Api:
   """Create a batch API client for the given cluster."""
+  # 🟢 [Gateway Modification] Enable the Python K8s Client to read Gateway VIP credentials
+  gateway_kubeconfig = os.environ.get('XPK_USE_GATEWAY_KUBECONFIG')
+  if gateway_kubeconfig and os.path.exists(gateway_kubeconfig):
+      k8s_config.load_kube_config(config_file=gateway_kubeconfig)
+      logging.info(f"Successful initialize k8s batch api client from Gateway KUBECONFIG: {gateway_kubeconfig}")
+      return k8s_client.BatchV1Api()
+
   client = gke.get_authenticated_client(project_id, region, cluster_name)
 
   # Initilize the client
@@ -392,10 +418,16 @@ def clean_up_workload(
 
     cmds = get_xpk_setup_cmd(tmpdir, xpk_branch)
     cmds.append(workload_delete_cmd)
+
     hook = SubprocessHook()
+
+    # 🟢 [Gateway Modification] Intercept XPK_USE_GATEWAY_KUBECONFIG and force override KUBECONFIG
+    gateway_kubeconfig = os.environ.get('XPK_USE_GATEWAY_KUBECONFIG')
+    target_kubeconfig = gateway_kubeconfig if gateway_kubeconfig else os.path.join(tmpdir, "xpk.conf")
+
     result = hook.run_command(
         ["bash", "-c", ";".join(cmds)],
-        env={**os.environ, "KUBECONFIG": os.path.join(tmpdir, "xpk.conf")},
+        env={**os.environ, "KUBECONFIG": target_kubeconfig},
     )
     assert (
         result.exit_code == 0
