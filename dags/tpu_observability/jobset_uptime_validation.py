@@ -12,73 +12,83 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""A DAG to test JobSet time-to-recover metric using a node pool disk resize."""
+"""A DAG to test jobset uptime metric."""
 
 import datetime
 
 from airflow import models
+from airflow.decorators import task
 from airflow.models.baseoperator import chain
-from airflow.utils.trigger_rule import TriggerRule
 from airflow.utils.task_group import TaskGroup
+from airflow.utils.trigger_rule import TriggerRule
 
 from dags import composer_env
-from dags.tpu_observability.utils import jobset_util as jobset
-from dags.tpu_observability.utils import node_pool_util as node_pool
-from dags.tpu_observability.utils.jobset_util import JobSet, Workload
 from dags.tpu_observability.configs.common import (
     MachineConfigMap,
     GCS_CONFIG_PATH,
     GCS_JOBSET_CONFIG_PATH,
 )
+from dags.tpu_observability.utils import jobset_util as jobset
+from dags.tpu_observability.utils import node_pool_util as node_pool
+from dags.tpu_observability.utils.jobset_util import Workload
+from dags.tpu_observability.utils.time_util import TimeUtil
 from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper, get_dag_timeout
 
 
-DAG_ID = "jobset_ttr_node_pool_resize"
+DAG_ID = "jobset_uptime_validation"
 DAGRUN_TIMEOUT = get_dag_timeout(DAG_ID)
 SCHEDULE = SchedulingHelper.arrange_schedule_time(DAG_ID)
-_DISK_SIZE_INCREMENT = 100
+
+
+@task
+def get_current_time() -> TimeUtil:
+  """Get the current time in UTC."""
+  return TimeUtil.now()
+
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
 # know this signature).
 with models.DAG(  # pylint: disable=unexpected-keyword-arg
     dag_id=DAG_ID,
-    start_date=datetime.datetime(2026, 1, 27),
+    start_date=datetime.datetime(2025, 8, 15),
+    default_args={"retries": 0},
     schedule=SCHEDULE if composer_env.is_prod_env() else None,
     dagrun_timeout=DAGRUN_TIMEOUT,
     catchup=False,
     tags=[
         "cloud-ml-auto-solutions",
         "jobset",
-        "time-to-recover",
+        "uptime",
         "tpu-observability",
-        "node-pool-resize",
         "TPU",
         "v6e-16",
     ],
     description=(
-        "This DAG tests the JobSet time-to-recover metric by triggering a "
-        "node pool disk resize, then polls the metric to check "
-        "if it is updated."
+        "This DAG tests the jobset uptime metric by deploying a workload on a "
+        "TPU v6e-16 node pool and verifying that "
+        "the metric behaves as expected."
     ),
     doc_md="""
-      # JobSet Time-To-Recover (TTR) Test Using Node Pool Disk Resize
+      # JobSet Uptime Metric Test Using TPU v6e-16 Node Pool
 
       ### Description
-      This DAG verifies that JobSet can recover when the underlying node pool
-      undergoes a disruptive update (Disk Resize). It launches a JobSet,
-      increases the disk size of the node pool, and confirms that the
-      JobSet controller restarts the workload successfully.
+      This DAG automates the process of creating a TPU v6e-16 node pool, launching
+      a jobset, and monitoring the jobset uptime metric to ensure it behaves
+      correctly. It also includes a negative test case to verify metric behavior
+      over invalid time ranges. Finally, the DAG cleans up all created resources.
 
       ### Prerequisites
-      This test requires an existing cluster to run.
+      This test requires an existing GKE cluster with TPU v6e-16 quota.
 
       ### Procedures
-      First the node-pool is created, a jobset yaml is then launched on the
-      cluster and given a short period of time to initialize. After this a
-      node pool disk resize is triggered to interrupt the jobset. A sensor is
-      finally run which will poll Cloud Monitoring to detect that the jobset
-      time-to-recover (TTR) metric has been updated, resulting in a success,
-      or timeout, and fail.
+      1. **Provisioning**: Creates a TPU v6e-16 node pool with a specified reservation.
+      2. **Deployment**: Applies a JobSet workload and waits for Pods to become active.
+      3. **Metric Validation**: Polls the jobset uptime metric to confirm
+         it behaves as expected.
+      4. **Negative Testing**: Attempts to verify uptime against a current (future)
+         timestamp to ensure the sensor correctly handles out-of-bounds queries.
+      5. **Cleanup**: Deletes both the JobSet workload and the node pool to prevent
+         resource leakage.
       """,
 ) as dag:
   for machine in MachineConfigMap:
@@ -89,9 +99,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     with TaskGroup(  # pylint: disable=unexpected-keyword-arg
         group_id=f"v{config.tpu_version.value}"
     ):
-      selector = jobset.generate_node_pool_selector(
-          "jobset-ttr-node-pool-resize"
-      )
+      selector = jobset.generate_node_pool_selector("jobset-rollback-ttr")
 
       jobset_config = jobset.build_jobset_from_gcs_yaml(
           gcs_path=GCS_JOBSET_CONFIG_PATH,
@@ -114,40 +122,50 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           node_pool=cluster_info,
       )
 
-      start_workload = jobset.run_workload.override(task_id="start_workload")(
+      apply_time = jobset.run_workload.override(task_id="run_workload")(
           node_pool=cluster_info,
           jobset_config=jobset_config,
           workload_type=Workload.JAX_TPU_BENCHMARK,
       )
 
-      ensure_all_pods_running = jobset.wait_for_all_pods_running.override(
-          task_id="ensure_all_pods_running"
-      )(
+      pod_names = jobset.list_pod_names.override(task_id="list_pod_names")(
           node_pool=cluster_info,
           jobset_config=jobset_config,
       )
 
-      node_pool_resize = node_pool.update.override(task_id="node_pool_resize")(
-          node_pool=cluster_info,
-          spec=node_pool.NodePoolUpdateSpec.DiskSize(
-              delta=_DISK_SIZE_INCREMENT
-          ),
-      )
+      wait_for_job_start = jobset.wait_for_jobset_started.override(
+          task_id="wait_for_job_start"
+      )(cluster_info, pod_name_list=pod_names, job_apply_time=apply_time)
 
-      wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
-          task_id="wait_for_jobset_ttr_to_be_found"
+      wait_for_jobset_uptime_data = jobset.wait_for_jobset_uptime_data.override(
+          task_id="wait_for_jobset_uptime_data"
       )(
           node_pool=cluster_info,
           jobset_config=jobset_config,
+          jobset_apply_time=apply_time,
       )
 
-      cleanup_workload = jobset.end_workload.override(
-          task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
+      clean_up_workload = jobset.end_workload.override(
+          task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
       )(
           node_pool=cluster_info,
           jobset_config=jobset_config,
       ).as_teardown(
-          setups=start_workload
+          setups=apply_time
+      )
+
+      jobset_clear_time = get_current_time.override(
+          task_id="get_current_time"
+      )()
+
+      ensure_no_jobset_uptime_data = jobset.ensure_no_jobset_uptime_data.override(
+          task_id="ensure_no_jobset_uptime_data"
+      )(
+          node_pool=cluster_info,
+          jobset_config=jobset_config,
+          jobset_clear_time=jobset_clear_time,
+          # Wait 5 minutes to confirm no data has been detected.
+          wait_time_seconds=300,
       )
 
       cleanup_node_pool = node_pool.delete.override(
@@ -157,14 +175,14 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       )
 
       chain(
-          selector,
-          jobset_config,
           cluster_info,
           create_node_pool,
-          start_workload,
-          ensure_all_pods_running,
-          node_pool_resize,
-          wait_for_metric_upload,
-          cleanup_workload,
+          apply_time,
+          pod_names,
+          wait_for_job_start,
+          wait_for_jobset_uptime_data,
+          clean_up_workload,
+          jobset_clear_time,
+          ensure_no_jobset_uptime_data,
           cleanup_node_pool,
       )

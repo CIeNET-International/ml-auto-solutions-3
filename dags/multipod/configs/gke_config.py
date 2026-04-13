@@ -109,11 +109,11 @@ def get_gke_maxtext_nightly_config(
   run_name = f"{num_slices}slice-V{cluster.device_version.value}_{cluster.core_count}-maxtext-nightly-{current_datetime}"
 
   run_model_cmds = (
-      "bash preflight.sh PLATFORM=GKE",
+      "bash src/dependencies/scripts/preflight.sh PLATFORM=GKE",
       (
           "JAX_PLATFORM_NAME=TPU XLA_FLAGS='--xla_dump_to=/tmp/xla_dump/'"
           " ENABLE_PJRT_COMPATIBILITY=true"
-          f" python3 -m MaxText.train MaxText/configs/base.yml run_name={run_name}"
+          f" python3 -m maxtext.trainers.pre_train.train src/maxtext/configs/base.yml run_name={run_name}"
           f" base_output_directory={base_output_directory}"
           " dataset_path=gs://max-datasets-rogue dataset_type=synthetic"
           " model_name=llama3-8b per_device_batch_size=12 reuse_example_batch=1 metrics_file='metrics.txt'"
@@ -209,11 +209,11 @@ def get_gke_gpt3_6b_nightly_config(
   run_name = f"{num_slices}slice-V{cluster.device_version.value}_{cluster.core_count}-gpt3-6b-nightly-{current_datetime}"
 
   run_model_cmds = (
-      "bash preflight.sh PLATFORM=GKE",
+      "bash src/dependencies/scripts/preflight.sh PLATFORM=GKE",
       (
           "JAX_PLATFORM_NAME=TPU XLA_FLAGS='--xla_dump_to=/tmp/xla_dump/'"
           " ENABLE_PJRT_COMPATIBILITY=true"
-          f" python3 -m MaxText.train MaxText/configs/base.yml run_name={run_name} model_name=gpt3-6b"
+          f" python3 -m maxtext.trainers.pre_train.train src/maxtext/configs/base.yml run_name={run_name} model_name=gpt3-6b"
           f" base_output_directory={base_output_directory}"
           " dataset_path=gs://max-datasets-rogue dataset_type=synthetic"
           " per_device_batch_size=12 reuse_example_batch=1 global_parameter_scale=1 metrics_file='metrics.txt'"

@@ -26,7 +26,7 @@ from dags.multipod.configs import gke_config
 from xlml.utils import name_format
 
 # Run once a day at 1 am UTC (5 pm PST)
-SCHEDULED_TIME = "45 2 * * *" if composer_env.is_prod_env() else None
+SCHEDULED_TIME = "0 5 * * *" if composer_env.is_prod_env() else None
 HF_TOKEN = models.Variable.get("HF_TOKEN", None)
 
 
@@ -57,13 +57,7 @@ with models.DAG(
   }
 
   # Unchained tests
-  # TODO(ranran): add back ckpt conversation after b/384580048
   test_models_tpu = {
-      "mixtral-8x22b": {
-          "script_name": "tpu/mixtral/8x22b/2_test_mixtral",
-          "cluster": XpkClusters.TPU_V6E_256_MLPERF_CLUSTER,
-          "time_out_in_min": 90,
-      },
       "deepseek3-671b": {
           "script_name": "tpu/deepseek/v3-671b/2_test_deepseek",
           "cluster": XpkClusters.TPU_V5P_128_CLUSTER,
@@ -71,12 +65,12 @@ with models.DAG(
       },
       "deepseek2-16b": {
           "script_name": "tpu/deepseek/v2-16b/test_deepseek",
-          "cluster": XpkClusters.TPU_V5P_8_CLUSTER,
+          "cluster": XpkClusters.TPU_V5P_8_CLUSTER_V2,
           "time_out_in_min": 90,
       },
       "gpt-oss-20b": {
           "script_name": "tpu/gpt_oss/20b/test_gpt_oss",
-          "cluster": XpkClusters.TPU_V5P_8_CLUSTER,
+          "cluster": XpkClusters.TPU_V5P_8_CLUSTER_V2,
           "time_out_in_min": 90,
       },
   }

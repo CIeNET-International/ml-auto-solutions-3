@@ -146,9 +146,14 @@ with models.DAG(
         )
 
         log_filters = [
-            "jsonPayload.message:\"'event_type': 'emergency_restore'\"",
-            "jsonPayload.message:\"'is_restoring_slice': True\"",
-            "jsonPayload.message:\"'directory': '/local/\"",
+            (
+                "(textPayload:\"'event_type': 'restore'\" OR"
+                " jsonPayload.message:\"'event_type': 'restore'\")"
+            ),
+            (
+                "(textPayload:\"'directory': '/local/\" OR"
+                " jsonPayload.message:\"'directory': '/local/\")"
+            ),
         ]
         validate_restored_source = validation_util.validate_log_exist.override(
             task_id="validate_emc_restored_from_local"

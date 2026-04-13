@@ -16,7 +16,7 @@
 
 import enum
 import dataclasses
-import datetime
+from datetime import timedelta
 import json
 import logging
 import os
@@ -28,15 +28,32 @@ from typing import Final
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
-
-from dags.tpu_observability.utils import subprocess_util as subprocess
-from dags.tpu_observability.utils.gcp_util import query_time_series
-from dags.tpu_observability.utils.node_pool_util import Info as node_pool_info
-from dags.tpu_observability.utils.time_util import TimeUtil
+from airflow.sensors.base import PokeReturnValue
 from google.cloud.monitoring_v3 import types
 import kubernetes
+
+from dags.tpu_observability.utils import subprocess_util as subprocess
+from dags.tpu_observability.utils.gcp_util import list_time_series
+from dags.tpu_observability.utils.node_pool_util import Info as node_pool_info
+from dags.tpu_observability.utils.node_pool_util import NODE_POOL_SELECTOR_KEY
+from dags.tpu_observability.utils.time_util import TimeUtil
 from xlml.apis import gcs
+from xlml.utils import composer
 from xlml.utils import gke
+
+
+@task
+def generate_node_pool_selector(prefix: str) -> str:
+  """Generates a unique node_pool_selector value.
+
+  Args:
+    prefix: An identifier for the workload type (e.g., "resize", "rollback").
+
+  Returns:
+    The selector value string (e.g., "rollback-20260212123456").
+  """
+  run_id = TimeUtil.now().to_datetime().strftime("%Y%m%d%H%M%S")
+  return f"{prefix}-{run_id}"
 
 
 class Workload:
@@ -127,7 +144,7 @@ class Workload:
 # pylint: disable=line-too-long
 _TEMPLATE = string.Template(
     textwrap.dedent(
-        """
+        f"""
         apiVersion: jobset.x-k8s.io/v1alpha2
         kind: JobSet
         metadata:
@@ -151,6 +168,7 @@ _TEMPLATE = string.Template(
                     nodeSelector:
                       cloud.google.com/gke-tpu-accelerator: $tpu_accelerator_type
                       cloud.google.com/gke-tpu-topology: $tpu_topology
+                      {NODE_POOL_SELECTOR_KEY}: $node_pool_selector
                     containers:
                     - name: $container_name
                       image: $image
@@ -210,6 +228,7 @@ class JobSet:
   container_name: str
   image: str
   tpu_cores_per_pod: int
+  node_pool_selector: str
 
   def generate_yaml(self, workload_script: Workload) -> str:
     """Generates the final JobSet YAML content.
@@ -224,6 +243,7 @@ class JobSet:
     params = dataclasses.asdict(self)
     params["command"] = ["bash", "-c"]
     params["args"] = workload_script
+    params["node_pool_selector"] = self.node_pool_selector or ""
 
     return _TEMPLATE.substitute(params)
 
@@ -415,11 +435,11 @@ def _generate_jobset_name(dag_id_prefix: str) -> str:
   Returns:
     A string representing the generated jobset name.
   """
-  now_utc = datetime.datetime.now(datetime.timezone.utc)
+  now_utc = TimeUtil.now().to_datetime()
   timestamp = now_utc.strftime("%Y%m%d%H%M%S")
   dag_id_prefix = dag_id_prefix.replace("_", "-").lower()
 
-  return f"{dag_id_prefix}-workload-{timestamp}"
+  return f"{dag_id_prefix}-{timestamp}"
 
 
 @task
@@ -470,6 +490,7 @@ def run_workload(
   Args:
     node_pool: Configuration object with cluster details.
     jobset_config: The JobSet object containing YAML configuration.
+    workload_type: The workload script to execute.
   Returns:
     The UTC time when the workload was started.
   """
@@ -487,8 +508,25 @@ def run_workload(
 
     subprocess.run_exec(cmd, env=env)
 
-    current_time_utc = datetime.datetime.now(datetime.timezone.utc)
-    return TimeUtil.from_datetime(current_time_utc)
+    # Log metadata for XLML dashboard
+    # Pod names follow the pattern:
+    #   {jobset_name}-{replicated_job_name}-{job-index}-{pod-index}-{random}
+    # The jobset_name prefix is stable across pod recreations, so a regex
+    # pattern is more reliable than an exact pod name list.
+    pod_name_pattern = f"{jobset_config.jobset_name}.*"
+    jobset_metadata = {
+        "project_id": node_pool.project_id,
+        "cluster_name": node_pool.cluster_name,
+        "node_pool_name": node_pool.node_pool_name,
+        "jobset_name": jobset_config.jobset_name,
+        "pod_name_pattern": pod_name_pattern,
+    }
+    composer.log_metadata_for_xlml_dashboard(jobset_metadata)
+    logging.info(
+        "Logged JobSet metadata to XLML dashboard: %s", jobset_metadata
+    )
+
+    return TimeUtil.now()
 
 
 @task
@@ -641,11 +679,8 @@ def wait_for_jobset_started(
     job_apply_time: The datetime object of the time the job was applied.
   """
 
-  end_time_datatime = job_apply_time.to_datetime() + datetime.timedelta(
-      minutes=10
-  )
   start_time = job_apply_time
-  end_time = TimeUtil.from_datetime(end_time_datatime)
+  end_time = job_apply_time + timedelta(minutes=10)
 
   if not pod_name_list:
     raise AirflowFailException("pod_name_list is empty, sensor cannot proceed.")
@@ -657,7 +692,7 @@ def wait_for_jobset_started(
       f'resource.labels.cluster_name = "{node_pool.cluster_name}"',
       f'resource.labels.pod_name = "{pod_name}"',
   ]
-  time_series_data = query_time_series(
+  time_series_data = list_time_series(
       project_id=node_pool.project_id,
       filter_str=" AND ".join(filter_string),
       start_time=start_time,
@@ -704,21 +739,19 @@ def wait_for_jobset_ttr_to_be_found(
 
   Args:
     node_pool (Info): An instance of the Info class containing GKE metadata.
-    jobset_config: An instance of the JobSet class representing the jobset configuration.
+    jobset_config: An instance of the JobSet class representing the jobset
+      configuration.
     start_time (TimeUtil, optional): The UTC timestamp to start polling from.
     If not provided, defaults to 60 minutes before the current time.
 
   Returns:
     bool: True if the TTR metric is found in Cloud Monitoring, False otherwise.
   """
-  now = datetime.datetime.now()
   query_start = (
-      start_time
-      if start_time
-      else TimeUtil.from_datetime(now - datetime.timedelta(minutes=60))
+      start_time if start_time else TimeUtil.now() - timedelta(minutes=60)
   )
 
-  time_series = query_time_series(
+  time_series = list_time_series(
       project_id=node_pool.project_id,
       filter_str=(
           'metric.type="kubernetes.io/jobset/times_to_recover" '
@@ -726,23 +759,106 @@ def wait_for_jobset_ttr_to_be_found(
           f'resource.labels.entity_name="{jobset_config.jobset_name}"'
       ),
       start_time=query_start,
-      end_time=TimeUtil.from_datetime(now),
+      end_time=TimeUtil.now(),
   )
 
-  # This function checks whether the TTR metric is present;
-  # it does not assess its value.
   logging.info("Time series: %s", time_series)
   return len(time_series) > 0
 
 
 @task.sensor(poke_interval=30, timeout=600, mode="poke")
-def wait_for_all_pods_running(node_pool: node_pool_info, jobset_config: JobSet):
-  num_running = len(
-      get_running_pods(
-          node_pool=node_pool,
-          jobset_name=jobset_config.jobset_name,
-          namespace="default",
-      )
+def wait_for_all_pods_running(
+    node_pool: node_pool_info, jobset_config: JobSet
+) -> PokeReturnValue:
+  """Waits for all pods to be running and returns the pod names.
+
+  Args:
+    node_pool: The Info object containing the cluster information.
+    jobset_config: The JobSet configuration.
+
+  Returns:
+    PokeReturnValue with is_done=True and pod names when all pods are running,
+    or is_done=False to continue polling.
+  """
+  running_pods = get_running_pods(
+      node_pool=node_pool,
+      jobset_name=jobset_config.jobset_name,
+      namespace="default",
   )
   num_pods = jobset_config.replicas * jobset_config.parallelism
-  return num_running == num_pods
+  if len(running_pods) == num_pods:
+    logging.info(
+        "All %d pods are running for JobSet '%s': %s",
+        num_pods,
+        jobset_config.jobset_name,
+        running_pods,
+    )
+    return PokeReturnValue(is_done=True, xcom_value=running_pods)
+  return PokeReturnValue(is_done=False)
+
+
+def query_uptime_metrics(
+    node_pool: node_pool_info,
+    jobset_name: str,
+    start_time: TimeUtil,
+    end_time: TimeUtil,
+):
+  """Queries the JobSet's uptime metric from Cloud Monitoring."""
+  filter_string = [
+      'metric.type="kubernetes.io/jobset/uptime"',
+      f'resource.labels.project_id = "{node_pool.project_id}"',
+      f'resource.labels.cluster_name = "{node_pool.cluster_name}"',
+      f'resource.labels.entity_name = "{jobset_name}"',
+  ]
+
+  return list_time_series(
+      project_id=node_pool.project_id,
+      filter_str=" AND ".join(filter_string),
+      start_time=start_time,
+      end_time=end_time,
+      view=types.ListTimeSeriesRequest.TimeSeriesView.FULL,
+      log_enable=True,
+  )
+
+
+@task.sensor(poke_interval=30, timeout=3600, mode="poke")
+def wait_for_jobset_uptime_data(
+    node_pool: node_pool_info,
+    jobset_config: JobSet,
+    jobset_apply_time: TimeUtil,
+):
+  """Verify uptime data exists after jobset application."""
+  start_time = jobset_apply_time
+  end_time = TimeUtil.now()
+  data = query_uptime_metrics(
+      node_pool, jobset_config.jobset_name, start_time, end_time
+  )
+
+  logging.info(f"Uptime data query result: {data}")
+  if len(data) > 0:
+    return True
+  return False
+
+
+@task.sensor(poke_interval=30, timeout=360, mode="poke")
+def ensure_no_jobset_uptime_data(
+    node_pool: node_pool_info,
+    jobset_config: JobSet,
+    jobset_clear_time: TimeUtil,
+    wait_time_seconds: int,
+):
+  """Ensure no uptime data is recorded after jobset deletion."""
+  start_time = jobset_clear_time
+  now = TimeUtil.now()
+  data = query_uptime_metrics(
+      node_pool, jobset_config.jobset_name, start_time, now
+  )
+
+  logging.info(f"Uptime data query result: {data}")
+  if len(data) > 0:
+    raise AirflowFailException(f"Data detected: {data}")
+
+  if (now - start_time).to_unix_seconds() >= wait_time_seconds:
+    logging.info("Stability period passed with no data detected.")
+    return True
+  return False

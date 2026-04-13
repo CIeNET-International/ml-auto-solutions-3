@@ -41,7 +41,7 @@ def build_maxtext_setup_script() -> str:
       curl -LsSf https://astral.sh/uv/install.sh | sh
       export PATH="$HOME/.local/bin:$PATH"
 
-      uv venv --python 3.12 --seed maxtext_venv
+      uv venv --python 3.12 --seed --clear maxtext_venv
       source maxtext_venv/bin/activate
 
       # =======================================================================
@@ -51,7 +51,7 @@ def build_maxtext_setup_script() -> str:
       uv pip install -e .[tpu] --resolution=lowest
       python3 -m pip install uv
 
-      install_maxtext_github_deps
+      install_maxtext_tpu_github_deps
 
       # =======================================================================
       # Post-Training Installations
@@ -234,10 +234,15 @@ def build_notebook_execution_command(
       f"{export_prefix}papermill {output_nb} {output_nb} --log-output"
   )
 
+  # Verify the success message exists in the notebook's output.
+  # We 'grep -v "print("' to ignore the Python source code line
+  # and ensure we are matching an actual execution result.
+  expected_completed_message = "Training Completed Successfully!"
   verification_script = textwrap.dedent(
       f"""
-      if ! grep -q "Training Completed Successfully!" {output_nb}; then
-        echo "Error: Notebook did not report successful completion."
+      set -o pipefail
+      if ! grep "{expected_completed_message}" {output_nb} | grep -vq "print("; then
+        echo "Error: Notebook did not report '{expected_completed_message}'."
         exit 1
       fi
       """

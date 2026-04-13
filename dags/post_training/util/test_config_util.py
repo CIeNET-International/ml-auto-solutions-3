@@ -88,7 +88,7 @@ class RLTestConfig:
   tokenizer_path: str
   load_parameters_path: str
   loss_algos: list[LossAlgo]
-  rl_config_path: str = "src/MaxText/configs/rl.yml"
+  rl_config_path: str = "src/maxtext/configs/post_train/rl.yml"
 
   def __init__(
       self,
@@ -100,7 +100,7 @@ class RLTestConfig:
       tokenizer_path: str,
       load_parameters_path: str,
       loss_algos: list[LossAlgo],
-      rl_config_path: str = "src/MaxText/configs/rl.yml",
+      rl_config_path: str = "src/maxtext/configs/post_train/rl.yml",
   ):
     """Initializes the RL test configurations.
 
@@ -158,7 +158,7 @@ class RLTestConfig:
       ])
 
     rl_command = (
-        "python -m src.MaxText.rl.train_rl "
+        "python -m maxtext.trainers.post_train.rl.train_rl "
         f"{self.rl_config_path} " + " ".join(command_params)
     )
 
@@ -215,7 +215,7 @@ class SFTTestConfig:
   base_dir: str
   tokenizer_path: str
   load_parameters_path: str
-  sft_config_path: str = "src/MaxText/configs/sft.yml"
+  sft_config_path: str = "src/maxtext/configs/post_train/sft.yml"
 
   def __init__(
       self,
@@ -228,7 +228,7 @@ class SFTTestConfig:
       base_dir: str,
       tokenizer_path: str,
       load_parameters_path: str,
-      sft_config_path: str = "src/MaxText/configs/sft.yml",
+      sft_config_path: str = "src/maxtext/configs/post_train/sft.yml",
   ):
     """Initializes the SFT test configurations.
 
@@ -245,7 +245,7 @@ class SFTTestConfig:
       load_parameters_path: GCS path to load pretrained model parameters
         from.
       sft_config_path: Path to the SFT configuration YAML file (default:
-        src/MaxText/configs/sft.yml).
+        src/maxtext/configs/post_train/sft.yml).
     """
     self.cluster = cluster
     self.accelerator = accelerator
@@ -271,7 +271,7 @@ class SFTTestConfig:
       A tuple containing the SFT training command string.
     """
     sft_command = (
-        "python3 -m MaxText.sft.sft_trainer "
+        "python3 -m maxtext.trainers.post_train.sft.train_sft "
         f"{self.sft_config_path} run_name={run_name} "
         f"base_output_directory={self.base_dir} "
         f"model_name={self.model_name} "

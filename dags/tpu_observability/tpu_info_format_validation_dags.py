@@ -44,6 +44,12 @@ from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.tpu_observability.utils import tpu_info_util as tpu_info
 from dags.tpu_observability.utils.jobset_util import Workload
+from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper, get_dag_timeout
+
+
+DAG_ID = "tpu_info_format_validation_dag"
+DAGRUN_TIMEOUT = get_dag_timeout(DAG_ID)
+SCHEDULE = SchedulingHelper.arrange_schedule_time(DAG_ID)
 
 
 @task
@@ -289,10 +295,11 @@ def validate_latency_table(tpu_info_output: list[tpu_info.Table]):
 # Keyword arguments are generated dynamically at runtime (pylint does not
 # know this signature).
 with models.DAG(  # pylint: disable=unexpected-keyword-arg
-    dag_id="tpu_info_format_validation_dag",
+    dag_id=DAG_ID,
     start_date=datetime.datetime(2025, 8, 15),
     default_args={"retries": 0},
-    schedule="0 20 * * *" if composer_env.is_prod_env() else None,
+    schedule=SCHEDULE if composer_env.is_prod_env() else None,
+    dagrun_timeout=DAGRUN_TIMEOUT,
     catchup=False,
     tags=["gke", "tpu-observability", "tpu-info", "TPU", "v6e-16"],
     description=(
@@ -339,6 +346,10 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       """Generates a second node pool name."""
       return f"{node_pool_info.node_pool_name}-2"
 
+    selector = jobset.generate_node_pool_selector(
+        "tpu-info-format-validation-dag"
+    )
+
     # Keyword arguments are generated dynamically at runtime (pylint does not
     # know this signature).
     with TaskGroup(  # pylint: disable=unexpected-keyword-arg
@@ -346,17 +357,19 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     ):
       jobset_config = jobset.build_jobset_from_gcs_yaml(
           gcs_path=GCS_JOBSET_CONFIG_PATH,
-          dag_name="tpu_info_format_validation_dag",
+          dag_name=DAG_ID,
+          node_pool_selector=selector,
       )
 
       cluster_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
           task_id="build_node_pool_info_from_gcs_yaml"
       )(
           gcs_path=GCS_CONFIG_PATH,
-          dag_name="tpu_info_format_validation_dag",
+          dag_name=DAG_ID,
           is_prod=composer_env.is_prod_env(),
           machine_type=config.machine_version.value,
           tpu_topology=config.tpu_topology,
+          node_pool_selector=selector,
       )
 
       cluster_info_2 = node_pool.copy_node_pool_info_with_override.override(
@@ -393,10 +406,8 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           workload_type=Workload.JAX_TPU_BENCHMARK,
       )
 
-      pod_names = jobset.list_pod_names.override(
-          task_id="list_pod_names",
-          retries=5,
-          retry_delay=datetime.timedelta(seconds=10),
+      running_pods = jobset.wait_for_all_pods_running.override(
+          task_id="ensure_all_pods_running"
       )(
           node_pool=cluster_info,
           jobset_config=jobset_config,
@@ -404,12 +415,16 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 
       wait_for_job_start = jobset.wait_for_jobset_started.override(
           task_id="wait_for_job_start"
-      )(cluster_info, pod_name_list=pod_names, job_apply_time=apply_time)
+      )(
+          cluster_info,
+          pod_name_list=running_pods,
+          job_apply_time=apply_time,
+      )
 
       outputs_of_tpu_info = (
           get_tpu_info_from_pod.override(task_id="get_tpu_info")
           .partial(info=cluster_info)
-          .expand(pod_name=pod_names)
+          .expand(pod_name=running_pods)
       )
 
       output_of_tpu_info = (
@@ -502,12 +517,13 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       chain(cleanup_first_node_pool, cleanup_second_node_pool)
 
       chain(
+          selector,
           jobset_config,
           cluster_info,
           cluster_info_2,
           create_node_pool,
           apply_time,
-          pod_names,
+          running_pods,
           wait_for_job_start,
           outputs_of_tpu_info,
           output_of_tpu_info,

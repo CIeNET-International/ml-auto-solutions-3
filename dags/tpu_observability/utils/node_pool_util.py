@@ -27,10 +27,20 @@ from airflow.exceptions import AirflowFailException
 from google.cloud import monitoring_v3
 
 from dags.tpu_observability.utils.time_util import TimeUtil
-from dags.tpu_observability.utils.gcp_util import query_time_series
+from dags.tpu_observability.utils.gcp_util import list_time_series
 from dags.tpu_observability.utils import subprocess_util as subprocess
 from xlml.apis import gcs
 from xlml.utils import composer
+
+
+NODE_POOL_SELECTOR_KEY = "tpu-observability/workload"
+"""The label key for binding JobSet workloads to specific GKE node pools.
+
+This key is used as a Kubernetes node label to ensure pods are scheduled
+on the correct node pool. It is applied to both:
+- GKE node pools via `--node-labels` during creation
+- JobSet YAML via `nodeSelector` to target the labeled nodes
+"""
 
 
 class Status(enum.Enum):
@@ -71,6 +81,7 @@ class Info:
   num_nodes: int = None
   tpu_topology: str = None
   reservation: str = None
+  node_pool_selector: str = None
 
 
 @task
@@ -183,7 +194,12 @@ def create(
     node_pool: Info,
     ignore_failure: bool = False,
 ) -> None:
-  """Creates a GKE node pool by the given node pool information."""
+  """Creates a GKE node pool by the given node pool information.
+
+  Args:
+    node_pool: The node pool configuration.
+    ignore_failure: If True, command failures are ignored.
+  """
 
   composer.log_metadata_for_xlml_dashboard({
       "cluster_project": node_pool.project_id,
@@ -214,10 +230,27 @@ def create(
   if node_pool.reservation:
     command += f" --reservation-affinity=specific --reservation={node_pool.reservation}"
 
+  if node_pool.node_pool_selector:
+    command += f" --node-labels={NODE_POOL_SELECTOR_KEY}={node_pool.node_pool_selector}"
+
   if ignore_failure:
     command += "2>&1 || true "
 
-  subprocess.run_exec(command)
+  try:
+    subprocess.run_exec(command)
+  except Exception as e:
+    debug_cmd = (
+        "gcloud container operations list "
+        f"--project={node_pool.project_id} "
+        f"--region={node_pool.location} "
+        f"--filter='status=RUNNING AND targetLink:{node_pool.node_pool_name}' "
+        f"--format='json(name,status)'"
+    )
+    debug_res = subprocess.run_exec(debug_cmd)
+
+    raise AirflowFailException(
+        f"Primary task failed. Current operations:\n{debug_res}"
+    ) from e
 
 
 @task
@@ -392,7 +425,7 @@ def _query_status_metric(node_pool: Info) -> Status:
   # data points from all series into a single flat list ('records'). It then
   # finds the record with the maximum timestamp from this list to ensure the
   # true latest status is identified.
-  time_series_data = query_time_series(
+  time_series_data = list_time_series(
       project_id=node_pool.project_id,
       filter_str=" AND ".join(filter_string),
       start_time=start_time,
@@ -507,7 +540,7 @@ def wait_for_availability(
       f'resource.labels.node_pool_name="{node_pool.node_pool_name}"',
   ]
 
-  page_result = query_time_series(
+  page_result = list_time_series(
       project_id=node_pool.project_id,
       filter_str=" AND ".join(filter_string),
       start_time=start_time,
@@ -589,7 +622,7 @@ def wait_for_ttr(
       f'resource.labels.node_pool_name = "{node_pool.node_pool_name}"',
   ]
 
-  page_result = query_time_series(
+  page_result = list_time_series(
       project_id=node_pool.project_id,
       filter_str=" AND ".join(filter_string),
       start_time=start_time,

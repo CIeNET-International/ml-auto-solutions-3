@@ -30,13 +30,20 @@ from dags.tpu_observability.configs.common import (
     GCS_CONFIG_PATH,
     GCS_JOBSET_CONFIG_PATH,
 )
+from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper, get_dag_timeout
+
+
+DAG_ID = "jobset_ttr_pod_delete"
+DAGRUN_TIMEOUT = get_dag_timeout(DAG_ID)
+SCHEDULE = SchedulingHelper.arrange_schedule_time(DAG_ID)
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
 # know this signature).
 with models.DAG(  # pylint: disable=unexpected-keyword-arg
-    dag_id="jobset_ttr_pod_delete",
+    dag_id=DAG_ID,
     start_date=datetime.datetime(2026, 1, 8),
-    schedule="0 19 * * *" if composer_env.is_prod_env() else None,
+    schedule=SCHEDULE if composer_env.is_prod_env() else None,
+    dagrun_timeout=DAGRUN_TIMEOUT,
     catchup=False,
     tags=[
         "cloud-ml-auto-solutions",
@@ -49,7 +56,8 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     ],
     description=(
         "This DAG tests the JobSet time-to-recover metric by deleting a random "
-        "pod to trigger a recovery, then polls the metric to check if it is updated."
+        "pod to trigger a recovery, then polls the metric to check if it is"
+        " updated."
     ),
     doc_md="""
       # JobSet Time-To-Recover (TTR) Test Using Random Pod Deletion
@@ -79,18 +87,23 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     with TaskGroup(  # pylint: disable=unexpected-keyword-arg
         group_id=f"v{config.tpu_version.value}"
     ):
+      selector = jobset.generate_node_pool_selector("jobset-ttr-pod-delete")
+
       jobset_config = jobset.build_jobset_from_gcs_yaml(
-          gcs_path=GCS_JOBSET_CONFIG_PATH, dag_name="jobset_ttr_pod_delete"
+          gcs_path=GCS_JOBSET_CONFIG_PATH,
+          dag_name=DAG_ID,
+          node_pool_selector=selector,
       )
 
       cluster_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
           task_id="build_node_pool_info_from_gcs_yaml"
       )(
           gcs_path=GCS_CONFIG_PATH,
-          dag_name="jobset_ttr_pod_delete",
+          dag_name=DAG_ID,
           is_prod=composer_env.is_prod_env(),
           machine_type=config.machine_version.value,
           tpu_topology=config.tpu_topology,
+          node_pool_selector=selector,
       )
 
       create_node_pool = node_pool.create.override(task_id="create_node_pool")(
@@ -137,6 +150,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       )
 
       chain(
+          selector,
           jobset_config,
           cluster_info,
           create_node_pool,

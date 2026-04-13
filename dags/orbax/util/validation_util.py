@@ -68,20 +68,22 @@ def validate_checkpoint_at_steps_are_saved(
       location=location,
       cluster_name=cluster_name,
       pod_pattern=pod_pattern,
-      text_filter=f'jsonPayload.message=~"{log_pattern}"',
+      text_filter=f'(textPayload=~"{log_pattern}" OR jsonPayload.message=~"{log_pattern}")',
       start_time=start_time,
       end_time=end_time,
   )
 
   steps_are_saved: set[int] = set()  # Use a set for faster lookup.
   for entry in entries:
-    if not isinstance(entry, logging_api.StructEntry):
-      raise AirflowFailException(
-          "Log entry must be contain a jsonPayload attribute."
-      )
-    message = entry.payload.get("message")
+    message = None
+    if isinstance(entry, logging_api.TextEntry):
+      message = entry.payload
+    elif isinstance(entry, logging_api.StructEntry):
+      message = entry.payload.get("message")
+
     if not message:
-      raise AirflowFailException(f"Failed to parse entry {entry}")
+      logging.warning(f"Could not extract message from log entry: {entry}")
+      continue
 
     m = complied_pattern.search(message)
     if m:
@@ -468,7 +470,9 @@ def validate_restored_correct_checkpoint(
       cluster_name=cluster_name,
       namespace="default",
       pod_pattern=pod_pattern,
-      text_filter="jsonPayload.message:\"'event_type'\"",
+      text_filter=(
+          "(textPayload:\"'event_type'\" OR jsonPayload.message:\"'event_type'\")"
+      ),
       start_time=start_time,
       end_time=end_time,
   )
@@ -478,12 +482,15 @@ def validate_restored_correct_checkpoint(
 
   local_saved_steps_before_restore = []
   for entry in entries:
-    if not isinstance(entry, logging_api.StructEntry):
-      raise AirflowFailException(
-          "Log entry must be contain a jsonPayload attribute."
-      )
+    message = None
+    if isinstance(entry, logging_api.TextEntry):
+      message = entry.payload
+    elif isinstance(entry, logging_api.StructEntry):
+      message = entry.payload.get("message")
 
-    message = entry.payload.get("message")
+    if not message:
+      logging.warning(f"Could not extract message from log entry: {entry}")
+      continue
 
     if re.search(r"'event_type': 'save'", message):
       saved_step_match = re.search(r"'step': (\d+)", message)

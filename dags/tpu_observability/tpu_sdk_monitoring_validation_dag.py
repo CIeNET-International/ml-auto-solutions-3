@@ -33,6 +33,12 @@ from dags.tpu_observability.configs.common import (
     GCS_CONFIG_PATH,
     GCS_JOBSET_CONFIG_PATH,
 )
+from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper, get_dag_timeout
+
+
+DAG_ID = "tpu_sdk_monitoring_validation"
+DAGRUN_TIMEOUT = get_dag_timeout(DAG_ID)
+SCHEDULE = SchedulingHelper.arrange_schedule_time(DAG_ID)
 
 
 @task
@@ -79,9 +85,10 @@ def validate_monitoring_sdk(info: node_pool.Info, pod_name: str) -> None:
 
 
 with models.DAG(
-    dag_id="tpu_sdk_monitoring_validation",
+    dag_id=DAG_ID,
     start_date=datetime.datetime(2026, 1, 13),
-    schedule="0 22 * * *" if composer_env.is_prod_env() else None,
+    schedule=SCHEDULE if composer_env.is_prod_env() else None,
+    dagrun_timeout=DAGRUN_TIMEOUT,
     catchup=False,
     tags=[
         "cloud-ml-auto-solutions",
@@ -124,19 +131,25 @@ with models.DAG(
   with TaskGroup(  # pylint: disable=unexpected-keyword-arg
       group_id=f"v{config.tpu_version.value}"
   ):
+    selector = jobset.generate_node_pool_selector(
+        "tpu-sdk-monitoring-validation"
+    )
+
     jobset_config = jobset.build_jobset_from_gcs_yaml(
         gcs_path=GCS_JOBSET_CONFIG_PATH,
-        dag_name="tpu_sdk_monitoring_validation",
+        dag_name=DAG_ID,
+        node_pool_selector=selector,
     )
 
     cluster_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
         task_id="build_node_pool_info_from_gcs_yaml"
     )(
         gcs_path=GCS_CONFIG_PATH,
-        dag_name="tpu_sdk_monitoring_validation",
+        dag_name=DAG_ID,
         is_prod=composer_env.is_prod_env(),
         machine_type=config.machine_version.value,
         tpu_topology=config.tpu_topology,
+        node_pool_selector=selector,
     )
 
     create_node_pool = node_pool.create.override(task_id="create_node_pool")(
@@ -149,7 +162,9 @@ with models.DAG(
         workload_type=Workload.JAX_TPU_BENCHMARK,
     )
 
-    pod_names = jobset.list_pod_names.override(task_id="list_pod_names")(
+    running_pods = jobset.wait_for_all_pods_running.override(
+        task_id="ensure_all_pods_running"
+    )(
         node_pool=cluster_info,
         jobset_config=jobset_config,
     )
@@ -157,15 +172,15 @@ with models.DAG(
     wait_for_jobset_started = jobset.wait_for_jobset_started.override(
         task_id="wait_for_jobset_started"
     )(
-        node_pool=cluster_info,
-        pod_name_list=pod_names,
+        cluster_info,
+        pod_name_list=running_pods,
         job_apply_time=apply_time,
     )
 
     sdk_validation = (
         validate_monitoring_sdk.override(task_id="sdk_validation")
         .partial(info=cluster_info)
-        .expand(pod_name=pod_names)
+        .expand(pod_name=running_pods)
     )
 
     cleanup_workload = jobset.end_workload.override(
@@ -184,11 +199,12 @@ with models.DAG(
     )
 
     chain(
+        selector,
         jobset_config,
         cluster_info,
         create_node_pool,
         apply_time,
-        pod_names,
+        running_pods,
         wait_for_jobset_started,
         sdk_validation,
         cleanup_workload,
