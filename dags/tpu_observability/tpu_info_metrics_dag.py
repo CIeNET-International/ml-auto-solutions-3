@@ -46,7 +46,7 @@ from dags.tpu_observability.utils import tpu_info_util as tpu_info
 from dags.tpu_observability.utils.node_pool_util import Info
 from dags.tpu_observability.utils.time_util import TimeUtil
 from dags.tpu_observability.utils.jobset_util import Workload
-from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper, get_dag_timeout
+from dags.common.scheduling_helper import SchedulingHelper, get_dag_timeout
 
 
 DAG_ID = "tpu_info_metrics_verification"
