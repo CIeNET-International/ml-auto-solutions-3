@@ -24,8 +24,6 @@ import random
 import re
 import tempfile
 
-from abc import ABC, abstractmethod
-
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from google.cloud import monitoring_v3
@@ -397,7 +395,8 @@ def draw_random_nodes(node_pool: Info, count: int) -> list[str]:
   if count > len(nodes_list):
     count = len(nodes_list)
 
-  target_node_list = random.sample(nodes_list, k=count)
+  random.shuffle(nodes_list)
+  target_node_list = nodes_list[:count]
   logging.info(
       "Randomly selected nodes '%s' from node pool '%s'.",
       target_node_list,
@@ -453,7 +452,7 @@ class NodeOperationSpec:
     return NodeOperationSpec(
         target=NodeOperation.DRAIN,
         approach=NodeOperationApproach.K8S_CLI,
-        command_template=("kubectl drain {node_name}"),
+        command_template="kubectl drain {node_name}",
         extra_flags="--ignore-daemonsets --delete-emptydir-data",
     )
 
@@ -468,15 +467,7 @@ class NodeOperationSpec:
 
   @staticmethod
   def Reboot() -> "NodeOperationSpec":
-    return NodeOperationSpec(
-        target=NodeOperation.REBOOT,
-        approach=NodeOperationApproach.GCP_CLI,
-        command_template=(
-            "gcloud compute instances reset {node_name} "
-            "--project={node_pool.project_id} "
-            "--zone={node_pool.node_locations} --quiet"
-        ),
-    )
+    pass
 
 
 @task
@@ -510,16 +501,18 @@ def operate_node(
     env = os.environ.copy()
     env["KUBECONFIG"] = kube_dir
 
-  commands = [(f"{base_command} {operation.extra_flags}").strip()]
-  match operation.approach:
-    case NodeOperationApproach.K8S_CLI:
-      commands.insert(0, get_credentials_command(node_pool))
-    case NodeOperationApproach.GCP_CLI:
-      pass
-    case _:
-      raise ValueError(f"Unsupported operation approach: {operation.approach}")
+    commands = [(f"{base_command} {operation.extra_flags}").strip()]
+    match operation.approach:
+      case NodeOperationApproach.K8S_CLI:
+        commands.insert(0, get_credentials_command(node_pool))
+      case NodeOperationApproach.GCP_CLI:
+        pass
+      case _:
+        raise ValueError(
+            f"Unsupported operation approach: {operation.approach}"
+        )
 
-  subprocess.run_exec(" && ".join(commands), env=env)
+    subprocess.run_exec(" && ".join(commands), env=env)
   return node_name
 
 
