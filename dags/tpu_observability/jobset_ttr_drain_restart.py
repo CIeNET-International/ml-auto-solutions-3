@@ -139,6 +139,13 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           .expand(node_name=select_nodes)
       )
 
+      check_nodes_number = node_pool.check_nodes_number.override(
+          task_id="check_nodes_number"
+      )(
+          node_pool=cluster_info,
+          drained_node_number=1,
+      )
+
       uncordon_node = (
           node_pool.operate_node.override(task_id="uncordon_node")
           .partial(
@@ -178,6 +185,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           ensure_all_pods_running,
           select_nodes,
           drained_node,
+          check_nodes_number,
           uncordon_node,
           wait_for_metric_upload,
           cleanup_workload,
