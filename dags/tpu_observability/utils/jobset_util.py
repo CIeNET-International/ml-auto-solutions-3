@@ -508,6 +508,8 @@ def build_jobset_from_gcs_yaml(
   Builds a JobSet instance by merging YAML defaults and generating
   a timestamped name based on dag_id_prefix.
 
+  update priority: jobset_defaults > dag-specific config > overrides
+
   Args:
     gcs_path: The GCS path to the YAML configuration file.
     dag_name: The name of the DAG to extract specific configurations.
@@ -518,17 +520,13 @@ def build_jobset_from_gcs_yaml(
   jobset = JobSet.__new__(JobSet)
   dict.__init__(jobset, {})
 
+  cfg_defaults = config.get("jobset_defaults", {})
   dag_cfg = config.get("dag", {}).get(dag_name, {})
   dag_id_prefix = dag_cfg.get("dag_id_prefix")
 
   jobset["jobset_name"] = _generate_jobset_name(dag_id_prefix)
-  jobset.update(
-      {
-          k: v
-          for k, v in config.get("jobset_defaults", {}).items()
-          if k in known_fields
-      }
-  )
+
+  jobset.update({k: v for k, v in cfg_defaults.items() if k in known_fields})
   jobset.update({k: v for k, v in dag_cfg.items() if k in known_fields})
   jobset.update({k: v for k, v in overrides.items() if k in known_fields})
 
@@ -556,8 +554,7 @@ def run_workload(
     The UTC time when the workload was started.
   """
 
-  if isinstance(jobset_config, dict):
-    jobset_config = JobSet(**jobset_config)
+  jobset_config = JobSet(**jobset_config)
 
   with tempfile.NamedTemporaryFile() as temp_config_file:
     env = os.environ.copy()
@@ -595,7 +592,7 @@ def run_workload(
 
 
 @task
-def end_workload(node_pool: node_pool_info, jobset_config: JobSet | dict):
+def end_workload(node_pool: node_pool_info, jobset_config: JobSet):
   """
   Deletes all JobSets from the GKE cluster to clean up resources.
 
@@ -609,8 +606,7 @@ def end_workload(node_pool: node_pool_info, jobset_config: JobSet | dict):
     namespace: The Kubernetes namespace to delete the JobSet from.
   """
 
-  if isinstance(jobset_config, dict):
-    jobset_config = JobSet(**jobset_config)
+  jobset_config = JobSet(**jobset_config)
 
   with tempfile.NamedTemporaryFile() as temp_config_file:
     env = os.environ.copy()
@@ -934,7 +930,7 @@ def ensure_no_jobset_uptime_data(
 
 
 @task
-def suspended_jobset(node_pool: node_pool_info, jobset_config: JobSet | dict):
+def suspended_jobset(node_pool: node_pool_info, jobset_config: JobSet):
   """
   Suspend a jobset from the GKE cluster.
 
@@ -946,8 +942,8 @@ def suspended_jobset(node_pool: node_pool_info, jobset_config: JobSet | dict):
     node_pool: Configuration object with cluster details.
     jobset_name: The name of the JobSet to delete.
   """
-  if isinstance(jobset_config, dict):
-    jobset_config = JobSet(**jobset_config)
+
+  jobset_config = JobSet(**jobset_config)
 
   with tempfile.NamedTemporaryFile() as temp_config_file:
     env = os.environ.copy()
