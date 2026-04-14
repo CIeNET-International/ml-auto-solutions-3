@@ -263,8 +263,9 @@ class JobSetStartupOutput:
   Attributes:
     task_group: The Airflow TaskGroup containing the startup logic (apply,
       wait for pods, and wait for workload start).
-    running_pods: An XComArg representing the list of pod names that
-      successfully reached the 'Running' state. Useful for fault injection.
+    running_pods: An XComArg representing a snapshot of pod names that
+      reached the 'Running' state. Note that this list is a point-in-time
+      reference and may change as pods are dynamically managed by Kubernetes.
     jobset_start_time: An XComArg containing the UTC timestamp when the
       JobSet was applied. Used as a baseline for monitoring queries.
   """
