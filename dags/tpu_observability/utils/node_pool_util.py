@@ -380,20 +380,19 @@ def draw_random_nodes(node_pool: Info, count: int) -> list[str]:
       node_pool: An instance of the Info class that encapsulates the
         configuration and metadata of a GKE node pool.
       count: The number of nodes to select.
+
   Returns:
       A list of names of randomly selected nodes from the node pool.
+
   Raises:
       AirflowFailException: If no nodes are found in the node pool.
   """
   nodes_list = list_nodes(node_pool)
 
-  if not nodes_list:
+  if not nodes_list or count > len(nodes_list):
     raise AirflowFailException(
         f"No nodes found in node pool '{node_pool.node_pool_name}'."
     )
-
-  if count > len(nodes_list):
-    count = len(nodes_list)
 
   random.shuffle(nodes_list)
   target_node_list = nodes_list[:count]
@@ -404,6 +403,7 @@ def draw_random_nodes(node_pool: Info, count: int) -> list[str]:
   )
 
   return target_node_list
+
 
 @task
 def check_nodes_number(
@@ -492,10 +492,6 @@ class NodeOperationSpec:
         command_template="kubectl uncordon {node_name}",
         extra_flags="",
     )
-
-  @staticmethod
-  def Reboot() -> "NodeOperationSpec":
-    pass
 
 
 @task
