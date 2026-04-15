@@ -12,6 +12,7 @@
 # limitations under the License.
 """A DAG to run end-to-end JAX Stable Stack TPU tests."""
 
+from multiprocessing import context
 import os
 import stat
 import datetime
@@ -40,35 +41,19 @@ def inject_gateway_env(context):
         return
 
     os.environ['KUBECONFIG'] = kubeconfig_path
-    print(f"[Gateway Setup] Fetching credentials for {cluster_name}...")
+
+    print(f"[Gateway Setup] Fetching credentials for {cluster_name} via Fleet...")
     cmd = f"gcloud container fleet memberships get-credentials {cluster_name}-membership --project {cluster_project}"
 
-    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-    if result.returncode != 0:
-        print(f"[Gateway Setup Error]: {result.stderr}")
-        raise Exception("Failed to fetch Gateway credentials in pre_execute")
-    print("[Gateway Setup] Credentials fetched successfully!")
-
-    unique_id = task.task_id.replace("-", "_").replace(".", "_")
-    fake_bin_dir = f"/tmp/fake_bin_{unique_id}"
-    os.makedirs(fake_bin_dir, exist_ok=True)
-
-    fake_gcloud_path = os.path.join(fake_bin_dir, 'gcloud')
-    with open(fake_gcloud_path, 'w') as f:
-        f.write("#!/bin/bash\n"
-                "if [[ \"$*\" == *\"container clusters get-credentials\"* ]]; then\n"
-                "  echo \"[Gateway Intercept] XPK tried to fetch standard credentials. Intercepted! (Minimalist Version)\"\n"
-                "  exit 0\n"
-                "fi\n"
-                f"REAL_GCLOUD=$(which -a gcloud | grep -v \"{fake_bin_dir}\" | head -n 1)\n"
-                "exec \"$REAL_GCLOUD\" \"$@\"\n")
-
-    os.chmod(fake_gcloud_path, os.stat(fake_gcloud_path).st_mode | stat.S_IEXEC)
-    os.environ['PATH'] = f"{fake_bin_dir}:{os.environ.get('PATH', '')}"
+    try:
+        subprocess.run(cmd, shell=True, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as e:
+        print(f"[Gateway Setup Error]: {e.stderr}")
+        raise Exception("Failed to fetch Gateway credentials")
 
     os.environ['XPK_USE_GATEWAY_KUBECONFIG'] = kubeconfig_path
 
-    print(f"[Gateway Intercept] Successfully injected fake gcloud and Secret Env Var! KUBECONFIG={kubeconfig_path}")
+    print(f"[Gateway Setup] Success! KUBECONFIG redirected to {kubeconfig_path}")
 
 
 with models.DAG(
