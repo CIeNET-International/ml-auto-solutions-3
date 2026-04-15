@@ -575,7 +575,7 @@ def run_workload(
 
   Args:
     node_pool: Configuration object with cluster details.
-    jobset_config: The JobSet object or dict containing YAML configuration.
+    jobset_config: The JobSet object containing YAML configuration.
     workload_type: The workload script to execute.
   Returns:
     The UTC time when the workload was started.
