@@ -377,15 +377,15 @@ def draw_random_nodes(node_pool: Info, count: int) -> list[str]:
   """Selects random nodes from the specified GKE node pool.
 
   Args:
-      node_pool: An instance of the Info class that encapsulates the
-        configuration and metadata of a GKE node pool.
-      count: The number of nodes to select.
+    node_pool: An instance of the Info class that encapsulates the
+      configuration and metadata of a GKE node pool.
+    count: The number of nodes to select.
 
   Returns:
-      A list of names of randomly selected nodes from the node pool.
+    A list of names of randomly selected nodes from the node pool.
 
   Raises:
-      AirflowFailException: If no nodes are found in the node pool.
+    AirflowFailException: If no nodes are found in the node pool.
   """
   nodes_list = list_nodes(node_pool)
 
