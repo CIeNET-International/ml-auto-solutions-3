@@ -175,7 +175,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       check_nodes_number = check_nodes_number.override(
           task_id="check_nodes_number"
       )(
-          node_pool=cluster_info,
+          pool=cluster_info,
           drained_node_number=1,
       )
 
