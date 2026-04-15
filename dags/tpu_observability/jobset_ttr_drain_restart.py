@@ -21,9 +21,14 @@ from airflow.models.baseoperator import chain
 from airflow.utils.trigger_rule import TriggerRule
 from airflow.utils.task_group import TaskGroup
 
+
+from airflow.decorators import task
+
 from dags import composer_env
 from dags.tpu_observability.utils import jobset_util as jobset
+from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.tpu_observability.utils import node_pool_util as node_pool
+from dags.tpu_observability.utils.node_pool_util import Info
 from dags.tpu_observability.utils.node_pool_util import NodeOperationSpec
 from dags.tpu_observability.utils.jobset_util import Workload
 from dags.tpu_observability.configs.common import (
@@ -86,6 +91,34 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
   for machine in MachineConfigMap:
     config = machine.value
 
+    @task
+    def check_nodes_number(
+        pool: Info,
+        drained_node_number: int,
+    ) -> bool:
+      """Checks whether the current node number match the expected number after
+      node draining.
+
+      Args:
+          pool: An instance of the Info class that encapsulates the
+            configuration and metadata of a GKE node pool.
+          drained_node_number: The number of nodes expected to be drained.
+
+      Returns:
+          A boolean indicating whether the current node number matches the
+            expected number after draining.
+
+      """
+      original_number = pool.num_nodes
+      command = (
+          "kubectl get nodes -l"
+          f"cloud.google.com/gke-nodepool={pool.node_pool_name}"
+          " --field-selector spec.unschedulable!=true --no-headers | wc -l"
+      )
+      stdout = subprocess.run_exec(command)
+      current_number = int(stdout.strip())
+      return current_number == original_number - drained_node_number
+
     # Keyword arguments are generated dynamically at runtime (pylint does not
     # know this signature).
     with TaskGroup(  # pylint: disable=unexpected-keyword-arg
@@ -139,7 +172,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           .expand(node_name=select_nodes)
       )
 
-      check_nodes_number = node_pool.check_nodes_number.override(
+      check_nodes_number = check_nodes_number.override(
           task_id="check_nodes_number"
       )(
           node_pool=cluster_info,
