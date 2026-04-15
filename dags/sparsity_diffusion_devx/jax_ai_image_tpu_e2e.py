@@ -57,12 +57,7 @@ def inject_gateway_env(context):
     with open(fake_gcloud_path, 'w') as f:
         f.write("#!/bin/bash\n"
                 "if [[ \"$*\" == *\"container clusters get-credentials\"* ]]; then\n"
-                "  echo \"[Gateway Intercept] XPK tried to fetch standard credentials. Intercepted to protect Gateway KUBECONFIG.\"\n"
-                "  CONTEXT_NAME=$(kubectl config get-contexts -o name | head -n 1)\n"
-                "  if [ ! -z \"$CONTEXT_NAME\" ]; then\n"
-                "    kubectl config use-context \"$CONTEXT_NAME\"\n"
-                "    echo \"[Gateway Intercept] Context set to $CONTEXT_NAME\"\n"
-                "  fi\n"
+                "  echo \"[Gateway Intercept] XPK tried to fetch standard credentials. Intercepted! (Minimalist Version)\"\n"
                 "  exit 0\n"
                 "fi\n"
                 f"REAL_GCLOUD=$(which -a gcloud | grep -v \"{fake_bin_dir}\" | head -n 1)\n"
