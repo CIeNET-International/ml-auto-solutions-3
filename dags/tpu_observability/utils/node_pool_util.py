@@ -405,35 +405,6 @@ def draw_random_nodes(node_pool: Info, count: int) -> list[str]:
   return target_node_list
 
 
-@task
-def check_nodes_number(
-    node_pool: Info,
-    drained_node_number: int,
-) -> bool:
-  """Checks whether the current node number match the expected number after
-  node draining.
-
-  Args:
-      node_pool: An instance of the Info class that encapsulates the
-        configuration and metadata of a GKE node pool.
-      drained_node_number: The number of nodes expected to be drained.
-
-  Returns:
-      A boolean indicating whether the current node number matches the
-        expected number after draining.
-
-  """
-  original_number = node_pool.num_nodes
-  command = (
-      "kubectl get nodes -l"
-      f"cloud.google.com/gke-nodepool={node_pool.node_pool_name}"
-      " --field-selector spec.unschedulable!=true --no-headers | wc -l"
-  )
-  stdout = subprocess.run_exec(command)
-  current_number = int(stdout.strip())
-  return current_number == original_number - drained_node_number
-
-
 class NodeOperation(enum.Enum):
   """Enum for different types of node operations."""
 
