@@ -411,7 +411,7 @@ class NodeOperation(enum.Enum):
   DELETE = enum.auto()
   DRAIN = enum.auto()
   UNCORDON = enum.auto()
-  
+
 
 class NodeOperationApproach(enum.Enum):
   """Enum for different approaches to perform node operations."""
