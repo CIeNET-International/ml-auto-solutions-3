@@ -27,6 +27,8 @@ from dags.common import test_owner
 from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_PATH
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils.node_pool_util import NodeOperationSpec
+from dags.tpu_observability.utils.node_pool_util import Info
+from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper, get_dag_timeout
 
 
@@ -83,6 +85,34 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       """Generates a problematic node location."""
       return f"{node_pool_info.location}-c"
 
+    @task
+    def check_nodes_number(
+        pool: Info,
+        deleted_node_number: int,
+    ) -> bool:
+      """Checks whether the current node number match the expected number after
+      node draining.
+
+      Args:
+          pool: An instance of the Info class that encapsulates the
+            configuration and metadata of a GKE node pool.
+          drained_node_number: The number of nodes expected to be drained.
+
+      Returns:
+          A boolean indicating whether the current node number matches the
+            expected number after draining.
+
+      """
+      original_number = pool.num_nodes
+      command = (
+          "kubectl get nodes -l"
+          f"cloud.google.com/gke-nodepool={pool.node_pool_name}"
+          " --field-selector spec.unschedulable!=true --no-headers | wc -l"
+      )
+      stdout = subprocess.run_exec(command)
+      current_number = int(stdout.strip())
+      return current_number == original_number - deleted_node_number
+
     # Keyword arguments are generated dynamically at runtime (pylint does not
     # know this signature).
     with TaskGroup(  # pylint: disable=unexpected-keyword-arg
@@ -135,6 +165,11 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
               operation=NodeOperationSpec.Delete(),
           )
           .expand(node_name=select_random_node)
+      )
+
+      task_id = "check_nodes_number"
+      check_nodes_number = check_nodes_number.override(task_id=task_id)(
+          pool=node_pool_info, deleted_node_number=1,
       )
 
       task_id = "wait_for_repair"
@@ -196,7 +231,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           create_node_pool,
           wait_for_provisioning,
           wait_for_running,
+          select_random_node,
           delete_node,
+          check_nodes_number,
           wait_for_repair,
           wait_for_recovered,
           delete_node_pool,
