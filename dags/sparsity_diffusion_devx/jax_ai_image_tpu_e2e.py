@@ -12,7 +12,6 @@
 # limitations under the License.
 """A DAG to run end-to-end JAX Stable Stack TPU tests."""
 
-from multiprocessing import context
 import os
 import stat
 import datetime
@@ -27,15 +26,17 @@ from dags.multipod.configs.common import SetupMode
 from xlml.utils import name_format
 from xlml.apis import metric_config
 
+
 # Run once a day at 3 am UTC (7 pm PST)
 SCHEDULED_TIME = "30 1 * * *" if composer_env.is_prod_env() else None
 BASE_OUTPUT_DIRECTORY = gcs_bucket.BASE_OUTPUT_DIR
 
 def inject_gateway_env(context):
     task = context['task']
-    kubeconfig_path = getattr(task, 'gateway_kubeconfig_path', None)
-    cluster_name = getattr(task, 'gateway_cluster_name', None)
-    cluster_project = getattr(task, 'gateway_cluster_project', None)
+    params = getattr(task, 'params', {}) or {}
+    kubeconfig_path = params.get('gateway_kubeconfig_path')
+    cluster_name = params.get('gateway_cluster_name')
+    cluster_project = params.get('gateway_cluster_project')
 
     if not kubeconfig_path:
         return
@@ -96,75 +97,77 @@ with models.DAG(
     ]
 
     for accelerator, slices in maxtext_test_configs.items():
-        with dag:
-            cores = accelerator.rsplit("-", maxsplit=1)[-1]
-            cluster = config.clusters[accelerator]
-            for slice_num in slices:
-                for mode, image in maxtext_docker_images:
+        cores = accelerator.rsplit("-", maxsplit=1)[-1]
+        cluster = config.clusters[accelerator]
+        for slice_num in slices:
+            for mode, image in maxtext_docker_images:
 
-                    maxtext_task_wrapper = config.get_gke_config(
-                        num_slices=slice_num,
-                        cluster=cluster,
-                        time_out_in_min=60,
-                        run_model_cmds=(
-                            f"JAX_PLATFORMS=tpu,cpu ENABLE_PJRT_COMPATIBILITY=true TPU_SLICE_BUILDER_DUMP_CHIP_FORCE=true TPU_SLICE_BUILDER_DUMP_ICI=true JAX_FORCE_TPU_INIT=true ENABLE_TPUNETD_CLIENT=true && "
-                            f"python -m maxtext.trainers.pre_train.train src/maxtext/configs/base.yml run_name={slice_num}slice-V{cluster.device_version}_{cores}-maxtext-jax-stable-stack-{current_datetime} "
-                            "steps=30 per_device_batch_size=1 max_target_length=4096 model_name=llama2-7b "
-                            "enable_checkpointing=false attention=dot_product remat_policy=minimal_flash use_iota_embed=true scan_layers=false "
-                            "dataset_type=synthetic async_checkpointing=false "
-                            f"base_output_directory={gcs_bucket.BASE_OUTPUT_DIR}/maxtext/jax-stable-stack/automated/{current_datetime}",
-                        ),
-                        test_name=f"maxtext-jax-stable-stack-{mode.value}",
-                        docker_image=image.value,
-                        test_owner=test_owner.ROHAN_B,
-                    )
+                maxtext_task_wrapper = config.get_gke_config(
+                    num_slices=slice_num,
+                    cluster=cluster,
+                    time_out_in_min=60,
+                    run_model_cmds=(
+                        f"JAX_PLATFORMS=tpu,cpu ENABLE_PJRT_COMPATIBILITY=true TPU_SLICE_BUILDER_DUMP_CHIP_FORCE=true TPU_SLICE_BUILDER_DUMP_ICI=true JAX_FORCE_TPU_INIT=true ENABLE_TPUNETD_CLIENT=true && "
+                        f"python -m maxtext.trainers.pre_train.train src/maxtext/configs/base.yml run_name={slice_num}slice-V{cluster.device_version}_{cores}-maxtext-jax-stable-stack-{current_datetime} "
+                        "steps=30 per_device_batch_size=1 max_target_length=4096 model_name=llama2-7b "
+                        "enable_checkpointing=false attention=dot_product remat_policy=minimal_flash use_iota_embed=true scan_layers=false "
+                        "dataset_type=synthetic async_checkpointing=false "
+                        f"base_output_directory={gcs_bucket.BASE_OUTPUT_DIR}/maxtext/jax-stable-stack/automated/{current_datetime}",
+                    ),
+                    test_name=f"maxtext-jax-stable-stack-{mode.value}",
+                    docker_image=image.value,
+                    test_owner=test_owner.ROHAN_B,
+                )
 
-                    k8s_task = maxtext_task_wrapper.run_with_quarantine(quarantine_task_group)
+                k8s_task = maxtext_task_wrapper.run_with_quarantine(quarantine_task_group)
 
-                    if accelerator == "v6e-256":
-                        gateway_kubeconfig_path = f"/tmp/kubeconfig_gw_maxtext_{accelerator}_{slice_num}_{current_datetime}.yaml"
-                        tasks_to_modify = list(k8s_task.iter_tasks()) if hasattr(k8s_task, 'iter_tasks') else [k8s_task]
-                        for t in tasks_to_modify:
-                            t.gateway_kubeconfig_path = gateway_kubeconfig_path
-                            t.gateway_cluster_name = cluster.name
-                            t.gateway_cluster_project = cluster.project
-                            t.pre_execute = inject_gateway_env
+                if accelerator == "v6e-256":
+                    gateway_kubeconfig_path = f"/tmp/kubeconfig_gw_maxtext_{accelerator}_{slice_num}_{current_datetime}.yaml"
+                    tasks_to_modify = list(k8s_task.iter_tasks()) if hasattr(k8s_task, 'iter_tasks') else [k8s_task]
+                    for t in tasks_to_modify:
+                        if not t.params:
+                                t.params = {}
+                        t.params['gateway_kubeconfig_path'] = gateway_kubeconfig_path
+                        t.params['gateway_cluster_name'] = cluster.name
+                        t.params['gateway_cluster_project'] = cluster.project
+                        t.pre_execute = inject_gateway_env
 
     for accelerator, slices in maxdiffusion_test_configs.items():
-        with dag:
-            cores = accelerator.rsplit("-", maxsplit=1)[-1]
-            cluster = config.clusters[accelerator]
-            for slice_num in slices:
-                for mode, image in maxdiffusion_docker_images:
+        cores = accelerator.rsplit("-", maxsplit=1)[-1]
+        cluster = config.clusters[accelerator]
+        for slice_num in slices:
+            for mode, image in maxdiffusion_docker_images:
 
-                    maxdiffusion_task_wrapper = config.get_gke_config(
-                        num_slices=slice_num,
-                        cluster=cluster,
-                        time_out_in_min=60,
-                        run_model_cmds=(
-                            "export JAX_COORDINATION_SERVICE_HEARTBEAT_TIMEOUT_SECONDS=1200 "
-                            "JAX_ENABLE_COMPILATION_CACHE=false "
-                            f"JAX_PLATFORMS=tpu,cpu ENABLE_PJRT_COMPATIBILITY=true TPU_SLICE_BUILDER_DUMP_CHIP_FORCE=true TPU_SLICE_BUILDER_DUMP_ICI=true JAX_FORCE_TPU_INIT=true ENABLE_TPUNETD_CLIENT=true && "
-                            f"pip install . && python src/maxdiffusion/train_sdxl.py src/maxdiffusion/configs/base_xl.yml "
-                            f"pretrained_model_name_or_path=gs://maxdiffusion-github-runner-test-assets/checkpoints/models--stabilityai--stable-diffusion-xl-base-1.0 "
-                            f"revision=refs/pr/95 activations_dtype=bfloat16 weights_dtype=bfloat16 "
-                            f"dataset_name=gs://jfacevedo-maxdiffusion-v5p/pokemon-datasets/pokemon-gpt4-captions_sdxl resolution=1024 per_device_batch_size=1 "
-                            f"jax_cache_dir=gs://jfacevedo-maxdiffusion/cache_dir/ max_train_steps=20 attention=flash enable_profiler=True "
-                            f"run_name={slice_num}slice-V{cluster.device_version}_{cores}-maxdiffusion-jax-stable-stack-{current_datetime} "
-                            f"output_dir={gcs_bucket.BASE_OUTPUT_DIR}/maxdiffusion-jax-stable-stack-{mode.value}-{accelerator}-{slice_num}/automated/{current_datetime}",
-                        ),
-                        test_name=f"maxdiffusion-jax-ai-image-{mode.value}",
-                        docker_image=image.value,
-                        test_owner=test_owner.ROHAN_B,
-                    )
+                maxdiffusion_task_wrapper = config.get_gke_config(
+                    num_slices=slice_num,
+                    cluster=cluster,
+                    time_out_in_min=60,
+                    run_model_cmds=(
+                        "export JAX_COORDINATION_SERVICE_HEARTBEAT_TIMEOUT_SECONDS=1200 "
+                        "JAX_ENABLE_COMPILATION_CACHE=false "
+                        f"JAX_PLATFORMS=tpu,cpu ENABLE_PJRT_COMPATIBILITY=true TPU_SLICE_BUILDER_DUMP_CHIP_FORCE=true TPU_SLICE_BUILDER_DUMP_ICI=true JAX_FORCE_TPU_INIT=true ENABLE_TPUNETD_CLIENT=true && "
+                        f"pip install . && python src/maxdiffusion/train_sdxl.py src/maxdiffusion/configs/base_xl.yml "
+                        f"pretrained_model_name_or_path=gs://maxdiffusion-github-runner-test-assets/checkpoints/models--stabilityai--stable-diffusion-xl-base-1.0 "
+                        f"revision=refs/pr/95 activations_dtype=bfloat16 weights_dtype=bfloat16 "
+                        f"dataset_name=gs://jfacevedo-maxdiffusion-v5p/pokemon-datasets/pokemon-gpt4-captions_sdxl resolution=1024 per_device_batch_size=1 "
+                        f"jax_cache_dir=gs://jfacevedo-maxdiffusion/cache_dir/ max_train_steps=20 attention=flash enable_profiler=True "
+                        f"run_name={slice_num}slice-V{cluster.device_version}_{cores}-maxdiffusion-jax-stable-stack-{current_datetime} "
+                        f"output_dir={gcs_bucket.BASE_OUTPUT_DIR}/maxdiffusion-jax-stable-stack-{mode.value}-{accelerator}-{slice_num}/automated/{current_datetime}",
+                    ),
+                    test_name=f"maxdiffusion-jax-ai-image-{mode.value}",
+                    docker_image=image.value,
+                    test_owner=test_owner.ROHAN_B,
+                )
 
-                    k8s_task = maxdiffusion_task_wrapper.run_with_quarantine(quarantine_task_group)
+                k8s_task = maxdiffusion_task_wrapper.run_with_quarantine(quarantine_task_group)
 
-                    if accelerator == "v6e-256":
-                        gateway_kubeconfig_path = f"/tmp/kubeconfig_gw_maxdiff_{accelerator}_{slice_num}_{current_datetime}.yaml"
-                        tasks_to_modify = list(k8s_task.iter_tasks()) if hasattr(k8s_task, 'iter_tasks') else [k8s_task]
-                        for t in tasks_to_modify:
-                            t.gateway_kubeconfig_path = gateway_kubeconfig_path
-                            t.gateway_cluster_name = cluster.name
-                            t.gateway_cluster_project = cluster.project
-                            t.pre_execute = inject_gateway_env
+                if accelerator == "v6e-256":
+                    gateway_kubeconfig_path = f"/tmp/kubeconfig_gw_maxdiff_{accelerator}_{slice_num}_{current_datetime}.yaml"
+                    tasks_to_modify = list(k8s_task.iter_tasks()) if hasattr(k8s_task, 'iter_tasks') else [k8s_task]
+                    for t in tasks_to_modify:
+                        if not t.params:
+                            t.params = {}
+                        t.params['gateway_kubeconfig_path'] = gateway_kubeconfig_path
+                        t.params['gateway_cluster_name'] = cluster.name
+                        t.params['gateway_cluster_project'] = cluster.project
+                        t.pre_execute = inject_gateway_env
