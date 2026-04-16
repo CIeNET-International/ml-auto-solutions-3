@@ -169,7 +169,8 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 
       task_id = "check_nodes_number"
       check_nodes_number = check_nodes_number.override(task_id=task_id)(
-          pool=node_pool_info, deleted_node_number=1,
+          pool=node_pool_info,
+          deleted_node_number=1,
       )
 
       task_id = "wait_for_repair"
