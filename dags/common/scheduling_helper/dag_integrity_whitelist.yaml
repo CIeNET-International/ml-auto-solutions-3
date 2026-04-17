@@ -159,6 +159,10 @@ whitelisted_dags:
 - pytorchxla-torchbench-release-gpu
 - pytorchxla-torchbench-release-tpu
 - pytorchxla-torchbench-tpu
+- pytorchxla-nightly-gpu
+- pytorchxla-nightly-tpu
+- pytorchxla-r2-8-gpu
+- pytorchxla-r2-8-tpu
 - pytorchxla2-torchbench-gpu
 - pytorchxla2-torchbench-tpu
 - solutionsteam_vllm_benchmark_gpu
@@ -189,3 +193,4 @@ whitelisted_dags:
 - validate_interruption_count_gke_migrate_on_hwsw_maintenance
 - validate_interruption_count_gke_other
 - xlml_to_buganizer
+
