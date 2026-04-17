@@ -15,20 +15,41 @@
 """TaskGroupWithTimeout: timeout enforcement for Airflow TaskGroups."""
 
 import logging
-import signal
 from datetime import timedelta
 
 from airflow.exceptions import AirflowFailException
 from airflow.utils.task_group import TaskGroup
+from airflow.utils.timeout import timeout as AirflowTimeout
+
+
+class _FailOnTimeout(AirflowTimeout):
+  """Airflow timeout that marks the task as FAILED immediately.
+
+  The default ``airflow.utils.timeout.timeout`` raises ``AirflowTaskTimeout``
+  on expiry, which Airflow may retry.  This subclass raises
+  ``AirflowFailException`` instead so the task stops permanently.
+  """
+
+  def __init__(self, seconds, group_id, group_timeout):
+    super().__init__(seconds=seconds, error_message="Timeout")
+    self._group_id = group_id
+    self._group_timeout = group_timeout
+
+  def handle_timeout(self, signum, frame):
+    raise AirflowFailException(
+        f"TaskGroup '{self._group_id}' has exceeded its timeout "
+        f"of {self._group_timeout}. Skipping retries."
+    )
 
 
 class TaskGroupWithTimeout(TaskGroup):
   """A TaskGroup that enforces a per-task timeout.
 
   Each task added to this group gets ``execution_timeout`` set to the
-  group-level timeout.  A custom SIGALRM handler is installed so that
-  timeouts raise ``AirflowFailException`` (non-retryable / FAILED)
-  instead of the default ``AirflowTaskTimeout`` (retryable / UP_FOR_RETRY).
+  group-level timeout.  A ``_FailOnTimeout`` (subclass of
+  ``airflow.utils.timeout``) is used so that timeouts raise
+  ``AirflowFailException`` (non-retryable / FAILED) instead of the
+  default ``AirflowTaskTimeout`` (retryable / UP_FOR_RETRY).
 
   Args:
     group_id: Unique identifier for this TaskGroup.
@@ -60,13 +81,6 @@ class TaskGroupWithTimeout(TaskGroup):
     group_timeout = self.timeout
     group_id = self.group_id
 
-    # Pre-set execution_timeout so Airflow creates its signal-based timeout
-    # wrapper BEFORE pre_execute runs.  Airflow checks this attribute to
-    # decide whether to wrap execute() with ``timeout(seconds)``; if it is
-    # None at that point the timeout context is never created and any value
-    # set later in pre_execute has no effect.
-    task.execution_timeout = group_timeout
-
     original_pre_execute = task.pre_execute
 
     def wrapped_pre_execute(context):
@@ -80,18 +94,7 @@ class TaskGroupWithTimeout(TaskGroup):
           remaining,
       )
 
-      # Replace Airflow's SIGALRM handler with one that raises
-      # AirflowFailException (non-retryable) instead of the default
-      # AirflowTaskTimeout (retryable).  Then re-arm the alarm to fire
-      # at the actual remaining budget.
-      def _handle_group_timeout(signum, frame):
-        raise AirflowFailException(
-            f"TaskGroup '{group_id}' has exceeded its timeout "
-            f"of {group_timeout}. Skipping retries."
-        )
-
-      signal.signal(signal.SIGALRM, _handle_group_timeout)
-      signal.alarm(remaining)
+      _FailOnTimeout(remaining, group_id, group_timeout).__enter__()
 
       original_pre_execute(context=context)
 
