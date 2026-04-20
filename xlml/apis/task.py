@@ -28,7 +28,7 @@ from airflow.decorators import task
 from airflow.operators.empty import EmptyOperator
 
 from dags.common.quarantined_tests import QuarantineTests
-from xlml.utils import gpu, metric, name_format, ssh, tpu, xpk, axlearn, gke
+from xlml.utils import gpu, metric, name_format, ssh, xpk, tpu, axlearn, gke, kpo
 from xlml.apis import gcp_config, metric_config, test_config, gcs
 
 
@@ -44,7 +44,7 @@ class BaseTask(abc.ABC):
     """
     ...
 
-  def run_with_quarantine(self, quarantine_task_group):
+  def run_with_quarantine(self, quarantine_task_group, **kwargs):
     """Run a test job. If the test job is flaky, wrap it in a special task grop.
 
     Returns:
@@ -55,7 +55,7 @@ class BaseTask(abc.ABC):
       with quarantine_task_group:
         return self.run()
     else:
-      return self.run()
+      return self.run(**kwargs)
 
 
 def run_queued_resource_test(
@@ -254,8 +254,8 @@ class AXLearnTask(BaseTask):
           label=self.label,
       )
 
-      run_workload = axlearn.start_cli_in_kpo(
-          start_axlearn_cli_command=gen_cmds,
+      run_workload = kpo.run_command_in_kpo(
+          start_cli_command=gen_cmds,
           workload_id=workload_id,
           task_owner=self.test_cfg.task_owner,
           provisioning_timeout=self.workload_provision_timeout,
@@ -339,6 +339,7 @@ class XpkTask(BaseTask):
       mtc_enabled: bool = False,
       xpk_branch: str = xpk.MAIN_BRANCH,
       max_restart: int = 0,
+      use_gateway: bool = False,
   ) -> DAGNode:
     """Run a test job within a docker image.
 
@@ -360,6 +361,7 @@ class XpkTask(BaseTask):
           mtc_enabled,
           xpk_branch,
           max_restart,
+          use_gateway=use_gateway,
       )
       if not skip_post_process:
         _ = run_model >> self.post_process(gcs_path)
@@ -711,6 +713,7 @@ class XpkTask(BaseTask):
       mtc_enabled: bool = False,
       xpk_branch: str = xpk.MAIN_BRANCH,
       max_restart: int = 0,
+      use_gateway: bool = False,
   ) -> DAGNode:
     """Run the TPU/GPU test in `task_test_config` using xpk.
 
@@ -740,6 +743,7 @@ class XpkTask(BaseTask):
           mtc_enabled,
           xpk_branch,
           max_restart,
+          use_gateway=use_gateway,
       )
       wait_for_workload_completion = xpk.wait_for_workload_completion.override(
           timeout=int(self.task_test_config.timeout.total_seconds()),
@@ -776,6 +780,7 @@ class XpkTask(BaseTask):
       mtc_enabled: bool = False,
       xpk_branch: str = xpk.MAIN_BRANCH,
       max_restart: int = 0,
+      use_gateway: bool = False,
   ) -> DAGNode:
     """Create the workload and wait for it to provision."""
     with TaskGroup(group_id="launch_workload") as group:
@@ -799,6 +804,7 @@ class XpkTask(BaseTask):
           mtc_enabled=mtc_enabled,
           xpk_branch=xpk_branch,
           max_restart=max_restart,
+          use_gateway=use_gateway,
       )
       wait_for_workload_start = xpk.wait_for_workload_start.override(
           timeout=self.workload_provision_timeout.total_seconds()
