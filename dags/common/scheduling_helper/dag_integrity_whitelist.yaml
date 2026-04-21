@@ -1,3 +1,17 @@
+# ==============================================================================
+# DAG Integrity Whitelist
+# ==============================================================================
+# PURPOSE:
+# This file tracks DAGs that are exempt from the mandatory 'scheduling_helper'
+# registration. New DAGs should be registered in 'scheduling_helper.py' instead
+# of being added to this list.
+#
+# EXCLUSION REASONS:
+# - LEGACY: Implemented before scheduling_helper, pending migration.
+# - MOCK/TEST: Used exclusively for integration tests or CI/CD pipelines.
+# - EXTERNAL: Managed by an external team; not owned by our scheduling domain.
+# ==============================================================================
+
 whitelisted_dags:
 - a3mega_recipes_gpt3-175b_nemo
 - a3mega_recipes_llama3-1-70b_nemo
@@ -20,22 +34,12 @@ whitelisted_dags:
 - a4_recipes_two_node_nemo
 - airflow_to_bq_export
 - axlearn_reg_save
-- clean_up
-- framework_microbenchmark
-- gke_example_dag
-# - gke_node_pool_label_update
-# - gke_node_pool_status
 - jax_ai_image_candidate_tpu_e2e
 - jax_ai_image_tpu_e2e
 - jax_functional_tests
 - jetstream_benchmark_serving
 - jetstream_e2e_inference
 - jetstream_pytorch_inference
-# - jobset_rollback_ttr
-# - jobset_ttr_kill_process
-# - jobset_ttr_node_pool_resize
-# - jobset_ttr_pod_delete
-# - jobset_uptime_validation
 - maxdiffusion_tpu_e2e
 - maxtext-inference-microbenchmark
 - maxtext_aqtp_version_sweep_gke_example_dag
@@ -74,7 +78,6 @@ whitelisted_dags:
 - maxtext_trillium_configs_perf
 - maxtext_v5e_configs_perf
 - maxtext_v5p_configs_perf
-# - multi_host_nodepool_rollback
 - mxla_collective_nightly
 - mxla_gpt_6b_nightly_gke
 - mxla_maxtext_nightly_gke
@@ -147,8 +150,6 @@ whitelisted_dags:
 - new_internal_stable_release_a4_llama3.1-8b_8gpus_fp8_maxtext
 - new_internal_stable_release_a4_mixtral-8x7b_16gpus_bf16_maxtext
 - new_internal_stable_release_a4_mixtral-8x7b_8gpus_bf16_maxtext
-# - node_pool_ttr_disk_size
-# - node_pool_ttr_update_label
 - on_failure_actions_trigger
 - pathways_maxtext_v5e_configs_perf
 - project_bite_gpu_e2e
@@ -172,25 +173,8 @@ whitelisted_dags:
 - tf_2_18_supported
 - tf_dlrm_2_18
 - tf_nightly_supported
-# - tpu_info_format_validation_dag
-# - tpu_info_metrics_verification
-# - tpu_sdk_monitoring_validation
 - trt_llm_mlperf_v40
 - trt_llm_mlperf_v41
 - trtllm_bench_inference
-- validate_interruption_count_gce_bare_metal_preemption
-- validate_interruption_count_gce_defragmentation
-- validate_interruption_count_gce_eviction
-- validate_interruption_count_gce_host_error
-- validate_interruption_count_gce_hwsw_maintenance
-- validate_interruption_count_gce_migrate_on_hwsw_maintenance
-- validate_interruption_count_gce_other
-- validate_interruption_count_gke_bare_metal_preemption
-- validate_interruption_count_gke_defragmentation
-- validate_interruption_count_gke_eviction
-- validate_interruption_count_gke_host_error
-- validate_interruption_count_gke_hwsw_maintenance
-- validate_interruption_count_gke_migrate_on_hwsw_maintenance
-- validate_interruption_count_gke_other
 - xlml_to_buganizer
 
