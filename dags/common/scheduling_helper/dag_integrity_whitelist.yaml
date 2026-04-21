@@ -34,6 +34,9 @@ whitelisted_dags:
 - a4_recipes_two_node_nemo
 - airflow_to_bq_export
 - axlearn_reg_save
+- clean_up
+- framework_microbenchmark
+- gke_example_dag
 - jax_ai_image_candidate_tpu_e2e
 - jax_ai_image_tpu_e2e
 - jax_functional_tests
