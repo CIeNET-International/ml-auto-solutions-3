@@ -41,19 +41,19 @@ DagIdToTimeout: TypeAlias = dict[str, dt.timedelta]
 
 REGISTERED_DAGS: dict[str, DagIdToTimeout] = {
     TPU_OBS_MOCK_CLUSTER.name: {
-        "gke_node_pool_label_update": dt.timedelta(minutes=30),
-        "gke_node_pool_status": dt.timedelta(minutes=30),
-        "jobset_rollback_ttr": dt.timedelta(minutes=90),
-        "jobset_ttr_node_pool_resize": dt.timedelta(minutes=90),
-        "jobset_ttr_pod_delete": dt.timedelta(minutes=90),
-        "multi_host_nodepool_rollback": dt.timedelta(minutes=30),
-        "node_pool_ttr_disk_size": dt.timedelta(minutes=90),
-        "node_pool_ttr_update_label": dt.timedelta(minutes=90),
-        "tpu_info_format_validation_dag": dt.timedelta(minutes=30),
-        "tpu_sdk_monitoring_validation": dt.timedelta(minutes=30),
-        "jobset_ttr_kill_process": dt.timedelta(minutes=90),
-        "jobset_uptime_validation": dt.timedelta(minutes=90),
-        "tpu_info_metrics_verification": dt.timedelta(minutes=30),
+        "gke_node_pool_label_update": 30,
+        "gke_node_pool_status": 30,
+        "jobset_rollback_ttr": 90,
+        "jobset_ttr_node_pool_resize": 90,
+        "jobset_ttr_pod_delete": 90,
+        "multi_host_nodepool_rollback": 30,
+        "node_pool_ttr_disk_size": 90,
+        "node_pool_ttr_update_label": 90,
+        "tpu_info_format_validation_dag": 30,
+        "tpu_sdk_monitoring_validation": 30,
+        "jobset_ttr_kill_process": 90,
+        "jobset_uptime_validation": 90,
+        "tpu_info_metrics_verification": 30,
     },
 }
 
@@ -107,9 +107,7 @@ class SchedulingHelper:
 
       offset = dt.timedelta(0)
       for current_dag_id, timeout in dags.items():
-        if offset >= dt.timedelta(hours=24) or timeout >= dt.timedelta(
-            hours=24
-        ):
+        if offset >= dt.timedelta(hours=24) or timeout >= 1440:
           raise ScheduleWindowError(
               f"Schedule exceeds 24h window at '{dag_id} '"
               f"in cluster '{cluster_name}'."
@@ -118,7 +116,7 @@ class SchedulingHelper:
         if current_dag_id == dag_id:
           schedule = anchor + offset
           return f"{schedule.minute} {schedule.hour} * * {day_of_week.value}"
-        offset += timeout + cls.DEFAULT_MARGIN
+        offset += dt.timedelta(minutes=timeout) + cls.DEFAULT_MARGIN
 
     raise UnregisteredDagError(
         f"DAG '{dag_id}' is not registered. Please add it to REGISTERED_DAGS."
