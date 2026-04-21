@@ -33,6 +33,7 @@ from airflow.utils.trigger_rule import TriggerRule
 
 from dags import composer_env
 from dags.common import test_owner
+from dags.common.vm_resource import DockerImage
 from dags.tpu_observability.configs.common import (
     MachineConfigMap,
     TpuConfig,
@@ -291,6 +292,12 @@ def validate_latency_table(tpu_info_output: list[tpu_info.Table]):
         f" output:\n{content.raw_body}"
     )
 
+@task
+def generate_second_node_pool_name(
+    node_pool_info: node_pool.Info,
+) -> str:
+  """Generates a second node pool name."""
+  return f"{node_pool_info.node_pool_name}-2"
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
 # know this signature).
@@ -339,66 +346,66 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       resources, including the JobSet and the temporary node pools.
       """,
 ) as dag:
+  docker_images = {
+      "stable": DockerImage.TPU_OBS_LIBTPU_STABLE.value,
+      "nightly": DockerImage.TPU_OBS_LIBTPU_NIGHTLY.value,
+  }
+
   for machine in MachineConfigMap:
     config = machine.value
-
-    @task
-    def generate_second_node_pool_name(
-        node_pool_info: node_pool.Info,
-    ) -> str:
-      """Generates a second node pool name."""
-      return f"{node_pool_info.node_pool_name}-2"
-
     selector = jobset.generate_node_pool_selector(
-        "tpu-info-format-validation-dag"
+            DAG_ID
+        )
+
+    cluster_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
+            task_id="build_node_pool_info_from_gcs_yaml"
+        )(
+            gcs_path=GCS_CONFIG_PATH,
+            dag_name=DAG_ID,
+            is_prod=composer_env.is_prod_env(),
+            machine_type=config.machine_version.value,
+            tpu_topology=config.tpu_topology,
+            node_pool_selector=selector,
+        )
+
+    cluster_info_2 = node_pool.copy_node_pool_info_with_override.override(
+        task_id="copy_node_pool_info_with_override"
+    )(
+        info=cluster_info,
+        node_pool_name=generate_second_node_pool_name(cluster_info),
     )
 
     # Keyword arguments are generated dynamically at runtime (pylint does not
     # know this signature).
     with TaskGroup(  # pylint: disable=unexpected-keyword-arg
-        group_id=f"v{config.tpu_version.value}"
-    ):
-      jobset_config = jobset.build_jobset_from_gcs_yaml(
-          gcs_path=GCS_JOBSET_CONFIG_PATH,
-          dag_name=DAG_ID,
-          node_pool_selector=selector,
-      )
-
-      cluster_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
-          task_id="build_node_pool_info_from_gcs_yaml"
+        group_id="create_node_pool"
+    ) as create_node_pool:
+      create_first_node_pool = node_pool.create.override(
+          task_id="node_pool_1",
       )(
-          gcs_path=GCS_CONFIG_PATH,
-          dag_name=DAG_ID,
-          is_prod=composer_env.is_prod_env(),
-          machine_type=config.machine_version.value,
-          tpu_topology=config.tpu_topology,
-          node_pool_selector=selector,
+          node_pool=cluster_info,
       )
 
-      cluster_info_2 = node_pool.copy_node_pool_info_with_override.override(
-          task_id="copy_node_pool_info_with_override"
+      create_second_node_pool = node_pool.create.override(
+          task_id="node_pool_2",
       )(
-          info=cluster_info,
-          node_pool_name=generate_second_node_pool_name(cluster_info),
+          node_pool=cluster_info_2,
       )
 
+    image_task_groups = []
+    for type_name, image_url in docker_images.items():
       # Keyword arguments are generated dynamically at runtime (pylint does not
       # know this signature).
       with TaskGroup(  # pylint: disable=unexpected-keyword-arg
-          group_id="create_node_pool"
-      ) as create_node_pool:
-        create_first_node_pool = node_pool.create.override(
-            task_id="node_pool_1",
-            retries=2,
-        )(
-            node_pool=cluster_info,
-        )
+          group_id=f"v{config.tpu_version.value}_{type_name}"
+      ) as image_tg:
+        image_task_groups.append(image_tg)
 
-        create_second_node_pool = node_pool.create.override(
-            task_id="node_pool_2",
-            retries=2,
-        )(
-            node_pool=cluster_info_2,
+        jobset_config = jobset.build_jobset_from_gcs_yaml(
+            gcs_path=GCS_JOBSET_CONFIG_PATH,
+            dag_name=DAG_ID,
+            node_pool_selector=selector,
+            image=image_url,
         )
 
       startup = jobset.create_jobset_startup_group(
@@ -413,50 +420,50 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           .expand(pod_name=startup.running_pods)
       )
 
-      output_of_tpu_info = (
-          tpu_info.parse_tpu_info_output.override(
-              task_id="get_each_metric_table"
-          )
-          .partial()
-          .expand(output=outputs_of_tpu_info)
-      )
-
-      # Keyword arguments are generated dynamically at runtime (pylint does not
-      # know this signature).
-      with TaskGroup(  # pylint: disable=unexpected-keyword-arg
-          group_id="verification_group"
-      ) as verification_group:
-        verify_table_amount_task = (
-            verify_table_amount.override(task_id="verify_table_amount_task")
-            .partial()
-            .expand(tpu_info_output=output_of_tpu_info)
-        )
-
-        validate_tpu_chips_metric = (
-            validate_chips_table.override(task_id="validate_tpu_chips_metric")
-            .partial(tpu_config=config)
-            .expand(tpu_info_output=output_of_tpu_info)
-        )
-
-        validate_runtime_metric = (
-            validate_runtime_table.override(task_id="validate_runtime_metric")
-            .partial()
-            .expand(tpu_info_output=output_of_tpu_info)
-        )
-
-        validate_tensorcore_metric = (
-            validate_tensorcore_table.override(
-                task_id="validate_tensorcore_metric"
+        output_of_tpu_info = (
+            tpu_info.parse_tpu_info_output.override(
+                task_id="get_each_metric_table"
             )
             .partial()
-            .expand(tpu_info_output=output_of_tpu_info)
+            .expand(output=outputs_of_tpu_info)
         )
 
-        validate_latency_metric = (
-            validate_latency_table.override(task_id="validate_latency_metric")
-            .partial()
-            .expand(tpu_info_output=output_of_tpu_info)
-        )
+        # Keyword arguments are generated dynamically at runtime (pylint does not
+        # know this signature).
+        with TaskGroup(  # pylint: disable=unexpected-keyword-arg
+            group_id="verification_group"
+        ) as verification_group:
+          verify_table_amount_task = (
+              verify_table_amount.override(task_id="verify_table_amount_task")
+              .partial()
+              .expand(tpu_info_output=output_of_tpu_info)
+          )
+
+          validate_tpu_chips_metric = (
+              validate_chips_table.override(task_id="validate_tpu_chips_metric")
+              .partial(tpu_config=config)
+              .expand(tpu_info_output=output_of_tpu_info)
+          )
+
+          validate_runtime_metric = (
+              validate_runtime_table.override(task_id="validate_runtime_metric")
+              .partial()
+              .expand(tpu_info_output=output_of_tpu_info)
+          )
+
+          validate_tensorcore_metric = (
+              validate_tensorcore_table.override(
+                  task_id="validate_tensorcore_metric"
+              )
+              .partial()
+              .expand(tpu_info_output=output_of_tpu_info)
+          )
+
+          validate_latency_metric = (
+              validate_latency_table.override(task_id="validate_latency_metric")
+              .partial()
+              .expand(tpu_info_output=output_of_tpu_info)
+          )
 
       clean_up_workload = jobset.end_workload.override(
           task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
@@ -467,40 +474,40 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           setups=startup.jobset_start_time
       )
 
-      # Keyword arguments are generated dynamically at runtime (pylint does not
-      # know this signature).
-      with TaskGroup(  # pylint: disable=unexpected-keyword-arg
-          group_id="cleanup_node_pool"
-      ) as cleanup_node_pool:
-        cleanup_first_node_pool = node_pool.delete.override(
-            task_id="cleanup_node_pool_1",
-            trigger_rule=TriggerRule.ALL_DONE,
-            retries=2,
-        )(node_pool=cluster_info).as_teardown(
-            setups=create_node_pool,
+        # Keyword arguments are generated dynamically at runtime (pylint does not
+        # know this signature).
+        with TaskGroup(  # pylint: disable=unexpected-keyword-arg
+            group_id="cleanup_node_pool"
+        ) as cleanup_node_pool:
+          cleanup_first_node_pool = node_pool.delete.override(
+              task_id="cleanup_node_pool_1",
+              trigger_rule=TriggerRule.ALL_DONE,
+              retries=2,
+          )(node_pool=cluster_info).as_teardown(
+              setups=create_node_pool,
+          )
+
+          cleanup_second_node_pool = node_pool.delete.override(
+              task_id="cleanup_node_pool_2",
+              trigger_rule=TriggerRule.ALL_DONE,
+              retries=2,
+          )(node_pool=cluster_info_2).as_teardown(
+              setups=create_node_pool,
+          )
+
+        chain(
+            verify_table_amount_task,
+            [
+                validate_tpu_chips_metric,
+                validate_runtime_metric,
+                validate_tensorcore_metric,
+                validate_latency_metric,
+            ],
         )
 
-        cleanup_second_node_pool = node_pool.delete.override(
-            task_id="cleanup_node_pool_2",
-            trigger_rule=TriggerRule.ALL_DONE,
-            retries=2,
-        )(node_pool=cluster_info_2).as_teardown(
-            setups=create_node_pool,
-        )
+        _ = [create_first_node_pool, create_second_node_pool]
 
-      chain(
-          verify_table_amount_task,
-          [
-              validate_tpu_chips_metric,
-              validate_runtime_metric,
-              validate_tensorcore_metric,
-              validate_latency_metric,
-          ],
-      )
-
-      chain(create_first_node_pool, create_second_node_pool)
-
-      chain(cleanup_first_node_pool, cleanup_second_node_pool)
+        chain(cleanup_first_node_pool, cleanup_second_node_pool)
 
       chain(
           selector,
