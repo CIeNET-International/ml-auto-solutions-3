@@ -540,8 +540,8 @@ ALL_METRIC_STRATEGIES = [
     # Current Monitoring API aggregation differs from tpu-info, making it
     # unsuitable as a Source of Truth. Investigation for a valid verification
     # method is ongoing.
-    # BufferTransferLatencyStrategy(),
-    # HostToDeviceTransferLatenciesStrategy(),
-    # DeviceToHostTransferLatenciesStrategy(),
-    # CollectiveEndToEndLatencyLatenciesStrategy(),
+    BufferTransferLatencyStrategy(),
+    HostToDeviceTransferLatenciesStrategy(),
+    DeviceToHostTransferLatenciesStrategy(),
+    CollectiveEndToEndLatencyLatenciesStrategy(),
 ]
