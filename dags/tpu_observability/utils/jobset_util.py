@@ -566,9 +566,7 @@ def build_jobset_from_gcs_yaml(
 
 @task
 def run_workload(
-    node_pool: node_pool_info,
-    jobset_config: JobSet,
-    workload_type: Workload,
+    node_pool: node_pool_info, jobset_config: JobSet, workload_type: Workload
 ) -> TimeUtil:
   """
   Applies the specified YAML file to the GKE cluster.
