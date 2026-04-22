@@ -18,29 +18,9 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from airflow.exceptions import AirflowFailException
-from airflow.models import TaskInstance
-from airflow.utils.session import create_session
+from airflow.models import Variable
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.timeout import timeout as AirflowTimeout
-
-
-class _FailOnTimeout(AirflowTimeout):
-  """Airflow timeout that marks the task as FAILED immediately.
-
-  The default ``airflow.utils.timeout.timeout`` raises ``AirflowTaskTimeout``
-  on expiry, which Airflow may retry.  This subclass raises
-  ``AirflowFailException`` instead so the task stops permanently.
-  """
-
-  def __init__(self, seconds, group_id):
-    super().__init__(seconds=seconds, error_message="Timeout")
-    self._group_id = group_id
-
-  def handle_timeout(self, signum, frame):
-    raise AirflowFailException(
-        f"TaskGroup '{self._group_id}' has exceeded its timeout "
-        f"of {self.seconds}s. Skipping retries."
-    )
 
 
 class TaskGroupWithTimeout(TaskGroup):
@@ -48,10 +28,7 @@ class TaskGroupWithTimeout(TaskGroup):
 
   Each task in the group shares a single deadline: the first task to run
   sets the deadline to ``now + timeout``, and each subsequent task receives
-  only the time remaining until that deadline.  A ``_FailOnTimeout`` (subclass
-  of ``airflow.utils.timeout``) is used so that timeouts raise
-  ``AirflowFailException`` (non-retryable / FAILED) instead of the
-  default ``AirflowTaskTimeout`` (retryable / UP_FOR_RETRY).
+  only the time remaining until that deadline.
 
   Args:
     group_id: Unique identifier for this TaskGroup.
@@ -83,33 +60,16 @@ class TaskGroupWithTimeout(TaskGroup):
     original_execute = type(task).execute
 
     def wrapped_execute(context):
-      # Each TaskGroupWithTimeout has an independent deadline starting from
-      # when the group's first task began executing.  Query the DB for the
-      # earliest start_date among all task instances in this group so that
-      # every task independently derives the same shared deadline.
       dag = context["dag"]
       run_id = context["run_id"]
-      group_prefix = group_id + "."
-      group_task_ids = [t for t in dag.task_ids if t.startswith(group_prefix)]
+      var_key = f"{dag.dag_id}.{run_id}.{group_id}"
 
-      with create_session() as session:
-        earliest_ti = (
-            session.query(TaskInstance)
-            .filter(
-                TaskInstance.dag_id == dag.dag_id,
-                TaskInstance.run_id == run_id,
-                TaskInstance.task_id.in_(group_task_ids),
-                TaskInstance.start_date.isnot(None),
-            )
-            .order_by(TaskInstance.start_date)
-            .first()
-        )
-
-      group_start = (
-          earliest_ti.start_date
-          if earliest_ti is not None
-          else datetime.now(timezone.utc)
-      )
+      group_start_str = Variable.get(var_key, default_var=None)
+      if group_start_str is None:
+        group_start = datetime.now(timezone.utc)
+        Variable.set(var_key, group_start.isoformat())
+      else:
+        group_start = datetime.fromisoformat(group_start_str)
       deadline = group_start + timeout
 
       remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
@@ -127,7 +87,7 @@ class TaskGroupWithTimeout(TaskGroup):
         )
 
       current_task = context["task_instance"].task
-      with _FailOnTimeout(int(remaining), group_id):
+      with AirflowTimeout(seconds=int(remaining)):
         return original_execute(current_task, context)
 
     task.execute = wrapped_execute
