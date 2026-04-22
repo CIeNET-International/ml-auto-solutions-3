@@ -17,6 +17,7 @@ This script uses a factory pattern to dynamically generate an Airflow DAG for
 each metric verification strategy.
 """
 
+from __unknown__ import all_verification_tasks
 import copy
 import datetime
 import logging
@@ -35,7 +36,8 @@ from dags.common.task_group_with_timeout import TaskGroupWithTimeout
 from dags.common.scheduling_helper.scheduling_helper import (
     SchedulingHelper,
     get_dag_timeout,
-)
+)from dags.common.vm_resource import DockerImage
+
 from dags.tpu_observability.configs.common import (
     GCS_CONFIG_PATH,
     GCS_JOBSET_CONFIG_PATH,
@@ -64,7 +66,7 @@ SCHEDULE = SchedulingHelper.arrange_schedule_time(DAG_ID)
 
 PRE_TEST_TIMEOUT = datetime.timedelta(minutes=10)
 POST_TEST_TIMEOUT = datetime.timedelta(minutes=10)
-TEST_TIMEOUT = DAGRUN_TIMEOUT - PRE_TEST_TIMEOUT - POST_TEST_TIMEOUT
+TEST_TIMEOUT = (DAGRUN_TIMEOUT - PRE_TEST_TIMEOUT - POST_TEST_TIMEOUT)/2
 
 
 def compare_metric_values(
@@ -311,6 +313,11 @@ with models.DAG(
       pools.
     """,
 ) as dag:
+  docker_images = {
+      "stable": DockerImage.TPU_OBS_LIBTPU_STABLE.value,
+      "nightly": DockerImage.TPU_OBS_LIBTPU_NIGHTLY.value,
+  }
+
   for machine in MachineConfigMap:
     config = machine.value
 
@@ -349,46 +356,48 @@ with models.DAG(
             task_id="node_pool_2",
         )(
             node_pool=cluster_info_2,
-            node_pool_selector=selector,
-        ).as_setup()
-
-        startup = jobset.create_jobset_startup_tasks(
-            node_pool=cluster_info,
-            jobset_config=jobset_config,
-            jobset_name=jobset_name,
-            node_pool_selector=selector,
-            workload_type=Workload.JAX_TPU_BENCHMARK,
         )
-        chain([create_first_node_pool, create_second_node_pool], *startup.tasks)
 
-      with TaskGroupWithTimeout(
-          group_id="test",
-          timeout=TEST_TIMEOUT,
-      ) as test:
-        verification_results = {}
-        all_verification_tasks = []
+        _ = [create_first_node_pool, create_second_node_pool]
 
-        for strategy in ALL_METRIC_STRATEGIES:
-          verify_metric = verify_metric_for_all_pods.override(
-              task_id=f"verify_{strategy.dag_id_suffix}"
-          )(
+      image_task_groups = []
+      for type_name, image_url in docker_images.items():
+        with TaskGroupWithTimeout(
+            group_id=f"test_v{config.tpu_version.value}_{type_name}",
+            timeout=TEST_TIMEOUT,
+        ) as image_tg:
+          startup = jobset.create_jobset_startup_tasks(
               node_pool=cluster_info,
               jobset_config=jobset_config,
-              job_apply_time=startup.jobset_start_time,
-              metric_strategy=strategy,
-              pod_names=startup.running_pods,
+              jobset_name=jobset_name,
+              node_pool_selector=selector,
+              workload_type=Workload.JAX_TPU_BENCHMARK,
           )
 
-          all_verification_tasks.append(verify_metric)
-          verification_results[strategy.dag_id_suffix] = verify_metric
+          verification_results = {}
+          all_verification_tasks = []
 
-        summary = summarize_results.override(
-            task_id="summarize_results", trigger_rule=TriggerRule.ALL_DONE
-        )(
-            verification_results_dict=verification_results,
-            active_pods=startup.running_pods,
-        )
-        chain(all_verification_tasks, summary)
+          for strategy in ALL_METRIC_STRATEGIES:
+            verify_metric = verify_metric_for_all_pods.override(
+                task_id=f"verify_{strategy.dag_id_suffix}"
+            )(
+                node_pool=cluster_info,
+                jobset_config=jobset_config,
+                job_apply_time=startup.jobset_start_time,
+                metric_strategy=strategy,
+                pod_names=startup.running_pods,
+            )
+
+            all_verification_tasks.append(verify_metric)
+            verification_results[strategy.dag_id_suffix] = verify_metric
+
+          summary = summarize_results.override(
+              task_id="summarize_results", trigger_rule=TriggerRule.ALL_DONE
+          )(
+              verification_results_dict=verification_results,
+              active_pods=startup.running_pods,
+          )
+          chain(all_verification_tasks, summary)
 
       with TaskGroupWithTimeout(
           group_id="post_test",
@@ -417,4 +426,9 @@ with models.DAG(
             clean_up_workload, cleanup_first_node_pool, cleanup_second_node_pool
         )
 
-      chain(pre_test, test, post_test)
+      current_node = pre_test
+      for tg in image_task_groups:
+        chain(current_node, tg)
+        current_node = tg
+      chain(pre_test, current_node, post_test)
+
