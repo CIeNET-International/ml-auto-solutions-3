@@ -407,6 +407,7 @@ def wait_for_workload_reach_step(
     project_id: str,
     region: str,
     cluster_name: str,
+    log_pattern: str,
     workload_id: str,
     expect_reach_to_step: str,
 ) -> bool:
@@ -439,9 +440,13 @@ def wait_for_workload_reach_step(
         name=pod.metadata.name, namespace=pod.metadata.namespace
     )
     # Check if the workload completed step reached over the expected step
-    completed_step_matches = re.findall(r"completed step: (\d+)", logs)
+    completed_step_matches = re.findall(log_pattern, logs)
     if completed_step_matches:
-      current_step = int(completed_step_matches[-1])
+      last_match = completed_step_matches[-1]
+      if isinstance(last_match, tuple):
+          current_step = int(last_match[1])
+      else:
+          current_step = int(last_match)
       if current_step >= int(expect_reach_to_step):
         logging.info(
             "Reached to the expected step %s. Current step is %s.",
@@ -474,12 +479,12 @@ def _find_target_pod_node(
   core_api = _get_core_api_client(project_id, region, cluster_name)
   pods = _list_workload_pods(core_api, workload_id)
   pod_node_pairs = []
-  pattern = re.compile(r".*slice-job-(\d+)-(\d+)-\w+")
+  pattern = re.compile(r'job-(\d+)-(\d+)-')
 
   pod_node_pairs = [
       (pod.metadata.name, pod.spec.node_name)
       for pod in pods.items
-      if pod.status.phase == "Running" and pattern.match(pod.metadata.name)
+      if pod.status.phase == "Running" and pattern.search(pod.metadata.name)
   ]
   if not pod_node_pairs:
     raise AirflowFailException(
