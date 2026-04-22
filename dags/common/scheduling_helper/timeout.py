@@ -18,7 +18,6 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from airflow.exceptions import AirflowFailException
-from airflow.models import Variable
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.timeout import timeout as AirflowTimeout
 
@@ -61,15 +60,24 @@ class TaskGroupWithTimeout(TaskGroup):
 
     def wrapped_execute(context):
       dag = context["dag"]
-      run_id = context["run_id"]
-      var_key = f"{dag.dag_id}.{run_id}.{group_id}"
+      ti = context["task_instance"]
+      xcom_key = f"{group_id}.start"
+      group_task_ids = [t for t in dag.task_ids if t.startswith(group_id + ".")]
 
-      group_start_str = Variable.get(var_key, default_var=None)
-      if group_start_str is None:
+      raw = ti.xcom_pull(task_ids=group_task_ids, key=xcom_key)
+      results = list(raw) if raw is not None else []
+      start_str = next(
+          (v for v in results if isinstance(v, (str, datetime))), None
+      )
+      if start_str is None:
         group_start = datetime.now(timezone.utc)
-        Variable.set(var_key, group_start.isoformat())
+        ti.xcom_push(key=xcom_key, value=group_start.isoformat())
       else:
-        group_start = datetime.fromisoformat(group_start_str)
+        group_start = (
+            start_str
+            if isinstance(start_str, datetime)
+            else datetime.fromisoformat(start_str)
+        )
       deadline = group_start + timeout
 
       remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
