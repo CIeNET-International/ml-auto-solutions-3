@@ -32,6 +32,7 @@ from dags.tpu_observability.configs.common import (
     GCS_JOBSET_CONFIG_PATH,
     MachineConfigMap,
 )
+from dags.common.vm_resource import DockerImage
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils.jobset_util import Workload
@@ -106,6 +107,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       jobset_config = jobset.build_jobset_from_gcs_yaml(
           gcs_path=GCS_JOBSET_CONFIG_PATH,
           dag_name=DAG_ID,
+          image=DockerImage.TPU_OBS_LIBTPU_STABLE.value,
       )
 
       selector = jobset.generate_node_pool_selector(DAG_ID)
