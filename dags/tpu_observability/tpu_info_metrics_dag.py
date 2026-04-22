@@ -31,6 +31,7 @@ from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
 from dags import composer_env
+from dags.common.vm_resource import DockerImage
 
 from dags.tpu_observability.configs.common import (
     MachineConfigMap,
@@ -275,6 +276,11 @@ with models.DAG(
       pools.
     """,
 ) as dag:
+  docker_images = {
+      "stable": DockerImage.TPU_OBS_LIBTPU_STABLE.value,
+      "nightly": DockerImage.TPU_OBS_LIBTPU_NIGHTLY.value,
+  }
+
   for machine in MachineConfigMap:
     config = machine.value
 
@@ -316,72 +322,81 @@ with models.DAG(
 
         _ = [create_first_node_pool, create_second_node_pool]
 
-      startup = jobset.create_jobset_startup_tasks(
-          node_pool=cluster_info,
-          jobset_config=jobset_config,
-          workload_type=Workload.JAX_TPU_BENCHMARK,
-      )
+      image_task_groups = []
+      for type_name, image_url in docker_images.items():
+        with TaskGroup(  # pylint: disable=unexpected-keyword-arg
+            group_id=f"v{config.tpu_version.value}_{type_name}"
+        ) as image_tg:
 
-      verification_results = {}
-      all_verification_groups = []
-
-      for strategy in ALL_METRIC_STRATEGIES:
-        group_id = f"verify_{strategy.dag_id_suffix}"
-
-        with TaskGroup(group_id=group_id) as verification_group:
-          tpu_info_metric_outputs = (
-              get_tpu_info_metric_from_pod.override(
-                  task_id="get_tpu_info_metric_table"
-              )
-              .partial(
-                  node_pool=cluster_info,
-                  jobset_config=jobset_config,
-                  metric_name=strategy.tpu_info_metric_name,
-              )
-              .expand(pod_name=startup.running_pods)
+          startup = jobset.create_jobset_startup_tasks(
+              node_pool=cluster_info,
+              jobset_config=jobset_config,
+              workload_type=Workload.JAX_TPU_BENCHMARK,
           )
 
-          tpu_info_metric_output = (
-              tpu_info.parse_tpu_info_output.override(
-                  task_id="get_each_metric_table"
-              )
-              .partial()
-              .expand(output=tpu_info_metric_outputs)
-          )
+          verification_results = {}
+          all_verification_groups = []
 
-          verify_metric = (
-              run_metric_verification.override(task_id="run_verification")
-              .partial(
-                  node_pool=cluster_info,
-                  job_apply_time=startup.jobset_start_time,
-                  metric_strategy=strategy,
-              )
-              .expand(
-                  comparison_data=startup.running_pods.zip(
-                      tpu_info_metric_output
+          for strategy in ALL_METRIC_STRATEGIES:
+            group_id = f"verify_{strategy.dag_id_suffix}"
+
+            with TaskGroup(group_id=group_id) as verification_group:
+              tpu_info_metric_outputs = (
+                  get_tpu_info_metric_from_pod.override(
+                      task_id="get_tpu_info_metric_table"
                   )
+                  .partial(
+                      node_pool=cluster_info,
+                      jobset_config=jobset_config,
+                      metric_name=strategy.tpu_info_metric_name,
+                  )
+                  .expand(pod_name=startup.running_pods)
               )
+
+              tpu_info_metric_output = (
+                  tpu_info.parse_tpu_info_output.override(
+                      task_id="get_each_metric_table"
+                  )
+                  .partial()
+                  .expand(output=tpu_info_metric_outputs)
+              )
+
+              verify_metric = (
+                  run_metric_verification.override(task_id="run_verification")
+                  .partial(
+                      node_pool=cluster_info,
+                      job_apply_time=startup.jobset_start_time,
+                      metric_strategy=strategy,
+                  )
+                  .expand(comparison_data=startup.running_pods.zip(tpu_info_metric_output))
+              )
+
+            all_verification_groups.append(verification_group)
+            verification_results[strategy.dag_id_suffix] = verify_metric
+
+          summary = summarize_results.override(
+              task_id="summarize_results", trigger_rule=TriggerRule.ALL_DONE
+          )(
+              verification_results_dict=verification_results,
+              active_pods=startup.running_pods,
           )
 
-        all_verification_groups.append(verification_group)
+          clean_up_workload = jobset.end_workload.override(
+              task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
+          )(
+              node_pool=cluster_info,
+              jobset_config=jobset_config,
+          ).as_teardown(
+              setups=startup.jobset_start_time
+          )
 
-        verification_results[strategy.dag_id_suffix] = verify_metric
-
-      summary = summarize_results.override(
-          task_id="summarize_results", trigger_rule=TriggerRule.ALL_DONE
-      )(
-          verification_results_dict=verification_results,
-          active_pods=startup.running_pods,
-      )
-
-      clean_up_workload = jobset.end_workload.override(
-          task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
-      )(
-          node_pool=cluster_info,
-          jobset_config=jobset_config,
-      ).as_teardown(
-          setups=startup.jobset_start_time
-      )
+          chain(
+              *startup.tasks,
+              all_verification_groups,
+              summary,
+              clean_up_workload,
+          )
+          image_task_groups.append(image_tg)
 
       with TaskGroup(group_id="cleanup_node_pool") as cleanup_node_pool:
         cleanup_first_node_pool = node_pool.delete.override(
@@ -400,12 +415,11 @@ with models.DAG(
 
         chain(cleanup_first_node_pool, cleanup_second_node_pool)
 
-      chain(
-          selector,
-          create_node_pool,
-          *startup.tasks,
-          all_verification_groups,
-          summary,
-          clean_up_workload,
-          cleanup_node_pool,
-      )
+      chain(selector, cluster_info, cluster_info_2, create_node_pool)
+
+      current_node = create_node_pool
+      for tg in image_task_groups:
+        chain(current_node, tg)
+        current_node = tg
+
+      chain(current_node, cleanup_node_pool)
