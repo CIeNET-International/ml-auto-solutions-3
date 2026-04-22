@@ -100,13 +100,13 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       node draining.
 
       Args:
-          pool: An instance of the Info class that encapsulates the
-            configuration and metadata of a GKE node pool.
-          drained_node_number: The number of nodes expected to be drained.
+        pool: An instance of the Info class that encapsulates the
+        configuration and metadata of a GKE node pool.
+        drained_node_number: The number of nodes expected to be drained.
 
       Returns:
-          A boolean indicating whether the current node number matches the
-            expected number after draining.
+        A boolean indicating whether the current node number matches the
+          expected number after draining.
 
       """
       original_number = pool.num_nodes
