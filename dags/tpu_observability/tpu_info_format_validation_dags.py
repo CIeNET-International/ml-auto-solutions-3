@@ -149,6 +149,11 @@ def verify_table_amount(tpu_info_output: list[tpu_info.Table]):
       "TPU Runtime Utilization",
       "TensorCore Utilization",
       "TPU Buffer Transfer Latency",
+      "TPU Inbound Buffer Transfer Latency",
+      # This metric is not available in currently tpu-info version
+      # "Host Compute Latency Status",
+      "TPU gRPC TCP Minimum RTT",
+      "TPU gRPC TCP Delivery Rate",
   }
 
   found_names = {table.name for table in tpu_info_output}
@@ -460,6 +465,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           jobset_config = jobset.build_jobset_from_gcs_yaml(
               gcs_path=GCS_JOBSET_CONFIG_PATH,
               dag_name=DAG_ID,
+              node_pool_selector=selector,
               image=image_url,
           )
 
@@ -481,7 +487,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
               pod_names=startup.running_pods,
           )
 
-          chain(jobset_config, *startup.tasks, validate_format, jobset_name)
+          chain(jobset_name, *startup.tasks, validate_format)
 
         with TaskGroupWithTimeout(
             group_id="post_test",
@@ -496,6 +502,11 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
               jobset_name=jobset_name,
           )
 
+        # Keyword arguments are generated dynamically at runtime (pylint does not
+        # know this signature).
+        with TaskGroup(  # pylint: disable=unexpected-keyword-arg
+            group_id="cleanup_node_pool"
+        ) as cleanup_node_pool:
           cleanup_first_node_pool = node_pool.delete.override(
               task_id="cleanup_node_pool_1",
               trigger_rule=TriggerRule.ALL_DONE,
