@@ -23,8 +23,6 @@ from airflow.operators.python import PythonOperator
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.timeout import timeout as AirflowTimeout
 
-_START_TASK_ID = "_timeout_start"
-
 
 class TaskGroupWithTimeout(TaskGroup):
   """A TaskGroup that enforces a per-task timeout.
@@ -50,30 +48,60 @@ class TaskGroupWithTimeout(TaskGroup):
   def __init__(self, group_id, timeout: timedelta, **kwargs):
     super().__init__(group_id=group_id, **kwargs)
     self.timeout = timeout
-    self._start_task = None
-    self._creating_start_task = False
+    self._root_node = None
 
   def __enter__(self):
+    """Enter the TaskGroup context and create the root timing task.
+
+    Creates ``_root_node``, records``datetime.now(UTC)`` as an ISO-format
+    string via XCom. This task serves as the *root node* of the group:
+    all other tasks in the group are wired to run after it (see ``__exit__``),
+    so its XCom value represents the earliest possible group start time that
+    every downstream task can reference.
+
+    While ``_root_node`` is being constructed, ``self._root_node`` is still
+    ``None``; ``add()`` uses that sentinel to skip timeout injection for the
+    root node itself.
+    """
     tg = super().__enter__()
-    self._creating_start_task = True
-    self._start_task = PythonOperator(
-        task_id=_START_TASK_ID,
+    self._root_node = PythonOperator(
+        task_id="_timeout_start",
         python_callable=lambda: datetime.now(timezone.utc).isoformat(),
     )
-    self._creating_start_task = False
     return tg
 
   def __exit__(self, *args):
+    """Exit the TaskGroup context and enforce the root-node dependency.
+
+    Iterates over every direct child registered in this TaskGroup and sets
+    ``_root_node`` as an upstream dependency for each one (skipping
+    ``_root_node`` itself to avoid a self-loop).  This makes ``_root_node``
+    the single root node of the group: it runs first, stores the wall-clock
+    start time in XCom, and only then do the real workload tasks begin.
+    ``wrapped_execute`` (injected by ``add()``) later pulls that XCom value to
+    calculate how much of the shared timeout budget remains.
+    """
     for child in self.children.values():
-      if child is not self._start_task:
-        child.set_upstream(self._start_task)
+      if child is not self._root_node:
+        child.set_upstream(self._root_node)
     return super().__exit__(*args)
 
   def add(self, base_op: BaseOperator):
     node = super().add(base_op)
 
-    if self._creating_start_task:
+    if self._root_node is None:
       return node
+    # The node has to have the `execute` method (e.g., BaseOperator or
+    # MappedOperator), or there will be nothing to intercept.
+    #
+    # Rationale for NOT using `isinstance(node, BaseOperator)`:
+    # 1. Dynamic Task Mapping: Tasks generated via `.expand()` return a `MappedOperator`.
+    # 2. Class Hierarchy: `MappedOperator` does NOT inherit from `BaseOperator`
+    #    (both inherit from `AbstractOperator`). An `isinstance` check would silently
+    #    skip mapped tasks, leaving them without timeout protection.
+    # 3. Nested TaskGroups: `node` can be a nested `TaskGroup` (which lacks `execute`).
+    # Therefore, Duck Typing (checking for a callable `execute` attribute) is the
+    # most robust approach to intercept all executable nodes regardless of internal SDK changes.
     if not hasattr(node, "execute") or not callable(node.execute):
       logging.info(
           "Node %s is not an executable task (e.g., nested TaskGroup). Skipping timeout injection.",
@@ -84,16 +112,17 @@ class TaskGroupWithTimeout(TaskGroup):
 
     group_id = self.group_id
     timeout = self.timeout
-    start_task = self._start_task
+    root_node_id = self._root_node.task_id
 
     def wrapped_execute(context):
       task_instance = context.get("task_instance")
-      start_str = task_instance.xcom_pull(task_ids=start_task.task_id)
-      group_start = (
-          datetime.fromisoformat(start_str)
-          if start_str
-          else datetime.now(timezone.utc)
-      )
+      start_str = task_instance.xcom_pull(task_ids=root_node_id)
+      if not start_str:
+        raise AirflowFailException(
+            f"TaskGroup '{group_id}': no XCom value found from root node "
+            f"'{root_node_id}'. Cannot determine group start time."
+        )
+      group_start = datetime.fromisoformat(start_str)
       deadline = group_start + timeout
 
       remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
