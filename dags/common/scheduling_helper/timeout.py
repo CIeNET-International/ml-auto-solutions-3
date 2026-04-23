@@ -18,8 +18,12 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from airflow.exceptions import AirflowFailException
+from airflow.models import BaseOperator
+from airflow.operators.python import PythonOperator
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.timeout import timeout as AirflowTimeout
+
+_START_TASK_ID = "_timeout_start"
 
 
 class TaskGroupWithTimeout(TaskGroup):
@@ -46,38 +50,50 @@ class TaskGroupWithTimeout(TaskGroup):
   def __init__(self, group_id, timeout: timedelta, **kwargs):
     super().__init__(group_id=group_id, **kwargs)
     self.timeout = timeout
+    self._start_task = None
+    self._creating_start_task = False
 
-  def add(self, task):
-    dag_node = super().add(task)
+  def __enter__(self):
+    tg = super().__enter__()
+    self._creating_start_task = True
+    self._start_task = PythonOperator(
+        task_id=_START_TASK_ID,
+        python_callable=lambda: datetime.now(timezone.utc).isoformat(),
+    )
+    self._creating_start_task = False
+    return tg
 
-    # Only wrap actual operators (with execute), not sub-TaskGroups.
-    if isinstance(task, TaskGroup) or not hasattr(task, "execute"):
-      return dag_node
+  def __exit__(self, *args):
+    for child in self.children.values():
+      if child is not self._start_task:
+        child.set_upstream(self._start_task)
+    return super().__exit__(*args)
+
+  def add(self, base_op: BaseOperator):
+    node = super().add(base_op)
+
+    if self._creating_start_task:
+      return node
+    if not hasattr(node, "execute") or not callable(node.execute):
+      logging.info(
+          "Node %s is not an executable task (e.g., nested TaskGroup). Skipping timeout injection.",
+          node,
+      )
+      return node
+    original_execute = type(node).execute
 
     group_id = self.group_id
     timeout = self.timeout
-    original_execute = type(task).execute
+    start_task = self._start_task
 
     def wrapped_execute(context):
-      dag = context["dag"]
-      ti = context["task_instance"]
-      xcom_key = f"{group_id}.start"
-      group_task_ids = [t for t in dag.task_ids if t.startswith(group_id + ".")]
-
-      raw = ti.xcom_pull(task_ids=group_task_ids, key=xcom_key)
-      results = list(raw) if raw is not None else []
-      start_str = next(
-          (v for v in results if isinstance(v, (str, datetime))), None
+      task_instance = context.get("task_instance")
+      start_str = task_instance.xcom_pull(task_ids=start_task.task_id)
+      group_start = (
+          datetime.fromisoformat(start_str)
+          if start_str
+          else datetime.now(timezone.utc)
       )
-      if start_str is None:
-        group_start = datetime.now(timezone.utc)
-        ti.xcom_push(key=xcom_key, value=group_start.isoformat())
-      else:
-        group_start = (
-            start_str
-            if isinstance(start_str, datetime)
-            else datetime.fromisoformat(start_str)
-        )
       deadline = group_start + timeout
 
       remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
@@ -94,9 +110,8 @@ class TaskGroupWithTimeout(TaskGroup):
             "Skipping retries."
         )
 
-      current_task = context["task_instance"].task
       with AirflowTimeout(seconds=int(remaining)):
-        return original_execute(current_task, context)
+        return original_execute(task_instance.task, context)
 
-    task.execute = wrapped_execute
-    return dag_node
+    node.execute = wrapped_execute
+    return node
