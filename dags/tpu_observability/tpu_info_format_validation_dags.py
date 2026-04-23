@@ -351,12 +351,14 @@ def validate_latency_table(tpu_info_output: list[tpu_info.Table]):
         f" output:\n{content.raw_body}"
     )
 
+
 @task
 def generate_second_node_pool_name(
     node_pool_info: node_pool.Info,
 ) -> str:
   """Generates a second node pool name."""
   return f"{node_pool_info.node_pool_name}-2"
+
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
 # know this signature).
