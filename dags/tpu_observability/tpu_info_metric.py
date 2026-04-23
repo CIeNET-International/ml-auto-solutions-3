@@ -305,15 +305,13 @@ class _BaseDistributionStrategy(BaseMetricStrategy):
     for metric_table in tpu_info_metric_output:
       if metric_table.name == table_name:
         for row_dict in metric_table.body:
-          group_value = row_dict.get(group_key)
-          if not group_value:
-            continue
+          group_value = row_dict.get(group_key, "summary")
 
-          parsed_values_by_group[group_value] = {}
+          if group_value not in parsed_values_by_group:
+            parsed_values_by_group[group_value] = {}
           for p in self.percentiles_to_check:
             # Use Enum name as key (e.g. "P999")
             value_str = row_dict.get(p.name, "")
-
             match = re.search(r"([\d\.]+)", value_str)
             if match:
               parsed_values_by_group[group_value][p.name] = float(
