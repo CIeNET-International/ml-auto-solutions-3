@@ -291,7 +291,6 @@ with models.DAG(
       """Generates a second node pool name."""
       return f"{node_pool_info.node_pool_name}-2"
 
-
     with TaskGroup(group_id=f"v{config.tpu_version.value}"):
       selector = jobset.generate_node_pool_selector(
           "tpu_info_metrics_verification"
@@ -343,24 +342,11 @@ with models.DAG(
               image=image_url,
           )
 
-          apply_time = jobset.run_workload(
+          startup = jobset.create_jobset_startup_group(
               node_pool=cluster_info,
               jobset_config=jobset_config,
               workload_type=Workload.JAX_TPU_BENCHMARK,
           )
-
-          pod_names = jobset.list_pod_names.override(
-              task_id="list_pod_names",
-              retries=5,
-              retry_delay=datetime.timedelta(seconds=10),
-          )(
-              node_pool=cluster_info,
-              jobset_config=jobset_config,
-          )
-
-          wait_for_job_start = jobset.wait_for_jobset_started.override(
-              task_id="wait_for_job_start"
-          )(cluster_info, pod_name_list=pod_names, job_apply_time=apply_time)
 
           verification_results = {}
           all_verification_groups = []
@@ -378,7 +364,7 @@ with models.DAG(
                       jobset_config=jobset_config,
                       metric_name=strategy.tpu_info_metric_name,
                   )
-                  .expand(pod_name=pod_names)
+                  .expand(pod_name=startup.running_pods)
               )
 
               tpu_info_metric_output = (
@@ -393,10 +379,14 @@ with models.DAG(
                   run_metric_verification.override(task_id="run_verification")
                   .partial(
                       node_pool=cluster_info,
-                      job_apply_time=apply_time,
+                      job_apply_time=startup.jobset_start_time,
                       metric_strategy=strategy,
                   )
-                  .expand(comparison_data=pod_names.zip(tpu_info_metric_output))
+                  .expand(
+                      comparison_data=startup.running_pods.zip(
+                          tpu_info_metric_output
+                      )
+                  )
               )
 
             all_verification_groups.append(verification_group)
@@ -406,7 +396,7 @@ with models.DAG(
               task_id="summarize_results", trigger_rule=TriggerRule.ALL_DONE
           )(
               verification_results_dict=verification_results,
-              active_pods=pod_names,
+              active_pods=startup.running_pods,
           )
 
           clean_up_workload = jobset.end_workload.override(
@@ -415,13 +405,11 @@ with models.DAG(
               node_pool=cluster_info,
               jobset_config=jobset_config,
           ).as_teardown(
-              setups=apply_time
+              setups=startup.jobset_start_time
           )
 
           chain(
-              apply_time,
-              pod_names,
-              wait_for_job_start,
+              startup.task_group,
               all_verification_groups,
               summary,
               clean_up_workload,
