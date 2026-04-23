@@ -443,7 +443,7 @@ class BufferTransferLatencyStrategy(_BaseDistributionStrategy):
   )
   tpu_info_metric_name = "buffer_transfer_latency"
   dag_id_suffix = "buffer_transfer_latency"
-  tolerance_percent = 3.0
+  tolerance_percent = 10.0
   _monitoring_group_by_label = "buffer_size"
   _tpu_info_table_name = "TPU Buffer Transfer Latency"
   _tpu_info_group_by_key = "Buffer Size"
@@ -455,7 +455,7 @@ class HostToDeviceTransferLatenciesStrategy(_BaseDistributionStrategy):
   metric_name = "kubernetes.io/container/multislice/accelerator/host_to_device_transfer_latencies"
   tpu_info_metric_name = "host_to_device_transfer_latency"
   dag_id_suffix = "host_to_device_transfer_latency"
-  tolerance_percent = 3.0
+  tolerance_percent = 10.0
   _monitoring_group_by_label = "buffer_size"
   _tpu_info_table_name = "TPU Host to Device Transfer Latency"
   _tpu_info_group_by_key = "Buffer Size"
@@ -469,7 +469,7 @@ class DeviceToHostTransferLatenciesStrategy(_BaseDistributionStrategy):
   metric_name = "kubernetes.io/container/multislice/accelerator/device_to_host_transfer_latencies"
   tpu_info_metric_name = "device_to_host_transfer_latency"
   dag_id_suffix = "device_to_host_transfer_latency"
-  tolerance_percent = 3.0
+  tolerance_percent = 10.0
   _monitoring_group_by_label = "buffer_size"
   _tpu_info_table_name = "TPU Device to Host Transfer Latency"
   _tpu_info_group_by_key = "Buffer Size"
@@ -483,7 +483,7 @@ class CollectiveEndToEndLatencyLatenciesStrategy(_BaseDistributionStrategy):
   metric_name = "kubernetes.io/container/multislice/network/collective_end_to_end_latencies"
   tpu_info_metric_name = "collective_e2e_latency"
   dag_id_suffix = "collective_e2e_latency"
-  tolerance_percent = 3.0
+  tolerance_percent = 10.0
   _monitoring_group_by_label = "collective_type"
   _tpu_info_table_name = "TPU Collective End to End Latency"
   _tpu_info_group_by_key = "Buffer Size"

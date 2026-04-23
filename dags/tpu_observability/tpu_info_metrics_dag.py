@@ -368,7 +368,11 @@ with models.DAG(
                       job_apply_time=startup.jobset_start_time,
                       metric_strategy=strategy,
                   )
-                  .expand(comparison_data=startup.running_pods.zip(tpu_info_metric_output))
+                  .expand(
+                      comparison_data=startup.running_pods.zip(
+                          tpu_info_metric_output
+                      )
+                  )
               )
 
             all_verification_groups.append(verification_group)
