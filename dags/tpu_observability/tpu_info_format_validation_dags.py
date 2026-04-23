@@ -297,12 +297,14 @@ def validate_latency_table(tpu_info_output: list[tpu_info.Table]):
         f" output:\n{content.raw_body}"
     )
 
+
 @task
 def generate_second_node_pool_name(
     node_pool_info: node_pool.Info,
 ) -> str:
   """Generates a second node pool name."""
   return f"{node_pool_info.node_pool_name}-2"
+
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
 # know this signature).
@@ -360,10 +362,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     config = machine.value
 
     with TaskGroup(group_id=f"v{config.tpu_version.value}"):
-
-      selector = jobset.generate_node_pool_selector(
-          DAG_ID
-      )
+      selector = jobset.generate_node_pool_selector(DAG_ID)
 
       cluster_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
           task_id="build_node_pool_info_from_gcs_yaml"
@@ -407,7 +406,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
         with TaskGroup(  # pylint: disable=unexpected-keyword-arg
             group_id=f"v{config.tpu_version.value}_{type_name}"
         ) as image_tg:
-
           jobset_config = jobset.build_jobset_from_gcs_yaml(
               gcs_path=GCS_JOBSET_CONFIG_PATH,
               dag_name=DAG_ID,
@@ -441,9 +439,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
               group_id="verification_group"
           ) as verification_group:
             verify_table_amount_task = (
-                verify_table_amount.override(
-                    task_id="verify_table_amount_task"
-                )
+                verify_table_amount.override(task_id="verify_table_amount_task")
                 .partial()
                 .expand(tpu_info_output=output_of_tpu_info)
             )
