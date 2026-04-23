@@ -74,9 +74,7 @@ def parse_tpu_info_output(output: str) -> list[Table]:
     A list of Table objects with attributes populated for each found table.
   """
   pattern = re.compile(
-      r"^([A-Za-z][^\n]*?)\s*\n+"
-      r"(^\|[^\n]*(?:\n\|[^\n]*)*)",
-      re.MULTILINE
+      r"^([A-Za-z][^\n]*?)\s*\n+" r"(^\|[^\n]*(?:\n\|[^\n]*)*)", re.MULTILINE
   )
 
   parsed_tables = []
