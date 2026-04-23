@@ -149,13 +149,11 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 
       verify_duration = jobset.verify_recovery_duration.override(
           task_id="verify_recovery_duration"
-      )(
-          start_time=deletion_start_time
-      )
+      )(start_time=deletion_start_time)
 
       wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
           task_id="wait_for_jobset_ttr_to_be_found",
-          trigger_rule=TriggerRule.ALL_DONE
+          trigger_rule=TriggerRule.ALL_DONE,
       )(
           node_pool=cluster_info,
           jobset_config=jobset_config,

@@ -161,7 +161,6 @@ with models.DAG(
         with TaskGroup(  # pylint: disable=unexpected-keyword-arg
             group_id=f"v{config.tpu_version.value}_{type_name}"
         ) as image_tg:
-
           jobset_config = jobset.build_jobset_from_gcs_yaml(
               gcs_path=GCS_JOBSET_CONFIG_PATH,
               dag_name=DAG_ID,
