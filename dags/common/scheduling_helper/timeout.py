@@ -17,7 +17,7 @@
 import logging
 from datetime import datetime, timedelta, timezone
 
-from airflow.exceptions import AirflowFailException
+from airflow.exceptions import AirflowFailException, AirflowTaskTimeout
 from airflow.models import BaseOperator
 from airflow.operators.python import PythonOperator
 from airflow.utils.task_group import TaskGroup
@@ -108,6 +108,17 @@ class TaskGroupWithTimeout(TaskGroup):
           node,
       )
       return node
+    # Use type(node).execute (unbound method) instead of node.execute (bound
+    # method) to defer `self` binding to actual execution time.
+    #
+    # With node.execute, `self` is bound to the task object at DAG parse time,
+    # when XComArg placeholders in op_kwargs are still unresolved. This causes
+    # downstream XCom serialization failures (e.g. "Object of type X is not
+    # JSON serializable") because the placeholder leaks into the return value.
+    #
+    # With type(node).execute, `self` is supplied explicitly as
+    # `task_instance.task` inside wrapped_execute, which runs at execution time
+    # after Airflow has resolved all XComArg values into concrete objects.
     original_execute = type(node).execute
 
     group_id = self.group_id
@@ -140,7 +151,20 @@ class TaskGroupWithTimeout(TaskGroup):
         )
 
       with AirflowTimeout(seconds=int(remaining)):
-        return original_execute(task_instance.task, context)
+        try:
+          return original_execute(task_instance.task, context)
+        except AirflowTaskTimeout:
+          # If the group deadline has passed, this timeout was triggered by
+          # the group budget (our AirflowTimeout above), not the task's own
+          # execution_timeout. Raise AirflowFailException to skip retries.
+          # Otherwise, re-raise so Airflow handles the task's own timeout
+          # normally (including retries).
+          if datetime.now(timezone.utc) >= deadline:
+            raise AirflowFailException(
+                f"TaskGroup '{group_id}' timed out after {timeout}. "
+                "Skipping retries."
+            )
+          raise
 
     node.execute = wrapped_execute
     return node
