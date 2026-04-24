@@ -154,6 +154,6 @@ TPU gRPC TCP Delivery Rate
 
   tpu_info_output = parse_tpu_info_output(full_output)
   print(tpu_info_output)
-  for i in tpu_info_output:
-    print(i.name)
-    print(i.body)
+  # for i in tpu_info_output:
+  #   print(i.name)
+  #   print(i.body)
