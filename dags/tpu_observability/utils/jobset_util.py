@@ -16,6 +16,7 @@
 
 import enum
 import dataclasses
+import datetime
 from datetime import timedelta
 import json
 import logging
@@ -24,7 +25,9 @@ import random
 import string
 import tempfile
 import textwrap
+import time
 from typing import Final
+import yaml
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
@@ -68,6 +71,7 @@ class Workload:
   JAX_TPU_BENCHMARK = json.dumps(
       textwrap.dedent(
           """
+          pip install requests
           pip install jax[k8s] libtpu
           python -c '
           import jax
@@ -147,7 +151,7 @@ class Workload:
 # pylint: disable=line-too-long
 _TEMPLATE = string.Template(
     textwrap.dedent(
-        f"""
+        """
         apiVersion: jobset.x-k8s.io/v1alpha2
         kind: JobSet
         metadata:
@@ -158,6 +162,7 @@ _TEMPLATE = string.Template(
         spec:
           failurePolicy:
             maxRestarts: $max_restarts
+            $restartStrategy
           replicatedJobs:
           - name: $replicated_job_name
             replicas: $replicas
@@ -168,13 +173,18 @@ _TEMPLATE = string.Template(
                 parallelism: $parallelism
                 template:
                   spec:
+                    $restartPolicy
+                    $terminationGracePeriodSeconds
                     nodeSelector:
                       cloud.google.com/gke-tpu-accelerator: $tpu_accelerator_type
                       cloud.google.com/gke-tpu-topology: $tpu_topology
-                      {NODE_POOL_SELECTOR_KEY}: $node_pool_selector
                     containers:
                     - name: $container_name
                       image: $image
+                      lifecycle:
+                        preStop:
+                          exec:
+                            $container_prestop_command
                       command: $command
                       args:
                         - $args
@@ -232,6 +242,7 @@ class JobSet:
   image: str
   tpu_cores_per_pod: int
   node_pool_selector: str
+  delay_recovery: bool = False
 
   def generate_yaml(self, workload_script: Workload) -> str:
     """Generates the final JobSet YAML content.
@@ -247,6 +258,25 @@ class JobSet:
     params["command"] = ["bash", "-c"]
     params["args"] = workload_script
     params["node_pool_selector"] = self.node_pool_selector or ""
+
+    default_vals = {
+        "restartStrategy": "",
+        "restartPolicy": "",
+        "terminationGracePeriodSeconds": "",
+        "container_prestop_command": 'command: ["/bin/sh", "-c", "true"]',
+    }
+
+    if self.delay_recovery:
+      default_vals.update({
+          "restartStrategy": "restartStrategy: BlockingRecreate",
+          "restartPolicy": "restartPolicy: Never",
+          "terminationGracePeriodSeconds": "terminationGracePeriodSeconds: 350",
+          "container_prestop_command": (
+              'command: ["/bin/sh", "-c", "sleep 300"]'
+          ),
+      })
+
+    params.update(default_vals)
 
     return _TEMPLATE.substitute(params)
 
@@ -359,6 +389,22 @@ class Command:
   ) -> str:
     """Alias for getting just the names, maintaining existing API."""
     return Command.k8s_get_pods(jobset_name, namespace, output)
+
+  @staticmethod
+  def k8s_get_jobset_events_command(
+      jobset_name: str,
+      namespace: str,
+  ) -> str:
+    """Generates the kubectl command to get events for a specific JobSet."""
+
+    columns = "LAST_SEEN:.lastTimestamp,REASON:.reason,MESSAGE:.message"
+    selector = f"involvedObject.kind=JobSet,involvedObject.name={jobset_name}"
+
+    return (
+        f"kubectl get events -n {namespace} "
+        f"--field-selector {selector} "
+        f"-o custom-columns={columns} --no-headers"
+    )
 
 
 def get_replica_num(
@@ -509,7 +555,9 @@ def build_jobset_from_gcs_yaml(
 
 @task
 def run_workload(
-    node_pool: node_pool_info, jobset_config: JobSet, workload_type: Workload
+    node_pool: node_pool_info,
+    jobset_config: JobSet,
+    workload_type: Workload,
 ) -> TimeUtil:
   """
   Applies the specified YAML file to the GKE cluster.
@@ -681,8 +729,11 @@ def delete_one_random_pod(
         ),
     ])
 
+    current_time_utc = datetime.datetime.now(datetime.timezone.utc)
     subprocess.run_exec(cmd, env=env)
     logging.info("Successfully initiated deletion for pod: %s", target_pod)
+
+    return TimeUtil.from_datetime(current_time_utc)
 
 
 @task.sensor(poke_interval=30, timeout=900, mode="poke")
@@ -747,6 +798,26 @@ def wait_for_jobset_started(
   ]
 
   return all(p > threshold_value for p in last_n_data_points)
+
+
+@task
+def verify_recovery_duration(start_time: TimeUtil, end_time: TimeUtil):
+  """
+  Checks if the time elapsed since start_timestamp is > 60 seconds.
+  """
+
+  duration = end_time.time - start_time.time
+
+  logging.info(f"Start Time: {start_time.to_iso_string()}")
+  logging.info(f"End Time: {end_time.to_iso_string()}")
+  logging.info(f"Recovery Duration: {duration} seconds")
+
+  if duration < 60:
+    raise AirflowFailException(
+        f"Recovery too fast ({duration}s < 60s). "
+        "The 'jobset_time_to_recover' metric requires > 60s to be recorded. "
+        "Failing fast to avoid waiting for a missing metric."
+    )
 
 
 @task.sensor(poke_interval=60, timeout=3600, mode="poke")
@@ -941,3 +1012,48 @@ def ensure_no_jobset_uptime_data(
     logging.info("Stability period passed with no data detected.")
     return True
   return False
+
+
+@task.sensor(poke_interval=30, timeout=600, mode="poke")
+def wait_for_jobset_recovered(
+    node_pool: node_pool_info, jobset_config: JobSet
+) -> PokeReturnValue:
+  """Executes the event command and extracts the LAST_SEEN timestamp.
+
+  Args:
+    node_pool: Configuration object with cluster details.
+    jobset_config: The JobSet object containing configuration details.
+    namespace: The Kubernetes namespace to query. Defaults to "default".
+
+  Returns:
+    The timestamp string (e.g., '2026-03-04T03:48:47Z') or None if no events
+    found.
+  """
+  with tempfile.TemporaryDirectory() as tmpdir:
+    env = os.environ.copy()
+    env["KUBECONFIG"] = os.path.join(tmpdir, "kubeconfig")
+
+    cmd = " && ".join([
+        Command.get_credentials_command(node_pool),
+        Command.k8s_get_jobset_events_command(
+            jobset_config.jobset_name,
+            jobset_config.namespace,
+        ),
+    ])
+
+    stdout = subprocess.run_exec(cmd, env=env)
+
+    logging.info(stdout)
+    lines = stdout.strip().splitlines()
+    logging.info(lines)
+    if not lines:
+      logging.warning(
+          "No events found for JobSet %s", jobset_config.jobset_name
+      )
+      return PokeReturnValue(is_done=False)
+
+    first_line = lines[0].split()
+    if first_line:
+      end_time = TimeUtil.from_iso_string(first_line[0])
+      logging.info("Detected JobSet restart time: %s", end_time)
+      return PokeReturnValue(is_done=True, xcom_value=end_time)

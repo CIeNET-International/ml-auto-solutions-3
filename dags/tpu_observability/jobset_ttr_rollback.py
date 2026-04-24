@@ -22,6 +22,7 @@ from airflow.utils.trigger_rule import TriggerRule
 from airflow.utils.task_group import TaskGroup
 
 from dags import composer_env
+from dags.common.vm_resource import DockerImage
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils.jobset_util import Workload
@@ -94,6 +95,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           gcs_path=GCS_JOBSET_CONFIG_PATH,
           dag_name=DAG_ID,
           node_pool_selector=selector,
+          image=DockerImage.TPU_OBS_LIBTPU_STABLE.value,
       )
 
       cluster_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
@@ -121,11 +123,27 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           task_id="rollback_node_pool"
       )(node_pool=cluster_info)
 
-      wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
-          task_id="wait_for_jobset_ttr_to_be_found"
+      wait_for_recovery = jobset.wait_for_jobset_recovered.override(
+          task_id="wait_for_recovery"
       )(
           node_pool=cluster_info,
           jobset_config=jobset_config,
+      )
+
+      verify_duration = jobset.verify_recovery_duration.override(
+          task_id="verify_recovery_duration"
+      )(
+          start_time=rollback_node_pool,
+          end_time=wait_for_recovery,
+      )
+
+      wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
+          task_id="wait_for_jobset_ttr_to_be_found",
+          trigger_rule=TriggerRule.ALL_DONE,
+      )(
+          node_pool=cluster_info,
+          jobset_config=jobset_config,
+          start_time=rollback_node_pool,
       )
 
       cleanup_workload = jobset.end_workload.override(
@@ -150,6 +168,8 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           create_node_pool,
           startup.task_group,
           rollback_node_pool,
+          wait_for_recovery,
+          verify_duration,
           wait_for_metric_upload,
           cleanup_workload,
           cleanup_node_pool,
