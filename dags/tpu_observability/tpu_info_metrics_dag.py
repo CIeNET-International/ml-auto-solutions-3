@@ -75,6 +75,7 @@ def compare_metric_values(
     pod_name: str,
     metric_display_name: str,
     tolerance_percent: float,
+    labels: list[str] | None = None,
 ):
   """Compares two lists of metric values and checks if they are within a
   tolerance range."""
@@ -91,15 +92,15 @@ def compare_metric_values(
       metric_display_name,
   )
   logging.info(
-      "%-12s%-15s%-17s%-12s%-15s%-10s",
-      "Device",
+      "%-20s%-15s%-17s%-12s%-15s%-10s",
+      "Label" if labels else "Device",
       "TPU-Info Val",
       "Monitoring Val",
       "Difference",
       "Allowed Diff",
       "Result",
   )
-  logging.info("-" * 85)
+  logging.info("-" * 95)
 
   all_passed = True
   for i, (log_val, mon_val) in enumerate(zip(cmd_values, monitoring_values)):
@@ -108,9 +109,10 @@ def compare_metric_values(
     passed = diff <= allowed_diff
     if not passed:
       all_passed = False
+    label = labels[i] if labels else f"Device {i}"
     logging.info(
-        "%-12s%-15.2f%-17.2f%-12.2f%-15.2f%-10s",
-        f"Device {i}",
+        "%-20s%-15.2f%-17.2f%-12.2f%-15.2f%-10s",
+        label,
         log_val,
         mon_val,
         diff,
@@ -127,6 +129,7 @@ def compare_metric_values(
   logging.info(
       "Overall Result for Pod %s (%s): PASS", pod_name, metric_display_name
   )
+
 
 
 @task
@@ -197,27 +200,18 @@ def verify_metric_for_all_pods(
           pod_name,
       )
 
-      compare_metric_values(
-          cmd_values,
-          monitoring_values,
-          pod_name,
-          metric_display_name=metric_strategy.dag_id_suffix,
-          tolerance_percent=tolerance_for_metric,
-      )
-      results.append(True)
-      logging.info("Validation succeeded for pod: %s", pod_name)
-    except Exception as e:
-      logging.error("Validation failed for pod: %s. Error: %s", pod_name, e)
-      failed_pods.append((pod_name, e))
+  labels = metric_strategy.get_labels(tpu_info_output)
+  compare_metric_values(
+      cmd_values,
+      monitoring_values,
+      pod_name,
+      metric_display_name=metric_strategy.dag_id_suffix,
+      tolerance_percent=tolerance_for_metric,
+      labels=labels,
+  )
 
-  if failed_pods:
-    failed_pod_names = [name for name, _ in failed_pods]
-    logging.error("The following pods failed validation: %s", failed_pod_names)
-    raise AirflowFailException(
-        f"Task failed because validation failed on pods: {failed_pod_names}"
-    )
 
-  return results
+  return True
 
 
 @task
