@@ -22,6 +22,7 @@ from airflow.models import BaseOperator
 from airflow.operators.python import PythonOperator
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.timeout import timeout as AirflowTimeout
+from airflow.utils.trigger_rule import TriggerRule
 
 
 class TaskGroupWithTimeout(TaskGroup):
@@ -34,6 +35,11 @@ class TaskGroupWithTimeout(TaskGroup):
   Args:
     group_id: Unique identifier for this TaskGroup.
     timeout: Timeout as a timedelta (e.g. ``timedelta(minutes=30)``).
+    trigger_rule: Trigger rule for the internal ``_timeout_start`` task.
+      Defaults to ``TriggerRule.ALL_SUCCESS``.  Set to
+      ``TriggerRule.ALL_DONE`` for cleanup groups that must run even when
+      an upstream group has failed (e.g. a ``post_test`` group following a
+      ``testing`` group).
     **kwargs: Additional arguments passed to TaskGroup.
 
   Usage:
@@ -43,11 +49,26 @@ class TaskGroupWithTimeout(TaskGroup):
     ) as testing:
       task_a = my_task_a()
       task_b = my_task_b()
+
+    # Cleanup group that must run even when `testing` fails:
+    with TaskGroupWithTimeout(
+        group_id="post_test",
+        timeout=timedelta(minutes=10),
+        trigger_rule=TriggerRule.ALL_DONE,
+    ) as post_test:
+      cleanup_task()
   """
 
-  def __init__(self, group_id, timeout: timedelta, **kwargs):
+  def __init__(
+      self,
+      group_id,
+      timeout: timedelta,
+      trigger_rule: str = TriggerRule.ALL_SUCCESS,
+      **kwargs,
+  ):
     super().__init__(group_id=group_id, **kwargs)
     self.timeout = timeout
+    self.trigger_rule = trigger_rule
     self._root_node = None
 
   def __enter__(self):
@@ -67,6 +88,7 @@ class TaskGroupWithTimeout(TaskGroup):
     self._root_node = PythonOperator(
         task_id="_timeout_start",
         python_callable=lambda: datetime.now(timezone.utc).isoformat(),
+        trigger_rule=self.trigger_rule,
     )
     return tg
 
@@ -89,7 +111,7 @@ class TaskGroupWithTimeout(TaskGroup):
   def add(self, base_op: BaseOperator):
     node = super().add(base_op)
 
-    if self._root_node is None:
+    if base_op.task_id.split(".")[-1] == "_timeout_start":
       return node
     # The node has to have the `execute` method (e.g., BaseOperator or
     # MappedOperator), or there will be nothing to intercept.
@@ -150,16 +172,25 @@ class TaskGroupWithTimeout(TaskGroup):
             "Skipping retries."
         )
 
+      # Determine the bottleneck *before* running the task body so that the
+      # decision is deterministic and not subject to a race condition.
+      # regular @task operators have no per-task timeout (None → inf).
+      task_timeout_sec = float(
+          getattr(task_instance.task, "timeout", None) or float("inf")
+      )
+      logging.info(
+          "TaskGroup '%s' task '%s': task_timeout=%.1fs, group_remaining=%.1fs",
+          group_id,
+          task_instance.task_id,
+          task_timeout_sec,
+          remaining,
+      )
+
       with AirflowTimeout(seconds=int(remaining)):
         try:
           return original_execute(task_instance.task, context)
         except AirflowTaskTimeout:
-          # If the group deadline has passed, this timeout was triggered by
-          # the group budget (our AirflowTimeout above), not the task's own
-          # execution_timeout. Raise AirflowFailException to skip retries.
-          # Otherwise, re-raise so Airflow handles the task's own timeout
-          # normally (including retries).
-          if datetime.now(timezone.utc) >= deadline:
+          if remaining < task_timeout_sec:
             raise AirflowFailException(
                 f"TaskGroup '{group_id}' timed out after {timeout}. "
                 "Skipping retries."
