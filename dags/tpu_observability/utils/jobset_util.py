@@ -15,6 +15,7 @@
 """Utilities for managing JobSets in GKE clusters for TPU observability."""
 
 import enum
+from collections.abc import MutableMapping
 from datetime import timedelta
 import json
 import logging
@@ -23,8 +24,9 @@ import random
 import string
 import tempfile
 import textwrap
-import dataclasses
-from typing import Final, Any
+from typing import Final, Any, Optional
+
+from pydantic import BaseModel
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
@@ -191,21 +193,21 @@ _TEMPLATE = string.Template(
 # pylint: enable=line-too-long
 
 
-@dataclasses.dataclass
-class JobSet(dict):
+class JobSet(BaseModel, MutableMapping):
   """
   Generates YAML configurations for Kubernetes JobSets and serves as a
   data transfer object specifically for Airflow XCom, 'multiple_outputs', etc.
 
-  This class is specifically designed to encapsulate data for efficient passing
-  between Airflow tasks. As a result, it does not support features that would
-  complicate its role as a serializable carrier, such as 'copy.deepcopy()',
-  'pickle' operations, or the dynamic assignment of fields not defined in the
-  data model.
+  BaseModel:
+    BaseModel is advanced version of @dataclass. we can do dynamic attribute
+      assignment, validation. More suitable in this case.
 
-  This class helps in creating JobSet YAMLs by providing a template and allowing
-  customization of various parameters like jobset name, replicas, TPU
-  configuration, and the workload script to be executed.
+  MutableMapping:
+    We avoid to use dict here. Since airflow will adapt default serialization
+      and deserialization process on dict, we might lose BaseModel's
+      features. Instead, we implement MutableMapping, so airflow would just
+      call customized serialize() and deserialize() methods defined by
+      ourselves.
 
   Attributes:
     jobset_name: The name of the JobSet.
@@ -225,49 +227,72 @@ class JobSet(dict):
     tpu_cores_per_pod: The number of TPU cores requested per pod.
   """
 
-  jobset_name: str
-  namespace: str
-  max_restarts: int
-  replicated_job_name: str
-  replicas: int
-  backoff_limit: int
-  completions: int
-  parallelism: int
-  tpu_accelerator_type: str
-  tpu_topology: str
-  container_name: str
-  image: str
-  tpu_cores_per_pod: int
-  node_pool_selector: str
-
-  def __setattr__(self, key: str, value: Any) -> None:
-    if key not in self.__class__.__dataclass_fields__:
-      raise AttributeError(f"'{key}' is not a valid attribute of JobSet.")
-    if value is None:
-      raise ValueError(f"'{key}' cannot be set to None.")
-    self[key] = value
-
-  def __getattr__(self, key: str) -> Any:
-    if key not in self.__class__.__dataclass_fields__:
-      raise AttributeError(f"'{key}' is not a valid attribute of JobSet.")
-    try:
-      return self[key]
-    except KeyError as e:
-      raise AttributeError(
-          f"'{key}' has not been set for this JobSet instance."
-      ) from e
-
-  def __setitem__(self, key: str, value: Any) -> None:
-    if key not in self.__class__.__dataclass_fields__:
-      raise KeyError(f"Key '{key}' is not a valid JobSet parameter.")
-    if value is None:
-      raise ValueError(f"Key '{key}' cannot be set to None.")
-    super().__setitem__(key, value)
+  jobset_name: Optional[str] = None
+  namespace: Optional[str] = None
+  max_restarts: Optional[int] = None
+  replicated_job_name: Optional[str] = None
+  replicas: Optional[int] = None
+  backoff_limit: Optional[int] = None
+  completions: Optional[int] = None
+  parallelism: Optional[int] = None
+  tpu_accelerator_type: Optional[str] = None
+  tpu_topology: Optional[str] = None
+  container_name: Optional[str] = None
+  image: Optional[str] = None
+  tpu_cores_per_pod: Optional[int] = None
+  node_pool_selector: Optional[str] = None
 
   def __getitem__(self, key: str) -> Any:
-    if key not in self.__class__.__dataclass_fields__:
+    """Necessary MutableMapping method: allows dict-like field access."""
+
+    if key not in JobSet.model_fields:
       raise KeyError(f"Key '{key}' is not a valid JobSet parameter.")
-    return super().__getitem__(key)
+    return object.__getattribute__(self, key)
+
+  def __setitem__(self, key: str, value: Any) -> None:
+    """Necessary MutableMapping method: allows setting field values."""
+    if key not in JobSet.model_fields:
+      raise KeyError(f"Key '{key}' is not a valid JobSet parameter.")
+    if value is None:
+      raise ValueError(f"Value for '{key}' cannot be None.")
+    object.__setattr__(self, key, value)
+
+  def __delitem__(self, key: str) -> None:
+    """Necessary MutableMapping method: allows deletion of fields."""
+    raise NotImplementedError("JobSet does not support field deletion.")
+
+  def __getattr__(self, key: str) -> Any:
+    """Allows attribute-style access."""
+    return self[key]
+
+  def __setattr__(self, key: str, value: Any) -> None:
+    """Allows attribute-style access."""
+    self[key] = value
+
+  def __iter__(self):
+    """Necessary MutableMapping method: iterates over non-None field keys."""
+    return (k for k, v in self.model_dump().items() if v is not None)
+
+  def __len__(self):
+    """Necessary MutableMapping method: counts non-None fields."""
+    return sum(1 for v in self.model_dump().values() if v is not None)
+
+  def serialize(self) -> dict:
+    """
+    Customized serialization method for Airflow XCom. When a JobSet instance
+    is created, it would be serialized into a Airflow database. This method
+    defines how the serialization happens, we store it as a dictionary.
+    """
+    return {k: v for k, v in self.model_dump().items() if v is not None}
+
+  @staticmethod
+  def deserialize(data: dict) -> "JobSet":
+    """
+    Customized deserialization method for Airflow XCom. When a dict instance
+    (serialized from a JobSet object)is retrieved from the Airflow database,
+    it would call this method to deserialize back into a JobSet object.
+    """
+    return JobSet(**data)
 
   def generate_yaml(self, workload_script: Workload) -> str:
     """Generates the final JobSet YAML content.
@@ -279,7 +304,7 @@ class JobSet(dict):
     Returns:
         A string containing the complete JobSet YAML.
     """
-    params = dict(self)
+    params = {k: v for k, v in self.model_dump().items() if v is not None}
     params["command"] = ["bash", "-c"]
     params["args"] = workload_script
     params["node_pool_selector"] = self.node_pool_selector or ""
@@ -543,9 +568,8 @@ def build_jobset_from_gcs_yaml(
     **overrides: Additional parameters to override default configurations.
   """
   config = gcs.load_yaml_from_gcs(gcs_path)
-  known_fields = set(JobSet.__annotations__.keys())
-  jobset = JobSet.__new__(JobSet)
-  dict.__init__(jobset, {})
+  known_fields = JobSet.model_fields.keys()
+  jobset = JobSet()
 
   cfg_defaults = config.get("jobset_defaults", {})
   dag_cfg = config.get("dag", {}).get(dag_name, {})
@@ -578,9 +602,6 @@ def run_workload(
   Returns:
     The UTC time when the workload was started.
   """
-
-  jobset_config = JobSet(**jobset_config)
-
   with tempfile.NamedTemporaryFile() as temp_config_file:
     env = os.environ.copy()
     env["KUBECONFIG"] = temp_config_file.name
@@ -630,9 +651,6 @@ def end_workload(node_pool: node_pool_info, jobset_config: JobSet):
     jobset_name: The name of the JobSet to delete.
     namespace: The Kubernetes namespace to delete the JobSet from.
   """
-
-  jobset_config = JobSet(**jobset_config)
-
   with tempfile.NamedTemporaryFile() as temp_config_file:
     env = os.environ.copy()
     env["KUBECONFIG"] = temp_config_file.name
@@ -1019,8 +1037,6 @@ def suspended_jobset(node_pool: node_pool_info, jobset_config: JobSet):
     node_pool: Configuration object with cluster details.
     jobset_name: The name of the JobSet to delete.
   """
-
-  jobset_config = JobSet(**jobset_config)
 
   with tempfile.NamedTemporaryFile() as temp_config_file:
     env = os.environ.copy()
