@@ -53,7 +53,7 @@ REGISTERED_DAGS: dict[str, DagIdToTimeout] = {
         "gke_node_pool_label_update": DefaultTimeout,
         "gke_node_pool_status": DefaultTimeout,
         "jobset_rollback_ttr": dt.timedelta(minutes=90),
-        "jobset_ttr_node_pool_ressize": dt.timedelta(minutes=90),
+        "jobset_ttr_node_pool_resize": dt.timedelta(minutes=90),
         "jobset_ttr_pod_delete": dt.timedelta(minutes=90),
         "multi_host_nodepool_rollback": DefaultTimeout,
         "node_pool_ttr_disk_size": dt.timedelta(minutes=90),
