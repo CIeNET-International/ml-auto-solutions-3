@@ -71,9 +71,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       This test requires an existing cluster to run.
 
       ### Procedures
-      First two node-pools are created. The validation test is then run to
+      A node-pool is created. The validation test is then run to
       check if the number of "Ready" replicas is 0. A jobset is then launched
-      which uses 2 replicas. Once the jobset is running the jobs should
+      which uses 1 replica. Once the jobset is running the jobs should
       quickly enter the "Ready" state. The number of found replicas is
       tested against the number of replicas which should be "Ready". If they
       match the DAG is a success.
@@ -82,15 +82,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
   for machine in MachineConfigMap:
     config = machine.value
 
-    @task
-    def generate_second_node_pool_name(
-        node_pool_info: node_pool.Info,
-    ) -> str:
-      """Generates a second node pool name."""
-      return f"{node_pool_info.node_pool_name}-2"
-
-    # Keyword arguments are generated dynamically at runtime (pylint does not
-    # know this signature).
     with TaskGroup(  # pylint: disable=unexpected-keyword-arg
         group_id=f"v{config.tpu_version.value}"
     ):
@@ -113,27 +104,13 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           node_pool_selector=selector,
       )
 
-      cluster_info_2 = node_pool.copy_node_pool_info_with_override(
-          info=cluster_info,
-          node_pool_name=generate_second_node_pool_name(cluster_info),
-      )
-
       # Keyword arguments are generated dynamically at runtime (pylint does not
       # know this signature).
-      with TaskGroup(  # pylint: disable=unexpected-keyword-arg
-          group_id="create_node_pool"
-      ) as create_node_pool:
-        create_first_node_pool = node_pool.create.override(
-            task_id="node_pool_1",
-        )(
-            node_pool=cluster_info,
-        )
-
-        create_second_node_pool = node_pool.create.override(
-            task_id="node_pool_2",
-        )(
-            node_pool=cluster_info_2,
-        )
+      create_node_pool = node_pool.create.override(
+          task_id="create_node_pool",
+      )(
+          node_pool=cluster_info,
+      )
 
       validate_zero_replicas = jobset.validate_jobset_replica_number(
           node_pool=cluster_info,
@@ -142,10 +119,10 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           pre_startup=True,
       )
 
-      start_workload = jobset.run_workload(
+      startup = jobset.create_jobset_startup_group(
           node_pool=cluster_info,
           jobset_config=jobset_config,
-          workload_type=Workload.IDLE_READY_TPU_20M,
+          workload_type=Workload.JAX_TPU_BENCHMARK,
       )
 
       validate_ready_replicas = jobset.validate_jobset_replica_number(
@@ -161,36 +138,23 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           node_pool=cluster_info,
           jobset_config=jobset_config,
       ).as_teardown(
-          setups=start_workload
+          setups=startup.jobset_start_time
       )
 
-      # Keyword arguments are generated dynamically at runtime (pylint does not
-      # know this signature).
-      with TaskGroup(  # pylint: disable=unexpected-keyword-arg
-          group_id="cleanup_node_pool"
-      ) as cleanup_node_pool:
-        cleanup_first_node_pool = node_pool.delete.override(
-            task_id="cleanup_node_pool_1",
-            trigger_rule=TriggerRule.ALL_DONE,
-        )(node_pool=cluster_info).as_teardown(
-            setups=create_node_pool,
-        )
-
-        cleanup_second_node_pool = node_pool.delete.override(
-            task_id="cleanup_node_pool_2",
-            trigger_rule=TriggerRule.ALL_DONE,
-        )(node_pool=cluster_info_2).as_teardown(
-            setups=create_node_pool,
-        )
+      cleanup_node_pool = node_pool.delete.override(
+          task_id="cleanup_node_pool",
+          trigger_rule=TriggerRule.ALL_DONE,
+      )(node_pool=cluster_info).as_teardown(
+          setups=create_node_pool,
+      )
 
       chain(
           selector,
           jobset_config,
           cluster_info,
-          cluster_info_2,
           create_node_pool,
           validate_zero_replicas,
-          start_workload,
+          startup.task_group,
           validate_ready_replicas,
           cleanup_workload,
           cleanup_node_pool,
