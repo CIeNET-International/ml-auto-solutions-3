@@ -15,6 +15,7 @@
 """Utilities for managing JobSets in GKE clusters for TPU observability."""
 
 import enum
+import dataclasses
 from collections.abc import MutableMapping
 from datetime import timedelta
 import json
