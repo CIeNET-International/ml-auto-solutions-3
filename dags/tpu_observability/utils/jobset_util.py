@@ -194,20 +194,18 @@ _TEMPLATE = string.Template(
 
 
 class JobSet(BaseModel, MutableMapping):
-  """
-  Generates YAML configurations for Kubernetes JobSets and serves as a
+  """Generates YAML configurations for Kubernetes JobSets and serves as a
   data transfer object specifically for Airflow XCom, 'multiple_outputs', etc.
 
-  BaseModel:
-    BaseModel is advanced version of @dataclass. we can do dynamic attribute
-      assignment, validation. More suitable in this case.
+  Note:
+    Extends Pydantic's BaseModel (rather than a plain dataclass) to leverage
+    runtime type validation, field coercion, and dynamic attribute assignment.
 
-  MutableMapping:
-    We avoid to use dict here. Since airflow will adapt default serialization
-      and deserialization process on dict, we might lose BaseModel's
-      features. Instead, we implement MutableMapping, so airflow would just
-      call customized serialize() and deserialize() methods defined by
-      ourselves.
+    Implements MutableMapping instead of inheriting from dict to prevent
+    Airflow from invoking its default dict serialization/deserialization
+    logic, which would bypass BaseModel's field handling. By satisfying the
+    MutableMapping interface, Airflow delegates to the custom serialize() and
+    deserialize() methods defined on this class.
 
   Attributes:
     jobset_name: The name of the JobSet.
