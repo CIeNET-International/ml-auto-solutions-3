@@ -247,7 +247,6 @@ with models.DAG(
 
     ### Prerequisites
     - This test requires an existing cluster.
-    - This test requires that a dataset with the same name as the UI parameter "[BigQuery Database Dataset]".
     - If you're using a service account to pull an image from a different project, you need to grant the service account the `Artifact Registry Reader` role in that project.
 
     ### Procedures

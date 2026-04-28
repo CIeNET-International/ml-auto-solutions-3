@@ -50,9 +50,6 @@ RECIPE_FLAG = [
     "selected_model_names",
     "priority",
     "max_restarts",
-    "bq_enable",
-    "bq_db_project",
-    "bq_db_dataset",
     "workload_id",
     "device_type",
 ]

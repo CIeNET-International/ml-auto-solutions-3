@@ -152,25 +152,6 @@ PARAMETERS = {
         title="Max Restarts",
         description="Max restarts for the workload",
     ),
-    "bq_enable": Param(
-        False,
-        type="boolean",
-        title="BigQuery Enable",
-        description="Enable BigQuery to store metrics data",
-    ),
-    "bq_db_project": Param(
-        "cloud-tpu-multipod-dev",
-        type="string",
-        title="BigQuery Database Project",
-        description="The Project of BigQuery Database",
-    ),
-    "bq_db_dataset": Param(
-        # TODO(b/451750407): Replace this temporary image with a formal one.
-        "chzheng_test_100steps",
-        type="string",
-        title="BigQuery Database Dataset",
-        description="The Dataset of BigQuery Database",
-    ),
     "override_timeout_in_min": Param(
         None,
         type=["null", "integer"],
