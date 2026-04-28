@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from airflow.exceptions import AirflowFailException
 from airflow.models import BaseOperator
 from airflow.operators.python import PythonOperator
+from airflow.sensors.base import BaseSensorOperator
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.timeout import timeout as AirflowTimeout
 from airflow.utils.trigger_rule import TriggerRule
@@ -35,28 +36,10 @@ class TaskGroupWithTimeout(TaskGroup):
   Args:
     group_id: Unique identifier for this TaskGroup.
     timeout: Timeout as a timedelta (e.g. ``timedelta(minutes=30)``).
-    is_teardown: When ``True``, the group is treated as a teardown/cleanup
-      group: the internal ``ROOT_TASK_ID`` task uses
-      ``TriggerRule.ALL_DONE`` so the group runs even if an upstream group
-      has failed (e.g. a ``post_test`` group following a ``testing`` group).
-      Defaults to ``False`` (``TriggerRule.ALL_SUCCESS``).
+    is_teardown: When ``True``, the group runs even if an upstream group
+      has failed — suitable for cleanup/teardown groups (e.g. a ``post_test``
+      group following a ``testing`` group). Defaults to ``False``.
     **kwargs: Additional arguments passed to TaskGroup.
-
-  Usage:
-    with TaskGroupWithTimeout(
-        group_id="testing",
-        timeout=timedelta(minutes=30),
-    ) as testing:
-      task_a = my_task_a()
-      task_b = my_task_b()
-
-    # Cleanup group that must run even when `testing` fails:
-    with TaskGroupWithTimeout(
-        group_id="post_test",
-        timeout=timedelta(minutes=10),
-        is_teardown=True,
-    ) as post_test:
-      cleanup_task()
   """
 
   ROOT_TASK_ID = "provision_taskgroup_session"
@@ -115,7 +98,7 @@ class TaskGroupWithTimeout(TaskGroup):
   def add(self, base_op: BaseOperator):
     node = super().add(base_op)
 
-    if base_op.task_id.split(".")[-1] == self.ROOT_TASK_ID:
+    if base_op.task_id.endswith(f".{self.ROOT_TASK_ID}"):
       return node
     # The node has to have the `execute` method (e.g., BaseOperator or
     # MappedOperator), or there will be nothing to intercept.
@@ -155,58 +138,35 @@ class TaskGroupWithTimeout(TaskGroup):
       deadline = group_start + timeout
 
       remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
-      logging.info(
-          "TaskGroup '%s' deadline: group_start=%s, deadline=%s, remaining=%.1fs",
-          group_id,
-          group_start.isoformat(),
-          deadline.isoformat(),
-          remaining,
-      )
       if remaining <= 0:
         raise AirflowFailException(
             f"TaskGroup '{group_id}' has already exceeded its timeout. "
             "Skipping retries."
         )
-
-      # Resolve the effective per-attempt limit upfront, then run the task
-      # without post-hoc exception branching. Two distinct per-task limits
-      # may coexist and we honor the stricter:
-      #   - `execution_timeout` (BaseOperator, timedelta): hard wall-clock
-      #     limit applied to every operator. Airflow default: None.
-      #   - `timeout` (BaseSensorOperator only, seconds as float): poke-loop
-      #     limit specific to sensors. Airflow default: 7 days. Detected via
-      #     `hasattr(task, "poke")` to avoid importing sensor classes here;
-      #     forced to inf for non-sensor operators that happen to expose a
-      #     `timeout` attribute.
+      #   - `execution_timeout` (BaseOperator, timedelta): wall-clock per attempt.
+      #   - `timeout` (BaseSensorOperator, seconds): poke-loop limit, sensors only.
       task = task_instance.task
-      execution_timeout = getattr(task, "execution_timeout", None)
-      execution_timeout_sec = (
-          execution_timeout.total_seconds()
-          if execution_timeout
+      # Not every task sets execution_timeout; fall back to inf so an unset
+      execution_timeout = (
+          task.execution_timeout.total_seconds()
+          if task.execution_timeout
           else float("inf")
       )
-      sensor_timeout_sec = (
-          float(getattr(task, "timeout", float("inf")) or float("inf"))
-          if hasattr(task, "poke")
-          else float("inf")
+      sensor_timeout = (
+          task.timeout if isinstance(task, BaseSensorOperator) else float("inf")
       )
       effective_timeout_sec = int(
-          min(remaining, execution_timeout_sec, sensor_timeout_sec)
+          min(remaining, execution_timeout, sensor_timeout)
       )
       logging.info(
-          "TaskGroup '%s' task '%s': execution_timeout=%.1fs, sensor_timeout=%.1fs, group_remaining=%.1fs, effective=%ds",
+          "TaskGroup '%s' task '%s': effective timeout=%ds",
           group_id,
           task_instance.task_id,
-          execution_timeout_sec,
-          sensor_timeout_sec,
-          remaining,
           effective_timeout_sec,
       )
 
-      # Let AirflowTaskTimeout propagate so Airflow's normal retry semantics
-      # apply. The single exit point for "skip retries" is the `remaining <= 0`
-      # check at the top of this function: if a previous attempt exhausted the
-      # group budget, the next retry short-circuits there.
+      # Group-budget exhaustion is enforced by the `remaining <= 0` check
+      # above on the next retry; let AirflowTaskTimeout propagate normally.
       with AirflowTimeout(seconds=effective_timeout_sec):
         return original_execute(task, context)
 
