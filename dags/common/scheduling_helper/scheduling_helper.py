@@ -63,6 +63,7 @@ REGISTERED_DAGS: dict[str, DagIdToTimeout] = {
         "jobset_ttr_kill_process": dt.timedelta(minutes=90),
         "jobset_uptime_validation": dt.timedelta(minutes=90),
         "tpu_info_metrics_verification": DefaultTimeout,
+        "gke_cluster_version_manager": DefaultTimeout,
     },
     TPU_INTERRUPTION_MOCK_CLUSTER.name: {
         "validate_interruption_count_gce_bare_metal_preemption": DefaultTimeout,
