@@ -195,18 +195,18 @@ _TEMPLATE = string.Template(
 
 
 class JobSet(BaseModel, MutableMapping):
-  """Generates YAML configurations for Kubernetes JobSets and serves as a
+  """
+  Generates YAML configurations for Kubernetes JobSets and serves as a
   data transfer object specifically for Airflow XCom, 'multiple_outputs', etc.
 
-  Note:
-    Extends Pydantic's BaseModel (rather than a plain dataclass) to leverage
-    runtime type validation, field coercion, and dynamic attribute assignment.
+  Extends Pydantic's BaseModel (rather than a plain dataclass) to leverage
+  runtime type validation, field coercion, and dynamic attribute assignment.
 
-    Implements MutableMapping instead of inheriting from dict to prevent
-    Airflow from invoking its default dict serialization/deserialization
-    logic, which would bypass BaseModel's field handling. By satisfying the
-    MutableMapping interface, Airflow delegates to the custom serialize() and
-    deserialize() methods defined on this class.
+  Implements MutableMapping instead of inheriting from dict to prevent
+  Airflow from invoking its default dict serialization/deserialization
+  logic, which would bypass BaseModel's field handling. By satisfying the
+  MutableMapping interface, Airflow delegates to the custom serialize() and
+  deserialize() methods defined on this class.
 
   Attributes:
     jobset_name: The name of the JobSet.
@@ -278,18 +278,34 @@ class JobSet(BaseModel, MutableMapping):
 
   def serialize(self) -> dict:
     """
-    Customized serialization method for Airflow XCom. When a JobSet instance
-    is created, it would be serialized into a Airflow database. This method
-    defines how the serialization happens, we store it as a dictionary.
+    Serializes this JobSet to a dict for Airflow XCom storage.
+
+    Because JobSet is a MutableMapping rather than a plain dict, Airflow
+    skips its default dict serialization and delegates to this method
+    instead. Only non-None fields are included to keep the payload minimal.
+
+    Returns:
+      A dict representation of this JobSet, excluding unset fields.
     """
     return {k: v for k, v in self.model_dump().items() if v is not None}
 
   @staticmethod
   def deserialize(data: dict) -> "JobSet":
     """
-    Customized deserialization method for Airflow XCom. When a dict instance
-    (serialized from a JobSet object)is retrieved from the Airflow database,
-    it would call this method to deserialize back into a JobSet object.
+    Deserializes a dict retrieved from Airflow XCom back into a JobSet.
+
+    Because JobSet is a MutableMapping rather than a plain dict, Airflow
+    skips its default dict deserialization and delegates to this method
+    instead.
+
+    Args:
+      data: A dict previously produced by serialize().
+      version: The version of the serialized data format (not used in
+        this implementation, but a required signature for Airflow
+        deserialization).
+
+    Returns:
+      A JobSet instance populated with the fields from data.
     """
     return JobSet(**data)
 
@@ -1068,8 +1084,8 @@ def wait_for_jobset_replica_number(
     jobset_config: Configuration of JobSet which is being run.
     job_status(ReplicatedJobStatus): The type of status being checked for.
     expected_replica_number(int): The expected number of replicas to be found.
-    xcom_argument(dict): An optional argument to pull the expected replica number
-      from an XCom push. Should be in the format {"replicas": int}.
+    xcom_argument(dict): An optional argument to pull the expected replica
+      number from an XCom push. Should be in the format {"replicas": int}.
   """
 
   logging.info("Checking for number of replicas of type: %s", job_status.value)

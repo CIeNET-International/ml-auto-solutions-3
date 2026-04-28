@@ -68,7 +68,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       ### Prerequisites
       This test requires an existing cluster to run.
       ### Procedures
-      First two node-pools are created. The validation test is then run to
+      First a node-pool is created. The validation test is then run to
       check if the number of "Suspended" replicas is 0. Once the jobset is
       running the jobs should quickly enter the "Ready" state. Then using
       command to suspend entire jobset. The number of found replicas is
