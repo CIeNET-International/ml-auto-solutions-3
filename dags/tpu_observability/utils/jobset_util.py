@@ -262,7 +262,10 @@ class JobSet(BaseModel, MutableMapping):
 
   def __getattr__(self, key: str) -> Any:
     """Allows attribute-style access."""
-    return self[key]
+    try:
+      return self[key]
+    except KeyError as e:
+      raise AttributeError(f"'JobSet' object has no attribute '{key}'") from e
 
   def __setattr__(self, key: str, value: Any) -> None:
     """Allows attribute-style access."""
@@ -1091,7 +1094,7 @@ def wait_for_jobset_replica_number(
   logging.info("Checking for number of replicas of type: %s", job_status.value)
   suspended_replica_number = get_replica_num(
       job_status=job_status,
-      job_name=jobset_config["replicated_job_name"],
+      job_name=jobset_config.replicated_job_name,
       node_pool=node_pool,
   )
   return suspended_replica_number == expected_replica_number
