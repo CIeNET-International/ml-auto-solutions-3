@@ -290,7 +290,7 @@ class JobSet(BaseModel, MutableMapping):
     return {k: v for k, v in self.model_dump().items() if v is not None}
 
   @staticmethod
-  def deserialize(data: dict) -> "JobSet":
+  def deserialize(data: dict, version: int) -> "JobSet":
     """
     Deserializes a dict retrieved from Airflow XCom back into a JobSet.
 
