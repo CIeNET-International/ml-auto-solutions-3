@@ -174,18 +174,33 @@ class TaskGroupWithTimeout(TaskGroup):
             "Skipping retries."
         )
 
-      # Collapse the two timeout settings into a single effective limit
-      # *before* invoking the task body. Rationale:
+      # Collapse all timeout settings into a single effective limit *before*
+      # invoking the task body. Rationale:
       #   - Single exit point: any AirflowTaskTimeout is treated uniformly
       #     as a fatal group-budget exhaustion, no post-hoc branching.
       #   - Avoids a race window where letting the task's own timeout
       #     re-raise normally would trigger a retry that cannot fit in the
       #     remaining group budget once Airflow scheduling overhead is
       #     accounted for.
-      # Regular @task operators have no per-task timeout (None → inf).
-      task_timeout_sec = float(
-          getattr(task_instance.task, "timeout", None) or float("inf")
+      #
+      # Two distinct per-task limits may coexist and we honor the stricter:
+      #   - `execution_timeout` (BaseOperator, timedelta): hard wall-clock
+      #     limit applied to every operator.
+      #   - `timeout` (BaseSensorOperator only, seconds as float): poke-loop
+      #     limit specific to sensors. Detected via `hasattr(task, "poke")`
+      #     to avoid importing sensor classes here.
+      execution_timeout = getattr(task_instance.task, "execution_timeout", None)
+      execution_timeout_sec = (
+          execution_timeout.total_seconds()
+          if execution_timeout
+          else float("inf")
       )
+      sensor_timeout_sec = float("inf")
+      if hasattr(task_instance.task, "poke"):
+        sensor_timeout_sec = float(
+            getattr(task_instance.task, "timeout", None) or float("inf")
+        )
+      task_timeout_sec = min(execution_timeout_sec, sensor_timeout_sec)
       effective_timeout_sec = int(min(remaining, task_timeout_sec))
       logging.info(
           "TaskGroup '%s' task '%s': task_timeout=%.1fs, group_remaining=%.1fs, effective=%ds",
