@@ -33,12 +33,11 @@ DAG_ID = "gke_cluster_version_manager"
 @task
 def find_available_version(node_pool_info: node_pool.Info) -> str:
   """Finds the latest available GKE version."""
-  region = node_pool_info.region
-  if not region:
-    raise ValueError("Region not found in node_pool_info")
 
   command = (
-      f"gcloud container get-server-config --region={region} --format='json'"
+      f"gcloud container get-server-config --region={node_pool_info.region} "
+      f"--project={node_pool_info.project_id} "
+      "--format='json'"
   )
   logging.info("Running command: %s", command)
   stdout = subprocess.run_exec(command)
@@ -46,7 +45,6 @@ def find_available_version(node_pool_info: node_pool.Info) -> str:
   output_json = json.loads(stdout)
   valid_versions = output_json.get("validMasterVersions", [])
 
-  # Filter: ^1\.(3[2-9]|[4-9][0-9])
   pattern = re.compile(r"^1\.(3[2-9]|[4-9][0-9])")
   matching_versions = [v for v in valid_versions if pattern.match(v)]
 
@@ -61,17 +59,8 @@ def find_available_version(node_pool_info: node_pool.Info) -> str:
 @task
 def find_current_cluster_version(node_pool_info: node_pool.Info) -> dict:
   """Finds the current version of the cluster."""
-  cluster_name = node_pool_info.cluster_name
-  region = node_pool_info.region
-  if not cluster_name or not region:
-    raise ValueError("cluster_name or region not found in node_pool_info")
 
-  command = (
-      f"gcloud container clusters describe {cluster_name} "
-      f"--region={region} --format='json'"
-  )
-  logging.info("Running command: %s", command)
-  stdout = subprocess.run_exec(command)
+  stdout = node_pool.describe_cluster(node_pool_info)
 
   output_json = json.loads(stdout)
   current_master_version = output_json.get("currentMasterVersion")
@@ -92,8 +81,6 @@ def upgrade_master(
 ):
   """Upgrades the master to the target version if needed."""
   current_master = current_versions.get("currentMasterVersion")
-  cluster_name = node_pool_info.cluster_name
-  region = node_pool_info.region
 
   if current_master != latest_version:
     logging.info(
@@ -101,12 +88,7 @@ def upgrade_master(
         current_master,
         latest_version,
     )
-    command = (
-        f"gcloud container clusters upgrade {cluster_name} --master "
-        f"--cluster-version={latest_version} --region={region} --quiet"
-    )
-    logging.info("Running command: %s", command)
-    subprocess.run_exec(command)
+    node_pool.upgrade_cluster_master(node_pool_info, latest_version)
   else:
     logging.info("Master is already at target version. Skipping.")
 
@@ -117,8 +99,6 @@ def upgrade_nodes(
 ):
   """Upgrades all node pools to the target version if needed."""
   current_node = current_versions.get("currentNodeVersion")
-  cluster_name = node_pool_info.cluster_name
-  region = node_pool_info.region
 
   if current_node != latest_version:
     logging.info(
@@ -126,12 +106,7 @@ def upgrade_nodes(
         current_node,
         latest_version,
     )
-    command = (
-        f"gcloud container clusters upgrade {cluster_name} "
-        f"--region={region} --cluster-version={latest_version} --quiet"
-    )
-    logging.info("Running command: %s", command)
-    subprocess.run_exec(command)
+    node_pool.upgrade_cluster_node_pool(node_pool_info, latest_version)
   else:
     logging.info("Nodes are already at target version. Skipping.")
 
@@ -139,15 +114,8 @@ def upgrade_nodes(
 @task
 def verify_upgrade(target_version: str, node_pool_info: node_pool.Info):
   """Verifies that the upgrade was successful."""
-  cluster_name = node_pool_info.cluster_name
-  region = node_pool_info.region
 
-  command = (
-      f"gcloud container clusters describe {cluster_name} "
-      f"--region={region} --format='json'"
-  )
-  logging.info("Running command: %s", command)
-  stdout = subprocess.run_exec(command)
+  stdout = node_pool.describe_cluster(node_pool_info)
 
   output_json = json.loads(stdout)
   current_master_version = output_json.get("currentMasterVersion")
