@@ -35,11 +35,11 @@ class TaskGroupWithTimeout(TaskGroup):
   Args:
     group_id: Unique identifier for this TaskGroup.
     timeout: Timeout as a timedelta (e.g. ``timedelta(minutes=30)``).
-    trigger_rule: Trigger rule for the internal ``_timeout_start`` task.
-      Defaults to ``TriggerRule.ALL_SUCCESS``.  Set to
-      ``TriggerRule.ALL_DONE`` for cleanup groups that must run even when
-      an upstream group has failed (e.g. a ``post_test`` group following a
-      ``testing`` group).
+    is_teardown: When ``True``, the group is treated as a teardown/cleanup
+      group: the internal ``_timeout_start`` task uses
+      ``TriggerRule.ALL_DONE`` so the group runs even if an upstream group
+      has failed (e.g. a ``post_test`` group following a ``testing`` group).
+      Defaults to ``False`` (``TriggerRule.ALL_SUCCESS``).
     **kwargs: Additional arguments passed to TaskGroup.
 
   Usage:
@@ -54,7 +54,7 @@ class TaskGroupWithTimeout(TaskGroup):
     with TaskGroupWithTimeout(
         group_id="post_test",
         timeout=timedelta(minutes=10),
-        trigger_rule=TriggerRule.ALL_DONE,
+        is_teardown=True,
     ) as post_test:
       cleanup_task()
   """
@@ -63,12 +63,14 @@ class TaskGroupWithTimeout(TaskGroup):
       self,
       group_id,
       timeout: timedelta,
-      trigger_rule: str = TriggerRule.ALL_SUCCESS,
+      is_teardown: bool = False,
       **kwargs,
   ):
     super().__init__(group_id=group_id, **kwargs)
     self.timeout = timeout
-    self.trigger_rule = trigger_rule
+    self.trigger_rule = (
+        TriggerRule.ALL_DONE if is_teardown else TriggerRule.ALL_SUCCESS
+    )
     self._root_node = None
 
   def __enter__(self):
@@ -172,30 +174,37 @@ class TaskGroupWithTimeout(TaskGroup):
             "Skipping retries."
         )
 
-      # Determine the bottleneck *before* running the task body so that the
-      # decision is deterministic and not subject to a race condition.
-      # regular @task operators have no per-task timeout (None → inf).
+      # Collapse the two timeout settings into a single effective limit
+      # *before* invoking the task body. Rationale:
+      #   - Single exit point: any AirflowTaskTimeout is treated uniformly
+      #     as a fatal group-budget exhaustion, no post-hoc branching.
+      #   - Avoids a race window where letting the task's own timeout
+      #     re-raise normally would trigger a retry that cannot fit in the
+      #     remaining group budget once Airflow scheduling overhead is
+      #     accounted for.
+      # Regular @task operators have no per-task timeout (None → inf).
       task_timeout_sec = float(
           getattr(task_instance.task, "timeout", None) or float("inf")
       )
+      effective_timeout_sec = int(min(remaining, task_timeout_sec))
       logging.info(
-          "TaskGroup '%s' task '%s': task_timeout=%.1fs, group_remaining=%.1fs",
+          "TaskGroup '%s' task '%s': task_timeout=%.1fs, group_remaining=%.1fs, effective=%ds",
           group_id,
           task_instance.task_id,
           task_timeout_sec,
           remaining,
+          effective_timeout_sec,
       )
 
-      with AirflowTimeout(seconds=int(remaining)):
-        try:
+      try:
+        with AirflowTimeout(seconds=effective_timeout_sec):
           return original_execute(task_instance.task, context)
-        except AirflowTaskTimeout:
-          if remaining < task_timeout_sec:
-            raise AirflowFailException(
-                f"TaskGroup '{group_id}' timed out after {timeout}. "
-                "Skipping retries."
-            )
-          raise
+      except AirflowTaskTimeout:
+        raise AirflowFailException(
+            f"TaskGroup '{group_id}' timed out after {effective_timeout_sec}s "
+            f"(group_remaining={remaining:.1f}s, task_timeout={task_timeout_sec}s). "
+            "Skipping retries."
+        )
 
     node.execute = wrapped_execute
     return node
