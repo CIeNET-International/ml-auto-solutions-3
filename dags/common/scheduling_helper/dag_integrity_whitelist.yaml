@@ -171,6 +171,7 @@ whitelisted_dags:
 - pytorchxla2-torchbench-tpu
 - solutionsteam_vllm_benchmark_gpu
 - solutionsteam_vllm_benchmark_tpu
+- task_group_with_timeout_example_dag
 - tensorrt_llm_inference
 - tf_2_18_se_supported
 - tf_2_18_supported
