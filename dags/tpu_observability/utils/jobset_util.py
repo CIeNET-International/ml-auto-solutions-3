@@ -16,6 +16,7 @@
 
 import enum
 import dataclasses
+from collections.abc import MutableMapping
 from datetime import timedelta
 import json
 import logging
@@ -24,7 +25,9 @@ import random
 import string
 import tempfile
 import textwrap
-from typing import Final
+from typing import Final, Any, Optional
+
+from pydantic import BaseModel
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
@@ -191,14 +194,19 @@ _TEMPLATE = string.Template(
 # pylint: enable=line-too-long
 
 
-@dataclasses.dataclass
-class JobSet:
+class JobSet(BaseModel, MutableMapping):
   """
-  Generates YAML configurations for Kubernetes JobSets.
+  Generates YAML configurations for Kubernetes JobSets and serves as a
+  data transfer object specifically for Airflow XCom, 'multiple_outputs', etc.
 
-  This class helps in creating JobSet YAMLs by providing a template and allowing
-  customization of various parameters like jobset name, replicas, TPU
-  configuration, and the workload script to be executed.
+  Extends Pydantic's BaseModel (rather than a plain dataclass) to leverage
+  runtime type validation, field coercion, and dynamic attribute assignment.
+
+  Implements MutableMapping instead of inheriting from dict to prevent
+  Airflow from invoking its default dict serialization/deserialization
+  logic, which would bypass BaseModel's field handling. By satisfying the
+  MutableMapping interface, Airflow delegates to the custom serialize() and
+  deserialize() methods defined on this class.
 
   Attributes:
     jobset_name: The name of the JobSet.
@@ -218,20 +226,95 @@ class JobSet:
     tpu_cores_per_pod: The number of TPU cores requested per pod.
   """
 
-  jobset_name: str
-  namespace: str
-  max_restarts: int
-  replicated_job_name: str
-  replicas: int
-  backoff_limit: int
-  completions: int
-  parallelism: int
-  tpu_accelerator_type: str
-  tpu_topology: str
-  container_name: str
-  image: str
-  tpu_cores_per_pod: int
-  node_pool_selector: str
+  jobset_name: Optional[str] = None
+  namespace: Optional[str] = None
+  max_restarts: Optional[int] = None
+  replicated_job_name: Optional[str] = None
+  replicas: Optional[int] = None
+  backoff_limit: Optional[int] = None
+  completions: Optional[int] = None
+  parallelism: Optional[int] = None
+  tpu_accelerator_type: Optional[str] = None
+  tpu_topology: Optional[str] = None
+  container_name: Optional[str] = None
+  image: Optional[str] = None
+  tpu_cores_per_pod: Optional[int] = None
+  node_pool_selector: Optional[str] = None
+
+  def __getitem__(self, key: str) -> Any:
+    """Necessary MutableMapping method: allows dict-like field access."""
+
+    if key not in JobSet.model_fields:
+      raise KeyError(f"Key '{key}' is not a valid JobSet parameter.")
+    return object.__getattribute__(self, key)
+
+  def __setitem__(self, key: str, value: Any) -> None:
+    """Necessary MutableMapping method: allows setting field values."""
+    if key not in JobSet.model_fields:
+      raise KeyError(f"Key '{key}' is not a valid JobSet parameter.")
+    if value is None:
+      raise ValueError(f"Value for '{key}' cannot be None.")
+    object.__setattr__(self, key, value)
+
+  def __delitem__(self, key: str) -> None:
+    """Necessary MutableMapping method: allows deletion of fields."""
+    raise NotImplementedError("JobSet does not support field deletion.")
+
+  def __getattr__(self, key: str) -> Any:
+    """Allows attribute-style access."""
+    try:
+      return self[key]
+    except KeyError as e:
+      raise AttributeError(f"'JobSet' object has no attribute '{key}'") from e
+
+  def __setattr__(self, key: str, value: Any) -> None:
+    """Allows attribute-style access."""
+    self[key] = value
+
+  def to_dict(self) -> dict:
+    """Converts the JobSet to a dict, excluding None values."""
+    return {k: v for k, v in self.model_dump().items() if v is not None}
+
+  def __iter__(self) -> iter:
+    """Necessary MutableMapping method: iterates over non-None field keys."""
+    return iter(self.to_dict())
+
+  def __len__(self) -> int:
+    """Necessary MutableMapping method: counts non-None fields."""
+    return len(self.to_dict())
+
+  def serialize(self) -> dict:
+    """
+    Serializes this JobSet to a dict for Airflow XCom storage.
+
+    Because JobSet is a MutableMapping rather than a plain dict, Airflow
+    skips its default dict serialization and delegates to this method
+    instead. Only non-None fields are included to keep the payload minimal.
+
+    Returns:
+      A dict representation of this JobSet, excluding unset fields.
+    """
+    return self.to_dict()
+
+  @staticmethod
+  def deserialize(data: dict, version: int) -> "JobSet":
+    """
+    Deserializes a dict retrieved from Airflow XCom back into a JobSet.
+
+    Because JobSet is a MutableMapping rather than a plain dict, Airflow
+    skips its default dict deserialization and delegates to this method
+    instead.
+
+    Args:
+      data: A dict previously produced by serialize().
+      version: The version of the serialized data format (not used in
+        this implementation, but a required signature for Airflow
+        deserialization).
+
+    Returns:
+      A JobSet instance populated with the fields from data.
+    """
+    return JobSet(**data)
 
   def generate_yaml(self, workload_script: Workload) -> str:
     """Generates the final JobSet YAML content.
@@ -243,7 +326,7 @@ class JobSet:
     Returns:
         A string containing the complete JobSet YAML.
     """
-    params = dataclasses.asdict(self)
+    params = self.to_dict()
     params["command"] = ["bash", "-c"]
     params["args"] = workload_script
     params["node_pool_selector"] = self.node_pool_selector or ""
@@ -361,8 +444,18 @@ class Command:
     return Command.k8s_get_pods(jobset_name, namespace, output)
 
 
+class ReplicatedJobStatus(enum.Enum):
+  """Defines status of a replicated job."""
+
+  READY = "ready"
+  SUSPENDED = "suspended"
+  ACTIVE = "active"
+  FAILED = "failed"
+  SUCCEEDED = "succeeded"
+
+
 def get_replica_num(
-    replica_type: str, job_name: str, node_pool: node_pool_info
+    job_status: ReplicatedJobStatus, job_name: str, node_pool: node_pool_info
 ) -> int:
   """
   Get the number of a certain type of replicas from a running jobset.
@@ -371,12 +464,12 @@ def get_replica_num(
   the number of replicas in a certain status.
 
   Args:
-    replica_type: The type of replica being searched for.
+    job_status: The status of the replicated job being searched for.
     job_name: The name of the job replica which is run from the jobset.
     node_pool: The Info object containing the cluster information needed for
     the kubernetes API to connect to it.
   Returns:
-    The number of replicas of the specific type in the jobset.
+    The number of replicas of the specific status in the jobset.
   """
   api_client = gke.get_authenticated_client(
       node_pool.project_id,
@@ -396,7 +489,7 @@ def get_replica_num(
   try:
     replica_job_status = jobsets["items"][0]["status"]["replicatedJobsStatus"]
     name = replica_job_status[0]["name"]
-    replicas = replica_job_status[0][replica_type]
+    replicas = replica_job_status[0][job_status.value]
     logging.info("Found %s replicas", replicas)
 
   except (KeyError, IndexError, TypeError) as e:
@@ -469,7 +562,7 @@ def _generate_jobset_name(dag_id_prefix: str) -> str:
   return f"{dag_id_prefix}-{timestamp}"
 
 
-@task
+@task.python(multiple_outputs=True)
 def build_jobset_from_gcs_yaml(
     gcs_path: str,
     dag_name: str,
@@ -479,32 +572,32 @@ def build_jobset_from_gcs_yaml(
   Builds a JobSet instance by merging YAML defaults and generating
   a timestamped name based on dag_id_prefix.
 
+  update priority: jobset_defaults > dag-specific config > overrides
+
   Args:
     gcs_path: The GCS path to the YAML configuration file.
     dag_name: The name of the DAG to extract specific configurations.
     **overrides: Additional parameters to override default configurations.
   """
   config = gcs.load_yaml_from_gcs(gcs_path)
-  known_fields = {f.name for f in dataclasses.fields(JobSet)}
-  merged = {
-      k: v
-      for k, v in config.get("jobset_defaults", {}).items()
-      if k in known_fields
-  }
+  known_fields = JobSet.model_fields.keys()
+  jobset = JobSet()
+
+  cfg_defaults = config.get("jobset_defaults", {})
   dag_cfg = config.get("dag", {}).get(dag_name, {})
   dag_id_prefix = dag_cfg.get("dag_id_prefix")
 
-  for k, v in dag_cfg.items():
-    if k in known_fields and v is not None:
-      merged[k] = v
+  jobset["jobset_name"] = _generate_jobset_name(dag_id_prefix)
 
-  merged.update({k: v for k, v in overrides.items() if k in known_fields})
-  merged["jobset_name"] = _generate_jobset_name(dag_id_prefix)
+  jobset.update({k: v for k, v in cfg_defaults.items() if k in known_fields})
+  jobset.update({k: v for k, v in dag_cfg.items() if k in known_fields})
+  jobset.update({k: v for k, v in overrides.items() if k in known_fields})
 
   logging.info(
-      f"Final JobSet '{merged['jobset_name']}' created for DAG '{dag_name}'"
+      f"Final JobSet '{jobset['jobset_name']}' created for DAG '{dag_name}'"
   )
-  return JobSet(**merged)
+
+  return jobset
 
 
 @task
