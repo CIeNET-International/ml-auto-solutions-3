@@ -30,15 +30,15 @@ class TaskGroupWithTimeout(TaskGroup):
   """A TaskGroup that enforces a per-task timeout.
 
   Each task in the group shares a single deadline: the first task to run
-  sets the deadline to ``now + timeout``, and each subsequent task receives
+  sets the deadline to `now + timeout`, and each subsequent task receives
   only the time remaining until that deadline.
 
   Args:
     group_id: Unique identifier for this TaskGroup.
-    timeout: Timeout as a timedelta (e.g. ``timedelta(minutes=30)``).
-    is_teardown: When ``True``, the group runs even if an upstream group
-      has failed — suitable for cleanup/teardown groups (e.g. a ``post_test``
-      group following a ``testing`` group). Defaults to ``False``.
+    timeout: Timeout as a timedelta (e.g. `timedelta(minutes=30)`).
+    is_teardown: When `True`, the group runs even if an upstream group
+      has failed — suitable for cleanup/teardown groups (e.g. a `post_test`
+      group following a `testing` group). Defaults to `False`.
     **kwargs: Additional arguments passed to TaskGroup.
   """
 
@@ -61,14 +61,14 @@ class TaskGroupWithTimeout(TaskGroup):
   def __enter__(self):
     """Enter the TaskGroup context and create the root timing task.
 
-    Creates ``_root_node``, records``datetime.now(UTC)`` as an ISO-format
+    Creates `_root_node`, records `datetime.now(UTC)` as an ISO-format
     string via XCom. This task serves as the *root node* of the group:
-    all other tasks in the group are wired to run after it (see ``__exit__``),
+    all other tasks in the group are wired to run after it (see `__exit__`),
     so its XCom value represents the earliest possible group start time that
     every downstream task can reference.
 
-    While ``_root_node`` is being constructed, ``self._root_node`` is still
-    ``None``; ``add()`` uses that sentinel to skip timeout injection for the
+    While `_root_node` is being constructed, `self._root_node` is still
+    `None`; `.add()` uses that sentinel to skip timeout injection for the
     root node itself.
     """
     tg = super().__enter__()
@@ -82,17 +82,21 @@ class TaskGroupWithTimeout(TaskGroup):
   def __exit__(self, *args):
     """Exit the TaskGroup context and enforce the root-node dependency.
 
-    Iterates over every direct child registered in this TaskGroup and sets
-    ``_root_node`` as an upstream dependency for each one (skipping
-    ``_root_node`` itself to avoid a self-loop).  This makes ``_root_node``
-    the single root node of the group: it runs first, stores the wall-clock
-    start time in XCom, and only then do the real workload tasks begin.
-    ``wrapped_execute`` (injected by ``add()``) later pulls that XCom value to
-    calculate how much of the shared timeout budget remains.
+    Wire `_root_node` as upstream of every in-group root child.
+    A "root child" is a direct child with no upstream sibling within this
+    group. Non-root children inherit the dependency transitively through
+    their siblings, which avoids the N redundant edges that wiring every
+    child directly would create.
     """
+    children_ids = set(self.children.keys())
     for child in self.children.values():
-      if child is not self._root_node:
-        child.set_upstream(self._root_node)
+      if child is self._root_node:
+        continue
+      # If a sibling already chains into this child, the dependency on
+      # _root_node is satisfied transitively — no need to add a direct edge.
+      if child.upstream_task_ids & children_ids:
+        continue
+      child.set_upstream(self._root_node)
     return super().__exit__(*args)
 
   def add(self, base_op: BaseOperator):
@@ -143,21 +147,11 @@ class TaskGroupWithTimeout(TaskGroup):
             f"TaskGroup '{group_id}' has already exceeded its timeout. "
             "Skipping retries."
         )
-      #   - `execution_timeout` (BaseOperator, timedelta): wall-clock per attempt.
-      #   - `timeout` (BaseSensorOperator, seconds): poke-loop limit, sensors only.
       task = task_instance.task
-      # Not every task sets execution_timeout; fall back to inf so an unset
-      execution_timeout = (
-          task.execution_timeout.total_seconds()
-          if task.execution_timeout
-          else float("inf")
-      )
-      sensor_timeout = (
-          task.timeout if isinstance(task, BaseSensorOperator) else float("inf")
-      )
-      effective_timeout_sec = int(
-          min(remaining, execution_timeout, sensor_timeout)
-      )
+
+      # Take the minimum value as the effective timeout to ensure all tasks
+      # are strictly bounded under this task group's shared deadline.
+      effective_timeout_sec = min(remaining, _determine_task_timeout(task))
       logging.info(
           "TaskGroup '%s' task '%s': effective timeout=%ds",
           group_id,
@@ -167,8 +161,35 @@ class TaskGroupWithTimeout(TaskGroup):
 
       # Group-budget exhaustion is enforced by the `remaining <= 0` check
       # above on the next retry; let AirflowTaskTimeout propagate normally.
-      with AirflowTimeout(seconds=effective_timeout_sec):
+      with AirflowTimeout(seconds=int(effective_timeout_sec)):
         return original_execute(task, context)
 
     node.execute = wrapped_execute
     return node
+
+
+def _determine_task_timeout(task: BaseOperator) -> float:
+  """
+  Determines the effective timeout for a task by identifying which limit
+  triggers first.
+
+  This method centralizes the logic for various operator types.
+  - For sensors, it resolves the potential overlap between sensor-specific
+    timeouts and general execution timeouts.
+  - For standard operators, it takes "inf" as the value when no limit is
+    set, which aligns with the API's behavior of allowing unlimited
+    execution.
+  """
+  # Since Airflow treats an unset `execution_timeout` as unlimited,
+  # we take "inf" as its value to align with this behavior
+  is_set = task.execution_timeout is not None
+  inf = float("inf")
+  timeout_1 = task.execution_timeout.total_seconds() if is_set else inf
+
+  if isinstance(task, BaseSensorOperator):
+    # This attribute has a default value stored in the configuration file;
+    # therefore, `timeout` will always be set.
+    timeout_2 = task.timeout
+    return min(timeout_1, timeout_2)
+
+  return timeout_1
