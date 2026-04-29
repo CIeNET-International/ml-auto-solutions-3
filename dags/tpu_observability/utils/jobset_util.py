@@ -271,13 +271,17 @@ class JobSet(BaseModel, MutableMapping):
     """Allows attribute-style access."""
     self[key] = value
 
-  def __iter__(self):
-    """Necessary MutableMapping method: iterates over non-None field keys."""
-    return (k for k, v in self.model_dump().items() if v is not None)
+  def to_dict(self) -> dict:
+    """Converts the JobSet to a dict, excluding None values."""
+    return {k: v for k, v in self.model_dump().items() if v is not None}
 
-  def __len__(self):
+  def __iter__(self) -> iter:
+    """Necessary MutableMapping method: iterates over non-None field keys."""
+    return iter(self.to_dict())
+
+  def __len__(self) -> int:
     """Necessary MutableMapping method: counts non-None fields."""
-    return sum(1 for v in self.model_dump().values() if v is not None)
+    return len(self.to_dict())
 
   def serialize(self) -> dict:
     """
@@ -290,7 +294,7 @@ class JobSet(BaseModel, MutableMapping):
     Returns:
       A dict representation of this JobSet, excluding unset fields.
     """
-    return {k: v for k, v in self.model_dump().items() if v is not None}
+    return self.to_dict()
 
   @staticmethod
   def deserialize(data: dict, version: int) -> "JobSet":
@@ -322,7 +326,7 @@ class JobSet(BaseModel, MutableMapping):
     Returns:
         A string containing the complete JobSet YAML.
     """
-    params = {k: v for k, v in self.model_dump().items() if v is not None}
+    params = self.to_dict()
     params["command"] = ["bash", "-c"]
     params["args"] = workload_script
     params["node_pool_selector"] = self.node_pool_selector or ""
