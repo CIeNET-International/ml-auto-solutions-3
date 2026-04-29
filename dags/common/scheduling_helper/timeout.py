@@ -75,17 +75,10 @@ class TaskGroupWithTimeout(TaskGroup):
     self._root_node = None
 
   def __enter__(self):
-    """Enter the TaskGroup context and create the root timing task.
+    """Inject `_root_node` when entering the group context.
 
-    Creates `_root_node`, records `datetime.now(UTC)` as an ISO-format
-    string via XCom. This task serves as the *root node* of the group:
-    all other tasks in the group are wired to run after it (see `__exit__`),
-    so its XCom value represents the earliest possible group start time that
-    every downstream task can reference.
-
-    While `_root_node` is being constructed, `self._root_node` is still
-    `None`; `.add()` uses that sentinel to skip timeout injection for the
-    root node itself.
+    Overridden because this group's timeout mechanism needs a single anchor
+    task to record the start time; see class docstring for the full flow.
     """
     tg = super().__enter__()
     self._root_node = PythonOperator(
@@ -96,12 +89,10 @@ class TaskGroupWithTimeout(TaskGroup):
     return tg
 
   def __exit__(self, *args):
-    """Wire `_root_node` as upstream of every in-group root child.
+    """Wire `_root_node` as upstream of in-group root children on context exit.
 
-    A "root child" is a direct child with no upstream sibling within this
-    group. Non-root children inherit the dependency transitively through
-    their siblings, which avoids the N redundant edges that wiring every
-    child directly would create.
+    Overridden to guarantee `_root_node` runs first. Only children with no
+    in-group sibling upstream get a direct edge; others inherit transitively.
     """
     children_ids = set(self.children.keys())
     for child in self.children.values():
@@ -134,10 +125,8 @@ class TaskGroupWithTimeout(TaskGroup):
         # `execution_timeout` (if set) but escape this group's shared
         # timeout budget. Log so the trade-off is visible.
         logging.info(
-            "%s: skipping timeout injection for mapped task '%s' "
-            "(MappedOperator has no execute() at parse time).",
-            self.group_name,
-            node.task_id,
+            f"{self.group_name}: skipping timeout injection for mapped task "
+            f"'{node.task_id}' (MappedOperator has no execute() at parse time)."
         )
         return node
 
