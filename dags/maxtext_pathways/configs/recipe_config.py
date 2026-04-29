@@ -41,7 +41,6 @@ RECIPE_FLAG = [
     "cluster_name",
     "project",
     "zone",
-    "benchmark_steps",
     "num_slices_list",
     "server_image",
     "proxy_image",
