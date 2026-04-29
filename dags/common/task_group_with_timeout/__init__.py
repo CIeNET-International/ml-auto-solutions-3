@@ -12,27 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Scheduling helper package for DAG scheduling.
-
-This package provides:
-- SchedulingHelper: Manages DAG scheduling across different clusters.
-- get_dag_timeout: Returns the registered timeout for a specific DAG.
+"""TaskGroupWithTimeout: a TaskGroup that enforces a shared deadline timeout.
 
 Usage:
-  from dags.common.scheduling_helper import (
-      SchedulingHelper,
-      get_dag_timeout,
-  )
+  from dags.common.task_group_with_timeout import TaskGroupWithTimeout
 """
 
-from dags.common.scheduling_helper.scheduling_helper import (
-    DagIdToTimeout,
-    DayOfWeek,
-    REGISTERED_DAGS,
-    ScheduleWindowError,
-    SchedulingError,
-    SchedulingHelper,
-    TPU_OBS_MOCK_CLUSTER,
-    UnregisteredDagError,
-    get_dag_timeout,
+from dags.common.task_group_with_timeout.task_group_with_timeout import (
+    TaskGroupWithTimeout,
 )
