@@ -30,6 +30,7 @@ from airflow.utils.task_group import TaskGroup
 
 
 from dags import composer_env
+from dags.common.vm_resource import DockerImage
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils import subprocess_util as subprocess
@@ -40,6 +41,7 @@ from dags.tpu_observability.configs.common import (
     GCS_JOBSET_CONFIG_PATH,
 )
 from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper, get_dag_timeout
+from dags.tpu_observability.utils.time_util import TimeUtil
 
 
 DAG_ID = "jobset_ttr_kill_process"
@@ -65,12 +67,23 @@ def kill_tpu_pod_workload(info: node_pool.Info, pod_name: str) -> None:
         f"kubectl exec {pod_name} -n default -- pkill -9 -f python",
     ])
 
+    operation_start_time = TimeUtil.from_datetime(
+        datetime.datetime.now(datetime.timezone.utc)
+    )
+
     try:
       subprocess.run_exec(cmd, env=env)
     except subprocess.ProcessKilledException:
       logging.info("Process was terminated with SIGKILL")
     except Exception as e:
       raise e
+
+  return operation_start_time
+
+
+@task
+def pick_first(items):
+  return items[0] if items else None
 
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
@@ -133,6 +146,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           gcs_path=GCS_JOBSET_CONFIG_PATH,
           dag_name=DAG_ID,
           node_pool_selector=selector,
+          image=DockerImage.TPU_OBS_LIBTPU_STABLE.value,
       )
 
       cluster_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
@@ -162,11 +176,28 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           .expand(pod_name=startup.running_pods)
       )
 
-      wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
-          task_id="wait_for_metric_upload"
+      single_start_time = pick_first(kill_tasks)
+
+      wait_for_recovery = jobset.wait_for_jobset_recovered.override(
+          task_id="wait_for_recovery"
       )(
           node_pool=cluster_info,
           jobset_config=jobset_config,
+      )
+
+      verify_duration = jobset.verify_recovery_duration.override(
+          task_id="verify_recovery_duration"
+      )(
+          start_time=single_start_time,
+          end_time=wait_for_recovery,
+      )
+
+      wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
+          task_id="wait_for_jobset_ttr_to_be_found",
+      )(
+          node_pool=cluster_info,
+          jobset_config=jobset_config,
+          start_time=single_start_time,
       )
 
       cleanup_workload = jobset.end_workload.override(
@@ -191,6 +222,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           create_node_pool,
           startup.task_group,
           kill_tasks,
+          verify_duration,
           wait_for_metric_upload,
           cleanup_workload,
           cleanup_node_pool,
