@@ -19,8 +19,11 @@ from datetime import datetime, timedelta, timezone
 
 from airflow.exceptions import AirflowFailException
 from airflow.models import BaseOperator
+from airflow.models.mappedoperator import MappedOperator
+from airflow.models.taskmixin import DAGNode
 from airflow.operators.python import PythonOperator
 from airflow.sensors.base import BaseSensorOperator
+from airflow.utils.context import Context
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.timeout import timeout as AirflowTimeout
 from airflow.utils.trigger_rule import TriggerRule
@@ -32,6 +35,18 @@ class TaskGroupWithTimeout(TaskGroup):
   Each task in the group shares a single deadline: the first task to run
   sets the deadline to `now + timeout`, and each subsequent task receives
   only the time remaining until that deadline.
+
+  This customized object is implemented by intercepting `TaskGroup`'s `.add()`
+  at parsing phase, and wrapping `Task`'s `.execute()` to allow setting up a
+  dynamic timeout value so that it can affect `.execute()` at runtime phase.
+
+  Limitations:
+    1. Dynamic Task Mapping: Tasks generated via `.expand()` return a
+       `MappedOperator` which will unmap as a `BaseOperator` only at runtime;
+       therefore, there's no `.execute()` method to wrap at parsing phase.
+    2. Nested TaskGroups: The `.add()` interception only applies to direct
+       children. Tasks placed inside a nested `TaskGroup` will bypass this
+       parent group's customized wrapper and evade the shared timeout budget.
 
   Args:
     group_id: Unique identifier for this TaskGroup.
@@ -52,6 +67,7 @@ class TaskGroupWithTimeout(TaskGroup):
       **kwargs,
   ):
     super().__init__(group_id=group_id, **kwargs)
+    self.group_name = f"{self.__class__.__name__}: '{group_id}'"
     self.timeout = timeout
     self.trigger_rule = (
         TriggerRule.ALL_DONE if is_teardown else TriggerRule.ALL_SUCCESS
@@ -80,9 +96,8 @@ class TaskGroupWithTimeout(TaskGroup):
     return tg
 
   def __exit__(self, *args):
-    """Exit the TaskGroup context and enforce the root-node dependency.
+    """Wire `_root_node` as upstream of every in-group root child.
 
-    Wire `_root_node` as upstream of every in-group root child.
     A "root child" is a direct child with no upstream sibling within this
     group. Non-root children inherit the dependency transitively through
     their siblings, which avoids the N redundant edges that wiring every
@@ -99,73 +114,83 @@ class TaskGroupWithTimeout(TaskGroup):
       child.set_upstream(self._root_node)
     return super().__exit__(*args)
 
-  def add(self, base_op: BaseOperator):
-    node = super().add(base_op)
+  def add(self, node: DAGNode):
+    node = super().add(node)
 
-    if base_op.task_id.endswith(f".{self.ROOT_TASK_ID}"):
-      return node
-    # The node has to have the `execute` method (e.g., BaseOperator or
-    # MappedOperator), or there will be nothing to intercept.
-    #
-    # Rationale for NOT using `isinstance(node, BaseOperator)`:
-    # 1. Dynamic Task Mapping: Tasks generated via `.expand()` return a `MappedOperator`.
-    # 2. Class Hierarchy: `MappedOperator` does NOT inherit from `BaseOperator`
-    #    (both inherit from `AbstractOperator`). An `isinstance` check would silently
-    #    skip mapped tasks, leaving them without timeout protection.
-    # 3. Nested TaskGroups: `node` can be a nested `TaskGroup` (which lacks `execute`).
-    # Therefore, Duck Typing (checking for a callable `execute` attribute) is the
-    # most robust approach to intercept all executable nodes regardless of internal SDK changes.
-    if not hasattr(node, "execute") or not callable(node.execute):
-      logging.info(
-          "Node %s is not an executable task (e.g., nested TaskGroup). Skipping timeout injection.",
-          node,
-      )
-      return node
-    # Use the unbound method so `self` binds at execution time, after Airflow
-    # resolves XComArg placeholders. Binding via `node.execute` at parse time
-    # leaks unresolved placeholders into XCom and breaks serialization.
-    original_execute = type(node).execute
-
-    group_id = self.group_id
-    timeout = self.timeout
-    root_node_id = self._root_node.task_id
-
-    def wrapped_execute(context):
-      task_instance = context.get("task_instance")
-      start_str = task_instance.xcom_pull(task_ids=root_node_id)
-      if not start_str:
+    match node:
+      case TaskGroup():
+        # Tasks inside a nested TaskGroup will skip this parent's logic.
+        # This means they will escape the shared timeout limit.
+        # To prevent this, we intentionally block nested TaskGroups here.
+        #
+        # TODO: support nested TaskGroupWithTimeout
         raise AirflowFailException(
-            f"TaskGroup '{group_id}': no XCom value found from root node "
-            f"'{root_node_id}'. Cannot determine group start time."
+            f"{self.__class__.__name__} does not support nested TaskGroups"
         )
-      group_start = datetime.fromisoformat(start_str)
-      deadline = group_start + timeout
 
-      remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
-      if remaining <= 0:
-        raise AirflowFailException(
-            f"TaskGroup '{group_id}' has already exceeded its timeout. "
-            "Skipping retries."
+      case MappedOperator():
+        # Mapped tasks don't have an `.execute()` method at parse time, so
+        # there's nothing to wrap here. They run with their own
+        # `execution_timeout` (if set) but escape this group's shared
+        # timeout budget. Log so the trade-off is visible.
+        logging.info(
+            "%s: skipping timeout injection for mapped task '%s' "
+            "(MappedOperator has no execute() at parse time).",
+            self.group_name,
+            node.task_id,
         )
-      task = task_instance.task
+        return node
 
-      # Take the minimum value as the effective timeout to ensure all tasks
-      # are strictly bounded under this task group's shared deadline.
-      effective_timeout_sec = min(remaining, _determine_task_timeout(task))
-      logging.info(
-          "TaskGroup '%s' task '%s': effective timeout=%ds",
-          group_id,
-          task_instance.task_id,
-          effective_timeout_sec,
-      )
+      case BaseOperator() if node.task_id.endswith(f".{self.ROOT_TASK_ID}"):
+        # Skip the root node, which only initiates the session of this task
+        # group and requires no interception.
+        return node
 
-      # Group-budget exhaustion is enforced by the `remaining <= 0` check
-      # above on the next retry; let AirflowTaskTimeout propagate normally.
-      with AirflowTimeout(seconds=int(effective_timeout_sec)):
-        return original_execute(task, context)
+      case BaseOperator():
+        # Use the unbound method so `self` binds at execution time, after
+        # Airflow resolves XComArg placeholders. Binding via `node.execute` at
+        # the parsing phase leaks unresolved placeholders into XCom and breaks
+        # DAG serialization.
+        original_execute = type(node).execute
 
-    node.execute = wrapped_execute
-    return node
+        group_name = self.group_name
+        timeout = self.timeout
+        root_node_id = self._root_node.task_id
+
+        def wrapped_execute(context: Context):
+          task_instance = context.get("task_instance")
+
+          start_time_str = task_instance.xcom_pull(task_ids=root_node_id)
+          if not start_time_str:
+            raise AirflowFailException(
+                "Failed to overwrite timeout for task: "
+                f"{group_name} session wasn't initiated."
+            )
+
+          start_time = datetime.fromisoformat(start_time_str)
+          deadline = start_time + timeout
+          remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
+          if remaining <= 0:
+            raise AirflowFailException(f"{group_name} timeout exceeded")
+
+          task = task_instance.task
+
+          # Take the minimum value as the effective timeout to ensure all tasks
+          # are strictly bounded under this task group's shared deadline.
+          effective_timeout_sec = min(remaining, _determine_task_timeout(task))
+          logging.info(
+              f"{group_name}; "
+              f"task: '{task_instance.task_id}'; "
+              f"effective timeout: {effective_timeout_sec}s"
+          )
+
+          # Group-budget exhaustion is enforced by the `remaining <= 0` check
+          # above on the next retry; let AirflowTaskTimeout propagate normally.
+          with AirflowTimeout(seconds=int(effective_timeout_sec)):
+            return original_execute(task, context)
+
+        node.execute = wrapped_execute
+        return node
 
 
 def _determine_task_timeout(task: BaseOperator) -> float:
