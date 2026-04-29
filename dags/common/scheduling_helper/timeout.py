@@ -120,15 +120,12 @@ class TaskGroupWithTimeout(TaskGroup):
         )
 
       case MappedOperator():
-        # Mapped tasks don't have an `.execute()` method at parse time, so
-        # there's nothing to wrap here. They run with their own
-        # `execution_timeout` (if set) but escape this group's shared
-        # timeout budget. Log so the trade-off is visible.
-        logging.info(
-            f"{self.group_name}: skipping timeout injection for mapped task "
-            f"'{node.task_id}' (MappedOperator has no execute() at parse time)."
+        # Mapped tasks don't have an `.execute()` method at this stage.
+        # This means they will escape the shared timeout limit.
+        # To prevent this, we intentionally block MappedOperators here.
+        raise AirflowFailException(
+            f"{self.__class__.__name__} does not support Dynamic Task Mapping"
         )
-        return node
 
       case BaseOperator() if node.task_id.endswith(f".{self.ROOT_TASK_ID}"):
         # Skip the root node, which only initiates the session of this task

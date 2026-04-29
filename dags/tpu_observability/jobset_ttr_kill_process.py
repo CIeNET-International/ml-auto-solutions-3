@@ -39,18 +39,11 @@ from dags.tpu_observability.configs.common import (
     GCS_CONFIG_PATH,
     GCS_JOBSET_CONFIG_PATH,
 )
-from dags.common.scheduling_helper import (
-    SchedulingHelper,
-    TaskGroupWithTimeout,
-    get_dag_timeout,
-)
+from dags.common.scheduling_helper import SchedulingHelper, get_dag_timeout
 
 
 DAG_ID = "jobset_ttr_kill_process"
 DAGRUN_TIMEOUT = get_dag_timeout(DAG_ID)
-PRE_TEST_TIMEOUT = datetime.timedelta(minutes=20)
-TEST_TIMEOUT = datetime.timedelta(minutes=30)
-POST_TEST_TIMEOUT = DAGRUN_TIMEOUT - PRE_TEST_TIMEOUT - TEST_TIMEOUT
 SCHEDULE = SchedulingHelper.arrange_schedule_time(DAG_ID)
 
 
@@ -134,100 +127,61 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     with TaskGroup(  # pylint: disable=unexpected-keyword-arg
         group_id=f"v{config.tpu_version.value}"
     ):
-      # Pre-test: provisioning
-      with TaskGroupWithTimeout(
-          group_id="pre_test", timeout=PRE_TEST_TIMEOUT
-      ) as pre_test:
-        selector = jobset.generate_node_pool_selector("jobset-ttr-kill-process")
+      selector = jobset.generate_node_pool_selector("jobset-ttr-kill-process")
 
-        jobset_config = jobset.build_jobset_from_gcs_yaml(
-            gcs_path=GCS_JOBSET_CONFIG_PATH,
-            dag_name=DAG_ID,
-            node_pool_selector=selector,
-        )
+      jobset_config = jobset.build_jobset_from_gcs_yaml(
+          gcs_path=GCS_JOBSET_CONFIG_PATH,
+          dag_name=DAG_ID,
+          node_pool_selector=selector,
+      )
 
-        cluster_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
-            task_id="build_node_pool_info_from_gcs_yaml"
-        )(
-            gcs_path=GCS_CONFIG_PATH,
-            dag_name=DAG_ID,
-            is_prod=composer_env.is_prod_env(),
-            machine_type=config.machine_version.value,
-            tpu_topology=config.tpu_topology,
-            node_pool_selector=selector,
-        )
+      cluster_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
+          task_id="build_node_pool_info_from_gcs_yaml"
+      )(
+          gcs_path=GCS_CONFIG_PATH,
+          dag_name=DAG_ID,
+          is_prod=composer_env.is_prod_env(),
+          machine_type=config.machine_version.value,
+          tpu_topology=config.tpu_topology,
+          node_pool_selector=selector,
+      )
 
-        create_node_pool = node_pool.create.override(
-            task_id="create_node_pool"
-        )(
-            node_pool=cluster_info,
-        )
+      create_node_pool = node_pool.create.override(task_id="create_node_pool")(
+          node_pool=cluster_info,
+      )
 
-      # Test: fault injection and metric verification
-      with TaskGroupWithTimeout(
-          group_id="testing", timeout=TEST_TIMEOUT
-      ) as testing:
-        apply_time = jobset.run_workload.override(task_id="run_workload")(
-            node_pool=cluster_info,
-            jobset_config=jobset_config,
-            workload_type=Workload.JAX_TPU_BENCHMARK,
-        )
+      startup = jobset.create_jobset_startup_group(
+          node_pool=cluster_info,
+          jobset_config=jobset_config,
+          workload_type=Workload.JAX_TPU_BENCHMARK,
+      )
 
-        running_pods = jobset.wait_for_all_pods_running.override(
-            task_id="ensure_all_pods_running"
-        )(
-            node_pool=cluster_info,
-            jobset_config=jobset_config,
-        )
+      kill_tasks = (
+          kill_tpu_pod_workload.override(task_id="kill_tpu_pod_workload")
+          .partial(info=cluster_info)
+          .expand(pod_name=startup.running_pods)
+      )
 
-        wait_for_job_start = jobset.wait_for_jobset_started.override(
-            task_id="wait_for_job_start"
-        )(
-            cluster_info,
-            pod_name_list=running_pods,
-            job_apply_time=apply_time,
-        )
+      wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
+          task_id="wait_for_metric_upload"
+      )(
+          node_pool=cluster_info,
+          jobset_config=jobset_config,
+      )
 
-        kill_tasks = (
-            kill_tpu_pod_workload.override(task_id="kill_tpu_pod_workload")
-            .partial(info=cluster_info)
-            .expand(pod_name=running_pods)
-        )
+      cleanup_workload = jobset.end_workload.override(
+          task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
+      )(
+          node_pool=cluster_info,
+          jobset_config=jobset_config,
+      ).as_teardown(
+          setups=startup.jobset_start_time
+      )
 
-        wait_for_metric_upload = (
-            jobset.wait_for_jobset_ttr_to_be_found.override(
-                task_id="wait_for_metric_upload"
-            )(
-                node_pool=cluster_info,
-                jobset_config=jobset_config,
-            )
-        )
-
-      # Post-test: cleanup
-      with TaskGroupWithTimeout(
-          group_id="post_test",
-          timeout=POST_TEST_TIMEOUT,
-          is_teardown=True,
-      ) as post_test:
-        cleanup_workload = jobset.end_workload.override(
-            task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
-        )(
-            node_pool=cluster_info,
-            jobset_config=jobset_config,
-        ).as_teardown(
-            setups=apply_time
-        )
-
-        cleanup_node_pool = node_pool.delete.override(
-            task_id="cleanup_node_pool", trigger_rule=TriggerRule.ALL_DONE
-        )(node_pool=cluster_info).as_teardown(
-            setups=create_node_pool,
-        )
-
-      chain(
-          pre_test,
-          testing,
-          post_test,
+      cleanup_node_pool = node_pool.delete.override(
+          task_id="cleanup_node_pool", trigger_rule=TriggerRule.ALL_DONE
+      )(node_pool=cluster_info).as_teardown(
+          setups=create_node_pool,
       )
 
       chain(
@@ -235,9 +189,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           jobset_config,
           cluster_info,
           create_node_pool,
-          apply_time,
-          running_pods,
-          wait_for_job_start,
+          startup.task_group,
           kill_tasks,
           wait_for_metric_upload,
           cleanup_workload,
