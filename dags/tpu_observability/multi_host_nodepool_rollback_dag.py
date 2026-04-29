@@ -28,7 +28,7 @@ from dags import composer_env
 from dags.common import test_owner
 from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_PATH
 from dags.tpu_observability.utils import node_pool_util as node_pool
-from dags.common.scheduling_helper import SchedulingHelper, get_dag_timeout
+from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper, get_dag_timeout
 
 
 DAG_ID = "multi_host_nodepool_rollback"
