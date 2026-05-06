@@ -14,37 +14,43 @@
 
 """Example DAG demonstrating TaskGroupWithTimeout edge cases.
 
-Manually triggered (`schedule=None`). The DAG contains nine independent
-TaskGroups (case_1 ... case_8_teardown) that exercise different edge
-cases of TaskGroupWithTimeout. Per-group descriptions live in each
-group's `tooltip`, visible on hover in the Airflow Graph view.
+Manually triggered (`schedule=None`). The DAG contains TaskGroups
+(case_1 ... case_8_teardown, with case_5 split into three sub-cases
+case_5_1..case_5_3 and case_6 split into nine sub-cases
+case_6_1..case_6_9) that exercise different edge cases of
+TaskGroupWithTimeout. Per-group descriptions live in each group's
+`tooltip`, visible on hover in the Airflow Graph view.
 
-Each group is paired with a `verify_<case>` task placed outside the
-group (with `trigger_rule=ALL_DONE`). The verify task asserts every
-in-group task ended in its expected state — green when the demo behaved
-as designed, red when reality drifted from the spec (e.g. a task that
-was expected to fail unexpectedly succeeded).
+Tasks register their expected outcome (PASS/FAIL) into the module-level
+`validate_dict` via `gen_task`. A single `verify_task_states` task at
+the end of the DAG (with `trigger_rule=ALL_DONE`) reads the dict and
+asserts every task ended in its expected state — green when the demo
+behaved as designed, red when reality drifted from the spec.
 
-Tasks expected to fail are also marked `.as_teardown(
+Tasks expected to fail are marked `.as_teardown(
 on_failure_fail_dagrun=False)` so their failure does not propagate to
-the dagrun's overall status. Combined, the dagrun's overall status
-reflects whether all `verify_<case>` tasks passed.
+the dagrun's overall status. Combined with the single verification task,
+the dagrun is green iff every demo behaved as designed.
 
-case_5 and case_6 are cross-product groups (sub-cases case_5_1..3 and
-case_6_1..9 respectively) verifying that _determine_task_timeout picks
-the minimum of (group_remaining, sensor.timeout, execution_timeout).
-"unset" means the parameter is omitted; for sensor.timeout this falls
-back to the BaseSensorOperator default (7 days), effectively unbounded
-relative to the group budget.
+case_5_1..case_5_3 and case_6_1..case_6_9 are independent groups
+verifying _determine_task_timeout picks the minimum of
+(group_remaining, sensor.timeout, execution_timeout). "unset" means
+the parameter is omitted; for sensor.timeout this falls back to the
+BaseSensorOperator default (7 days), effectively unbounded relative
+to the group budget.
 """
 
 import datetime
 import time
+from collections.abc import Callable
+from enum import Enum, auto
+from typing import Any
 
 from airflow import models
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from airflow.models.baseoperator import chain
+from airflow.models.xcom_arg import XComArg
 from airflow.sensors.python import PythonSensor
 from airflow.utils.trigger_rule import TriggerRule
 
@@ -52,6 +58,29 @@ from dags.common.task_group_with_timeout import TaskGroupWithTimeout
 
 
 DAG_ID = "task_group_with_timeout_example_dag"
+
+
+class TaskRun(Enum):
+  PASS = auto()
+  FAIL = auto()
+
+
+# global shared, to reduce args
+validate_dict = {}
+validate_subjects = []
+
+
+def gen_task(expect: TaskRun, op: Callable, **op_kwargs) -> Any:
+  """Build a task and register its expected PASS/FAIL outcome."""
+  task_obj = op(**op_kwargs)
+  task_id = (
+      task_obj.operator.task_id
+      if isinstance(task_obj, XComArg)
+      else task_obj.task_id
+  )
+  validate_dict[task_id] = expect
+  validate_subjects.append(task_obj)
+  return task_obj
 
 
 @task
@@ -110,19 +139,22 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       ),
       timeout=datetime.timedelta(minutes=2),
   ) as case_1:
-    step_one = sleep_for.override(task_id="step_one")(seconds=5)
-    step_two = sleep_for.override(task_id="step_two")(seconds=5)
-    step_three = sleep_for.override(task_id="step_three")(seconds=5)
+    step_one = gen_task(
+        expect=TaskRun.PASS,
+        op=sleep_for.override(task_id="step_one"),
+        seconds=5,
+    )
+    step_two = gen_task(
+        expect=TaskRun.PASS,
+        op=sleep_for.override(task_id="step_two"),
+        seconds=5,
+    )
+    step_three = gen_task(
+        expect=TaskRun.PASS,
+        op=sleep_for.override(task_id="step_three"),
+        seconds=5,
+    )
     chain(step_one, step_two, step_three)
-
-  verify_case_1 = verify_task_states.override(task_id="verify_case_1")(
-      expected_states={
-          "case_1.step_one": "success",
-          "case_1.step_two": "success",
-          "case_1.step_three": "success",
-      }
-  )
-  chain(case_1, verify_case_1)
 
   with TaskGroupWithTimeout(
       group_id="case_2",
@@ -131,17 +163,12 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           "(120s vs 60s) - AirflowTaskTimeout fires at ~60s."
       ),
       timeout=datetime.timedelta(seconds=60),
-  ):
-    long_running_task = sleep_for.override(task_id="long_running_task")(
-        seconds=120
+  ) as case_2:
+    gen_task(
+        expect=TaskRun.FAIL,
+        op=sleep_for.override(task_id="long_running_task"),
+        seconds=120,
     ).as_teardown(on_failure_fail_dagrun=False)
-
-  verify_case_2 = verify_task_states.override(task_id="verify_case_2")(
-      expected_states={
-          "case_2.long_running_task": "failed",
-      }
-  )
-  chain(long_running_task, verify_case_2)
 
   with TaskGroupWithTimeout(
       group_id="case_3",
@@ -154,26 +181,33 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           "scheduling overhead between tasks.)"
       ),
       timeout=datetime.timedelta(seconds=60),
-  ):
-    step_1 = sleep_for.override(task_id="step_1")(seconds=5)
-    step_2 = sleep_for.override(task_id="step_2")(seconds=8)
-    step_3 = sleep_for.override(task_id="step_3")(seconds=10)
-    step_4 = sleep_for.override(task_id="step_4")(seconds=12)
-    step_5 = sleep_for.override(task_id="step_5")(seconds=30).as_teardown(
-        on_failure_fail_dagrun=False
+  ) as case_3:
+    step_1 = gen_task(
+        expect=TaskRun.PASS,
+        op=sleep_for.override(task_id="step_1"),
+        seconds=5,
     )
+    step_2 = gen_task(
+        expect=TaskRun.PASS,
+        op=sleep_for.override(task_id="step_2"),
+        seconds=8,
+    )
+    step_3 = gen_task(
+        expect=TaskRun.PASS,
+        op=sleep_for.override(task_id="step_3"),
+        seconds=10,
+    )
+    step_4 = gen_task(
+        expect=TaskRun.PASS,
+        op=sleep_for.override(task_id="step_4"),
+        seconds=12,
+    )
+    step_5 = gen_task(
+        expect=TaskRun.FAIL,
+        op=sleep_for.override(task_id="step_5"),
+        seconds=30,
+    ).as_teardown(on_failure_fail_dagrun=False)
     chain(step_1, step_2, step_3, step_4, step_5)
-
-  verify_case_3 = verify_task_states.override(task_id="verify_case_3")(
-      expected_states={
-          "case_3.step_1": "success",
-          "case_3.step_2": "success",
-          "case_3.step_3": "success",
-          "case_3.step_4": "success",
-          "case_3.step_5": "failed",
-      }
-  )
-  chain(step_5, verify_case_3)
 
   with TaskGroupWithTimeout(
       group_id="case_4",
@@ -187,9 +221,15 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           "the task is marked FAILED."
       ),
       timeout=datetime.timedelta(seconds=60),
-  ):
-    short_task = sleep_for.override(task_id="short_task")(seconds=15)
-    sensor_with_retries = PythonSensor(
+  ) as case_4:
+    short_task = gen_task(
+        expect=TaskRun.PASS,
+        op=sleep_for.override(task_id="short_task"),
+        seconds=15,
+    )
+    sensor_with_retries = gen_task(
+        expect=TaskRun.FAIL,
+        op=PythonSensor,
         task_id="sensor_with_retries",
         python_callable=_never_satisfied,
         poke_interval=5,
@@ -199,141 +239,173 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     ).as_teardown(on_failure_fail_dagrun=False)
     chain(short_task, sensor_with_retries)
 
-  verify_case_4 = verify_task_states.override(task_id="verify_case_4")(
-      expected_states={
-          "case_4.short_task": "success",
-          "case_4.sensor_with_retries": "failed",
-      }
-  )
-  chain(sensor_with_retries, verify_case_4)
-
   with TaskGroupWithTimeout(
-      group_id="case_5",
-      tooltip=(
-          "Cross product of execution_timeout vs a 60s group budget "
-          "(case_5_1=above, case_5_2=below, case_5_3=unset). All three "
-          "tasks sleep 120s and time out; whichever limit (group or "
-          "execution_timeout) is tighter wins."
-      ),
+      group_id="case_5_1",
+      tooltip="exec=120, group=60 -> group wins (~60s).",
       timeout=datetime.timedelta(seconds=60),
-  ):
-    case_5_1 = sleep_for.override(
-        task_id="case_5_1_exec_above_group",
-        execution_timeout=datetime.timedelta(seconds=120),
-    )(seconds=120).as_teardown(on_failure_fail_dagrun=False)
-    case_5_2 = sleep_for.override(
-        task_id="case_5_2_exec_below_group",
-        execution_timeout=datetime.timedelta(seconds=30),
-    )(seconds=120).as_teardown(on_failure_fail_dagrun=False)
-    case_5_3 = sleep_for.override(task_id="case_5_3_exec_unset")(
-        seconds=120
+  ) as case_5_1:
+    gen_task(
+        expect=TaskRun.FAIL,
+        op=sleep_for.override(
+            task_id="subject_task",
+            execution_timeout=datetime.timedelta(seconds=120),
+        ),
+        seconds=120,
     ).as_teardown(on_failure_fail_dagrun=False)
 
-  verify_case_5 = verify_task_states.override(task_id="verify_case_5")(
-      expected_states={
-          "case_5.case_5_1_exec_above_group": "failed",
-          "case_5.case_5_2_exec_below_group": "failed",
-          "case_5.case_5_3_exec_unset": "failed",
-      }
-  )
-  chain([case_5_1, case_5_2, case_5_3], verify_case_5)
+  with TaskGroupWithTimeout(
+      group_id="case_5_2",
+      tooltip="exec=30, group=60 -> exec wins (~30s).",
+      timeout=datetime.timedelta(seconds=60),
+  ) as case_5_2:
+    gen_task(
+        expect=TaskRun.FAIL,
+        op=sleep_for.override(
+            task_id="subject_task",
+            execution_timeout=datetime.timedelta(seconds=30),
+        ),
+        seconds=120,
+    ).as_teardown(on_failure_fail_dagrun=False)
 
   with TaskGroupWithTimeout(
-      group_id="case_6",
-      tooltip=(
-          "Cross product of sensor.timeout x execution_timeout vs a 60s "
-          "group budget (case_6_1..case_6_9). Expected trip points: "
-          "6-1 ~60s (group), 6-2 ~30s (exec), 6-3 ~30s (sensor), "
-          "6-4 ~20s (exec), 6-5 ~60s (group), 6-6 ~30s (exec), "
-          "6-7 ~60s (group), 6-8 ~30s (sensor), 6-9 ~60s (group)."
-      ),
+      group_id="case_5_3",
+      tooltip="exec=unset, group=60 -> group wins (~60s).",
       timeout=datetime.timedelta(seconds=60),
-  ):
-    case_6_1 = PythonSensor(
-        task_id="case_6_1_sensor_above_exec_above",
+  ) as case_5_3:
+    gen_task(
+        expect=TaskRun.FAIL,
+        op=sleep_for.override(task_id="subject_task"),
+        seconds=120,
+    ).as_teardown(on_failure_fail_dagrun=False)
+
+  with TaskGroupWithTimeout(
+      group_id="case_6_1",
+      tooltip="sensor=120, exec=120, group=60 -> group wins (~60s).",
+      timeout=datetime.timedelta(seconds=60),
+  ) as case_6_1:
+    gen_task(
+        expect=TaskRun.FAIL,
+        op=PythonSensor,
+        task_id="subject_sensor",
         python_callable=_never_satisfied,
         poke_interval=5,
         timeout=120,
         execution_timeout=datetime.timedelta(seconds=120),
     ).as_teardown(on_failure_fail_dagrun=False)
-    case_6_2 = PythonSensor(
-        task_id="case_6_2_sensor_above_exec_below",
+
+  with TaskGroupWithTimeout(
+      group_id="case_6_2",
+      tooltip="sensor=120, exec=30, group=60 -> exec wins (~30s).",
+      timeout=datetime.timedelta(seconds=60),
+  ) as case_6_2:
+    gen_task(
+        expect=TaskRun.FAIL,
+        op=PythonSensor,
+        task_id="subject_sensor",
         python_callable=_never_satisfied,
         poke_interval=5,
         timeout=120,
         execution_timeout=datetime.timedelta(seconds=30),
     ).as_teardown(on_failure_fail_dagrun=False)
-    case_6_3 = PythonSensor(
-        task_id="case_6_3_sensor_below_exec_above",
+
+  with TaskGroupWithTimeout(
+      group_id="case_6_3",
+      tooltip="sensor=30, exec=120, group=60 -> sensor wins (~30s).",
+      timeout=datetime.timedelta(seconds=60),
+  ) as case_6_3:
+    gen_task(
+        expect=TaskRun.FAIL,
+        op=PythonSensor,
+        task_id="subject_sensor",
         python_callable=_never_satisfied,
         poke_interval=5,
         timeout=30,
         execution_timeout=datetime.timedelta(seconds=120),
     ).as_teardown(on_failure_fail_dagrun=False)
-    case_6_4 = PythonSensor(
-        task_id="case_6_4_sensor_below_exec_below",
+
+  with TaskGroupWithTimeout(
+      group_id="case_6_4",
+      tooltip="sensor=30, exec=20, group=60 -> exec wins (~20s).",
+      timeout=datetime.timedelta(seconds=60),
+  ) as case_6_4:
+    gen_task(
+        expect=TaskRun.FAIL,
+        op=PythonSensor,
+        task_id="subject_sensor",
         python_callable=_never_satisfied,
         poke_interval=5,
         timeout=30,
         execution_timeout=datetime.timedelta(seconds=20),
     ).as_teardown(on_failure_fail_dagrun=False)
-    case_6_5 = PythonSensor(
-        task_id="case_6_5_sensor_unset_exec_above",
+
+  with TaskGroupWithTimeout(
+      group_id="case_6_5",
+      tooltip="sensor=unset, exec=120, group=60 -> group wins (~60s).",
+      timeout=datetime.timedelta(seconds=60),
+  ) as case_6_5:
+    gen_task(
+        expect=TaskRun.FAIL,
+        op=PythonSensor,
+        task_id="subject_sensor",
         python_callable=_never_satisfied,
         poke_interval=5,
         execution_timeout=datetime.timedelta(seconds=120),
     ).as_teardown(on_failure_fail_dagrun=False)
-    case_6_6 = PythonSensor(
-        task_id="case_6_6_sensor_unset_exec_below",
+
+  with TaskGroupWithTimeout(
+      group_id="case_6_6",
+      tooltip="sensor=unset, exec=30, group=60 -> exec wins (~30s).",
+      timeout=datetime.timedelta(seconds=60),
+  ) as case_6_6:
+    gen_task(
+        expect=TaskRun.FAIL,
+        op=PythonSensor,
+        task_id="subject_sensor",
         python_callable=_never_satisfied,
         poke_interval=5,
         execution_timeout=datetime.timedelta(seconds=30),
     ).as_teardown(on_failure_fail_dagrun=False)
-    case_6_7 = PythonSensor(
-        task_id="case_6_7_sensor_above_exec_unset",
+
+  with TaskGroupWithTimeout(
+      group_id="case_6_7",
+      tooltip="sensor=120, exec=unset, group=60 -> group wins (~60s).",
+      timeout=datetime.timedelta(seconds=60),
+  ) as case_6_7:
+    gen_task(
+        expect=TaskRun.FAIL,
+        op=PythonSensor,
+        task_id="subject_sensor",
         python_callable=_never_satisfied,
         poke_interval=5,
         timeout=120,
     ).as_teardown(on_failure_fail_dagrun=False)
-    case_6_8 = PythonSensor(
-        task_id="case_6_8_sensor_below_exec_unset",
+
+  with TaskGroupWithTimeout(
+      group_id="case_6_8",
+      tooltip="sensor=30, exec=unset, group=60 -> sensor wins (~30s).",
+      timeout=datetime.timedelta(seconds=60),
+  ) as case_6_8:
+    gen_task(
+        expect=TaskRun.FAIL,
+        op=PythonSensor,
+        task_id="subject_sensor",
         python_callable=_never_satisfied,
         poke_interval=5,
         timeout=30,
     ).as_teardown(on_failure_fail_dagrun=False)
-    case_6_9 = PythonSensor(
-        task_id="case_6_9_both_unset",
+
+  with TaskGroupWithTimeout(
+      group_id="case_6_9",
+      tooltip="sensor=unset, exec=unset, group=60 -> group wins (~60s).",
+      timeout=datetime.timedelta(seconds=60),
+  ) as case_6_9:
+    gen_task(
+        expect=TaskRun.FAIL,
+        op=PythonSensor,
+        task_id="subject_sensor",
         python_callable=_never_satisfied,
         poke_interval=5,
     ).as_teardown(on_failure_fail_dagrun=False)
-
-  verify_case_6 = verify_task_states.override(task_id="verify_case_6")(
-      expected_states={
-          "case_6.case_6_1_sensor_above_exec_above": "failed",
-          "case_6.case_6_2_sensor_above_exec_below": "failed",
-          "case_6.case_6_3_sensor_below_exec_above": "failed",
-          "case_6.case_6_4_sensor_below_exec_below": "failed",
-          "case_6.case_6_5_sensor_unset_exec_above": "failed",
-          "case_6.case_6_6_sensor_unset_exec_below": "failed",
-          "case_6.case_6_7_sensor_above_exec_unset": "failed",
-          "case_6.case_6_8_sensor_below_exec_unset": "failed",
-          "case_6.case_6_9_both_unset": "failed",
-      }
-  )
-  chain(
-      [
-          case_6_1,
-          case_6_2,
-          case_6_3,
-          case_6_4,
-          case_6_5,
-          case_6_6,
-          case_6_7,
-          case_6_8,
-          case_6_9,
-      ],
-      verify_case_6,
-  )
 
   with TaskGroupWithTimeout(
       group_id="case_7",
@@ -345,30 +417,34 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       ),
       timeout=datetime.timedelta(minutes=5),
   ) as case_7:
-    chain_head = noop.override(task_id="chain_head")()
-    chain_middle = noop.override(task_id="chain_middle")()
-    chain_tail = noop.override(task_id="chain_tail")()
-    noop.override(task_id="parallel_root")()
+    chain_head = gen_task(
+        expect=TaskRun.PASS,
+        op=noop.override(task_id="chain_head"),
+    )
+    chain_middle = gen_task(
+        expect=TaskRun.PASS,
+        op=noop.override(task_id="chain_middle"),
+    )
+    chain_tail = gen_task(
+        expect=TaskRun.PASS,
+        op=noop.override(task_id="chain_tail"),
+    )
+    gen_task(
+        expect=TaskRun.PASS,
+        op=noop.override(task_id="parallel_root"),
+    )
     chain(chain_head, chain_middle, chain_tail)
-
-  verify_case_7 = verify_task_states.override(task_id="verify_case_7")(
-      expected_states={
-          "case_7.chain_head": "success",
-          "case_7.chain_middle": "success",
-          "case_7.chain_tail": "success",
-          "case_7.parallel_root": "success",
-      }
-  )
-  chain(case_7, verify_case_7)
 
   with TaskGroupWithTimeout(
       group_id="case_8_main",
       tooltip="Main phase fails (failing_task raises immediately).",
       timeout=datetime.timedelta(minutes=2),
   ) as case_8_main:
-    failing_task = raise_workload_failure.override(
-        task_id="failing_task"
-    )().as_teardown(on_failure_fail_dagrun=False)
+    gen_task(
+        expect=TaskRun.FAIL,
+        op=raise_workload_failure.override(task_id="failing_task"),
+    ).as_teardown(on_failure_fail_dagrun=False)
+
   with TaskGroupWithTimeout(
       group_id="case_8_teardown",
       tooltip=(
@@ -378,23 +454,17 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       timeout=datetime.timedelta(minutes=2),
       is_teardown=True,
   ) as case_8_teardown:
-    noop.override(task_id="cleanup_task")()
+    gen_task(
+        expect=TaskRun.PASS,
+        op=noop.override(task_id="cleanup_task"),
+    )
+
   chain(case_8_main, case_8_teardown)
 
-  verify_case_8_main = verify_task_states.override(
-      task_id="verify_case_8_main"
-  )(
+  validate = verify_task_states(
       expected_states={
-          "case_8_main.failing_task": "failed",
+          task_id: ("success" if expect is TaskRun.PASS else "failed")
+          for task_id, expect in validate_dict.items()
       }
   )
-  chain(failing_task, verify_case_8_main)
-
-  verify_case_8_teardown = verify_task_states.override(
-      task_id="verify_case_8_teardown"
-  )(
-      expected_states={
-          "case_8_teardown.cleanup_task": "success",
-      }
-  )
-  chain(case_8_teardown, verify_case_8_teardown)
+  chain(validate_subjects, validate)
