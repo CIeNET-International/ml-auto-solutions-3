@@ -67,7 +67,6 @@ class TaskRun(Enum):
 
 # global shared, to reduce args
 validate_dict = {}
-validate_subjects = []
 
 
 def gen_task(expect: TaskRun, op: Callable, **op_kwargs) -> Any:
@@ -79,7 +78,6 @@ def gen_task(expect: TaskRun, op: Callable, **op_kwargs) -> Any:
       else task_obj.task_id
   )
   validate_dict[task_id] = expect
-  validate_subjects.append(task_obj)
   return task_obj
 
 
@@ -139,21 +137,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       ),
       timeout=datetime.timedelta(minutes=2),
   ) as case_1:
-    step_one = gen_task(
-        expect=TaskRun.PASS,
-        op=sleep_for.override(task_id="step_one"),
-        seconds=5,
-    )
-    step_two = gen_task(
-        expect=TaskRun.PASS,
-        op=sleep_for.override(task_id="step_two"),
-        seconds=5,
-    )
-    step_three = gen_task(
-        expect=TaskRun.PASS,
-        op=sleep_for.override(task_id="step_three"),
-        seconds=5,
-    )
+    step_one = gen_task(expect=TaskRun.PASS, op=sleep_for, seconds=5)
+    step_two = gen_task(expect=TaskRun.PASS, op=sleep_for, seconds=5)
+    step_three = gen_task(expect=TaskRun.PASS, op=sleep_for, seconds=5)
     chain(step_one, step_two, step_three)
 
   with TaskGroupWithTimeout(
@@ -166,7 +152,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
   ) as case_2:
     gen_task(
         expect=TaskRun.FAIL,
-        op=sleep_for.override(task_id="long_running_task"),
+        op=sleep_for,
         seconds=120,
     ).as_teardown(on_failure_fail_dagrun=False)
 
@@ -175,36 +161,20 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       tooltip=(
           "Shared deadline across a longer chain - five sequential tasks "
           "(5+8+10+12+30=65s sleep) against a 60s budget. The first four "
-          "steps succeed; step_5's remaining budget is too small for its "
-          "30s sleep, so AirflowTaskTimeout interrupts it. (Sleep totals "
-          "are kept comfortably under 60s to leave headroom for Composer "
-          "scheduling overhead between tasks.)"
+          "steps succeed; the last step's remaining budget is too small "
+          "for its 30s sleep, so AirflowTaskTimeout interrupts it. "
+          "(Sleep totals are kept comfortably under 60s to leave headroom "
+          "for Composer scheduling overhead between tasks.)"
       ),
       timeout=datetime.timedelta(seconds=60),
   ) as case_3:
-    step_1 = gen_task(
-        expect=TaskRun.PASS,
-        op=sleep_for.override(task_id="step_1"),
-        seconds=5,
-    )
-    step_2 = gen_task(
-        expect=TaskRun.PASS,
-        op=sleep_for.override(task_id="step_2"),
-        seconds=8,
-    )
-    step_3 = gen_task(
-        expect=TaskRun.PASS,
-        op=sleep_for.override(task_id="step_3"),
-        seconds=10,
-    )
-    step_4 = gen_task(
-        expect=TaskRun.PASS,
-        op=sleep_for.override(task_id="step_4"),
-        seconds=12,
-    )
+    step_1 = gen_task(expect=TaskRun.PASS, op=sleep_for, seconds=5)
+    step_2 = gen_task(expect=TaskRun.PASS, op=sleep_for, seconds=8)
+    step_3 = gen_task(expect=TaskRun.PASS, op=sleep_for, seconds=10)
+    step_4 = gen_task(expect=TaskRun.PASS, op=sleep_for, seconds=12)
     step_5 = gen_task(
         expect=TaskRun.FAIL,
-        op=sleep_for.override(task_id="step_5"),
+        op=sleep_for,
         seconds=30,
     ).as_teardown(on_failure_fail_dagrun=False)
     chain(step_1, step_2, step_3, step_4, step_5)
@@ -212,21 +182,17 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
   with TaskGroupWithTimeout(
       group_id="case_4",
       tooltip=(
-          "task_group_timeout vs sensor retry. short_task uses 15s of the "
-          "60s budget, leaving ~45s for the sensor. Each sensor attempt "
-          "times out at sensor.timeout=20s; with retries=3 (4 total "
-          "attempts), successive retries chip away at the remaining "
-          "budget. By the third retry the budget is gone, so "
+          "task_group_timeout vs sensor retry. The first task uses 15s "
+          "of the 60s budget, leaving ~45s for sensor_with_retries. Each "
+          "sensor attempt times out at sensor.timeout=20s; with retries=3 "
+          "(4 total attempts), successive retries chip away at the "
+          "remaining budget. By the third retry the budget is gone, so "
           "wrapped_execute's `remaining<=0` guard fires immediately and "
           "the task is marked FAILED."
       ),
       timeout=datetime.timedelta(seconds=60),
   ) as case_4:
-    short_task = gen_task(
-        expect=TaskRun.PASS,
-        op=sleep_for.override(task_id="short_task"),
-        seconds=15,
-    )
+    short_task = gen_task(expect=TaskRun.PASS, op=sleep_for, seconds=15)
     sensor_with_retries = gen_task(
         expect=TaskRun.FAIL,
         op=PythonSensor,
@@ -247,8 +213,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     gen_task(
         expect=TaskRun.FAIL,
         op=sleep_for.override(
-            task_id="subject_task",
-            execution_timeout=datetime.timedelta(seconds=120),
+            execution_timeout=datetime.timedelta(seconds=120)
         ),
         seconds=120,
     ).as_teardown(on_failure_fail_dagrun=False)
@@ -260,10 +225,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
   ) as case_5_2:
     gen_task(
         expect=TaskRun.FAIL,
-        op=sleep_for.override(
-            task_id="subject_task",
-            execution_timeout=datetime.timedelta(seconds=30),
-        ),
+        op=sleep_for.override(execution_timeout=datetime.timedelta(seconds=30)),
         seconds=120,
     ).as_teardown(on_failure_fail_dagrun=False)
 
@@ -274,7 +236,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
   ) as case_5_3:
     gen_task(
         expect=TaskRun.FAIL,
-        op=sleep_for.override(task_id="subject_task"),
+        op=sleep_for,
         seconds=120,
     ).as_teardown(on_failure_fail_dagrun=False)
 
@@ -411,38 +373,26 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       group_id="case_7",
       tooltip=(
           "Dependency-edge reduction. Graph view should show that "
-          "_root_node connects only to chain_head and parallel_root; "
-          "chain_middle and chain_tail reach the root transitively via "
-          "chain_head."
+          "_root_node connects only to the entry tasks of the group "
+          "(the chain root and the parallel branch); the rest of the "
+          "chain reaches _root_node transitively."
       ),
       timeout=datetime.timedelta(minutes=5),
   ) as case_7:
-    chain_head = gen_task(
-        expect=TaskRun.PASS,
-        op=noop.override(task_id="chain_head"),
-    )
-    chain_middle = gen_task(
-        expect=TaskRun.PASS,
-        op=noop.override(task_id="chain_middle"),
-    )
-    chain_tail = gen_task(
-        expect=TaskRun.PASS,
-        op=noop.override(task_id="chain_tail"),
-    )
-    gen_task(
-        expect=TaskRun.PASS,
-        op=noop.override(task_id="parallel_root"),
-    )
+    chain_head = gen_task(expect=TaskRun.PASS, op=noop)
+    chain_middle = gen_task(expect=TaskRun.PASS, op=noop)
+    chain_tail = gen_task(expect=TaskRun.PASS, op=noop)
+    gen_task(expect=TaskRun.PASS, op=noop)
     chain(chain_head, chain_middle, chain_tail)
 
   with TaskGroupWithTimeout(
       group_id="case_8_main",
-      tooltip="Main phase fails (failing_task raises immediately).",
+      tooltip="Main phase fails immediately (the inner task raises).",
       timeout=datetime.timedelta(minutes=2),
   ) as case_8_main:
     gen_task(
         expect=TaskRun.FAIL,
-        op=raise_workload_failure.override(task_id="failing_task"),
+        op=raise_workload_failure,
     ).as_teardown(on_failure_fail_dagrun=False)
 
   with TaskGroupWithTimeout(
@@ -454,10 +404,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       timeout=datetime.timedelta(minutes=2),
       is_teardown=True,
   ) as case_8_teardown:
-    gen_task(
-        expect=TaskRun.PASS,
-        op=noop.override(task_id="cleanup_task"),
-    )
+    gen_task(expect=TaskRun.PASS, op=noop)
 
   chain(case_8_main, case_8_teardown)
 
@@ -467,4 +414,4 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           for task_id, expect in validate_dict.items()
       }
   )
-  chain(validate_subjects, validate)
+  chain([dag.task_dict[tid] for tid in validate_dict], validate)
