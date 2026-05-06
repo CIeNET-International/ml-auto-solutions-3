@@ -1,9 +1,15 @@
 """Utility functions for automating Jupyter notebooks in Airflow."""
 
+import dataclasses
 import datetime
 import inspect
+import logging
 import textwrap
 from airflow.models.taskmixin import DAGNode
+from airflow.models.baseoperator import chain
+from airflow.operators.empty import EmptyOperator
+from airflow.operators.python import BranchPythonOperator
+from airflow.utils.trigger_rule import TriggerRule
 
 from dags.common.vm_resource import (
     Project,
@@ -14,7 +20,11 @@ from dags.common.vm_resource import (
     Zone,
 )
 from dags.post_training.util import test_config_util
-from xlml.apis import gcp_config, metric_config, task, test_config
+from xlml.apis import gcp_config, gcs, metric_config, task, test_config
+
+NOTEBOOK_CONFIG_GCS_PATH = (
+    "gs://ml-auto-solutions-dag-configs/post-training/notebook_dag_configs.yaml"
+)
 
 
 def build_maxtext_setup_script() -> str:
@@ -252,6 +262,7 @@ def initialize_notebook_test(
     set_up_script: str,
     parameters: dict[str, any],
     task_owner: str,
+    tpu_version: TpuVersion,
 ) -> test_config.TpuVmTest:
   """Creates a TpuVmTest configuration for notebook execution."""
   notebook_execution = build_notebook_execution_command(
@@ -262,7 +273,7 @@ def initialize_notebook_test(
   )
   return test_config.TpuVmTest(
       test_config.Tpu(
-          version=TpuVersion.V5E,
+          version=tpu_version,
           cores=8,
           runtime_version=RuntimeVersion.V2_ALPHA_TPUV6.value,
           reserved=False,
@@ -279,14 +290,130 @@ def initialize_notebook_test(
   )
 
 
-def run_training(config: test_config.TpuVmTest, hf_token: str) -> DAGNode:
+@dataclasses.dataclass
+class NotebookConfig:
+  tpu_version: str
+  zone: str
+
+
+def load_notebook_config_from_gcs_yaml(
+    gcs_path: str, dag_name: str
+) -> NotebookConfig:
+  """Loads and parses TPU version and zone configs from GCS yaml config."""
+  config = gcs.load_yaml_from_gcs(gcs_path)
+  dag_cfg = config.get("dag", {}).get(dag_name, {})
+
+  tpu_version = dag_cfg.get("tpu_version")
+  zone = dag_cfg.get("zone")
+
+  return NotebookConfig(tpu_version=tpu_version, zone=zone)
+
+
+def run_training(
+    config: test_config.TpuVmTest, hf_token: str, zone: str | None = None
+) -> DAGNode:
+  target_zone = zone if zone is not None else Zone.EUROPE_WEST4_B.value
   return task.run_queued_resource_test(
       task_test_config=config,
       task_gcp_config=gcp_config.GCPConfig(
           project_name=Project.CLOUD_ML_AUTO_SOLUTIONS.value,
-          zone=Zone.EUROPE_WEST4_B.value,
+          zone=target_zone,
           dataset_name=metric_config.DatasetOption.XLML_DATASET,
       ),
       skip_post_process=True,
       custom_env={"HF_TOKEN": hf_token},
   )
+
+
+def create_branched_notebook_tasks(
+    dag_name: str,
+    task_id_prefix: str,
+    notebook_path: str,
+    set_up_script: str,
+    parameters: dict[str, any],
+    task_owner: str,
+    hf_token: str,
+    config: NotebookConfig,
+    previous_tasks: list[DAGNode] | None = None,
+) -> list[DAGNode]:
+  """Creates and chains branched notebook tasks for all TPU versions.
+
+  Args:
+      dag_name: Name of the DAG.
+      task_id_prefix: Prefix for task and operator IDs (e.g. "rl_grpo" or "sft").
+      notebook_path: Path to the notebook to run.
+      set_up_script: Setup script for MaxText environment.
+      parameters: Dict of parameters to inject in the notebook.
+      task_owner: Owner of the task.
+      hf_token: HuggingFace access token.
+      config: Loaded NotebookConfig holding active tpu_version and zone.
+      previous_tasks: Optional list of tasks/DAGNodes to chain *before* the branches.
+
+  Returns:
+      A list of terminal DAGNode tasks ([run_task, skipped_task]) from the end
+      of this branch loop, which can be chained into subsequent tasks.
+  """
+
+  tpu_versions = [TpuVersion.V5E, TpuVersion.TRILLIUM]
+
+  def choose_tpu_branch(
+      tpu_version_value: str, task_group_id: str, skipped_task_id: str
+  ):
+    selected = config.tpu_version
+    logging.info(
+        f"[Branch tpu_version Decision] DAG: {dag_name}, "
+        f"Task ID Prefix: {task_id_prefix}. "
+        f"Configured active TPU version: '{selected}', "
+        f"Current loop TPU version: '{tpu_version_value}'."
+    )
+    if selected == "all" or selected == tpu_version_value:
+      logging.info(
+          f"[Branch tpu_version Decision] MATCH! Routing"
+          f"execution to active task group: '{task_group_id}'."
+      )
+      return task_group_id
+    logging.info(
+        f"[Branch tpu_version Decision] MISMATCH! Routing"
+        f"execution to skipped placeholder task: '{skipped_task_id}'."
+    )
+    return skipped_task_id
+
+  previous_version_tasks = previous_tasks or []
+  for tpu_version in tpu_versions:
+    # 1. Initialize the test config
+    notebook_test = initialize_notebook_test(
+        test_name=f"{dag_name}_{task_id_prefix}",
+        dag_name=dag_name,
+        notebook_path=notebook_path,
+        set_up_script=set_up_script,
+        parameters=parameters,
+        task_owner=task_owner,
+        tpu_version=tpu_version,
+    )
+
+    # 2. Create run training task group/task
+    run_task = run_training(notebook_test, hf_token, zone=config.zone)
+
+    # 3. Create skipped empty operator task
+    skipped = EmptyOperator(
+        task_id=f"skipped_{task_id_prefix}_{tpu_version.value}"
+    )
+
+    # 4. Create BranchPythonOperator
+    branch = BranchPythonOperator(
+        task_id=f"branch_{task_id_prefix}_{tpu_version.value}",
+        python_callable=choose_tpu_branch,
+        op_args=[tpu_version.value, run_task.group_id, skipped.task_id],
+    )
+
+    # 5. Chain previous tasks to the branch operator if exist
+    if previous_version_tasks:
+      chain(previous_version_tasks, branch)
+      branch.trigger_rule = TriggerRule.ALL_DONE
+
+    # 6. Connect branch to the run task and skipped empty operator
+    branch >> [run_task, skipped]
+
+    previous_version_tasks = [run_task, skipped]
+
+  return previous_version_tasks
