@@ -12,33 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Example DAG demonstrating TaskGroupWithTimeout edge cases.
-
-Manually triggered (`schedule=None`). The DAG contains TaskGroups
-(case_1 ... case_8_teardown, with case_5 split into three sub-cases
-case_5_1..case_5_3 and case_6 split into nine sub-cases
-case_6_1..case_6_9) that exercise different edge cases of
-TaskGroupWithTimeout. Per-group descriptions live in each group's
-`tooltip`, visible on hover in the Airflow Graph view.
-
-Tasks register their expected outcome (PASS/FAIL) into the module-level
-`validate_dict` via `gen_task`. A single `verify_task_states` task at
-the end of the DAG (with `trigger_rule=ALL_DONE`) reads the dict and
-asserts every task ended in its expected state — green when the demo
-behaved as designed, red when reality drifted from the spec.
-
-Tasks expected to fail are marked `.as_teardown(
-on_failure_fail_dagrun=False)` so their failure does not propagate to
-the dagrun's overall status. Combined with the single verification task,
-the dagrun is green iff every demo behaved as designed.
-
-case_5_1..case_5_3 and case_6_1..case_6_9 are independent groups
-verifying _determine_task_timeout picks the minimum of
-(group_remaining, sensor.timeout, execution_timeout). "unset" means
-the parameter is omitted; for sensor.timeout this falls back to the
-BaseSensorOperator default (7 days), effectively unbounded relative
-to the group budget.
-"""
+"""Example DAG demonstrating TaskGroupWithTimeout edge cases."""
 
 import datetime
 import time
@@ -50,8 +24,6 @@ from airflow import models
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from airflow.models.baseoperator import chain
-from airflow.models.xcom_arg import XComArg
-from airflow.sensors.python import PythonSensor
 from airflow.utils.trigger_rule import TriggerRule
 
 from dags.common.task_group_with_timeout import TaskGroupWithTimeout
@@ -72,12 +44,7 @@ validate_dict = {}
 def gen_task(expect: TaskRun, op: Callable, **op_kwargs) -> Any:
   """Build a task and register its expected PASS/FAIL outcome."""
   task_obj = op(**op_kwargs)
-  task_id = (
-      task_obj.operator.task_id
-      if isinstance(task_obj, XComArg)
-      else task_obj.task_id
-  )
-  validate_dict[task_id] = expect
+  validate_dict[task_obj.operator.task_id] = expect
   return task_obj
 
 
@@ -117,8 +84,9 @@ def verify_task_states(expected_states: dict, dag_run=None):
     )
 
 
-def _never_satisfied() -> bool:
-  """Sensor poke callable that never resolves, forcing the sensor time out"""
+@task.sensor(poke_interval=5)
+def never_satisfied() -> bool:
+  """Sensor that never resolves; used to force timeout."""
   return False
 
 
@@ -137,10 +105,10 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       ),
       timeout=datetime.timedelta(minutes=2),
   ) as case_1:
-    step_one = gen_task(expect=TaskRun.PASS, op=sleep_for, seconds=5)
-    step_two = gen_task(expect=TaskRun.PASS, op=sleep_for, seconds=5)
-    step_three = gen_task(expect=TaskRun.PASS, op=sleep_for, seconds=5)
-    chain(step_one, step_two, step_three)
+    step_1 = gen_task(expect=TaskRun.PASS, op=sleep_for, seconds=5)
+    step_2 = gen_task(expect=TaskRun.PASS, op=sleep_for, seconds=5)
+    step_3 = gen_task(expect=TaskRun.PASS, op=sleep_for, seconds=5)
+    chain(step_1, step_2, step_3)
 
   with TaskGroupWithTimeout(
       group_id="case_2",
@@ -154,7 +122,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
         expect=TaskRun.FAIL,
         op=sleep_for,
         seconds=120,
-    ).as_teardown(on_failure_fail_dagrun=False)
+    )
 
   with TaskGroupWithTimeout(
       group_id="case_3",
@@ -176,7 +144,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
         expect=TaskRun.FAIL,
         op=sleep_for,
         seconds=30,
-    ).as_teardown(on_failure_fail_dagrun=False)
+    )
     chain(step_1, step_2, step_3, step_4, step_5)
 
   with TaskGroupWithTimeout(
@@ -195,14 +163,12 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     short_task = gen_task(expect=TaskRun.PASS, op=sleep_for, seconds=15)
     sensor_with_retries = gen_task(
         expect=TaskRun.FAIL,
-        op=PythonSensor,
-        task_id="sensor_with_retries",
-        python_callable=_never_satisfied,
-        poke_interval=5,
-        timeout=20,
-        retries=3,
-        retry_delay=datetime.timedelta(seconds=1),
-    ).as_teardown(on_failure_fail_dagrun=False)
+        op=never_satisfied.override(
+            timeout=20,
+            retries=3,
+            retry_delay=datetime.timedelta(seconds=1),
+        ),
+    )
     chain(short_task, sensor_with_retries)
 
   with TaskGroupWithTimeout(
@@ -216,7 +182,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             execution_timeout=datetime.timedelta(seconds=120)
         ),
         seconds=120,
-    ).as_teardown(on_failure_fail_dagrun=False)
+    )
 
   with TaskGroupWithTimeout(
       group_id="case_5_2",
@@ -227,7 +193,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
         expect=TaskRun.FAIL,
         op=sleep_for.override(execution_timeout=datetime.timedelta(seconds=30)),
         seconds=120,
-    ).as_teardown(on_failure_fail_dagrun=False)
+    )
 
   with TaskGroupWithTimeout(
       group_id="case_5_3",
@@ -238,7 +204,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
         expect=TaskRun.FAIL,
         op=sleep_for,
         seconds=120,
-    ).as_teardown(on_failure_fail_dagrun=False)
+    )
 
   with TaskGroupWithTimeout(
       group_id="case_6_1",
@@ -247,13 +213,11 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
   ) as case_6_1:
     gen_task(
         expect=TaskRun.FAIL,
-        op=PythonSensor,
-        task_id="subject_sensor",
-        python_callable=_never_satisfied,
-        poke_interval=5,
-        timeout=120,
-        execution_timeout=datetime.timedelta(seconds=120),
-    ).as_teardown(on_failure_fail_dagrun=False)
+        op=never_satisfied.override(
+            timeout=120,
+            execution_timeout=datetime.timedelta(seconds=120),
+        ),
+    )
 
   with TaskGroupWithTimeout(
       group_id="case_6_2",
@@ -262,13 +226,11 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
   ) as case_6_2:
     gen_task(
         expect=TaskRun.FAIL,
-        op=PythonSensor,
-        task_id="subject_sensor",
-        python_callable=_never_satisfied,
-        poke_interval=5,
-        timeout=120,
-        execution_timeout=datetime.timedelta(seconds=30),
-    ).as_teardown(on_failure_fail_dagrun=False)
+        op=never_satisfied.override(
+            timeout=120,
+            execution_timeout=datetime.timedelta(seconds=30),
+        ),
+    )
 
   with TaskGroupWithTimeout(
       group_id="case_6_3",
@@ -277,13 +239,11 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
   ) as case_6_3:
     gen_task(
         expect=TaskRun.FAIL,
-        op=PythonSensor,
-        task_id="subject_sensor",
-        python_callable=_never_satisfied,
-        poke_interval=5,
-        timeout=30,
-        execution_timeout=datetime.timedelta(seconds=120),
-    ).as_teardown(on_failure_fail_dagrun=False)
+        op=never_satisfied.override(
+            timeout=30,
+            execution_timeout=datetime.timedelta(seconds=120),
+        ),
+    )
 
   with TaskGroupWithTimeout(
       group_id="case_6_4",
@@ -292,13 +252,11 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
   ) as case_6_4:
     gen_task(
         expect=TaskRun.FAIL,
-        op=PythonSensor,
-        task_id="subject_sensor",
-        python_callable=_never_satisfied,
-        poke_interval=5,
-        timeout=30,
-        execution_timeout=datetime.timedelta(seconds=20),
-    ).as_teardown(on_failure_fail_dagrun=False)
+        op=never_satisfied.override(
+            timeout=30,
+            execution_timeout=datetime.timedelta(seconds=20),
+        ),
+    )
 
   with TaskGroupWithTimeout(
       group_id="case_6_5",
@@ -307,12 +265,10 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
   ) as case_6_5:
     gen_task(
         expect=TaskRun.FAIL,
-        op=PythonSensor,
-        task_id="subject_sensor",
-        python_callable=_never_satisfied,
-        poke_interval=5,
-        execution_timeout=datetime.timedelta(seconds=120),
-    ).as_teardown(on_failure_fail_dagrun=False)
+        op=never_satisfied.override(
+            execution_timeout=datetime.timedelta(seconds=120)
+        ),
+    )
 
   with TaskGroupWithTimeout(
       group_id="case_6_6",
@@ -321,12 +277,10 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
   ) as case_6_6:
     gen_task(
         expect=TaskRun.FAIL,
-        op=PythonSensor,
-        task_id="subject_sensor",
-        python_callable=_never_satisfied,
-        poke_interval=5,
-        execution_timeout=datetime.timedelta(seconds=30),
-    ).as_teardown(on_failure_fail_dagrun=False)
+        op=never_satisfied.override(
+            execution_timeout=datetime.timedelta(seconds=30)
+        ),
+    )
 
   with TaskGroupWithTimeout(
       group_id="case_6_7",
@@ -335,12 +289,8 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
   ) as case_6_7:
     gen_task(
         expect=TaskRun.FAIL,
-        op=PythonSensor,
-        task_id="subject_sensor",
-        python_callable=_never_satisfied,
-        poke_interval=5,
-        timeout=120,
-    ).as_teardown(on_failure_fail_dagrun=False)
+        op=never_satisfied.override(timeout=120),
+    )
 
   with TaskGroupWithTimeout(
       group_id="case_6_8",
@@ -349,12 +299,8 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
   ) as case_6_8:
     gen_task(
         expect=TaskRun.FAIL,
-        op=PythonSensor,
-        task_id="subject_sensor",
-        python_callable=_never_satisfied,
-        poke_interval=5,
-        timeout=30,
-    ).as_teardown(on_failure_fail_dagrun=False)
+        op=never_satisfied.override(timeout=30),
+    )
 
   with TaskGroupWithTimeout(
       group_id="case_6_9",
@@ -363,11 +309,8 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
   ) as case_6_9:
     gen_task(
         expect=TaskRun.FAIL,
-        op=PythonSensor,
-        task_id="subject_sensor",
-        python_callable=_never_satisfied,
-        poke_interval=5,
-    ).as_teardown(on_failure_fail_dagrun=False)
+        op=never_satisfied,
+    )
 
   with TaskGroupWithTimeout(
       group_id="case_7",
@@ -393,7 +336,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     gen_task(
         expect=TaskRun.FAIL,
         op=raise_workload_failure,
-    ).as_teardown(on_failure_fail_dagrun=False)
+    )
 
   with TaskGroupWithTimeout(
       group_id="case_8_teardown",
