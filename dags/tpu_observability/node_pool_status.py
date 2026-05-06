@@ -42,6 +42,7 @@ def generate_problematic_node_pool_name(
   """Generates a problematic node pool name."""
   return f"{info.node_pool_name}-x"
 
+
 @task
 def generate_problematic_node_location(
     info: node_pool.Info,
