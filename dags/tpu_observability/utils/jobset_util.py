@@ -367,6 +367,17 @@ class JobSetStartupOutput:
   jobset_start_time: XComArg
 
 
+class ReplicatedJobStatus(enum.Enum):
+  """Defines status of a replicated job."""
+
+  READY = "ready"
+  SUSPENDED = "suspended"
+  ACTIVE = "active"
+  FAILED = "failed"
+  SUCCEEDED = "succeeded"
+  SPECIFIED = "specified"
+
+
 class Command:
   """
   A collection of static methods to generate Kubernetes and gcloud commands.
