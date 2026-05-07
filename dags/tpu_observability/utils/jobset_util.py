@@ -367,8 +367,11 @@ class JobSetStartupOutput:
   jobset_start_time: XComArg
 
 
-class ReplicatedJobStatus(enum.Enum):
-  """Defines status of a replicated job."""
+class JobSetHealthiness(enum.Enum):
+  """Enumeration of JobSet healthiness metrics based on replica states.
+  The values represent the metric name suffix used in Prometheus/GKE
+  observability to track the count of replicas in each lifecycle state.
+  """
 
   READY = "ready"
   SUSPENDED = "suspended"

@@ -24,7 +24,7 @@ from airflow.models.baseoperator import chain
 from dags import composer_env
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
-from dags.tpu_observability.utils.jobset_util import Workload, ReplicatedJobStatus
+from dags.tpu_observability.utils.jobset_util import Workload, JobSetHealthiness
 from dags.tpu_observability.configs.common import (
     MachineConfigMap,
     GCS_CONFIG_PATH,
@@ -38,6 +38,7 @@ DAGRUN_TIMEOUT = get_dag_timeout(DAG_ID)
 SCHEDULE = SchedulingHelper.arrange_schedule_time(DAG_ID)
 
 FAIL_WORKLOAD = "python3 -c 'import logging; import sys; logging.error(\"Simulating Failure\"); sys.exit(1)'"
+SUCCESS_WORKLOAD = "python3 -c 'import logging; import sys; logging.info(\"Simulating Success\"); sys.exit(0)'"
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
 # know this signature).
@@ -63,18 +64,20 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     doc_md="""
       # JobSet Healthiness Test For the "Suspended" Status
       ### Description
-      This DAG automates the process of creating node-pools, ensuring the
-      correct number of "Suspended" replicas appear, then launching a jobset on
-      multiple replicas to ensure the correct number begin running.
+      This DAG automates node-pool creation and validates JobSet healthiness
+      by examining replica-based metrics: Specified, Active, Ready,
+      Suspended, Succeeded, and Failed. It ensures the JobSet controller
+      accurately reports these states during startup, maintenance,
+      and failure scenarios.
       ### Prerequisites
       This test requires an existing cluster to run.
       ### Procedures
-      First a node-pool is created. The validation test is then run to
-      check if the number of "Suspended" replicas is 0. Once the jobset is
-      running the jobs should quickly enter the "Ready" state. Then using
-      command to suspend entire jobset. The number of found replicas is
-      tested against the number of replicas which should be "Suspended".
-      If they match the DAG is a success.
+      First a node-pool is created. This test uses a State-Trigger-Observe pattern:
+      it triggers lifecycle transitions (e.g., suspension, failure or succeeded)
+      and verifies that GKE telemetry reflects these shifts. Using sensors,
+      the DAG polls for eventual consistency to account for ingestion latency,
+      dynamically matching runtime JobSet configurations against normalized monitoring
+      data types to ensure accurate state validation.
       """,
 ) as dag:
   for machine in MachineConfigMap:
@@ -110,7 +113,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           node_pool=cluster_info,
       )
 
-      startup = jobset.create_jobset_startup_group(
+      startup = jobset.create_jobset_startup_tasks(
           node_pool=cluster_info,
           jobset_config=jobset_config,
           workload_type=Workload.JAX_TPU_BENCHMARK,
@@ -118,12 +121,12 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 
       with TaskGroup(group_id="validate_running_metrics") as validate_running:
         running_metrics = [
-            (ReplicatedJobStatus.SPECIFIED, "USE_CONFIG_REPLICAS"),
-            (ReplicatedJobStatus.ACTIVE, "USE_CONFIG_REPLICAS"),
-            (ReplicatedJobStatus.READY, "USE_CONFIG_REPLICAS"),
-            (ReplicatedJobStatus.FAILED, 0),
-            (ReplicatedJobStatus.SUCCEEDED, 0),
-            (ReplicatedJobStatus.SUSPENDED, 0),
+            (JobSetHealthiness.SPECIFIED, "USE_CONFIG_REPLICAS"),
+            (JobSetHealthiness.ACTIVE, "USE_CONFIG_REPLICAS"),
+            (JobSetHealthiness.READY, "USE_CONFIG_REPLICAS"),
+            (JobSetHealthiness.FAILED, 0),
+            (JobSetHealthiness.SUCCEEDED, 0),
+            (JobSetHealthiness.SUSPENDED, 0),
         ]
         for status, expected in running_metrics:
           jobset.wait_for_jobset_metrics.override(
@@ -146,8 +149,8 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           group_id="validate_suspended_metrics"
       ) as validate_suspended:
         suspended_metrics = [
-            (ReplicatedJobStatus.ACTIVE, 0),
-            (ReplicatedJobStatus.SUSPENDED, "USE_CONFIG_REPLICAS"),
+            (JobSetHealthiness.ACTIVE, 0),
+            (JobSetHealthiness.SUSPENDED, "USE_CONFIG_REPLICAS"),
         ]
         for status, expected in suspended_metrics:
           jobset.wait_for_jobset_metrics.override(
@@ -163,6 +166,33 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           node_pool=cluster_info,
           jobset_config=jobset_config,
       )
+
+      with TaskGroup(group_id="inject_and_validate_success") as success_test:
+        cleanup_for_success = jobset.end_workload.override(
+            task_id="cleanup_before_success_injection"
+        )(
+            node_pool=cluster_info,
+            jobset_config=jobset_config,
+        )
+
+        start_success_job = jobset.run_workload.override(
+            task_id="start_success_job"
+        )(
+            node_pool=cluster_info,
+            jobset_config=jobset_config,
+            workload_type=SUCCESS_WORKLOAD,
+        )
+
+        validate_succeeded_metric = jobset.wait_for_jobset_metrics.override(
+            task_id="wait_for_succeeded_count"
+        )(
+            metric_name=JobSetHealthiness.SUCCEEDED,
+            expected_value="USE_CONFIG_REPLICAS",
+            node_pool=cluster_info,
+            jobset_config=jobset_config,
+        )
+
+        chain(cleanup_for_success, start_success_job, validate_succeeded_metric)
 
       with TaskGroup(group_id="inject_and_validate_failure") as failure_test:
         cleanup_for_failure = jobset.end_workload.override(
@@ -181,7 +211,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
         validate_failed_metric = jobset.wait_for_jobset_metrics.override(
             task_id="wait_for_failed_count"
         )(
-            metric_name=ReplicatedJobStatus.FAILED,
+            metric_name=JobSetHealthiness.FAILED,
             expected_value="USE_CONFIG_REPLICAS",
             node_pool=cluster_info,
             jobset_config=jobset_config,
@@ -209,11 +239,12 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           jobset_config,
           cluster_info,
           create_node_pool,
-          startup.task_group,
+          *startup.tasks,
           validate_running,
           suspend_action,
           validate_suspended,
           resume_action,
+          success_test,
           failure_test,
           cleanup_workload,
           cleanup_node_pool,
