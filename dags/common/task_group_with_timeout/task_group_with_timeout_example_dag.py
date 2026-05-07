@@ -118,11 +118,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       ),
       timeout=datetime.timedelta(seconds=60),
   ) as case_2:
-    gen_task(
-        expect=TaskRun.FAIL,
-        op=sleep_for,
-        seconds=120,
-    )
+    gen_task(expect=TaskRun.FAIL, op=sleep_for, seconds=120)
 
   with TaskGroupWithTimeout(
       group_id="case_3",
@@ -140,11 +136,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     step_2 = gen_task(expect=TaskRun.PASS, op=sleep_for, seconds=8)
     step_3 = gen_task(expect=TaskRun.PASS, op=sleep_for, seconds=10)
     step_4 = gen_task(expect=TaskRun.PASS, op=sleep_for, seconds=12)
-    step_5 = gen_task(
-        expect=TaskRun.FAIL,
-        op=sleep_for,
-        seconds=30,
-    )
+    step_5 = gen_task(expect=TaskRun.FAIL, op=sleep_for, seconds=30)
     chain(step_1, step_2, step_3, step_4, step_5)
 
   with TaskGroupWithTimeout(
@@ -200,117 +192,162 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       tooltip="exec=unset, group=60 -> group wins (~60s).",
       timeout=datetime.timedelta(seconds=60),
   ) as case_5_3:
-    gen_task(
-        expect=TaskRun.FAIL,
-        op=sleep_for,
-        seconds=120,
-    )
+    gen_task(expect=TaskRun.FAIL, op=sleep_for, seconds=120)
 
   with TaskGroupWithTimeout(
       group_id="case_6_1",
       tooltip="sensor=120, exec=120, group=60 -> group wins (~60s).",
       timeout=datetime.timedelta(seconds=60),
   ) as case_6_1:
-    gen_task(
+    subject = gen_task(
         expect=TaskRun.FAIL,
         op=never_satisfied.override(
             timeout=120,
             execution_timeout=datetime.timedelta(seconds=120),
         ),
     )
+    probe = gen_task(
+        expect=TaskRun.FAIL,
+        op=sleep_for.override(trigger_rule=TriggerRule.ALL_DONE),
+        seconds=2,
+    )
+    chain(subject, probe)
 
   with TaskGroupWithTimeout(
       group_id="case_6_2",
       tooltip="sensor=120, exec=30, group=60 -> exec wins (~30s).",
       timeout=datetime.timedelta(seconds=60),
   ) as case_6_2:
-    gen_task(
+    subject = gen_task(
         expect=TaskRun.FAIL,
         op=never_satisfied.override(
             timeout=120,
             execution_timeout=datetime.timedelta(seconds=30),
         ),
     )
+    probe = gen_task(
+        expect=TaskRun.PASS,
+        op=sleep_for.override(trigger_rule=TriggerRule.ALL_DONE),
+        seconds=2,
+    )
+    chain(subject, probe)
 
   with TaskGroupWithTimeout(
       group_id="case_6_3",
       tooltip="sensor=30, exec=120, group=60 -> sensor wins (~30s).",
       timeout=datetime.timedelta(seconds=60),
   ) as case_6_3:
-    gen_task(
+    subject = gen_task(
         expect=TaskRun.FAIL,
         op=never_satisfied.override(
             timeout=30,
             execution_timeout=datetime.timedelta(seconds=120),
         ),
     )
+    probe = gen_task(
+        expect=TaskRun.PASS,
+        op=sleep_for.override(trigger_rule=TriggerRule.ALL_DONE),
+        seconds=2,
+    )
+    chain(subject, probe)
 
   with TaskGroupWithTimeout(
       group_id="case_6_4",
       tooltip="sensor=30, exec=20, group=60 -> exec wins (~20s).",
       timeout=datetime.timedelta(seconds=60),
   ) as case_6_4:
-    gen_task(
+    subject = gen_task(
         expect=TaskRun.FAIL,
         op=never_satisfied.override(
             timeout=30,
             execution_timeout=datetime.timedelta(seconds=20),
         ),
     )
+    probe = gen_task(
+        expect=TaskRun.PASS,
+        op=sleep_for.override(trigger_rule=TriggerRule.ALL_DONE),
+        seconds=2,
+    )
+    chain(subject, probe)
 
   with TaskGroupWithTimeout(
       group_id="case_6_5",
       tooltip="sensor=unset, exec=120, group=60 -> group wins (~60s).",
       timeout=datetime.timedelta(seconds=60),
   ) as case_6_5:
-    gen_task(
+    subject = gen_task(
         expect=TaskRun.FAIL,
         op=never_satisfied.override(
             execution_timeout=datetime.timedelta(seconds=120)
         ),
     )
+    probe = gen_task(
+        expect=TaskRun.FAIL,
+        op=sleep_for.override(trigger_rule=TriggerRule.ALL_DONE),
+        seconds=2,
+    )
+    chain(subject, probe)
 
   with TaskGroupWithTimeout(
       group_id="case_6_6",
       tooltip="sensor=unset, exec=30, group=60 -> exec wins (~30s).",
       timeout=datetime.timedelta(seconds=60),
   ) as case_6_6:
-    gen_task(
+    subject = gen_task(
         expect=TaskRun.FAIL,
         op=never_satisfied.override(
             execution_timeout=datetime.timedelta(seconds=30)
         ),
     )
+    probe = gen_task(
+        expect=TaskRun.PASS,
+        op=sleep_for.override(trigger_rule=TriggerRule.ALL_DONE),
+        seconds=2,
+    )
+    chain(subject, probe)
 
   with TaskGroupWithTimeout(
       group_id="case_6_7",
       tooltip="sensor=120, exec=unset, group=60 -> group wins (~60s).",
       timeout=datetime.timedelta(seconds=60),
   ) as case_6_7:
-    gen_task(
-        expect=TaskRun.FAIL,
-        op=never_satisfied.override(timeout=120),
+    subject = gen_task(
+        expect=TaskRun.FAIL, op=never_satisfied.override(timeout=120)
     )
+    probe = gen_task(
+        expect=TaskRun.FAIL,
+        op=sleep_for.override(trigger_rule=TriggerRule.ALL_DONE),
+        seconds=2,
+    )
+    chain(subject, probe)
 
   with TaskGroupWithTimeout(
       group_id="case_6_8",
       tooltip="sensor=30, exec=unset, group=60 -> sensor wins (~30s).",
       timeout=datetime.timedelta(seconds=60),
   ) as case_6_8:
-    gen_task(
-        expect=TaskRun.FAIL,
-        op=never_satisfied.override(timeout=30),
+    subject = gen_task(
+        expect=TaskRun.FAIL, op=never_satisfied.override(timeout=30)
     )
+    probe = gen_task(
+        expect=TaskRun.PASS,
+        op=sleep_for.override(trigger_rule=TriggerRule.ALL_DONE),
+        seconds=2,
+    )
+    chain(subject, probe)
 
   with TaskGroupWithTimeout(
       group_id="case_6_9",
       tooltip="sensor=unset, exec=unset, group=60 -> group wins (~60s).",
       timeout=datetime.timedelta(seconds=60),
   ) as case_6_9:
-    gen_task(
+    subject = gen_task(expect=TaskRun.FAIL, op=never_satisfied)
+    probe = gen_task(
         expect=TaskRun.FAIL,
-        op=never_satisfied,
+        op=sleep_for.override(trigger_rule=TriggerRule.ALL_DONE),
+        seconds=2,
     )
+    chain(subject, probe)
 
   with TaskGroupWithTimeout(
       group_id="case_7",
@@ -333,16 +370,13 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       tooltip="Main phase fails immediately (the inner task raises).",
       timeout=datetime.timedelta(minutes=2),
   ) as case_8_main:
-    gen_task(
-        expect=TaskRun.FAIL,
-        op=raise_workload_failure,
-    )
+    gen_task(expect=TaskRun.FAIL, op=raise_workload_failure)
 
   with TaskGroupWithTimeout(
       group_id="case_8_teardown",
       tooltip=(
           "Teardown phase (is_teardown=True) runs cleanup even when "
-          "case_8_main fails."
+          "the preceding group fails."
       ),
       timeout=datetime.timedelta(minutes=2),
       is_teardown=True,
