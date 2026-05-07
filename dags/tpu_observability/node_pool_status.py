@@ -69,6 +69,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 ) as dag:
   for machine in MachineConfigMap:
     config = machine.value
+
     @task
     def generate_problematic_node_pool_name(
         info: node_pool.Info,
@@ -123,18 +124,15 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       )
 
       task_id = "select_random_node"
-      select_random_node = node_pool.draw_random_nodes.override(
-          task_id=task_id
-      )(node_pool=node_pool_info, count=1)
+      select_random_node = node_pool.draw_random_node.override(task_id=task_id)(
+          node_pool=node_pool_info
+      )
 
       task_id = "delete_node"
-      delete_node = (
-          node_pool.operate_node.override(task_id=task_id)
-          .partial(
-              node_pool=node_pool_info,
-              operation=NodeOperationSpec.Delete(),
-          )
-          .expand(node_name=select_random_node)
+      delete_node = node_pool.operate_node.override(task_id=task_id)(
+          node_pool=node_pool_info,
+          operation=NodeOperationSpec.Delete(),
+          node_name=select_random_node,
       )
 
       # TODO: add a check that the node count decreases after deletion.

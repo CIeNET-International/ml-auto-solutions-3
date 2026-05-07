@@ -158,7 +158,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       )
 
       select_node = node_pool.draw_random_node.override(task_id="select_node")(
-          node_pool=cluster_info,
+          node_pool=cluster_info
       )
 
       drained_node = node_pool.operate_node.override(task_id="drained_node")(
@@ -177,7 +177,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       uncordon_node = node_pool.operate_node.override(task_id="uncordon_node")(
           node_pool=cluster_info,
           operation=NodeOperationSpec.Uncordon(),
-          node_name=select_node
+          node_name=select_node,
       )
 
       wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
