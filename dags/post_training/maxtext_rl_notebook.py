@@ -84,7 +84,7 @@ with models.DAG(
   # Setup commands for MaxText environment
   setup_script = notebook_util.build_maxtext_setup_script()
 
-  previous_algo_last_tasks = []
+  previous_algo_last_tasks = [config]
   for loss_algo in loss_algos:
     previous_algo_last_tasks = notebook_util.create_branched_notebook_tasks(
         dag_name=DAG_TEST_NAME,

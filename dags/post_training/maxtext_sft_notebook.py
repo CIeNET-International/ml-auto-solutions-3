@@ -90,4 +90,5 @@ with models.DAG(
       task_owner=test_owner.DEPP_L,
       hf_token=HF_TOKEN_LLAMA31,
       config=config,
+      previous_tasks=[config],
   )
