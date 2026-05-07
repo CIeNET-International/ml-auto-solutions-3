@@ -35,22 +35,6 @@ DAGRUN_TIMEOUT = get_dag_timeout(DAG_ID)
 SCHEDULE = SchedulingHelper.arrange_schedule_time(DAG_ID)
 
 
-@task
-def generate_problematic_node_pool_name(
-    info: node_pool.Info,
-) -> str:
-  """Generates a problematic node pool name."""
-  return f"{info.node_pool_name}-x"
-
-
-@task
-def generate_problematic_node_location(
-    info: node_pool.Info,
-) -> str:
-  """Generates a problematic node location."""
-  return f"{info.location}-c"
-
-
 # Keyword arguments are generated dynamically at runtime (pylint does not
 # know this signature).
 with models.DAG(  # pylint: disable=unexpected-keyword-arg
@@ -85,6 +69,20 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 ) as dag:
   for machine in MachineConfigMap:
     config = machine.value
+    @task
+    def generate_problematic_node_pool_name(
+        info: node_pool.Info,
+    ) -> str:
+      """Generates a problematic node pool name."""
+      return f"{info.node_pool_name}-x"
+
+    @task
+    def generate_problematic_node_location(
+        info: node_pool.Info,
+    ) -> str:
+      """Generates a problematic node location."""
+      return f"{info.location}-c"
+
     # Keyword arguments are generated dynamically at runtime (pylint does not
     # know this signature).
     with TaskGroup(  # pylint: disable=unexpected-keyword-arg
