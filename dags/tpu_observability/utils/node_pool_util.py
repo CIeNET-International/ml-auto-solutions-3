@@ -487,7 +487,7 @@ def operate_node(
   base_command = operation.command_template.format(
       node_name=node_name,
       project_id=node_pool.project_id,
-      node_location=node_pool.node_locations,
+      node_locations=node_pool.node_locations,
   )
 
   logging.info("Select node '%s' to %s", node_name, operation.target.name)
