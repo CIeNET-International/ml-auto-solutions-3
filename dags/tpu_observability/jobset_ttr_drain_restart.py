@@ -157,20 +157,14 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           jobset_config=jobset_config,
       )
 
-      select_nodes = node_pool.draw_random_nodes.override(
-          task_id="select_nodes"
-      )(
+      select_node = node_pool.draw_random_node.override(task_id="select_node")(
           node_pool=cluster_info,
-          count=1,
       )
 
-      drained_node = (
-          node_pool.operate_node.override(task_id="drained_node")
-          .partial(
-              node_pool=cluster_info,
-              operation=NodeOperationSpec.Drain(),
-          )
-          .expand(node_name=select_nodes)
+      drained_node = node_pool.operate_node.override(task_id="drained_node")(
+          node_pool=cluster_info,
+          operation=NodeOperationSpec.Drain(),
+          node_name=select_node,
       )
 
       check_nodes_number = check_nodes_number.override(
@@ -180,13 +174,10 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           drained_node_number=1,
       )
 
-      uncordon_node = (
-          node_pool.operate_node.override(task_id="uncordon_node")
-          .partial(
-              node_pool=cluster_info,
-              operation=NodeOperationSpec.Uncordon(),
-          )
-          .expand(node_name=select_nodes)
+      uncordon_node = node_pool.operate_node.override(task_id="uncordon_node")(
+          node_pool=cluster_info,
+          operation=NodeOperationSpec.Uncordon(),
+          node_name=select_node
       )
 
       wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
@@ -217,7 +208,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           create_node_pool,
           start_workload,
           ensure_all_pods_running,
-          select_nodes,
+          select_node,
           drained_node,
           check_nodes_number,
           uncordon_node,

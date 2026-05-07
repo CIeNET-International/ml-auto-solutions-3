@@ -373,7 +373,7 @@ def get_credentials_command(node_pool: Info) -> str:
 
 
 @task
-def draw_random_nodes(node_pool: Info, count: int) -> list[str]:
+def draw_random_node(node_pool: Info) -> str:
   """Selects random nodes from the specified GKE node pool.
 
   Args:
@@ -389,20 +389,20 @@ def draw_random_nodes(node_pool: Info, count: int) -> list[str]:
   """
   nodes_list = list_nodes(node_pool)
 
-  if not nodes_list or count > len(nodes_list):
+  if not nodes_list:
     raise AirflowFailException(
         f"No nodes found in node pool '{node_pool.node_pool_name}'."
     )
 
   random.shuffle(nodes_list)
-  target_node_list = nodes_list[:count]
+  target_node = nodes_list[0]
   logging.info(
       "Randomly selected nodes '%s' from node pool '%s'.",
-      target_node_list,
+      target_node,
       node_pool.node_pool_name,
   )
 
-  return target_node_list
+  return target_node
 
 
 class NodeOperation(enum.Enum):
