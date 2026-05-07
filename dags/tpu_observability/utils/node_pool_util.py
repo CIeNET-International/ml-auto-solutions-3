@@ -439,8 +439,8 @@ class NodeOperationSpec:
         approach=NodeOperationApproach.GCP_CLI,
         command_template=(
             "gcloud compute instances delete {node_name} "
-            "--project={node_pool.project_id} "
-            "--zone={node_pool.node_locations} --quiet"
+            "--project={project_id} "
+            "--zone={node_locations} --quiet"
         ),
         extra_flags="",
     )
@@ -485,7 +485,9 @@ def operate_node(
   """
 
   base_command = operation.command_template.format(
-      node_name=node_name, node_pool=node_pool
+      node_name=node_name,
+      project_id=node_pool.project_id,
+      node_location=node_pool.node_locations,
   )
 
   logging.info("Select node '%s' to %s", node_name, operation.target.name)
