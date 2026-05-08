@@ -76,15 +76,16 @@ with models.DAG(
   current_datetime = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
 
   # Load configurations from GCS
-  config = notebook_util.load_notebook_config_from_gcs_yaml(
+  config_arg = notebook_util.load_notebook_config_from_gcs_yaml(
       gcs_path=notebook_util.NOTEBOOK_CONFIG_GCS_PATH,
       dag_name=DAG_TEST_NAME,
   )
+  config = notebook_util.NotebookConfig(config_arg)
 
   # Setup commands for MaxText environment
   setup_script = notebook_util.build_maxtext_setup_script()
 
-  previous_algo_last_tasks = [config]
+  previous_algo_last_tasks = [config_arg]
   for loss_algo in loss_algos:
     previous_algo_last_tasks = notebook_util.create_branched_notebook_tasks(
         dag_name=DAG_TEST_NAME,

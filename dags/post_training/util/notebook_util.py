@@ -291,6 +291,52 @@ def initialize_notebook_test(
   )
 
 
+class XComValueWrapper:
+  """A wrapper that dynamically resolves a native Airflow XComArg at execution time."""
+
+  def __init__(
+      self, xcom_arg: airflow.XComArg, cast_type=str, default=None
+  ) -> None:
+    self.xcom_arg = xcom_arg
+    self.cast_type = cast_type
+    self.default = default
+
+  def resolve(self):
+    try:
+      context = get_current_context()
+      resolved = self.xcom_arg.resolve(context)
+      if resolved is not None:
+        return self.cast_type(resolved)
+    except Exception:
+      pass
+    return self.default
+
+  def __str__(self) -> str:
+    val = self.resolve()
+    if hasattr(val, "value"):
+      return str(val.value)
+    return str(val) if val is not None else ""
+
+  def __repr__(self) -> str:
+    return self.__str__()
+
+  def __eq__(self, other) -> bool:
+    val = self.resolve()
+    val_compare = val.value if hasattr(val, "value") else val
+    other_compare = other.value if hasattr(other, "value") else other
+    return val_compare == other_compare
+
+
+class NotebookConfig:
+  """A simple container holding dynamic XComValueWrapper fields."""
+
+  def __init__(self, config_arg: airflow.XComArg) -> None:
+    self.zone = XComValueWrapper(config_arg["zone"], cast_type=str)
+    self.tpu_version = XComValueWrapper(
+        config_arg["tpu_version"], cast_type=TpuVersion
+    )
+
+
 @airflow_task
 def load_notebook_config_from_gcs_yaml(
     gcs_path: str, dag_name: str
@@ -309,55 +355,12 @@ def load_notebook_config_from_gcs_yaml(
   return {"tpu_version": tpu_version, "zone": zone}
 
 
-class DynamicNotebookConfig:
-  """Wraps a lazy config XComArg and exposes properties that resolve to Zone/TpuVersion Enums at runtime."""
-
-  def __init__(self, config_arg: airflow.XComArg):
-    self._config_arg = config_arg
-
-  @property
-  def tpu_version(self) -> TpuVersion:
-    val = self._config_arg["tpu_version"]
-    try:
-      resolved = val.resolve(get_current_context())
-      return TpuVersion(resolved)
-    except AirflowException:
-      return val
-
-  @property
-  def zone(self) -> Zone:
-    val = self._config_arg["zone"]
-    try:
-      resolved = val.resolve(get_current_context())
-      return Zone(resolved)
-    except AirflowException:
-      return val
-
-
-class DynamicGCPConfig(gcp_config.GCPConfig):
-  """GCPConfig subclass that dynamically resolves zone XComArgs/Enums at runtime."""
-
-  @property
-  def zone(self) -> str:
-    val = self._zone
-    if isinstance(val, airflow.XComArg):
-      try:
-        val = val.resolve(get_current_context())
-      except AirflowException:
-        return val
-    return str(val.value) if hasattr(val, "value") else str(val)
-
-  @zone.setter
-  def zone(self, value):
-    self._zone = value
-
-
 def run_training(
     config: test_config.TpuVmTest, hf_token: str, zone: str
 ) -> DAGNode:
   return task.run_queued_resource_test(
       task_test_config=config,
-      task_gcp_config=DynamicGCPConfig(
+      task_gcp_config=gcp_config.GCPConfig(
           project_name=Project.CLOUD_ML_AUTO_SOLUTIONS.value,
           zone=zone,
           dataset_name=metric_config.DatasetOption.XLML_DATASET,
@@ -375,7 +378,7 @@ def create_branched_notebook_tasks(
     parameters: dict[str, any],
     task_owner: str,
     hf_token: str,
-    config: airflow.XComArg,
+    config: NotebookConfig,
     previous_tasks: list[DAGNode] = None,
 ) -> list[DAGNode]:
   """Creates and chains branched notebook tasks for all TPU versions.
@@ -388,17 +391,13 @@ def create_branched_notebook_tasks(
       parameters: Dict of parameters to inject in the notebook.
       task_owner: Owner of the task.
       hf_token: HuggingFace access token.
-      config: An `airflow.XComArg` task output that resolves at runtime to a
-        dictionary `dict[str, str]` containing 'tpu_version' and 'zone' keys.
+      config: A `NotebookConfig` wrapper containing zone and tpu_version.
       previous_tasks: Optional list of tasks/DAGNodes to chain *before* the branches.
 
   Returns:
       A list of terminal DAGNode tasks ([run_task, skipped_task]) from the end
       of this branch loop, which can be chained into subsequent tasks.
   """
-  if isinstance(config, airflow.XComArg):
-    config = DynamicNotebookConfig(config)
-
   # 1. Initialize and create the V5E test and task group
   notebook_test_v5e = initialize_notebook_test(
       test_name=f"{dag_name}_{task_id_prefix}",
@@ -432,9 +431,8 @@ def create_branched_notebook_tasks(
       trigger_rule=TriggerRule.ALL_DONE,
   )
   def task_path_decider() -> str:
-    active_tpu = config.tpu_version
-    logging.info(f"Configured active TPU version: '{active_tpu}'")
-    match active_tpu:
+    logging.info(f"Configured active TPU version: '{config.tpu_version}'")
+    match config.tpu_version:
       case TpuVersion.V5E:
         decided_task_id = run_task_v5e.group_id
       case TpuVersion.TRILLIUM:

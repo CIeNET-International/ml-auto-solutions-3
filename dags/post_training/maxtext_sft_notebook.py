@@ -73,10 +73,11 @@ with models.DAG(
   )
 
   # Load configurations from GCS
-  config = notebook_util.load_notebook_config_from_gcs_yaml(
+  config_arg = notebook_util.load_notebook_config_from_gcs_yaml(
       gcs_path=notebook_util.NOTEBOOK_CONFIG_GCS_PATH,
       dag_name=DAG_TEST_NAME,
   )
+  config = notebook_util.NotebookConfig(config_arg)
 
   # Setup commands for MaxText environment
   setup_script = notebook_util.build_maxtext_setup_script()
@@ -90,5 +91,5 @@ with models.DAG(
       task_owner=test_owner.DEPP_L,
       hf_token=HF_TOKEN_LLAMA31,
       config=config,
-      previous_tasks=[config],
+      previous_tasks=[config_arg],
   )
