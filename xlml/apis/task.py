@@ -147,9 +147,9 @@ def run_queued_resource_test(
         },
     )
 
-    with TaskGroup(group_id="clean_up") as clean_up:
-      clean_up_task = tpu.delete_queued_resource(queued_resource_name)
-    clean_up_task.as_teardown(setups=queued_resource_name.operator)
+    clean_up = tpu.delete_queued_resource.override(group_id="clean_up")(
+        queued_resource_name
+    )
 
     if skip_post_process:
       _ = provision >> run_model >> clean_up

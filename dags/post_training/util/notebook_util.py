@@ -296,27 +296,14 @@ def load_notebook_config_from_gcs_yaml(
     gcs_path: str, dag_name: str
 ) -> dict[str, str]:
   """Loads and parses TPU version and zone configs from GCS yaml config."""
-  logging.info(
-      "[Load Config] Attempting to load YAML configuration"
-      f"from GCS path: '{gcs_path}' for DAG: '{dag_name}'."
-  )
   config = gcs.load_yaml_from_gcs(gcs_path)
-  logging.info(
-      "[Load Config] Raw YAML configuration successfully parsed "
-      f"from GCS: {config}"
-  )
   dag_cfg = config.get("dag", {}).get(dag_name, {})
-  logging.info(
-      "[Load Config] Extracted configuration block "
-      f"for DAG '{dag_name}': {dag_cfg}"
-  )
 
   tpu_version = dag_cfg.get("tpu_version")
   zone = dag_cfg.get("zone")
 
   logging.info(
-      f"[Load Config] Parsed active configuration: "
-      f"tpu_version='{tpu_version}', zone='{zone}'."
+      f"Loaded configuration: tpu_version='{tpu_version}', zone='{zone}'."
   )
 
   return {"tpu_version": tpu_version, "zone": zone}
@@ -389,7 +376,7 @@ def create_branched_notebook_tasks(
     task_owner: str,
     hf_token: str,
     config: airflow.XComArg,
-    previous_tasks: list[DAGNode] | None = None,
+    previous_tasks: list[DAGNode] = None,
 ) -> list[DAGNode]:
   """Creates and chains branched notebook tasks for all TPU versions.
 
@@ -446,24 +433,17 @@ def create_branched_notebook_tasks(
   )
   def task_path_decider() -> str:
     active_tpu = config.tpu_version
-    logging.info(
-        f"[Branch Decision] Configured active TPU version: '{active_tpu}'"
-    )
-    if active_tpu == TpuVersion.V5E:
-      logging.info(
-          "[Branch Decision] MATCH! Routing execution to active V5E task group."
-      )
-      return run_task_v5e.group_id
-    elif active_tpu == TpuVersion.TRILLIUM:
-      logging.info(
-          "[Branch Decision] MATCH! Routing execution to active TRILLIUM task group."
-      )
-      return run_task_v6e.group_id
+    logging.info(f"Configured active TPU version: '{active_tpu}'")
+    match active_tpu:
+      case TpuVersion.V5E:
+        decided_task_id = run_task_v5e.group_id
+      case TpuVersion.TRILLIUM:
+        decided_task_id = run_task_v6e.group_id
+      case _:
+        decided_task_id = skipped.task_id
 
-    logging.info(
-        "[Branch Decision] MISMATCH/INVALID! Routing execution to skipped fallback task."
-    )
-    return skipped.task_id
+    logging.info(f"running task_id: {decided_task_id}")
+    return decided_task_id
 
   # 5. Instantiate branch decider task
   task_decider = task_path_decider()

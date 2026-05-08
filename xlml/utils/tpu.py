@@ -23,6 +23,7 @@ import uuid
 
 from absl import logging
 import airflow
+from airflow.utils.trigger_rule import TriggerRule
 from airflow.decorators import task, task_group
 from airflow.utils.task_group import TaskGroup
 from airflow.operators.python import get_current_context
@@ -244,6 +245,7 @@ def create_queued_resource(
   return tg, qualified_name
 
 
+@task_group
 def delete_queued_resource(qualified_name: airflow.XComArg):
   """Implements cascading delete for a Queued Resource.
 
@@ -252,7 +254,7 @@ def delete_queued_resource(qualified_name: airflow.XComArg):
       resource.
   """
 
-  @task
+  @task(trigger_rule=TriggerRule.NONE_SKIPPED)
   def delete_tpu_nodes_request(qualified_name: str):
     # TODO(wcromar): Find a less repetitive way to manage the TPU client.
     creds, _ = google.auth.default()
@@ -298,7 +300,7 @@ def delete_queued_resource(qualified_name: airflow.XComArg):
     logging.info(f'TPU Nodes: {qr.tpu.node_spec}')
     return False
 
-  @task
+  @task(trigger_rule=TriggerRule.NONE_SKIPPED)
   def delete_queued_resource_request(qualified_name: str) -> Optional[str]:
     creds, _ = google.auth.default()
     client = tpu_api.TpuClient(credentials=creds)
@@ -330,7 +332,7 @@ def delete_queued_resource(qualified_name: airflow.XComArg):
   qr_op_name = delete_tpu_nodes >> delete_queued_resource_request(
       qualified_name
   )
-  return wait_for_queued_resource_deletion(qr_op_name)
+  wait_for_queued_resource_deletion(qr_op_name)
 
 
 def kill_process_by_pid() -> str:
