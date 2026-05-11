@@ -7,9 +7,7 @@ import textwrap
 import airflow
 import json
 import re
-from airflow.exceptions import AirflowException
 from airflow.decorators import task as airflow_task
-from airflow.operators.python import get_current_context
 from airflow.models.taskmixin import DAGNode
 from airflow.models.baseoperator import chain
 from airflow.operators.empty import EmptyOperator
@@ -291,53 +289,15 @@ def initialize_notebook_test(
   )
 
 
-class XComValueWrapper:
-  """A wrapper that dynamically resolves a native Airflow XComArg at execution time."""
-
-  def __init__(
-      self, xcom_arg: airflow.XComArg, cast_type=str, default=None
-  ) -> None:
-    self.xcom_arg = xcom_arg
-    self.cast_type = cast_type
-    self.default = default
-
-  def resolve(self):
-    try:
-      context = get_current_context()
-      resolved = self.xcom_arg.resolve(context)
-      if resolved is not None:
-        return self.cast_type(resolved)
-    except Exception:
-      pass
-    return self.default
-
-  def __str__(self) -> str:
-    val = self.resolve()
-    if hasattr(val, "value"):
-      return str(val.value)
-    return str(val) if val is not None else ""
-
-  def __repr__(self) -> str:
-    return self.__str__()
-
-  def __eq__(self, other) -> bool:
-    val = self.resolve()
-    val_compare = val.value if hasattr(val, "value") else val
-    other_compare = other.value if hasattr(other, "value") else other
-    return val_compare == other_compare
-
-
 class NotebookConfig:
-  """A simple container holding dynamic XComValueWrapper fields."""
+  """A simple container holding dynamic XComArg fields."""
 
-  def __init__(self, config_arg: airflow.XComArg) -> None:
-    self.zone = XComValueWrapper(config_arg["zone"], cast_type=str)
-    self.tpu_version = XComValueWrapper(
-        config_arg["tpu_version"], cast_type=TpuVersion
-    )
+  def __init__(self, config_arg: dict[str, airflow.XComArg]) -> None:
+    self.zone = config_arg["zone"]
+    self.tpu_version = config_arg["tpu_version"]
 
 
-@airflow_task
+@airflow_task(multiple_outputs=True)
 def load_notebook_config_from_gcs_yaml(
     gcs_path: str, dag_name: str
 ) -> dict[str, str]:
@@ -348,6 +308,16 @@ def load_notebook_config_from_gcs_yaml(
   tpu_version = dag_cfg.get("tpu_version")
   zone = dag_cfg.get("zone")
 
+  # Validate that GCS config values correspond to valid Enum values
+  def assert_is_valid_enum(value: str, enum_class) -> None:
+    try:
+      enum_class(value)
+    except ValueError as e:
+      raise ValueError(f"Config Validation Error: {e}") from e
+
+  assert_is_valid_enum(zone, Zone)
+  assert_is_valid_enum(tpu_version, TpuVersion)
+
   logging.info(
       f"Loaded configuration: tpu_version='{tpu_version}', zone='{zone}'."
   )
@@ -356,7 +326,7 @@ def load_notebook_config_from_gcs_yaml(
 
 
 def run_training(
-    config: test_config.TpuVmTest, hf_token: str, zone: str
+    config: test_config.TpuVmTest, hf_token: str, zone: str | airflow.XComArg
 ) -> DAGNode:
   return task.run_queued_resource_test(
       task_test_config=config,
@@ -425,14 +395,16 @@ def create_branched_notebook_tasks(
   # 3. Create skipped fallback empty operator task
   skipped = EmptyOperator(task_id=f"skipped_{task_id_prefix}")
 
-  # 4. Define central Task-decorated Branch Operator
+  # 4. Define central Task-decorated Branch Operator accepting dynamic parameters
   @airflow_task.branch(
       task_id=f"task_path_decider_{task_id_prefix}",
       trigger_rule=TriggerRule.ALL_DONE,
   )
-  def task_path_decider() -> str:
-    logging.info(f"Configured active TPU version: '{config.tpu_version}'")
-    match config.tpu_version:
+  def task_path_decider(tpu_version: str) -> str:
+    logging.info(f"Configured active TPU version: '{tpu_version}'")
+    active_tpu_version = TpuVersion(tpu_version)
+
+    match active_tpu_version:
       case TpuVersion.V5E:
         decided_task_id = run_task_v5e.group_id
       case TpuVersion.TRILLIUM:
@@ -443,8 +415,8 @@ def create_branched_notebook_tasks(
     logging.info(f"running task_id: {decided_task_id}")
     return decided_task_id
 
-  # 5. Instantiate branch decider task
-  task_decider = task_path_decider()
+  # 5. Instantiate branch decider task, passing XComArg directly for Airflow auto-resolution
+  task_decider = task_path_decider(tpu_version=config.tpu_version)
 
   # 6. Chain previous tasks to the decider if exist
   if previous_tasks:
