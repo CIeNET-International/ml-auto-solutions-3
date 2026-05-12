@@ -82,7 +82,7 @@ with models.DAG(
   # Setup commands for MaxText environment
   setup_script = notebook_util.build_maxtext_setup_script()
 
-  notebook_util.create_branched_notebook_tasks(
+  notebook_util.run_notebook_tests(
       dag_name=DAG_TEST_NAME,
       task_id_prefix="sft",
       notebook_path="src/maxtext/examples/sft_llama3_demo_tpu.ipynb",
@@ -91,5 +91,5 @@ with models.DAG(
       task_owner=test_owner.DEPP_L,
       hf_token=HF_TOKEN_LLAMA31,
       config=config,
-      previous_tasks=[config_arg],
+      previous_task=config_arg,
   )

@@ -16,6 +16,7 @@
 
 import dataclasses
 from typing import Any
+
 from airflow.exceptions import AirflowException
 from airflow.models.xcom_arg import XComArg
 from airflow.operators.python import get_current_context
@@ -36,7 +37,7 @@ class GCPConfig:
   """
 
   project_name: str
-  zone: str
+  zone: str | XComArg
   dataset_name: metric_config.DatasetOption
   dataset_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value
   composer_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value

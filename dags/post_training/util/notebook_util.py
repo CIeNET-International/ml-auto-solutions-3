@@ -12,6 +12,7 @@ from airflow.models.taskmixin import DAGNode
 from airflow.models.baseoperator import chain
 from airflow.operators.empty import EmptyOperator
 from airflow.utils.trigger_rule import TriggerRule
+from airflow.utils.task_group import TaskGroup
 
 from dags.common.vm_resource import (
     Project,
@@ -292,7 +293,7 @@ def initialize_notebook_test(
 class NotebookConfig:
   """A simple container holding dynamic XComArg fields."""
 
-  def __init__(self, config_arg: dict[str, airflow.XComArg]) -> None:
+  def __init__(self, config_arg: airflow.XComArg) -> None:
     self.zone = config_arg["zone"]
     self.tpu_version = config_arg["tpu_version"]
 
@@ -340,7 +341,7 @@ def run_training(
   )
 
 
-def create_branched_notebook_tasks(
+def run_notebook_tests(
     dag_name: str,
     task_id_prefix: str,
     notebook_path: str,
@@ -349,9 +350,9 @@ def create_branched_notebook_tasks(
     task_owner: str,
     hf_token: str,
     config: NotebookConfig,
-    previous_tasks: list[DAGNode] = None,
-) -> list[DAGNode]:
-  """Creates and chains branched notebook tasks for all TPU versions.
+    previous_task: DAGNode | None = None,
+) -> TaskGroup:
+  """Creates and chains branched notebook tests for all TPU versions.
 
   Args:
       dag_name: Name of the DAG.
@@ -362,67 +363,70 @@ def create_branched_notebook_tasks(
       task_owner: Owner of the task.
       hf_token: HuggingFace access token.
       config: A `NotebookConfig` wrapper containing zone and tpu_version.
-      previous_tasks: Optional list of tasks/DAGNodes to chain *before* the branches.
+      previous_task: Optional task/DAGNode to chain *before* the branches.
 
   Returns:
-      A list of terminal DAGNode tasks ([run_task, skipped_task]) from the end
-      of this branch loop, which can be chained into subsequent tasks.
+      A TaskGroup representing the entire branched notebook test workflow.
   """
-  # 1. Initialize and create the V5E test and task group
-  notebook_test_v5e = initialize_notebook_test(
-      test_name=f"{dag_name}_{task_id_prefix}",
-      dag_name=dag_name,
-      notebook_path=notebook_path,
-      set_up_script=set_up_script,
-      parameters=parameters,
-      task_owner=task_owner,
-      tpu_version=TpuVersion.V5E,
-  )
-  run_task_v5e = run_training(notebook_test_v5e, hf_token, zone=config.zone)
+  with TaskGroup(
+      group_id=f"{task_id_prefix}_tests", prefix_group_id=False
+  ) as group:
+    # 1. Initialize and create the V5E test and task group
+    notebook_test_v5e = initialize_notebook_test(
+        test_name=f"{dag_name}_{task_id_prefix}",
+        dag_name=dag_name,
+        notebook_path=notebook_path,
+        set_up_script=set_up_script,
+        parameters=parameters,
+        task_owner=task_owner,
+        tpu_version=TpuVersion.V5E,
+    )
+    run_task_v5e = run_training(notebook_test_v5e, hf_token, zone=config.zone)
 
-  # 2. Initialize and create the TRILLIUM/V6E test and task group
-  notebook_test_v6e = initialize_notebook_test(
-      test_name=f"{dag_name}_{task_id_prefix}",
-      dag_name=dag_name,
-      notebook_path=notebook_path,
-      set_up_script=set_up_script,
-      parameters=parameters,
-      task_owner=task_owner,
-      tpu_version=TpuVersion.TRILLIUM,
-  )
-  run_task_v6e = run_training(notebook_test_v6e, hf_token, zone=config.zone)
+    # 2. Initialize and create the TRILLIUM/V6E test and task group
+    notebook_test_v6e = initialize_notebook_test(
+        test_name=f"{dag_name}_{task_id_prefix}",
+        dag_name=dag_name,
+        notebook_path=notebook_path,
+        set_up_script=set_up_script,
+        parameters=parameters,
+        task_owner=task_owner,
+        tpu_version=TpuVersion.TRILLIUM,
+    )
+    run_task_v6e = run_training(notebook_test_v6e, hf_token, zone=config.zone)
 
-  # 3. Create skipped fallback empty operator task
-  skipped = EmptyOperator(task_id=f"skipped_{task_id_prefix}")
+    # 3. Create skipped fallback empty operator task
+    skipped = EmptyOperator(task_id=f"skipped_{task_id_prefix}")
 
-  # 4. Define central Task-decorated Branch Operator accepting dynamic parameters
-  @airflow_task.branch(
-      task_id=f"task_path_decider_{task_id_prefix}",
-      trigger_rule=TriggerRule.ALL_DONE,
-  )
-  def task_path_decider(tpu_version: str) -> str:
-    logging.info(f"Configured active TPU version: '{tpu_version}'")
-    active_tpu_version = TpuVersion(tpu_version)
+    # 4. Define central Task-decorated Branch Operator accepting dynamic parameters
+    @airflow_task.branch(
+        task_id=f"task_path_decider_{task_id_prefix}",
+        trigger_rule=TriggerRule.ALL_DONE,
+        retries=0,
+    )
+    def task_path_decider(tpu_version: str) -> str:
+      logging.info(f"Configured active TPU version: '{tpu_version}'")
+      active_tpu_version = TpuVersion(tpu_version)
 
-    match active_tpu_version:
-      case TpuVersion.V5E:
-        decided_task_id = run_task_v5e.group_id
-      case TpuVersion.TRILLIUM:
-        decided_task_id = run_task_v6e.group_id
-      case _:
-        decided_task_id = skipped.task_id
+      match active_tpu_version:
+        case TpuVersion.V5E:
+          decided_task_id = run_task_v5e.group_id
+        case TpuVersion.TRILLIUM:
+          decided_task_id = run_task_v6e.group_id
+        case _:
+          decided_task_id = skipped.task_id
 
-    logging.info(f"running task_id: {decided_task_id}")
-    return decided_task_id
+      logging.info(f"running task_id: {decided_task_id}")
+      return decided_task_id
 
-  # 5. Instantiate branch decider task, passing XComArg directly for Airflow auto-resolution
-  task_decider = task_path_decider(tpu_version=config.tpu_version)
+    # 5. Instantiate branch decider task, passing XComArg directly for Airflow auto-resolution
+    task_decider = task_path_decider(tpu_version=config.tpu_version)
 
-  # 6. Chain previous tasks to the decider if exist
-  if previous_tasks:
-    chain(previous_tasks, task_decider)
+    # 6. Chain previous tasks to the decider if exist
+    if previous_task:
+      chain(previous_task, task_decider)
 
-  # 7. Connect branch decider to target branches
-  task_decider >> [run_task_v5e, run_task_v6e, skipped]
+    # 7. Connect branch decider to target branches
+    chain(task_decider, [run_task_v5e, run_task_v6e, skipped])
 
-  return [run_task_v5e, run_task_v6e, skipped]
+  return group

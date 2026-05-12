@@ -85,9 +85,9 @@ with models.DAG(
   # Setup commands for MaxText environment
   setup_script = notebook_util.build_maxtext_setup_script()
 
-  previous_algo_last_tasks = [config_arg]
+  previous_task = config_arg
   for loss_algo in loss_algos:
-    previous_algo_last_tasks = notebook_util.create_branched_notebook_tasks(
+    previous_task = notebook_util.run_notebook_tests(
         dag_name=DAG_TEST_NAME,
         task_id_prefix=f"rl_{loss_algo.value}",
         notebook_path="src/maxtext/examples/rl_llama3_demo.ipynb",
@@ -96,5 +96,5 @@ with models.DAG(
         task_owner=test_owner.DEPP_L,
         hf_token=HF_TOKEN_LLAMA31,
         config=config,
-        previous_tasks=previous_algo_last_tasks,
+        previous_task=previous_task,
     )
