@@ -356,18 +356,18 @@ def run_notebook_tests(
   """Creates and chains branched notebook tests for all TPU versions.
 
   Args:
-      dag_name: Name of the DAG.
-      task_id_prefix: Prefix for task and operator IDs (e.g. "rl_grpo" or "sft").
-      notebook_path: Path to the notebook to run.
-      set_up_script: Setup script for MaxText environment.
-      parameters: Dict of parameters to inject in the notebook.
-      task_owner: Owner of the task.
-      hf_token: HuggingFace access token.
-      config: A `NotebookConfig` wrapper containing zone and tpu_version.
-      previous_task: Optional task/DAGNode to chain *before* the branches.
+    dag_name: Name of the DAG.
+    task_id_prefix: Prefix for task and operator IDs (e.g. "rl_grpo" or "sft").
+    notebook_path: Path to the notebook to run.
+    set_up_script: Setup script for MaxText environment.
+    parameters: Dict of parameters to inject in the notebook.
+    task_owner: Owner of the task.
+    hf_token: HuggingFace access token.
+    config: A `NotebookConfig` wrapper containing zone and tpu_version.
+    previous_task: Optional task/DAGNode to chain *before* the branches.
 
   Returns:
-      A TaskGroup representing the entire branched notebook test workflow.
+    A TaskGroup representing the entire branched notebook test workflow.
   """
   with TaskGroup(
       group_id=f"{task_id_prefix}_tests", prefix_group_id=False
