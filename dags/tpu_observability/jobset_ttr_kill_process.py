@@ -191,6 +191,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 
       wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
           task_id="wait_for_jobset_ttr_to_be_found",
+          trigger_rule=TriggerRule.ALL_DONE
       )(
           node_pool=cluster_info,
           jobset_name=jobset_name,
@@ -219,6 +220,8 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           create_node_pool,
           *startup.tasks,
           kill_tasks,
+          single_start_time,
+          wait_for_recovery,
           verify_duration,
           wait_for_metric_upload,
           cleanup_workload,

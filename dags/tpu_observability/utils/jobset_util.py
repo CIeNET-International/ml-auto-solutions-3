@@ -1166,7 +1166,7 @@ def ensure_no_jobset_uptime_data(
   return False
 
 
-@task.sensor(poke_interval=30, timeout=600, mode="poke")
+@task.sensor(poke_interval=30, timeout=1200, mode="poke")
 def wait_for_jobset_recovered(
     node_pool: node_pool_info, jobset_config: JobSet
 ) -> PokeReturnValue:
