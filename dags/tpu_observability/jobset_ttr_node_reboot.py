@@ -15,14 +15,11 @@
 """A DAG to test JobSet Time-To-Recover (TTR) metric by triggering a node reboot."""
 
 import datetime
-import random
-import logging
 
 from airflow import models
 from airflow.models.baseoperator import chain
 from airflow.utils.trigger_rule import TriggerRule
 from airflow.utils.task_group import TaskGroup
-from airflow.decorators import task
 
 from dags import composer_env
 from dags.tpu_observability.utils import jobset_util as jobset
@@ -33,7 +30,10 @@ from dags.tpu_observability.configs.common import (
     GCS_CONFIG_PATH,
     GCS_JOBSET_CONFIG_PATH,
 )
-from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper, get_dag_timeout
+from dags.common.scheduling_helper.scheduling_helper import (
+    SchedulingHelper,
+    get_dag_timeout,
+)
 
 
 DAG_ID = "jobset_ttr_node_reboot"
@@ -116,24 +116,24 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           node_pool=cluster_info,
       )
 
-      start_workload = jobset.run_workload.override(task_id="start_workload")(
+      startup = jobset.create_jobset_startup_group(
           node_pool=cluster_info,
           jobset_config=jobset_config,
           workload_type=Workload.JAX_TPU_BENCHMARK,
       )
 
-      ensure_all_pods_running = jobset.wait_for_all_pods_running.override(
-          task_id="ensure_all_pods_running"
+      target_node = node_pool.draw_random_node.override(
+          task_id="draw_random_node"
       )(
           node_pool=cluster_info,
-          jobset_config=jobset_config,
       )
 
-      reboot_node = jobset.reboot_one_random_node.override(
-          task_id="reboot_one_random_node"
+      reboot_node = node_pool.operate_node.override(
+          task_id="reboot_node_operation"
       )(
           node_pool=cluster_info,
-          jobset_config=jobset_config,
+          node_name=target_node,
+          operation=node_pool.NodeOperationSpec.Reboot(),
       )
 
       wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
@@ -141,13 +141,12 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       )(
           node_pool=cluster_info,
           jobset_config=jobset_config,
-          start_time=reboot_node,
       )
 
       cleanup_workload = jobset.end_workload.override(
           task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
       )(node_pool=cluster_info, jobset_config=jobset_config).as_teardown(
-          setups=start_workload
+          setups=startup.jobset_start_time
       )
 
       cleanup_node_pool = node_pool.delete.override(
@@ -161,8 +160,8 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           jobset_config,
           cluster_info,
           create_node_pool,
-          start_workload,
-          ensure_all_pods_running,
+          startup.task_group,
+          target_node,
           reboot_node,
           wait_for_metric_upload,
           cleanup_workload,

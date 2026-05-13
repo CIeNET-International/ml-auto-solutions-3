@@ -411,6 +411,7 @@ class NodeOperation(enum.Enum):
   DELETE = enum.auto()
   DRAIN = enum.auto()
   UNCORDON = enum.auto()
+  REBOOT = enum.auto()
 
 
 class NodeOperationApproach(enum.Enum):
@@ -460,6 +461,23 @@ class NodeOperationSpec:
         target=NodeOperation.UNCORDON,
         approach=NodeOperationApproach.K8S_CLI,
         command_template="kubectl uncordon {node_name}",
+        extra_flags="",
+    )
+
+  @staticmethod
+  def Reboot() -> "NodeOperationSpec":
+    """
+    GCP CLI approach to reset a node (simulates a hard reboot).
+    Note: {node_locations} must map to a single zone for 'gcloud compute'.
+    """
+    return NodeOperationSpec(
+        target=NodeOperation.REBOOT,
+        approach=NodeOperationApproach.GCP_CLI,
+        command_template=(
+            "gcloud compute instances reset {node_name} "
+            "--project={project_id} "
+            "--zone={node_locations} --quiet"
+        ),
         extra_flags="",
     )
 
