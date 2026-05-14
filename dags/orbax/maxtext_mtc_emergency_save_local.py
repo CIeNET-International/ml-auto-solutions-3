@@ -10,6 +10,7 @@ multi-pod cluster.
 import datetime
 
 from airflow import models
+from airflow.models.baseoperator import chain
 from airflow.utils.trigger_rule import TriggerRule
 from airflow.utils.task_group import TaskGroup
 
@@ -96,8 +97,11 @@ with models.DAG(
       cfg_setting: test_config_util.Checkpointing,
       configs_list: list[test_config_util.TestConfig],
       task_group_id: str,
+      parent_group: TaskGroup | None = None,
   ) -> TaskGroup:
-    with TaskGroup(group_id=task_group_id) as task_group:
+    with TaskGroup(
+        group_id=task_group_id, parent_group=parent_group
+    ) as task_group:
       for _, image in test_config_util.DOCKER_IMAGES:
         for test_config in configs_list:
           for slice_num in test_config.slices:
@@ -198,18 +202,16 @@ with models.DAG(
       ),
   ]:
     group_id = f"maxtext_{checkpointing.name}_orbax_save_local"
-    if QuarantineTests.is_quarantined(group_id):
-      with quarantine_task_group:
-        group = create_checkpointing_tasks(
-            checkpointing, test_configs, group_id
-        )
-    else:
-      group = create_checkpointing_tasks(checkpointing, test_configs, group_id)
+    parent_group = (
+        quarantine_task_group
+        if QuarantineTests.is_quarantined(group_id)
+        else None
+    )
+    group = create_checkpointing_tasks(
+        checkpointing, test_configs, group_id, parent_group=parent_group
+    )
 
     task_groups.append(group)
 
   # Chain all task groups sequentially.
-  # pylint: disable=pointless-statement
-  for idx in range(len(task_groups) - 1):
-    task_groups[idx] >> task_groups[idx + 1]
-  # pylint: enable=pointless-statement
+  chain(*task_groups)
