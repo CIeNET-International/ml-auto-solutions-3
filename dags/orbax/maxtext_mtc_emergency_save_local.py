@@ -93,17 +93,33 @@ with models.DAG(
       ),
   ]
 
-  def create_checkpointing_tasks(
-      cfg_setting: test_config_util.Checkpointing,
-      configs_list: list[test_config_util.TestConfig],
-      task_group_id: str,
-      parent_group: TaskGroup | None = None,
-  ) -> TaskGroup:
+  quarantine_task_group = TaskGroup(
+      group_id="Quarantine", dag=dag, prefix_group_id=False
+  )
+
+  def run_with_quarantine(tg: TaskGroup) -> TaskGroup:
+    if QuarantineTests.is_quarantined(tg.group_id):
+      quarantine_task_group.add(tg)
+    return tg
+
+  task_groups = []
+
+  for checkpointing in [
+      test_config_util.Checkpointing(
+          name="mtc",  # Multi-tier Checkpointing
+          enable_multi_tier_checkpointing=True,
+      ),
+      test_config_util.Checkpointing(
+          name="emc",  # Emergency Checkpointing
+          enable_multi_tier_checkpointing=False,
+      ),
+  ]:
     with TaskGroup(
-        group_id=task_group_id, parent_group=parent_group
-    ) as task_group:
-      for _, image in test_config_util.DOCKER_IMAGES:
-        for test_config in configs_list:
+        group_id=f"maxtext_{checkpointing.name}_orbax_save_local",
+    ) as group:
+      group = run_with_quarantine(group)
+      for mode, image in test_config_util.DOCKER_IMAGES:
+        for test_config in test_configs:
           for slice_num in test_config.slices:
             # We conditionally set the trigger_rule on the first task.
             # If first task group failed the next one can execute.
@@ -115,7 +131,7 @@ with models.DAG(
             # Generate consistent run name.
             run_name = validation_util.generate_run_name(
                 short_id=test_config.short_id,
-                checkpointing_type=cfg_setting.name,
+                checkpointing_type=checkpointing.name,
                 slice_number=slice_num,
                 accelerator=test_config.accelerator,
             )
@@ -124,9 +140,9 @@ with models.DAG(
                 checkpoint_dir=test_config_util.DEFAULT_RAM_DISK,
                 run_name=run_name,
                 slice_num=slice_num,
-                out_folder=f"maxtext_{cfg_setting.name}_orbax_save_local",
+                out_folder=f"maxtext_{checkpointing.name}_orbax_save_local",
                 enable_multi_tier_checkpointing=(
-                    cfg_setting.enable_multi_tier_checkpointing
+                    checkpointing.enable_multi_tier_checkpointing
                 ),
             )
 
@@ -135,7 +151,7 @@ with models.DAG(
                 num_slices=slice_num,
                 cluster=test_config.cluster,
                 time_out_in_min=60,
-                test_name=f"{test_config.short_id}-{cfg_setting.name}",
+                test_name=f"{test_config.short_id}-{checkpointing.name}",
                 run_model_cmds=workload_command,
                 docker_image=image.value,
                 test_owner=test_owner.CAMILO_Q,
@@ -183,35 +199,8 @@ with models.DAG(
                 >> wait_delete_cpc_final
             )
             # pylint: enable=pointless-statement
-      return task_group
-
-  quarantine_task_group = TaskGroup(
-      group_id="Quarantine", dag=dag, prefix_group_id=False
-  )
-
-  task_groups = []
-
-  for checkpointing in [
-      test_config_util.Checkpointing(
-          name="mtc",  # Multi-tier Checkpointing
-          enable_multi_tier_checkpointing=True,
-      ),
-      test_config_util.Checkpointing(
-          name="emc",  # Emergency Checkpointing
-          enable_multi_tier_checkpointing=False,
-      ),
-  ]:
-    group_id = f"maxtext_{checkpointing.name}_orbax_save_local"
-    parent_group = (
-        quarantine_task_group
-        if QuarantineTests.is_quarantined(group_id)
-        else None
-    )
-    group = create_checkpointing_tasks(
-        checkpointing, test_configs, group_id, parent_group=parent_group
-    )
-
-    task_groups.append(group)
+      # Add to a list of test to chain them sequentially.
+      task_groups.append(group)
 
   # Chain all task groups sequentially.
   chain(*task_groups)
