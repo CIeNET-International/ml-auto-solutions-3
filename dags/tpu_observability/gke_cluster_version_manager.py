@@ -30,6 +30,48 @@ from dags.tpu_observability.utils import subprocess_util as subprocess
 DAG_ID = "gke_cluster_version_manager"
 
 
+def describe_cluster(node_pool_info: node_pool.Info) -> str:
+  """Describes the GKE cluster using gcloud command."""
+  command = (
+      f"gcloud container clusters describe {node_pool_info.cluster_name} "
+      f"--project={node_pool_info.project_id} "
+      f"--region={node_pool_info.region} "
+      "--format='json'"
+  )
+  return subprocess.run_exec(command)
+
+
+def upgrade_cluster_master(
+    node_pool_info: node_pool.Info, latest_version: str
+) -> str:
+  """Upgrades the master of the GKE cluster."""
+  command = (
+      f"gcloud container clusters upgrade {node_pool_info.cluster_name} "
+      "--master "
+      f"--cluster-version={latest_version} "
+      f"--project={node_pool_info.project_id} "
+      f"--region={node_pool_info.region} --quiet"
+  )
+  return subprocess.run_exec(command)
+
+
+def upgrade_cluster_node_pool(
+    node_pool_info: node_pool.Info,
+    latest_version: str,
+    node_pool_name: str = "default-pool",
+) -> str:
+  """Upgrades a specific node pool of the GKE cluster."""
+  command = (
+      f"gcloud container clusters upgrade {node_pool_info.cluster_name} "
+      f"--project={node_pool_info.project_id} "
+      f"--region={node_pool_info.region} "
+      f"--cluster-version={latest_version} "
+      f"--node-pool={node_pool_name} "
+      "--quiet"
+  )
+  return subprocess.run_exec(command)
+
+
 @task
 def find_available_version(node_pool_info: node_pool.Info) -> str:
   """Finds the latest available GKE version."""
@@ -60,7 +102,7 @@ def find_available_version(node_pool_info: node_pool.Info) -> str:
 def find_current_cluster_version(node_pool_info: node_pool.Info) -> dict:
   """Finds the current version of the cluster."""
 
-  stdout = node_pool.describe_cluster(node_pool_info)
+  stdout = describe_cluster(node_pool_info)
 
   output_json = json.loads(stdout)
   current_master_version = output_json.get("currentMasterVersion")
@@ -88,7 +130,7 @@ def upgrade_master(
         current_master,
         latest_version,
     )
-    node_pool.upgrade_cluster_master(node_pool_info, latest_version)
+    upgrade_cluster_master(node_pool_info, latest_version)
   else:
     logging.info("Master is already at target version. Skipping.")
 
@@ -106,7 +148,7 @@ def upgrade_nodes(
         current_node,
         latest_version,
     )
-    node_pool.upgrade_cluster_node_pool(node_pool_info, latest_version)
+    upgrade_cluster_node_pool(node_pool_info, latest_version)
   else:
     logging.info("Nodes are already at target version. Skipping.")
 
@@ -115,7 +157,7 @@ def upgrade_nodes(
 def verify_upgrade(target_version: str, node_pool_info: node_pool.Info):
   """Verifies that the upgrade was successful."""
 
-  stdout = node_pool.describe_cluster(node_pool_info)
+  stdout = describe_cluster(node_pool_info)
 
   output_json = json.loads(stdout)
   current_master_version = output_json.get("currentMasterVersion")
