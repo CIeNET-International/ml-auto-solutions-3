@@ -131,7 +131,6 @@ def compare_metric_values(
   )
 
 
-
 @task
 def verify_metric_for_all_pods(
     node_pool: Info,
@@ -209,7 +208,6 @@ def verify_metric_for_all_pods(
       tolerance_percent=tolerance_for_metric,
       labels=labels,
   )
-
 
   return True
 
