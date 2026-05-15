@@ -91,7 +91,6 @@ class BaseMetricStrategy(ABC):
     return None
 
 
-
 class _BaseSimplePointStrategy(BaseMetricStrategy):
   """Base strategy for parsing single numeric data points from Cloud Monitoring.
 
@@ -357,7 +356,6 @@ class _BaseDistributionStrategy(BaseMetricStrategy):
         labels.append(f"{group_value} {p.name}")
 
     return labels
-
 
 
 class MemoryUsedStrategy(_BaseSimplePointStrategy):

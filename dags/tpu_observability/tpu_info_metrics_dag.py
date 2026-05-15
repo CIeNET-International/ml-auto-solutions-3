@@ -116,7 +116,6 @@ def compare_metric_values(
   )
 
 
-
 @task
 def get_tpu_info_metric_from_pod(
     node_pool: node_pool.Info,
@@ -184,7 +183,6 @@ def run_metric_verification(
       tolerance_percent=tolerance_for_metric,
       labels=labels,
   )
-
 
   return True
 
