@@ -27,6 +27,7 @@ import tempfile
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from google.cloud import monitoring_v3
+from websocket import WebSocketConnectionClosedException
 
 from dags.tpu_observability.utils.time_util import TimeUtil
 from dags.tpu_observability.utils.gcp_util import list_time_series
@@ -467,17 +468,21 @@ class NodeOperationSpec:
   @staticmethod
   def Reboot() -> "NodeOperationSpec":
     """
-    GCP CLI approach to reset a node (simulates a hard reboot).
-    Note: {node_locations} must map to a single zone for 'gcloud compute'.
+    Defines a node reboot operation executed via a Kubernetes Pod.
+
+    This method generates a command template utilizing 'kubectl exec' to access
+    a privileged Pod with hostPID capabilities, using 'nsenter' to trigger a
+    reboot on the host OS.
+
+    Returns:
+      NodeOperationSpec: Configured for K8S_CLI approach with the reboot command template.
     """
+    reboot_cmd = "nsenter -t 1 -m -u -n -i reboot -f"
     return NodeOperationSpec(
         target=NodeOperation.REBOOT,
-        approach=NodeOperationApproach.GCP_CLI,
-        command_template=(
-            "gcloud compute instances reset {node_name} "
-            "--project={project_id} "
-            "--zone={node_locations} --quiet"
-        ),
+        approach=NodeOperationApproach.K8S_CLI,
+        command_template="kubectl exec {pod_name} -n {namespace} -- "
+        + reboot_cmd,
         extra_flags="",
     )
 
@@ -487,6 +492,8 @@ def operate_node(
     node_pool: Info,
     node_name: str,
     operation: NodeOperationSpec,
+    pod_name: str = None,
+    namespace: str = "default",
 ) -> str:
   """Performs a node operation based on the provided specification.
 
@@ -506,6 +513,8 @@ def operate_node(
       node_name=node_name,
       project_id=node_pool.project_id,
       node_locations=node_pool.node_locations,
+      pod_name=pod_name,
+      namespace=namespace,
   )
 
   logging.info("Select node '%s' to %s", node_name, operation.target.name)
@@ -526,7 +535,16 @@ def operate_node(
             f"Unsupported operation approach: {operation.approach}"
         )
 
-    subprocess.run_exec(" && ".join(commands), env=env)
+    try:
+      subprocess.run_exec(" && ".join(commands), env=env)
+    except WebSocketConnectionClosedException:
+      if operation.target == NodeOperation.REBOOT:
+        logging.info(
+            "Node reboot initiated: WebSocket connection closed as expected."
+        )
+        return node_name
+      raise
+
   return node_name
 
 

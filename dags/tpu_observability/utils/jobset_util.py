@@ -168,12 +168,15 @@ _TEMPLATE = string.Template(
                 parallelism: $parallelism
                 template:
                   spec:
+                    hostPID: $host_pid
                     nodeSelector:
                       cloud.google.com/gke-tpu-accelerator: $tpu_accelerator_type
                       cloud.google.com/gke-tpu-topology: $tpu_topology
                       {NODE_POOL_SELECTOR_KEY}: $node_pool_selector
                     containers:
                     - name: $container_name
+                      securityContext:
+                        privileged: $privileged
                       image: $image
                       command: $command
                       args:
@@ -216,6 +219,11 @@ class JobSet:
     container_name: The name of the container in the pod.
     image: The container image to use.
     tpu_cores_per_pod: The number of TPU cores requested per pod.
+    privileged: A test-specific flag to enable privileged mode and hostPID.
+      This unconventional setup is required for E2E validation tasks, such as
+      node-level fault injection (e.g., node reboots), where the pod must
+      interact with the host OS via nsenter. Should remain False for all
+      standard workloads. Defaults to False.
   """
 
   jobset_name: str
@@ -232,6 +240,7 @@ class JobSet:
   image: str
   tpu_cores_per_pod: int
   node_pool_selector: str
+  privileged: bool = False
 
   def generate_yaml(self, workload_script: Workload) -> str:
     """Generates the final JobSet YAML content.
@@ -247,6 +256,8 @@ class JobSet:
     params["command"] = ["bash", "-c"]
     params["args"] = workload_script
     params["node_pool_selector"] = self.node_pool_selector or ""
+    params["privileged"] = "true" if self.privileged else "false"
+    params["host_pid"] = "true" if self.privileged else "false"
 
     return _TEMPLATE.substitute(params)
 
