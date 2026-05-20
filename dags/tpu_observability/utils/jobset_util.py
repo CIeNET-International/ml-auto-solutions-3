@@ -1204,8 +1204,21 @@ def wait_for_jobset_recovered(
       )
       return PokeReturnValue(is_done=False)
 
-    first_line = lines[0].split()
-    if first_line:
-      end_time = TimeUtil.from_iso_string(first_line[0])
-      logging.info("Detected JobSet restart time: %s", end_time)
-      return PokeReturnValue(is_done=True, xcom_value=end_time)
+    for line in reversed(lines):
+      parts = line.split(maxsplit=2)
+
+      if len(parts) >= 2:
+        timestamp_str = parts[0]
+        reason = parts[1]
+
+        if reason == "RestartJobSetFailurePolicyAction":
+          logging.info("Matched recovery log line: %s", line)
+          end_time = TimeUtil.from_iso_string(timestamp_str)
+          logging.info("JobSet recovery confirmed. Event time: %s", end_time)
+          return PokeReturnValue(is_done=True, xcom_value=end_time)
+
+    logging.info(
+        "Target recovery reason RestartJobSetFailurePolicyAction not found in "
+        "events yet."
+    )
+    return PokeReturnValue(is_done=False)
