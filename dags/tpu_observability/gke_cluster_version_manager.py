@@ -21,6 +21,7 @@ import re
 
 from airflow import models
 from airflow.decorators import task
+from airflow.models.baseoperator import chain
 from airflow.utils.task_group import TaskGroup
 from dags import composer_env
 from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_PATH
@@ -207,4 +208,8 @@ with models.DAG(
       node_up = upgrade_nodes(avail_ver, curr_vers, node_pool_info)
       verify = verify_upgrade(avail_ver, node_pool_info)
 
-      curr_vers >> master_up >> node_up >> verify
+      chain(
+          master_up,
+          node_up,
+          verify,
+      )
