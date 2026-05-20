@@ -15,20 +15,16 @@
 """A DAG to test JobSet Time-To-Recover (TTR) metric by triggering a node reboot."""
 
 import datetime
-import random
-import logging
+from datetime import timedelta
 
 from airflow import models
-from airflow.decorators import task
 from airflow.models.baseoperator import chain
 from airflow.utils.trigger_rule import TriggerRule
-from airflow.utils.task_group import TaskGroup
 
 from dags import composer_env
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
-from dags.tpu_observability.utils.jobset_util import JobSet, Workload
-from dags.tpu_observability.utils.time_util import TimeUtil
+from dags.tpu_observability.utils.jobset_util import Workload
 from dags.tpu_observability.configs.common import (
     MachineConfigMap,
     GCS_CONFIG_PATH,
@@ -38,20 +34,12 @@ from dags.common.scheduling_helper.scheduling_helper import (
     SchedulingHelper,
     get_dag_timeout,
 )
+from dags.common.task_group_with_timeout import TaskGroupWithTimeout
 
 
 DAG_ID = "jobset_ttr_node_reboot"
 DAGRUN_TIMEOUT = get_dag_timeout(DAG_ID)
 SCHEDULE = SchedulingHelper.arrange_schedule_time(DAG_ID)
-
-
-@task(task_id="select_reboot_pod")
-def select_reboot_pod(pods: list[str]) -> str:
-  if not pods:
-    raise ValueError("No running pods available.")
-  selected = random.choice(pods)
-  logging.info(f"Selected pod for reboot: {selected}")
-  return selected
 
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
@@ -103,8 +91,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 
     # Keyword arguments are generated dynamically at runtime (pylint does not
     # know this signature).
-    with TaskGroup(  # pylint: disable=unexpected-keyword-arg
-        group_id=f"v{config.tpu_version.value}"
+    with TaskGroupWithTimeout(  # pylint: disable=unexpected-keyword-arg
+        group_id=f"v{config.tpu_version.value}",
+        timeout=timedelta(minutes=90),
     ):
       selector = jobset.generate_node_pool_selector("jobset-ttr-node-reboot")
 
@@ -130,18 +119,20 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           node_pool=cluster_info,
       )
 
-      startup = jobset.create_jobset_startup_group(
+      startup = jobset.create_jobset_startup_tasks(
           node_pool=cluster_info,
           jobset_config=jobset_config,
           workload_type=Workload.JAX_TPU_BENCHMARK,
       )
 
-      target_pod = select_reboot_pod(startup.running_pods)
-
-      reboot_node = node_pool.operate_node.override(task_id="reboot_node")(
+      target_pod = jobset.draw_random_pod(
           node_pool=cluster_info,
-          node_name=None,
-          operation=node_pool.NodeOperationSpec.Reboot(),
+          jobset_config=jobset_config,
+      )
+
+      reboot_node = jobset.operate_pod.override(task_id="reboot_node")(
+          node_pool=cluster_info,
+          operation=jobset.PodOperationSpec.Reboot(),
           pod_name=target_pod,
           namespace="default",
       )
@@ -170,7 +161,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           jobset_config,
           cluster_info,
           create_node_pool,
-          startup.task_group,
+          *startup.tasks,
           target_pod,
           reboot_node,
           wait_for_metric_upload,
