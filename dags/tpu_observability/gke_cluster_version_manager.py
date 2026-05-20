@@ -27,8 +27,11 @@ from dags import composer_env
 from dags.tpu_observability.configs.common import MachineConfigMap, GCS_CONFIG_PATH
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils import subprocess_util as subprocess
+from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper, get_dag_timeout
 
 DAG_ID = "gke_cluster_version_manager"
+DAGRUN_TIMEOUT = get_dag_timeout(DAG_ID)
+SCHEDULE = SchedulingHelper.arrange_schedule_time(DAG_ID)
 
 
 def describe_cluster(node_pool_info: node_pool.Info) -> str:
@@ -181,9 +184,9 @@ def verify_upgrade(target_version: str, node_pool_info: node_pool.Info):
 
 with models.DAG(
     dag_id=DAG_ID,
-    start_date=datetime.datetime(2025, 8, 1),
-    schedule=None,
-    catchup=False,
+    start_date=datetime.datetime(2026, 5, 20),
+    schedule=SCHEDULE if composer_env.is_prod_env() else None,
+    dagrun_timeout=DAGRUN_TIMEOUT,
     tags=["gke", "upgrade"],
     description="DAG to upgrade GKE cluster to latest available version",
 ) as dag:
