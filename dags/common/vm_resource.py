@@ -398,5 +398,11 @@ class DockerImage(enum.Enum):
       "gcr.io/tpu-prod-env-multipod/maxtext_post_training_nightly:"
       f"{datetime.datetime.today().strftime('%Y-%m-%d')}"
   )
-  TPU_OBS_LIBTPU_NIGHTLY = "us-west1-docker.pkg.dev/cienet-cmcs/tpu-obs-cloud-build/libtpu-nightly:latest"
-  TPU_OBS_LIBTPU_STABLE = "us-west1-docker.pkg.dev/cienet-cmcs/tpu-obs-cloud-build/libtpu-stable:latest"
+  LIBTPU_NIGHTLY = (
+      "us-west1-docker.pkg.dev/cienet-cmcs/tpu-obs-cloud-build/libtpu-nightly:"
+      "latest"
+  )
+  LIBTPU_STABLE = (
+      "us-west1-docker.pkg.dev/cienet-cmcs/tpu-obs-cloud-build/libtpu-stable:"
+      "latest"
+  )
