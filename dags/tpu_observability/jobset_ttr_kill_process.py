@@ -51,12 +51,12 @@ SCHEDULE = SchedulingHelper.arrange_schedule_time(DAG_ID)
 
 
 @task
-def kill_tpu_pod_workload(info: node_pool.Info, running_pods: list) -> None:
+def kill_tpu_pod_workloads(info: node_pool.Info, pod_names: list[str]) -> None:
   """
-  Kills the python process on a single pod.
+  Kills the python process on a list of pods.
 
   This task retrieves cluster credentials, then attempts to kill the JAX
-  python process inside the specified pod. It ignores errors if the pod
+  python process inside each specified pod. It ignores errors if the pod
   has already been deleted to ensure pipeline continuity.
   """
   target_pod = random.choice(running_pods)
@@ -65,21 +65,18 @@ def kill_tpu_pod_workload(info: node_pool.Info, running_pods: list) -> None:
     env = os.environ.copy()
     env["KUBECONFIG"] = temp_config_file.name
 
-    cmd = " && ".join([
-        jobset.Command.get_credentials_command(info),
-        f"kubectl exec {target_pod} -n default -- pkill -9 -f python",
-    ])
+    for pod_name in pod_names:
+      cmd = " && ".join([
+          jobset.Command.get_credentials_command(info),
+          f"kubectl exec {pod_name} -n default -- pkill -9 -f python",
+      ])
 
-    operation_start_time = TimeUtil.from_datetime(
-        datetime.datetime.now(datetime.timezone.utc)
-    )
-
-    try:
-      subprocess.run_exec(cmd, env=env)
-    except subprocess.ProcessKilledException:
-      logging.info("Process was terminated with SIGKILL")
-    except Exception as e:
-      raise e
+      try:
+        subprocess.run_exec(cmd, env=env)
+      except subprocess.ProcessKilledException:
+        logging.info(f"Process in pod {pod_name} was terminated with SIGKILL")
+      except Exception as e:
+        raise e
 
   return operation_start_time
 
@@ -171,7 +168,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           task_id="kill_tpu_pod_workload"
       )(
           info=cluster_info,
-          running_pods=startup.running_pods,
+          pod_names=startup.running_pods,
       )
 
       wait_for_recovery = jobset.wait_for_jobset_recovered.override(
