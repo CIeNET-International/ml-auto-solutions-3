@@ -194,7 +194,7 @@ with models.DAG(
     config = machine.value
 
     with TaskGroup(group_id=f"v{config.tpu_version.value}"):
-      node_pool_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
+      cluster_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
           task_id="build_node_pool_info_from_gcs_yaml"
       )(
           gcs_path=GCS_CONFIG_PATH,
@@ -204,12 +204,12 @@ with models.DAG(
           tpu_topology=config.tpu_topology,
       )
 
-      avail_ver = find_available_version(node_pool_info)
-      curr_vers = find_current_cluster_version(node_pool_info)
+      avail_ver = find_available_version(cluster_info)
+      curr_vers = find_current_cluster_version(cluster_info)
 
-      master_up = upgrade_master(avail_ver, curr_vers, node_pool_info)
-      node_up = upgrade_nodes(avail_ver, curr_vers, node_pool_info)
-      verify = verify_upgrade(avail_ver, node_pool_info)
+      master_up = upgrade_master(avail_ver, curr_vers, cluster_info)
+      node_up = upgrade_nodes(avail_ver, curr_vers, cluster_info)
+      verify = verify_upgrade(avail_ver, cluster_info)
 
       chain(
           master_up,
