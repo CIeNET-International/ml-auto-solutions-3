@@ -42,7 +42,7 @@ SCHEDULE = SchedulingHelper.arrange_schedule_time(DAG_ID)
 
 
 @task
-def validate_monitoring_sdk(info: node_pool.Info, pod_name: str) -> None:
+def validate_monitoring_sdk(info: node_pool.Info, pod_names: list[str]) -> None:
   """Validates the tpumonitoring SDK functions inside TPU worker pods.
 
   This task executes both help() and list_supported_metrics() via the SDK
@@ -50,7 +50,7 @@ def validate_monitoring_sdk(info: node_pool.Info, pod_name: str) -> None:
 
   Args:
     info: Cluster info for gcloud credentials.
-    pod_name: Pod name provided by dynamic task mapping.
+    pod_names: List of pod names.
   """
   # A dict of script to its expected result patterns.
   validate_spec: dict[sdk.TpuMonitoringScript, list[str]] = {
@@ -74,14 +74,15 @@ def validate_monitoring_sdk(info: node_pool.Info, pod_name: str) -> None:
       ],
   }
 
-  for script, patterns in validate_spec.items():
-    output = sdk.execute_sdk_command(info, pod_name, script)
-    for pattern in patterns:
-      if pattern not in output:
-        raise AssertionError(
-            f"Validation failed for 'tpumonitoring.{script.name.lower()}()': "
-            f"Missing '{pattern}'."
-        )
+  for pod_name in pod_names:
+    for script, patterns in validate_spec.items():
+      output = sdk.execute_sdk_command(info, pod_name, script)
+      for pattern in patterns:
+        if pattern not in output:
+          raise AssertionError(
+              f"Validation failed for 'tpumonitoring.{script.name.lower()}()' inside pod '{pod_name}': "
+              f"Missing '{pattern}'."
+          )
 
 
 with models.DAG(
@@ -162,10 +163,9 @@ with models.DAG(
         workload_type=Workload.JAX_TPU_BENCHMARK,
     )
 
-    sdk_validation = (
-        validate_monitoring_sdk.override(task_id="sdk_validation")
-        .partial(info=cluster_info)
-        .expand(pod_name=startup.running_pods)
+    sdk_validation = validate_monitoring_sdk.override(task_id="sdk_validation")(
+        info=cluster_info,
+        pod_names=startup.running_pods,
     )
 
     cleanup_workload = jobset.end_workload.override(
