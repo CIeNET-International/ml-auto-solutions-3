@@ -90,32 +90,43 @@ def validate_tpu_info_format(
   from dags.tpu_observability.utils.tpu_info_util import parse_tpu_info_output
   import logging
 
+  failed_pods = []
   for pod_name in pod_names:
     logging.info(
         "Executing tpu-info and performing format validation for pod: %s",
         pod_name,
     )
 
-    # 1. Get tpu-info output from pod
-    with tempfile.NamedTemporaryFile() as temp_config_file:
-      env = os.environ.copy()
-      env["KUBECONFIG"] = temp_config_file.name
+    try:
+      with tempfile.NamedTemporaryFile() as temp_config_file:
+        env = os.environ.copy()
+        env["KUBECONFIG"] = temp_config_file.name
 
-      cmd = " && ".join([
-          jobset.Command.get_credentials_command(info),
-          f"kubectl exec {pod_name} -n default -- tpu-info",
-      ])
+        cmd = " && ".join([
+            jobset.Command.get_credentials_command(info),
+            f"kubectl exec {pod_name} -n default -- tpu-info",
+        ])
 
-      raw_output = subprocess.run_exec(cmd, env=env)
+        raw_output = subprocess.run_exec(cmd, env=env)
 
-    # Parse tpu-info output
-    tpu_info_output = parse_tpu_info_output(raw_output)
+      tpu_info_output = parse_tpu_info_output(raw_output)
 
-    verify_table_amount(tpu_info_output)
-    validate_chips_table(tpu_info_output, tpu_config)
-    validate_runtime_table(tpu_info_output)
-    validate_tensorcore_table(tpu_info_output)
-    validate_latency_table(tpu_info_output)
+      verify_table_amount(tpu_info_output)
+      validate_chips_table(tpu_info_output, tpu_config)
+      validate_runtime_table(tpu_info_output)
+      validate_tensorcore_table(tpu_info_output)
+      validate_latency_table(tpu_info_output)
+      logging.info("Validation succeeded for pod: %s", pod_name)
+    except Exception as e:
+      logging.error("Validation failed for pod: %s. Error: %s", pod_name, e)
+      failed_pods.append((pod_name, e))
+
+  if failed_pods:
+    failed_pod_names = [name for name, _ in failed_pods]
+    logging.error("The following pods failed validation: %s", failed_pod_names)
+    raise AirflowFailException(
+        f"Task failed because validation failed on pods: {failed_pod_names}"
+    )
 
 
 def verify_table_amount(tpu_info_output: list[tpu_info.Table]):

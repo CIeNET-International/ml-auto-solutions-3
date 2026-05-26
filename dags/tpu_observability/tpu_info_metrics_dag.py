@@ -25,7 +25,7 @@ import tempfile
 
 from airflow import models
 from airflow.decorators import task
-from airflow.exceptions import AirflowException
+from airflow.exceptions import AirflowException, AirflowFailException
 from airflow.models.baseoperator import chain
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
@@ -125,6 +125,7 @@ def verify_metric_for_all_pods(
   """Runs metric verification across all pods sequentially."""
 
   results = []
+  failed_pods = []
   for pod_name in pod_names:
     logging.info(
         "Fetching tpu-info metric '%s' for pod: %s...",
@@ -132,63 +133,72 @@ def verify_metric_for_all_pods(
         pod_name,
     )
 
-    # 1. Execute the tpu-info command
-    with tempfile.TemporaryDirectory() as tmpdir:
-      kube_dir = tmpdir + "/kubeconfig"
-      env = os.environ.copy()
-      env["KUBECONFIG"] = kube_dir
+    try:
+      with tempfile.TemporaryDirectory() as tmpdir:
+        kube_dir = tmpdir + "/kubeconfig"
+        env = os.environ.copy()
+        env["KUBECONFIG"] = kube_dir
 
-      cmd = " && ".join([
-          jobset.Command.get_credentials_command(node_pool),
-          (
-              f"kubectl --kubeconfig={kube_dir} "
-              f"exec {pod_name} -n {jobset_config.namespace} "
-              f"-- tpu-info --metric {metric_strategy.tpu_info_metric_name}"
-          ),
-      ])
+        cmd = " && ".join([
+            jobset.Command.get_credentials_command(node_pool),
+            (
+                f"kubectl --kubeconfig={kube_dir} "
+                f"exec {pod_name} -n {jobset_config.namespace} "
+                f"-- tpu-info --metric {metric_strategy.tpu_info_metric_name}"
+            ),
+        ])
 
-      output = subprocess.run_exec(cmd=cmd, env=env)
+        output = subprocess.run_exec(cmd=cmd, env=env)
 
-    # Parse the tpu-info output
-    tpu_info_output = parse_tpu_info_output(output)
+      tpu_info_output = parse_tpu_info_output(output)
 
-    # Run the verification logic
-    logging.info(
-        "Verifying metric '%s' for pod: %s...",
-        metric_strategy.metric_name,
-        pod_name,
+      logging.info(
+          "Verifying metric '%s' for pod: %s...",
+          metric_strategy.metric_name,
+          pod_name,
+      )
+
+      start_time = job_apply_time
+      end_time = job_apply_time + datetime.timedelta(minutes=10)
+
+      time_series_data = metric_strategy.list_or_query_metric(
+          project_id=node_pool.project_id,
+          cluster_name=node_pool.cluster_name,
+          pod_name=pod_name,
+          start_time=start_time,
+          end_time=end_time,
+      )
+
+      monitoring_values = metric_strategy.parse_from_monitoring(time_series_data)
+      cmd_values = metric_strategy.parse_from_tpu_info(tpu_info_output)
+
+      tolerance_for_metric = metric_strategy.tolerance_percent
+      logging.info(
+          "Using a tolerance of %.2f%% for metric '%s' comparison on pod %s.",
+          tolerance_for_metric,
+          metric_strategy.dag_id_suffix,
+          pod_name,
+      )
+
+      compare_metric_values(
+          cmd_values,
+          monitoring_values,
+          pod_name,
+          metric_display_name=metric_strategy.dag_id_suffix,
+          tolerance_percent=tolerance_for_metric,
+      )
+      results.append(True)
+      logging.info("Validation succeeded for pod: %s", pod_name)
+    except Exception as e:
+      logging.error("Validation failed for pod: %s. Error: %s", pod_name, e)
+      failed_pods.append((pod_name, e))
+
+  if failed_pods:
+    failed_pod_names = [name for name, _ in failed_pods]
+    logging.error("The following pods failed validation: %s", failed_pod_names)
+    raise AirflowFailException(
+        f"Task failed because validation failed on pods: {failed_pod_names}"
     )
-
-    start_time = job_apply_time
-    end_time = job_apply_time + datetime.timedelta(minutes=10)
-
-    time_series_data = metric_strategy.list_or_query_metric(
-        project_id=node_pool.project_id,
-        cluster_name=node_pool.cluster_name,
-        pod_name=pod_name,
-        start_time=start_time,
-        end_time=end_time,
-    )
-
-    monitoring_values = metric_strategy.parse_from_monitoring(time_series_data)
-    cmd_values = metric_strategy.parse_from_tpu_info(tpu_info_output)
-
-    tolerance_for_metric = metric_strategy.tolerance_percent
-    logging.info(
-        "Using a tolerance of %.2f%% for metric '%s' comparison on pod %s.",
-        tolerance_for_metric,
-        metric_strategy.dag_id_suffix,
-        pod_name,
-    )
-
-    compare_metric_values(
-        cmd_values,
-        monitoring_values,
-        pod_name,
-        metric_display_name=metric_strategy.dag_id_suffix,
-        tolerance_percent=tolerance_for_metric,
-    )
-    results.append(True)
 
   return results
 

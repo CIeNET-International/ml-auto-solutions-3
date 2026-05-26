@@ -24,6 +24,7 @@ import os
 
 from airflow import models
 from airflow.decorators import task
+from airflow.exceptions import AirflowFailException
 from airflow.models.baseoperator import chain
 from airflow.utils.trigger_rule import TriggerRule
 from airflow.utils.task_group import TaskGroup
@@ -60,6 +61,7 @@ def kill_tpu_pod_workloads(info: node_pool.Info, pod_names: list[str]) -> None:
     env = os.environ.copy()
     env["KUBECONFIG"] = temp_config_file.name
 
+    failed_pods = []
     for pod_name in pod_names:
       cmd = " && ".join([
           jobset.Command.get_credentials_command(info),
@@ -68,10 +70,20 @@ def kill_tpu_pod_workloads(info: node_pool.Info, pod_names: list[str]) -> None:
 
       try:
         subprocess.run_exec(cmd, env=env)
+        logging.info("Execution succeeded for pod: %s", pod_name)
       except subprocess.ProcessKilledException:
         logging.info(f"Process in pod {pod_name} was terminated with SIGKILL")
+        logging.info("Execution succeeded for pod: %s", pod_name)
       except Exception as e:
-        raise e
+        logging.error("Execution failed for pod: %s. Error: %s", pod_name, e)
+        failed_pods.append((pod_name, e))
+
+    if failed_pods:
+      failed_pod_names = [name for name, _ in failed_pods]
+      logging.error("The following pods failed execution: %s", failed_pod_names)
+      raise AirflowFailException(
+          f"Task failed because execution failed on pods: {failed_pod_names}"
+      )
 
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
