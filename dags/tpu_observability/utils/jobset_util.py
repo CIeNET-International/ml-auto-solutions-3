@@ -380,6 +380,18 @@ class JobSetHealthiness(enum.Enum):
   SUCCEEDED = "succeeded"
   SPECIFIED = "specified"
 
+  @property
+  def healthiness_metric_type(self) -> str:
+    mapping = {
+        "ready": "prometheus.googleapis.com/kube_jobset_ready_replicas/gauge",
+        "active": "prometheus.googleapis.com/kube_jobset_active_replicas/gauge",
+        "suspended": "prometheus.googleapis.com/kube_jobset_suspended_replicas/gauge",
+        "succeeded": "prometheus.googleapis.com/kube_jobset_succeeded_replicas/gauge",
+        "failed": "prometheus.googleapis.com/kube_jobset_failed_replicas/gauge",
+        "specified": "prometheus.googleapis.com/kube_jobset_specified_replicas/gauge",
+    }
+    return mapping.get(self.value)
+
 
 class Command:
   """
@@ -914,7 +926,9 @@ def operate_pod(
 
 
 @task
-def suspended_jobset(node_pool: node_pool_info, jobset_config: JobSet):
+def suspended_jobset(
+    node_pool: node_pool_info, jobset_config: JobSet, jobset_name: str
+):
   """
   Suspend a jobset from the GKE cluster.
 
@@ -935,7 +949,7 @@ def suspended_jobset(node_pool: node_pool_info, jobset_config: JobSet):
         Command.get_credentials_command(node_pool),
         Command.k8s_suspend_jobset_command(
             temp_config_file.name,
-            jobset_config.jobset_name,
+            jobset_name,
             jobset_config.namespace,
         ),
     ])
@@ -944,7 +958,9 @@ def suspended_jobset(node_pool: node_pool_info, jobset_config: JobSet):
 
 
 @task
-def resume_jobset(node_pool: node_pool_info, jobset_config: JobSet):
+def resume_jobset(
+    node_pool: node_pool_info, jobset_config: JobSet, jobset_name: str
+):
   """
   Resume a jobset from the GKE cluster.
 
@@ -965,7 +981,7 @@ def resume_jobset(node_pool: node_pool_info, jobset_config: JobSet):
         Command.get_credentials_command(node_pool),
         Command.k8s_resume_jobset_command(
             temp_config_file.name,
-            jobset_config.jobset_name,
+            jobset_name,
             jobset_config.namespace,
         ),
     ])
@@ -1055,6 +1071,73 @@ def verify_recovery_duration(start_time: TimeUtil, end_time: TimeUtil):
         "The 'jobset_time_to_recover' metric requires > 60s to be recorded. "
         "Failing fast to avoid waiting for a missing metric."
     )
+@task.sensor(poke_interval=60, timeout=3600, mode="poke")
+def wait_for_jobset_metrics(
+    metric_name: JobSetHealthiness,
+    expected_value: int,
+    node_pool: node_pool_info,
+    jobset_name: str,
+    start_time: TimeUtil = None,
+) -> bool:
+  """Polls Cloud Monitoring for a specific JobSet replicated job metric.
+
+  A sensor task which polls various JobSet metrics (e.g., ready, active,
+  failed) every 60 seconds for 60 minutes. This sensor handles dynamic
+  scaling expectations and ensures compatibility with different data
+  types returned by the Prometheus exporter.
+
+  Args:
+    metric_name (JobSetHealthiness): The status of the replicated job to
+      monitor.
+    expected_value (int): The target value to wait for.
+    node_pool (Info): An instance of the Info class containing GKE cluster
+      metadata.
+    jobset_name: The name of the JobSet.
+    start_time (TimeUtil, optional): The UTC timestamp to start polling
+      from. If not provided, defaults to 60 minutes before the current time.
+
+  Returns:
+    bool: True if the current metric value matches the expected value,
+      False otherwise.
+  """
+
+  metric_type = metric_name.healthiness_metric_type
+  name_str = metric_name.value
+
+  query_start = (
+      start_time if start_time else TimeUtil.now() - timedelta(minutes=60)
+  )
+
+  time_series = list_time_series(
+      project_id=node_pool.project_id,
+      filter_str=(
+          f'metric.type="{metric_type}" '
+          f'resource.type="prometheus_target" '
+          f'resource.labels.cluster="{node_pool.cluster_name}" '
+          f'metric.labels.jobset_name="{jobset_name}"'
+      ),
+      start_time=query_start,
+      end_time=TimeUtil.now(),
+  )
+
+  if not time_series or len(time_series) == 0 or not time_series[0].points:
+    return False
+
+  point_value = time_series[0].points[0].value
+  if (
+      hasattr(point_value, "double_value")
+      and point_value.double_value is not None
+  ):
+    latest_value = point_value.double_value
+  else:
+    latest_value = float(point_value.int64_value)
+
+  logging.info(
+      f"Metric {name_str} for JobSet {jobset_name}: "
+      f"current={latest_value}, expected={expected_value}"
+  )
+
+  return float(latest_value) == float(expected_value)
 
 
 @task.sensor(poke_interval=60, timeout=3600, mode="poke", retries=0)

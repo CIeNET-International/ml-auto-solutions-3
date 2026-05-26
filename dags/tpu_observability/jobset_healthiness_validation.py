@@ -88,42 +88,40 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     with TaskGroup(  # pylint: disable=unexpected-keyword-arg
         group_id=f"v{config.tpu_version.value}"
     ):
-      selector = jobset.generate_node_pool_selector(
-          "jobset-healthiness-validation"
-      )
-
-      jobset_config = jobset.build_jobset_from_gcs_yaml(
-          gcs_path=GCS_JOBSET_CONFIG_PATH,
-          dag_name=DAG_ID,
-          node_pool_selector=selector,
-      )
-
-      cluster_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
-          task_id="build_node_pool_info_from_gcs_yaml"
-      )(
+      cluster_info = node_pool.build_node_pool_info_from_gcs_yaml(
           gcs_path=GCS_CONFIG_PATH,
           dag_name=DAG_ID,
           is_prod=composer_env.is_prod_env(),
           machine_type=config.machine_version.value,
           tpu_topology=config.tpu_topology,
-          node_pool_selector=selector,
       )
+
+      jobset_config = jobset.build_jobset_from_gcs_yaml(
+          gcs_path=GCS_JOBSET_CONFIG_PATH,
+          dag_name=DAG_ID,
+      )
+
+      selector = jobset.generate_node_pool_selector(DAG_ID)
+      jobset_name = jobset.generate_jobset_name(jobset_config.dag_id_prefix)
 
       create_node_pool = node_pool.create.override(task_id="create_node_pool")(
           node_pool=cluster_info,
+          node_pool_selector=selector,
       )
 
       startup = jobset.create_jobset_startup_tasks(
           node_pool=cluster_info,
           jobset_config=jobset_config,
+          jobset_name=jobset_name,
+          node_pool_selector=selector,
           workload_type=Workload.JAX_TPU_BENCHMARK,
       )
 
       with TaskGroup(group_id="validate_running_metrics") as validate_running:
         running_metrics = [
-            (JobSetHealthiness.SPECIFIED, "USE_CONFIG_REPLICAS"),
-            (JobSetHealthiness.ACTIVE, "USE_CONFIG_REPLICAS"),
-            (JobSetHealthiness.READY, "USE_CONFIG_REPLICAS"),
+            (JobSetHealthiness.SPECIFIED, jobset_config.replicas),
+            (JobSetHealthiness.ACTIVE, jobset_config.replicas),
+            (JobSetHealthiness.READY, jobset_config.replicas),
             (JobSetHealthiness.FAILED, 0),
             (JobSetHealthiness.SUCCEEDED, 0),
             (JobSetHealthiness.SUSPENDED, 0),
@@ -135,7 +133,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
               metric_name=status,
               expected_value=expected,
               node_pool=cluster_info,
-              jobset_config=jobset_config,
+              jobset_name=jobset_name,
           )
 
       suspend_action = jobset.suspended_jobset.override(
@@ -143,6 +141,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       )(
           node_pool=cluster_info,
           jobset_config=jobset_config,
+          jobset_name=jobset_name,
       )
 
       with TaskGroup(
@@ -150,7 +149,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       ) as validate_suspended:
         suspended_metrics = [
             (JobSetHealthiness.ACTIVE, 0),
-            (JobSetHealthiness.SUSPENDED, "USE_CONFIG_REPLICAS"),
+            (JobSetHealthiness.SUSPENDED, jobset_config.replicas),
         ]
         for status, expected in suspended_metrics:
           jobset.wait_for_jobset_metrics.override(
@@ -159,12 +158,13 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
               metric_name=status,
               expected_value=expected,
               node_pool=cluster_info,
-              jobset_config=jobset_config,
+              jobset_name=jobset_name,
           )
 
       resume_action = jobset.resume_jobset.override(task_id="resume_jobset")(
           node_pool=cluster_info,
           jobset_config=jobset_config,
+          jobset_name=jobset_name,
       )
 
       with TaskGroup(group_id="inject_and_validate_success") as success_test:
@@ -173,6 +173,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
         )(
             node_pool=cluster_info,
             jobset_config=jobset_config,
+            jobset_name=jobset_name,
         )
 
         start_success_job = jobset.run_workload.override(
@@ -180,6 +181,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
         )(
             node_pool=cluster_info,
             jobset_config=jobset_config,
+            jobset_name=jobset_name,
             workload_type=SUCCESS_WORKLOAD,
         )
 
@@ -187,9 +189,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             task_id="wait_for_succeeded_count"
         )(
             metric_name=JobSetHealthiness.SUCCEEDED,
-            expected_value="USE_CONFIG_REPLICAS",
+            expected_value=jobset_config.replicas,
             node_pool=cluster_info,
-            jobset_config=jobset_config,
+            jobset_name=jobset_name,
         )
 
         chain(cleanup_for_success, start_success_job, validate_succeeded_metric)
@@ -200,11 +202,13 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
         )(
             node_pool=cluster_info,
             jobset_config=jobset_config,
+            jobset_name=jobset_name,
         )
 
         start_fail_job = jobset.run_workload.override(task_id="start_fail_job")(
             node_pool=cluster_info,
             jobset_config=jobset_config,
+            jobset_name=jobset_name,
             workload_type=FAIL_WORKLOAD,
         )
 
@@ -212,9 +216,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             task_id="wait_for_failed_count"
         )(
             metric_name=JobSetHealthiness.FAILED,
-            expected_value="USE_CONFIG_REPLICAS",
+            expected_value=jobset_config.replicas,
             node_pool=cluster_info,
-            jobset_config=jobset_config,
+            jobset_name=jobset_name,
         )
 
         chain(cleanup_for_failure, start_fail_job, validate_failed_metric)
@@ -224,6 +228,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       )(
           node_pool=cluster_info,
           jobset_config=jobset_config,
+          jobset_name=jobset_name,
       ).as_teardown(
           setups=startup.jobset_start_time
       )
@@ -236,8 +241,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 
       chain(
           selector,
-          jobset_config,
-          cluster_info,
+          jobset_name,
           create_node_pool,
           *startup.tasks,
           validate_running,
