@@ -499,7 +499,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           cluster_info,
           cluster_info_2,
           create_node_pool,
-          startup.task_group,
+          *startup.tasks,
           validate_format,
           clean_up_workload,
           cleanup_node_pool,
