@@ -913,6 +913,66 @@ def operate_pod(
   return TimeUtil.from_datetime(current_time_utc)
 
 
+@task
+def suspended_jobset(node_pool: node_pool_info, jobset_config: JobSet):
+  """
+  Suspend a jobset from the GKE cluster.
+
+  This task executes a bash script to:
+  1. Authenticate `gcloud` with the specified GKE cluster.
+  2. Suspend a JobSet.
+
+  Args:
+    node_pool: Configuration object with cluster details.
+    jobset_name: The name of the JobSet to delete.
+  """
+
+  with tempfile.NamedTemporaryFile() as temp_config_file:
+    env = os.environ.copy()
+    env["KUBECONFIG"] = temp_config_file.name
+
+    cmd = " && ".join([
+        Command.get_credentials_command(node_pool),
+        Command.k8s_suspend_jobset_command(
+            temp_config_file.name,
+            jobset_config.jobset_name,
+            jobset_config.namespace,
+        ),
+    ])
+
+    subprocess.run_exec(cmd, env=env)
+
+
+@task
+def resume_jobset(node_pool: node_pool_info, jobset_config: JobSet):
+  """
+  Resume a jobset from the GKE cluster.
+
+  This task executes a bash script to:
+  1. Authenticate `gcloud` with the specified GKE cluster.
+  2. Resume a JobSet.
+
+  Args:
+    node_pool: Configuration object with cluster details.
+    jobset_name: The name of the JobSet to delete.
+  """
+
+  with tempfile.NamedTemporaryFile() as temp_config_file:
+    env = os.environ.copy()
+    env["KUBECONFIG"] = temp_config_file.name
+
+    cmd = " && ".join([
+        Command.get_credentials_command(node_pool),
+        Command.k8s_resume_jobset_command(
+            temp_config_file.name,
+            jobset_config.jobset_name,
+            jobset_config.namespace,
+        ),
+    ])
+
+    subprocess.run_exec(cmd, env=env)
+
+
 @task.sensor(poke_interval=30, timeout=900, mode="poke")
 def wait_for_jobset_started(
     node_pool: node_pool_info,
