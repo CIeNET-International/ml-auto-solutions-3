@@ -27,11 +27,12 @@ from dags.multipod.configs.common import SetupMode
 from xlml.apis import metric_config, mlcompass, task
 
 # Run once a day at 3 am UTC (7 pm PST / 8 pm PDT)
-CONIFGS_SCHEDULED_TIME = "0 9 * * *" if composer_env.is_prod_env() else None
+CONIFGS_SCHEDULED_TIME = (
+    "30 9 * * 1,3,5" if composer_env.is_prod_env() else None
+)
 DOCKER_IMAGES = [
     (SetupMode.STABLE, DockerImage.MAXTEXT_TPU_JAX_STABLE),
     (SetupMode.NIGHTLY, DockerImage.MAXTEXT_TPU_JAX_NIGHTLY),
-    (SetupMode.TPU_RECIPES, DockerImage.MAXTEXT_JAX_052_RECIPES_012),
 ]
 BASE_OUTPUT_DIRECTORY = "gs://runner-maxtext-logs"
 
@@ -69,12 +70,6 @@ with models.DAG(
   all_tests: list[task.XpkTask] = []
   for mode, image in DOCKER_IMAGES:
     for model in MaxTextTrilliumModelConfigs:
-      # No tpu-recipe for DeepSeek v3
-      if (
-          model == MaxTextTrilliumModelConfigs.DEEPSEEK_V3_EP16
-          and image == DockerImage.MAXTEXT_JAX_052_RECIPES_012
-      ):
-        continue
       if (
           model in need_stable_candidate_set
           and image == DockerImage.MAXTEXT_TPU_JAX_STABLE

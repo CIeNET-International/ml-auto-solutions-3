@@ -26,7 +26,7 @@ from dags.multipod.configs import gke_config
 from xlml.utils import name_format
 
 # Run once a day at 1 am UTC (5 pm PST)
-SCHEDULED_TIME = "0 5 * * *" if composer_env.is_prod_env() else None
+SCHEDULED_TIME = "30 1 * * *" if composer_env.is_prod_env() else None
 HF_TOKEN = models.Variable.get("HF_TOKEN", None)
 
 
@@ -58,8 +58,18 @@ with models.DAG(
 
   # Unchained tests
   test_models_tpu = {
+      "deepseek32-671b": {
+          "script_name": "tpu/deepseek/v3.2-671b/2_test_deepseek",
+          "cluster": XpkClusters.TPU_V5P_128_CLUSTER,
+          "time_out_in_min": 90,
+      },
       "deepseek3-671b": {
           "script_name": "tpu/deepseek/v3-671b/2_test_deepseek",
+          "cluster": XpkClusters.TPU_V5P_128_CLUSTER,
+          "time_out_in_min": 90,
+      },
+      "deepseek3-671b-mtp": {
+          "script_name": "tpu/deepseek/v3-671b/2_test_deepseek_mtp",
           "cluster": XpkClusters.TPU_V5P_128_CLUSTER,
           "time_out_in_min": 90,
       },

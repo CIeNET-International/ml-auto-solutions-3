@@ -13,8 +13,6 @@
 # limitations under the License.
 
 import datetime
-import random
-import string
 import time
 from absl import logging
 
@@ -24,18 +22,11 @@ from airflow.exceptions import AirflowException
 from airflow.hooks.subprocess import SubprocessHook
 from airflow.utils.trigger_rule import TriggerRule
 
-from airflow.providers.google.cloud.operators.kubernetes_engine import GKEStartPodOperator
-from kubernetes.client import models as k8s
-
 from dags import composer_env
 from dags.common import test_owner
-from dags.maxtext_pathways.configs import commands as cmds
 from dags.maxtext_pathways.configs import parameters as ui_params
 from dags.maxtext_pathways.configs import recipe_config as recipe_cfg
-from xlml.utils import xpk, gke
-
-# based on maxtext_dependencies.Dockerfile, and apply PR2715 in addition
-IMAGE = "gcr.io/cienet-cmcs/cnt_pathway:latest"
+from xlml.utils import kpo, xpk, gke
 
 
 @task.python(multiple_outputs=True)
@@ -55,10 +46,9 @@ def generate_derived_parameters(dag_params: dict) -> dict:
   """
   derived_params = {}
 
-  # Generate recipe workload_id and temp_key.
-  name, temp_post_fix = generate_recipe_workload_id(dag_params)
-  derived_params["temp_key"] = temp_post_fix
-  derived_params["recipe_workload_id"] = name
+  # Generate recipe workload_id.
+  name = generate_recipe_workload_id(dag_params)
+  derived_params["workload_id"] = name
 
   # Generate region by zone
   derived_params["region"] = gke.zone_to_region(dag_params["zone"])
@@ -84,9 +74,7 @@ def generate_commands(
   Generates a command string using the initial DAG parameters and derived parameters.
   """
   # Initialization command.
-  env_cmds = generate_install_dependencies_commands(
-      service_account=dag_params["service_account"]
-  )
+  env_cmds = generate_install_dependencies_commands()
   recipe_cmd = recipe_instance.run_command
 
   # Combine parameters to further generate the final command.
@@ -97,7 +85,8 @@ def generate_commands(
         recipe_cmd += f" --{key}={value}"
       else:
         recipe_cmd += f" --{key}='{value}'"
-
+  # Add the skip-validation flag in the recipe to bypass xpk system dependency check.
+  recipe_cmd += " --skip-validation"
   formatted_cmds = recipe_cmd.replace(" --", " \n  --")
   logging.info(f"\n {formatted_cmds}")
 
@@ -106,75 +95,46 @@ def generate_commands(
   return commands
 
 
-# TODO(b/455427519): DockerImage.MAXTEXT_TPU_JAX_NIGHTLY cannot directly execute benchmark recipes.
-# TODO(b/455412930): Build a Pathways-specific image. This feature will be changed to install dependencies directly from the image.
-def generate_install_dependencies_commands(service_account: str | None) -> str:
+def generate_install_dependencies_commands() -> str:
   """
   Generate the shell commands to install necessary dependencies in the Pod.
   """
-  env_cmds_list = (
-      cmds.UPDATE_APT
-      + cmds.INSTALL_KUBECTL
-      # Skip switching service account if not provided.
-      # + cmds.SWITCH_SERVICE_ACCOUNT
-      # + cmds.INSTALL_XPK
-      # Install dependencies for xpk without installing the whole xpk.
-      + [
-          "apt-get update && apt-get install -y google-cloud-sdk-gke-gcloud-auth-plugin",
-          "git clone --branch v0.12.0 https://github.com/AI-Hypercomputer/xpk /root/xpk",
-          "sed -i '/validate_dependencies()/s/^/## /' ~/xpk/src/xpk/main.py || true",
-          "python3 -m venv --system-site-packages .venv",
-          "source .venv/bin/activate",
-          "cd /root/xpk",
-          "pip install --upgrade pip",
-          "set -xue",
-          # Required dependencies for xpk create pathway workload.
-          "pip install argcomplete==3.6.3 ruamel.yaml==0.18.10 docker==7.1.0 kubernetes==31.0.0 google-cloud-filestore==1.12.0",
-      ]
-      + cmds.BACK_MAXTEXT
-  )
+  # fmt: off
+  return " && ".join([
+      # Update apt package list
+      "sudo apt-get update",
 
-  env_cmds = " && ".join(env_cmds_list)
-  # Skip switching service account if not provided.
-  # env_cmds = env_cmds.format(service_account=service_account)
+      # Install kubectl
+      "sudo apt-get install -y kubectl",
 
-  return env_cmds
+      # Install GKE auth plugin for cluster authentication
+      "sudo apt-get install google-cloud-sdk-gke-gcloud-auth-plugin -y",
+
+      # Install xpk
+      *xpk.get_xpk_setup_cmd("/root", xpk.MAIN_BRANCH),
+
+      # Install dependencies for maxtext
+      "pip install omegaconf",
+
+      # Prepare environment for further pip installs
+      "cd /deps",
+      "export USER=root",
+  ])
+  # fmt: on
 
 
-# TODO(b/455415420): Extract workload_id from start_recipe log to avoid being out of sync with the MaxText repo.
 def generate_recipe_workload_id(params: dict) -> tuple[str, str]:
   """
-  Generate a random value in advance to fix the workload_id so that the workload can be deleted later.
-  Please refer to the `generate_xpk_workload_cmd` function in the `/maxtext/benchmarks/maxtext_xpk_runner.py` file.
+  Generate a workload_id following the convention: {dag_id[:10]}-{timestamp[:10]}.
+  This is intended to facilitate later deletion of the workload.
   """
-  # Confirm whether to use customized_model_name.
-  params = params.copy()
-  if params["selected_model_names"] == "customized_model_name":
-    params["selected_model_names"] = params["customized_model_name"]
-
   time.localtime()
-  length_of_random_str = 3
-  temp_post_fix = "".join(
-      random.choice(string.ascii_lowercase + string.digits)
-      for _ in range(length_of_random_str)
-  )
+  timestamp = time.strftime("%Y%m%d%H%M%S", time.localtime())
+  dag_id = RECIPE_NAME
+  name = f"{dag_id[:10]}-{timestamp[:10]}"
+  name = name[:40].replace("_", "-")
 
-  truncate_model_name = 10
-  truncate_prefix = 3
-  post_fix = f'-{params["num_slices_list"]}-{time.strftime("%m%d%H", time.localtime())}-{temp_post_fix}'
-  common_prefix = params["user"]
-
-  pw_prefix = "pw-"
-
-  if params["selected_model_framework"] == "pathways":
-    post_fix = f'-{params["num_slices_list"]}-{temp_post_fix}'
-    name = f'{pw_prefix}{params["selected_model_names"].replace("_", "-")[:truncate_model_name - len(pw_prefix)]}'
-  else:
-    name = f'{params["selected_model_names"].replace("_", "-")[:truncate_model_name]}'
-
-  name = f"{common_prefix[:truncate_prefix]}-{name}{post_fix}"
-
-  return name, temp_post_fix
+  return name
 
 
 @task
@@ -200,60 +160,6 @@ def clean_up_pod(
   assert (
       result.exit_code == 0
   ), f"kubectl clean-up failed with code {result.exit_code}"
-
-
-@task
-def wait_workload_complete(
-    workload_id: str,
-    project_id: str,
-    region: str,
-    cluster_name: str,
-    benchmark_steps: int,
-    override_timeout_in_min: int = 10,
-    poke_interval_in_second: int = 60,
-) -> bool:
-  """
-  Checks for the completion of an workload by repeatedly executing its core logic.
-  The core logic uses workload logs to report the detailed status of successful or failed completion.
-  """
-  # Extract and reuse the logic in the` xpk` module to wait for a workload to be completed.
-  impl = getattr(
-      xpk.wait_for_workload_completion, "python_callable", None
-  ) or getattr(xpk.wait_for_workload_completion, "__wrapped__", None)
-
-  if impl is None:
-    raise AirflowException(
-        f"Cannot extract core callable from {xpk.wait_for_workload_completion}."
-        "It might not be a valid task/sensor or is wrapped too deeply."
-    )
-
-  # Dynamically sets the Airflow task timeout based on a custom flag or calculates it using a benchmark step count.
-  if override_timeout_in_min:
-    timeout_in_min = override_timeout_in_min
-  else:
-    max_step_min = 5  # Average time required for each step in lama3-1-405b.
-    timeout_in_min = benchmark_steps * max_step_min
-
-  timeout_in_sec = timeout_in_min * 60
-
-  logging.info(
-      f"The timeout for this task is {timeout_in_min} minutes ({timeout_in_sec} seconds).\n"
-      f"Check if completed every {poke_interval_in_second} seconds."
-  )
-
-  deadline = datetime.datetime.now() + datetime.timedelta(
-      seconds=timeout_in_sec
-  )
-  while datetime.datetime.now() < deadline:
-    # Call the core function to check if the workload is complete.
-    if impl(workload_id, project_id, region, cluster_name):
-      return True
-
-    time.sleep(poke_interval_in_second)
-
-  raise AirflowException(
-      f"Timed out after {timeout_in_min}min({timeout_in_sec}s). Please adjust `Override Timeout In Minutes` in UI input."
-  )
 
 
 RECIPE_INSTANCE = recipe_cfg.Recipe.PW_MCJAX_BENCHMARK_RECIPE
@@ -287,12 +193,6 @@ with models.DAG(
 
     ### Prerequisites
     - This test requires an existing cluster.
-    - This test requires that a dataset with the same name as the UI parameter "[BigQuery Database Dataset]".
-    - Create a service account named `one-click` with the following roles: `Artifact Registry Reader`, `Kubernetes Engine Admin`, `Monitoring Viewer`.
-        - Generate a new service account key and download the JSON file to retrieve its contents.
-        Next, create a secret manager named `one-click-key` and store the key contents there for use when switching service accounts.
-        - Make sure the default service account has the `Secret Manager Secret Accessor` role.
-        ex: [PROJECT_NUMBER]-compute@developer.gserviceaccount.com
     - If you're using a service account to pull an image from a different project, you need to grant the service account the `Artifact Registry Reader` role in that project.
 
     ### Procedures
@@ -312,67 +212,39 @@ with models.DAG(
   derived_params = generate_derived_parameters(dag_params)
   commands = generate_commands(dag_params, derived_params, RECIPE_INSTANCE)
 
-  start_recipe = GKEStartPodOperator(
-      task_id="start_recipe",
-      name=RECIPE_NAME.replace("_", "-"),
-      project_id=dag_params["project"],
-      cluster_name=dag_params["cluster_name"],
-      location=derived_params["region"],
-      namespace="default",
-      # This is required for `namespace="default"` under cienet-cmcs
-      node_selector={"cloud.google.com/gke-nodepool": "cpu-np"},
-      image=IMAGE,
-      # TODO(b/452777428): Apply this once the "apache-airflow-providers-google" in
-      # prod composer is upgraded to "16.0.0".
-      # on_finish_action=OnFinishAction.DELETE_POD.value,
-      get_logs=True,
-      cmds=["/bin/bash", "-cxue", commands],
-      labels={"airflow-runtime": recipe_runtime},
-      owner=test_owner.DORA_H,
+  start_recipe = kpo.run_command_in_kpo(
+      start_cli_command=commands,
+      workload_id="start_recipe",
+      task_owner=test_owner.DORA_H,
+      provisioning_timeout=datetime.timedelta(minutes=5),
+      workload_run_timeout=datetime.timedelta(minutes=15),
+      image_full_url=dag_params["runner"],
   )
 
-  # TODO(b/452777428): Remove this once the "apache-airflow-providers-google" in prod
-  # composer is upgraded to "16.0.0".
-  # Explicitly clean up the pod since the `on_finish_action` of
-  # `GKEStartPodOperator` is not functioning.
-  clean_up_start_recipe_pod = clean_up_pod.override(
-      trigger_rule=TriggerRule.ALL_DONE
+  wait_for_workload_complete = xpk.wait_for_workload_completion.override(
+      task_id="wait_for_workload_complete",
   )(
-      cluster_name=dag_params["cluster_name"],
-      region=derived_params["region"],
-      project=dag_params["project"],
-      airflow_runtime=recipe_runtime,
-  )
-
-  check_recipe_log = wait_workload_complete.override(
-      task_id="check_recipe_log",
-  )(
-      workload_id=derived_params["recipe_workload_id"],
+      workload_id=derived_params["workload_id"],
       project_id=dag_params["project"],
       region=derived_params["region"],
       cluster_name=dag_params["cluster_name"],
-      benchmark_steps=dag_params["benchmark_steps"],
-      override_timeout_in_min=dag_params["override_timeout_in_min"],
-      poke_interval_in_second=30,
   )
 
   clean_up_recipe = xpk.clean_up_workload.override(
       task_id="clean_up_recipe", trigger_rule=TriggerRule.ALL_DONE
   )(
-      workload_id=derived_params["recipe_workload_id"],
+      workload_id=derived_params["workload_id"],
       project_id=dag_params["project"],
       zone=dag_params["zone"],
       cluster_name=dag_params["cluster_name"],
   )
-
-  # TODO: Add an EmptyOperator to detect the overall state.
 
   (
       dag_params
       >> derived_params
       >> commands
       >> start_recipe
-      >> check_recipe_log
+      >> wait_for_workload_complete
       >> clean_up_recipe
   )
-  start_recipe >> clean_up_start_recipe_pod
+  start_recipe >> wait_for_workload_complete

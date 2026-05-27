@@ -17,6 +17,7 @@
 from airflow.models.param import Param
 from dags.maxtext_pathways.configs import model_configs as model_cfg
 from dags.common.vm_resource import TpuVersion
+from dags.common.vm_resource import DockerImage
 
 MODEL_FRAMEWORK = ["mcjax", "pathways"]
 
@@ -31,6 +32,8 @@ MODEL_NAME.extend(V5P_MODEL_NAME)
 MODEL_NAME.extend(V6E_MODEL_NAME)
 
 DEVICE_VERSION = ["v" + version.value for version in TpuVersion]
+
+IMAGE = DockerImage.MAXTEXT_TPU_JAX_STABLE
 
 PARAMETERS = {
     "user": Param(
@@ -73,18 +76,6 @@ PARAMETERS = {
         title="Core Count",
         description='Device core count for the cluster. ex: v6e-"64"',
     ),
-    "service_account": Param(
-        None,
-        type=["string", "null"],
-        title="Service account",
-        description="Service account of the project.",
-    ),
-    "benchmark_steps": Param(
-        20,
-        type="integer",
-        title="Benchmark Steps",
-        description="Number of benchmark steps.",
-    ),
     "num_slices_list": Param(
         1,
         type="integer",
@@ -92,22 +83,23 @@ PARAMETERS = {
         description="Number of slices",
     ),
     "server_image": Param(
-        # TODO(b/451750407): Replace this temporary image with a formal one.
-        "gcr.io/cienet-cmcs/lidanny/unsanitized_server:latest",
+        # Reference to:
+        # https://g3doc.corp.google.com/cloud/tpu/g3doc/fas/pathways-on-cloud/index.md?cl=head
+        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:latest",
         type="string",
         title="Server Image",
         description="Server image for pathways.",
     ),
     "proxy_image": Param(
-        # TODO(b/451750407): Replace this temporary image with a formal one.
-        "gcr.io/cienet-cmcs/lidanny/unsanitized_proxy_server:latest",
+        # Reference to:
+        # https://g3doc.corp.google.com/cloud/tpu/g3doc/fas/pathways-on-cloud/index.md?cl=head
+        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:latest",
         type="string",
         title="Proxy Image",
         description="Proxy image for pathways.",
     ),
     "runner": Param(
-        # TODO(b/451750407): Replace this temporary image with a formal one.
-        "gcr.io/cienet-cmcs/lidanny_latest:latest",
+        IMAGE.value,
         type="string",
         title="Runner Image",
         description="Runner image for the cluster.",
@@ -153,35 +145,5 @@ PARAMETERS = {
         type="integer",
         title="Max Restarts",
         description="Max restarts for the workload",
-    ),
-    "bq_enable": Param(
-        False,
-        type="boolean",
-        title="BigQuery Enable",
-        description="Enable BigQuery to store metrics data",
-    ),
-    "bq_db_project": Param(
-        "cloud-tpu-multipod-dev",
-        type="string",
-        title="BigQuery Database Project",
-        description="The Project of BigQuery Database",
-    ),
-    "bq_db_dataset": Param(
-        # TODO(b/451750407): Replace this temporary image with a formal one.
-        "chzheng_test_100steps",
-        type="string",
-        title="BigQuery Database Dataset",
-        description="The Dataset of BigQuery Database",
-    ),
-    "override_timeout_in_min": Param(
-        None,
-        type=["null", "integer"],
-        title="Override Timeout In Minutes",
-        description=(
-            "Timeout in minutes for the workload task. Adjust it when you "
-            "meet (airflow.exceptions.AirflowException: Timed out after ...) "
-            "issue. The default value `None` means automatic calculation "
-            "of timeout."
-        ),
     ),
 }

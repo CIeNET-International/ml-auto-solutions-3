@@ -26,7 +26,7 @@ from dags.multipod.configs import gke_config
 from xlml.utils import name_format
 
 # Run once a day at 4 am UTC (8 pm PST)
-SCHEDULED_TIME = "0 11 * * *" if composer_env.is_prod_env() else None
+SCHEDULED_TIME = "0 7 * * *" if composer_env.is_prod_env() else None
 HF_TOKEN = models.Variable.get("HF_TOKEN", None)
 
 
@@ -102,7 +102,7 @@ with models.DAG(
         test_name=f"{test_name_prefix}-stable-{model}",
         run_model_cmds=model_cmds,
         docker_image=DockerImage.MAXTEXT_TPU_JAX_STABLE.value,
-        cluster=XpkClusters.TPU_V5P_8_CLUSTER,
+        cluster=XpkClusters.TPU_V5P_8_CLUSTER_V2,
         test_owner=test_config["owner"],
     ).run_with_quarantine(quarantine_task_group)
     nightly_tpu = gke_config.get_gke_config(
@@ -116,18 +116,6 @@ with models.DAG(
     stable_tpu >> nightly_tpu
 
   multicluster_test_models = {
-      "gemma-7b": [
-          {
-              "script_name": "tpu/gemma/7b/1_test_gemma",
-              "cluster": XpkClusters.CPU_N2_STANDARD_64_CLUSTER,
-              "time_out_in_min": 60,
-          },
-          {
-              "script_name": "tpu/gemma/7b/2_test_gemma",
-              "cluster": XpkClusters.TPU_V5P_8_CLUSTER,
-              "time_out_in_min": 60,
-          },
-      ],
       "llama2-70b": [
           {
               "script_name": "tpu/llama2/70b/1_test_llama2_70b",
@@ -137,6 +125,18 @@ with models.DAG(
           {
               "script_name": "tpu/llama2/70b/2_test_llama2_70b",
               "cluster": XpkClusters.TPU_V5P_128_CLUSTER,
+              "time_out_in_min": 60,
+          },
+      ],
+      "gemma-7b": [
+          {
+              "script_name": "tpu/gemma/7b/1_test_gemma",
+              "cluster": XpkClusters.CPU_N2_STANDARD_64_CLUSTER,
+              "time_out_in_min": 60,
+          },
+          {
+              "script_name": "tpu/gemma/7b/2_test_gemma",
+              "cluster": XpkClusters.TPU_V5P_8_CLUSTER,
               "time_out_in_min": 60,
           },
       ],
