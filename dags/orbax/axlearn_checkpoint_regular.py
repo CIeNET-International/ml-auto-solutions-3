@@ -27,7 +27,6 @@ from dags.common.vm_resource import XpkClusters
 from dags.orbax.util import test_config_util, validation_util
 from xlml.utils.gke import zone_to_region
 from xlml.utils import axlearn
-from xlml.apis.xpk_cluster_config import XpkClusterConfig
 
 
 SCHEDULE = "0 13 * * *" if composer_env.is_prod_env() else None
