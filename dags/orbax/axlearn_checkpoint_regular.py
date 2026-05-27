@@ -30,7 +30,7 @@ from xlml.utils import axlearn
 from xlml.apis.xpk_cluster_config import XpkClusterConfig
 
 
-SCHEDULE = "0 17 * * *" if composer_env.is_prod_env() else None
+SCHEDULE = "0 13 * * *" if composer_env.is_prod_env() else None
 DAG_TEST_NAME = "axlearn_reg_save"
 
 RESERVE_TIME_FOR_OTHERS = datetime.timedelta(minutes=5)
