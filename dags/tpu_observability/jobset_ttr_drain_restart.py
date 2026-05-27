@@ -124,7 +124,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     with TaskGroup(  # pylint: disable=unexpected-keyword-arg
         group_id=f"v{config.tpu_version.value}"
     ):
-      selector = jobset.generate_node_pool_selector("jobset-ttr-drain-restart")
+      selector = jobset.generate_node_pool_selector(DAG_ID)
 
       jobset_config = jobset.build_jobset_from_gcs_yaml(
           gcs_path=GCS_JOBSET_CONFIG_PATH,
