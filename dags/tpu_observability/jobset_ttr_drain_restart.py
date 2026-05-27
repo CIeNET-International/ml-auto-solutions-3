@@ -21,7 +21,6 @@ from airflow.models.baseoperator import chain
 from airflow.utils.trigger_rule import TriggerRule
 from airflow.utils.task_group import TaskGroup
 
-
 from airflow.decorators import task
 
 from dags import composer_env
