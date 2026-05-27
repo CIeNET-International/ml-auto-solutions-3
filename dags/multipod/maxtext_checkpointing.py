@@ -75,7 +75,8 @@ with models.DAG(
     # Then train again by restoring this checkpoint
     # using a different sharding strategy.
     # Finally, asserts that the learning metrics are consistent,
-    # ensuring that checkpoints can be successfully loaded across different sharding strategies.
+    # ensuring that checkpoints can be successfully loaded
+    # across different sharding strategies.
     gke_config.get_gke_config(
         num_slices=2,
         cluster=XpkClusters.TPU_V5P_8_CLUSTER,
