@@ -73,7 +73,7 @@ def kill_tpu_pod_workloads(info: node_pool.Info, pod_names: list[str]) -> None:
         logging.info("Execution succeeded for pod: %s", pod_name)
       except subprocess.ProcessKilledException:
         logging.info(f"Process in pod {pod_name} was terminated with SIGKILL")
-        logging.info("Execution succeeded for pod: %s", pod_name)
+        logging.info("Execution failed for pod: %s", pod_name)
       except Exception as e:
         logging.error("Execution failed for pod: %s. Error: %s", pod_name, e)
         failed_pods.append((pod_name, e))

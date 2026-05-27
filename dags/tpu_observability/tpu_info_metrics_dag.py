@@ -169,7 +169,9 @@ def verify_metric_for_all_pods(
           end_time=end_time,
       )
 
-      monitoring_values = metric_strategy.parse_from_monitoring(time_series_data)
+      monitoring_values = metric_strategy.parse_from_monitoring(
+          time_series_data
+      )
       cmd_values = metric_strategy.parse_from_tpu_info(tpu_info_output)
 
       tolerance_for_metric = metric_strategy.tolerance_percent
@@ -410,7 +412,7 @@ with models.DAG(
           cluster_info,
           cluster_info_2,
           create_node_pool,
-          startup.task_group,
+          *startup.tasks,
           all_verification_tasks,
           summary,
           clean_up_workload,

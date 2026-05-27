@@ -23,6 +23,7 @@ import os
 import re
 import subprocess
 import tempfile
+import logging
 
 from airflow import models
 from airflow.decorators import task
@@ -43,9 +44,9 @@ from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.tpu_observability.utils import tpu_info_util as tpu_info
+from dags.tpu_observability.utils.tpu_info_util import parse_tpu_info_output
 from dags.tpu_observability.utils.jobset_util import Workload
 from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper, get_dag_timeout
-
 
 DAG_ID = "tpu_info_format_validation_dag"
 DAGRUN_TIMEOUT = get_dag_timeout(DAG_ID)
@@ -87,8 +88,6 @@ def validate_tpu_info_format(
     pod_names: list[str],
 ) -> None:
   """Executes tpu-info command and runs all validations sequentially across all pods."""
-  from dags.tpu_observability.utils.tpu_info_util import parse_tpu_info_output
-  import logging
 
   failed_pods = []
   for pod_name in pod_names:
