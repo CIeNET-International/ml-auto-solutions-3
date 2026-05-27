@@ -16,12 +16,14 @@
 list_supported_metrics() are functional inside TPU worker pods."""
 
 import datetime
+import logging
 
 from airflow import models
-from airflow.models.baseoperator import chain
-from airflow.utils.trigger_rule import TriggerRule
-from airflow.utils.task_group import TaskGroup
 from airflow.decorators import task
+from airflow.exceptions import AirflowFailException
+from airflow.models.baseoperator import chain
+from airflow.utils.task_group import TaskGroup
+from airflow.utils.trigger_rule import TriggerRule
 
 from dags import composer_env
 from dags.tpu_observability.utils import jobset_util as jobset
@@ -42,7 +44,7 @@ SCHEDULE = SchedulingHelper.arrange_schedule_time(DAG_ID)
 
 
 @task
-def validate_monitoring_sdk(info: node_pool.Info, pod_name: str) -> None:
+def validate_monitoring_sdk(info: node_pool.Info, pod_names: list[str]) -> None:
   """Validates the tpumonitoring SDK functions inside TPU worker pods.
 
   This task executes both help() and list_supported_metrics() via the SDK
@@ -50,7 +52,7 @@ def validate_monitoring_sdk(info: node_pool.Info, pod_name: str) -> None:
 
   Args:
     info: Cluster info for gcloud credentials.
-    pod_name: Pod name provided by dynamic task mapping.
+    pod_names: List of pod names.
   """
   # A dict of script to its expected result patterns.
   validate_spec: dict[sdk.TpuMonitoringScript, list[str]] = {
@@ -74,14 +76,29 @@ def validate_monitoring_sdk(info: node_pool.Info, pod_name: str) -> None:
       ],
   }
 
-  for script, patterns in validate_spec.items():
-    output = sdk.execute_sdk_command(info, pod_name, script)
-    for pattern in patterns:
-      if pattern not in output:
-        raise AssertionError(
-            f"Validation failed for 'tpumonitoring.{script.name.lower()}()': "
-            f"Missing '{pattern}'."
-        )
+  failed_pods = []
+  for pod_name in pod_names:
+    logging.info("Validating tpumonitoring SDK for pod: %s", pod_name)
+    try:
+      for script, patterns in validate_spec.items():
+        output = sdk.execute_sdk_command(info, pod_name, script)
+        for pattern in patterns:
+          if pattern not in output:
+            raise AssertionError(
+                f"Validation failed for 'tpumonitoring.{script.name.lower()}()' inside pod '{pod_name}': "
+                f"Missing '{pattern}'."
+            )
+      logging.info("Validation succeeded for pod: %s", pod_name)
+    except Exception as e:
+      logging.error("Validation failed for pod: %s. Error: %s", pod_name, e)
+      failed_pods.append((pod_name, e))
+
+  if failed_pods:
+    failed_pod_names = [name for name, _ in failed_pods]
+    logging.error("The following pods failed validation: %s", failed_pod_names)
+    raise AirflowFailException(
+        f"Task failed because validation failed on pods: {failed_pod_names}"
+    )
 
 
 with models.DAG(
@@ -162,10 +179,9 @@ with models.DAG(
         workload_type=Workload.JAX_TPU_BENCHMARK,
     )
 
-    sdk_validation = (
-        validate_monitoring_sdk.override(task_id="sdk_validation")
-        .partial(info=cluster_info)
-        .expand(pod_name=startup.running_pods)
+    sdk_validation = validate_monitoring_sdk.override(task_id="sdk_validation")(
+        info=cluster_info,
+        pod_names=startup.running_pods,
     )
 
     cleanup_workload = jobset.end_workload.override(

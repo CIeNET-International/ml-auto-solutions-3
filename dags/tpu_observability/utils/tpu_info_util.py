@@ -5,7 +5,6 @@ from enum import auto
 from enum import IntEnum
 import re
 
-from airflow.decorators import task
 
 # A type alias for a parsed row, mapping column headers to their values.
 _TableRow = dict[str, str]
@@ -65,7 +64,6 @@ class Table:
     self.body = parsed_body
 
 
-@task
 def parse_tpu_info_output(output: str) -> list[Table]:
   """Splits a multi-table string from tpu-info into a structured TpuInfo object.
 
