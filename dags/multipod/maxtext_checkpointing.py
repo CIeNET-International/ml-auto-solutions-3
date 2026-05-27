@@ -53,12 +53,12 @@ with models.DAG(
 
   for mode, image in docker_images:
     for chkpt_mode in ["sync", "async"]:
-      async_checkpointing = chkpt_mode == "async"
+      async_checkpointing_str = "true" if chkpt_mode == "async" else "false"
       run_name = f"checkpointing-{mode.value}-{chkpt_mode}-{current_datetime}"
       command = (
           "bash tests/end_to_end/test_checkpointing.sh "
           f" {run_name} {base_output_directory} {dataset_path}"
-          f" tfds autoselected {async_checkpointing}",
+          f" tfds autoselected {async_checkpointing_str}",
       )
       maxtext_v4_configs_test = gke_config.get_gke_config(
           num_slices=1,
