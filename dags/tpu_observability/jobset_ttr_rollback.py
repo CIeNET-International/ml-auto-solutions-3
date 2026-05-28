@@ -96,6 +96,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     with TaskGroup(  # pylint: disable=unexpected-keyword-arg
         group_id=f"v{config.tpu_version.value}"
     ):
+
       cluster_info = node_pool.build_node_pool_info_from_gcs_yaml(
           gcs_path=GCS_CONFIG_PATH,
           dag_name=DAG_ID,

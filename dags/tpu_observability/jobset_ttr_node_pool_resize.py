@@ -110,7 +110,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           gcs_path=GCS_JOBSET_CONFIG_PATH,
           dag_name=DAG_ID,
           node_pool_selector=selector,
-          image=DockerImage.TPU_OBS_LIBTPU_STABLE.value,
+          image=DockerImage.LIBTPU_STABLE.value,
       )
 
       selector = jobset.generate_node_pool_selector(DAG_ID)

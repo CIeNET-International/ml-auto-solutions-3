@@ -24,6 +24,15 @@ from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
 from dags import composer_env
+from dags.common.vm_resource import DockerImage
+from dags.tpu_observability.utils import jobset_util as jobset
+from dags.tpu_observability.utils import node_pool_util as node_pool
+from dags.tpu_observability.utils.jobset_util import Workload
+from dags.tpu_observability.configs.common import (
+    MachineConfigMap,
+    GCS_CONFIG_PATH,
+    GCS_JOBSET_CONFIG_PATH,
+)
 from dags.common.scheduling_helper.scheduling_helper import (
     SchedulingHelper,
     get_dag_timeout,
@@ -95,9 +104,20 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 
     # Keyword arguments are generated dynamically at runtime (pylint does not
     # know this signature).
-    with TaskGroup(  # pylint: disable=unexpected-keyword-arg
-        group_id=f"v{config.tpu_version.value}"
+    with TaskGroupWithTimeout(  # pylint: disable=unexpected-keyword-arg
+        group_id=f"v{config.tpu_version.value}",
+        timeout=timedelta(minutes=90),
     ):
+      selector = jobset.generate_node_pool_selector("jobset-ttr-node-reboot")
+
+      jobset_config = jobset.build_jobset_from_gcs_yaml(
+          gcs_path=GCS_JOBSET_CONFIG_PATH,
+          dag_name=DAG_ID,
+          node_pool_selector=selector,
+          privileged=True,
+          image=DockerImage.LIBTPU_STABLE.value,
+      )
+
       cluster_info = node_pool.build_node_pool_info_from_gcs_yaml(
           gcs_path=GCS_CONFIG_PATH,
           dag_name=DAG_ID,

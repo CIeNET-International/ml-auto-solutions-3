@@ -150,8 +150,8 @@ with models.DAG(
       """,
 ) as dag:
   docker_images = {
-      "stable": DockerImage.TPU_OBS_LIBTPU_STABLE.value,
-      "nightly": DockerImage.TPU_OBS_LIBTPU_NIGHTLY.value,
+      "stable": DockerImage.LIBTPU_STABLE.value,
+      "nightly": DockerImage.LIBTPU_NIGHTLY.value,
   }
 
   for machine in MachineConfigMap:
@@ -196,7 +196,6 @@ with models.DAG(
             group_id=f"test_v{config.tpu_version.value}_{type_name}",
             timeout=TEST_TIMEOUT,
         ) as image_tg:
-          image_task_groups.append(image_tg)
 
           startup = jobset.create_jobset_startup_tasks(
               node_pool=cluster_info,
