@@ -355,8 +355,8 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       """,
 ) as dag:
   docker_images = {
-      "stable": DockerImage.TPU_OBS_LIBTPU_STABLE.value,
-      "nightly": DockerImage.TPU_OBS_LIBTPU_NIGHTLY.value,
+      "stable": DockerImage.LIBTPU_STABLE.value,
+      "nightly": DockerImage.LIBTPU_NIGHTLY.value,
   }
 
   for machine in MachineConfigMap:
@@ -365,17 +365,17 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     with TaskGroup(group_id=f"v{config.tpu_version.value}"):
       selector = jobset.generate_node_pool_selector(DAG_ID)
 
-    cluster_info = node_pool.build_node_pool_info_from_gcs_yaml(
-        gcs_path=GCS_CONFIG_PATH,
-        dag_name=DAG_ID,
-        is_prod=composer_env.is_prod_env(),
-        machine_type=config.machine_version.value,
-        tpu_topology=config.tpu_topology,
-        node_pool_selector=selector,
-    )
+      cluster_info = node_pool.build_node_pool_info_from_gcs_yaml(
+          gcs_path=GCS_CONFIG_PATH,
+          dag_name=DAG_ID,
+          is_prod=composer_env.is_prod_env(),
+          machine_type=config.machine_version.value,
+          tpu_topology=config.tpu_topology,
+          node_pool_selector=selector,
+      )
 
-    cluster_info_2 = copy.deepcopy(cluster_info)
-    cluster_info_2.node_pool_name = f"{cluster_info.node_pool_name}-2"
+      cluster_info_2 = copy.deepcopy(cluster_info)
+      cluster_info_2.node_pool_name = f"{cluster_info.node_pool_name}-2"
 
       # Keyword arguments are generated dynamically at runtime (pylint does not
       # know this signature).
@@ -409,17 +409,17 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
               image=image_url,
           )
 
-        startup = jobset.create_jobset_startup_tasks(
-            node_pool=cluster_info,
-            jobset_config=jobset_config,
-            workload_type=Workload.JAX_TPU_BENCHMARK,
-        )
+          startup = jobset.create_jobset_startup_tasks(
+              node_pool=cluster_info,
+              jobset_config=jobset_config,
+              workload_type=Workload.JAX_TPU_BENCHMARK,
+          )
 
-        outputs_of_tpu_info = (
-            get_tpu_info_from_pod.override(task_id="get_tpu_info")
-            .partial(info=cluster_info)
-            .expand(pod_name=startup.running_pods)
-        )
+          outputs_of_tpu_info = (
+              get_tpu_info_from_pod.override(task_id="get_tpu_info")
+              .partial(info=cluster_info)
+              .expand(pod_name=startup.running_pods)
+          )
 
           output_of_tpu_info = (
               tpu_info.parse_tpu_info_output.override(

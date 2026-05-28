@@ -281,8 +281,8 @@ with models.DAG(
     """,
 ) as dag:
   docker_images = {
-      "stable": DockerImage.TPU_OBS_LIBTPU_STABLE.value,
-      "nightly": DockerImage.TPU_OBS_LIBTPU_NIGHTLY.value,
+      "stable": DockerImage.LIBTPU_STABLE.value,
+      "nightly": DockerImage.LIBTPU_NIGHTLY.value,
   }
 
   for machine in MachineConfigMap:
@@ -331,7 +331,6 @@ with models.DAG(
         with TaskGroup(  # pylint: disable=unexpected-keyword-arg
             group_id=f"v{config.tpu_version.value}_{type_name}"
         ) as image_tg:
-
           startup = jobset.create_jobset_startup_tasks(
               node_pool=cluster_info,
               jobset_config=jobset_config,
