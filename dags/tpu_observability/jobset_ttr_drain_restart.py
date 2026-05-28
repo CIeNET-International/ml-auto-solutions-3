@@ -24,6 +24,7 @@ from airflow.utils.task_group import TaskGroup
 from airflow.decorators import task
 
 from dags import composer_env
+from dags.common.vm_resource import DockerImage
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.tpu_observability.utils import node_pool_util as node_pool
@@ -130,6 +131,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           gcs_path=GCS_JOBSET_CONFIG_PATH,
           dag_name=DAG_ID,
           node_pool_selector=selector,
+          image=DockerImage.LIBTPU_STABLE.value,
       )
 
       cluster_info = node_pool.build_node_pool_info_from_gcs_yaml(

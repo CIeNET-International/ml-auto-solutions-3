@@ -22,6 +22,7 @@ from airflow.models.baseoperator import chain
 from airflow.utils.trigger_rule import TriggerRule
 
 from dags import composer_env
+from dags.common.vm_resource import DockerImage
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils.jobset_util import Workload
@@ -102,6 +103,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           dag_name=DAG_ID,
           node_pool_selector=selector,
           privileged=True,
+          image=DockerImage.LIBTPU_STABLE.value,
       )
 
       cluster_info = node_pool.build_node_pool_info_from_gcs_yaml(

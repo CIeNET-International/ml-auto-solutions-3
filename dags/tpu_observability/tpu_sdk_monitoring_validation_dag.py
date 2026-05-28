@@ -24,6 +24,7 @@ from airflow.utils.task_group import TaskGroup
 from airflow.decorators import task
 
 from dags import composer_env
+from dags.common.vm_resource import DockerImage
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import tpu_monitoring_sdk_util as sdk
 from dags.tpu_observability.utils import node_pool_util as node_pool
@@ -123,69 +124,86 @@ with models.DAG(
            and hardware devices inside the container.
       """,
 ) as dag:
+  docker_images = {
+      "stable": DockerImage.LIBTPU_STABLE.value,
+      "nightly": DockerImage.LIBTPU_NIGHTLY.value,
+  }
+
   for machine in MachineConfigMap:
     config = machine.value
 
-  # Keyword arguments are generated dynamically at runtime (pylint does not
-  # know this signature).
-  with TaskGroup(  # pylint: disable=unexpected-keyword-arg
-      group_id=f"v{config.tpu_version.value}"
-  ):
-    selector = jobset.generate_node_pool_selector(
-        "tpu-sdk-monitoring-validation"
-    )
+    # Keyword arguments are generated dynamically at runtime (pylint does not
+    # know this signature).
+    with TaskGroup(  # pylint: disable=unexpected-keyword-arg
+        group_id=f"v{config.tpu_version.value}"
+    ):
+      selector = jobset.generate_node_pool_selector(
+          "tpu-sdk-monitoring-validation"
+      )
 
-    jobset_config = jobset.build_jobset_from_gcs_yaml(
-        gcs_path=GCS_JOBSET_CONFIG_PATH,
-        dag_name=DAG_ID,
-        node_pool_selector=selector,
-    )
+      jobset_config = jobset.build_jobset_from_gcs_yaml(
+          gcs_path=GCS_JOBSET_CONFIG_PATH,
+          dag_name=DAG_ID,
+          node_pool_selector=selector,
+      )
 
-    cluster_info = node_pool.build_node_pool_info_from_gcs_yaml(
-        gcs_path=GCS_CONFIG_PATH,
-        dag_name=DAG_ID,
-        is_prod=composer_env.is_prod_env(),
-        machine_type=config.machine_version.value,
-        tpu_topology=config.tpu_topology,
-        node_pool_selector=selector,
-    )
+      cluster_info = node_pool.build_node_pool_info_from_gcs_yaml(
+          gcs_path=GCS_CONFIG_PATH,
+          dag_name=DAG_ID,
+          is_prod=composer_env.is_prod_env(),
+          machine_type=config.machine_version.value,
+          tpu_topology=config.tpu_topology,
+          node_pool_selector=selector,
+      )
 
-    create_node_pool = node_pool.create.override(task_id="create_node_pool")(
-        node_pool=cluster_info,
-    )
+      create_node_pool = node_pool.create.override(task_id="create_node_pool")(
+          node_pool=cluster_info,
+      )
 
-    startup = jobset.create_jobset_startup_tasks(
-        node_pool=cluster_info,
-        jobset_config=jobset_config,
-        workload_type=Workload.JAX_TPU_BENCHMARK,
-    )
+      image_task_groups = []
+      for type_name, image_url in docker_images.items():
+        with TaskGroup(  # pylint: disable=unexpected-keyword-arg
+            group_id=f"v{config.tpu_version.value}_{type_name}"
+        ) as image_tg:
+          startup = jobset.create_jobset_startup_tasks(
+              node_pool=cluster_info,
+              jobset_config=jobset_config,
+              workload_type=Workload.JAX_TPU_BENCHMARK,
+          )
 
-    sdk_validation = (
-        validate_monitoring_sdk.override(task_id="sdk_validation")
-        .partial(info=cluster_info)
-        .expand(pod_name=startup.running_pods)
-    )
+          sdk_validation = (
+              validate_monitoring_sdk.override(task_id="sdk_validation")
+              .partial(info=cluster_info)
+              .expand(pod_name=startup.running_pods)
+          )
 
-    cleanup_workload = jobset.end_workload.override(
-        task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
-    )(
-        node_pool=cluster_info,
-        jobset_config=jobset_config,
-    ).as_teardown(
-        setups=startup.jobset_start_time
-    )
+          cleanup_workload = jobset.end_workload.override(
+              task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
+          )(
+              node_pool=cluster_info,
+              jobset_config=jobset_config,
+          ).as_teardown(
+              setups=startup.jobset_start_time
+          )
 
-    cleanup_node_pool = node_pool.delete.override(
-        task_id="cleanup_node_pool", trigger_rule=TriggerRule.ALL_DONE
-    )(node_pool=cluster_info).as_teardown(
-        setups=create_node_pool,
-    )
+          chain(
+              *startup.tasks,
+              sdk_validation,
+              cleanup_workload,
+          )
+          image_task_groups.append(image_tg)
 
-    chain(
-        selector,
-        create_node_pool,
-        *startup.tasks,
-        sdk_validation,
-        cleanup_workload,
-        cleanup_node_pool,
-    )
+      cleanup_node_pool = node_pool.delete.override(
+          task_id="cleanup_node_pool", trigger_rule=TriggerRule.ALL_DONE
+      )(node_pool=cluster_info).as_teardown(
+          setups=create_node_pool,
+      )
+
+      chain(selector, jobset_config, cluster_info, create_node_pool)
+
+      current_node = create_node_pool
+      for tg in image_task_groups:
+        chain(current_node, tg)
+        current_node = tg
+
+      chain(current_node, cleanup_node_pool)

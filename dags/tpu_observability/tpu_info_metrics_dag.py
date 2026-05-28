@@ -31,6 +31,7 @@ from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
 from dags import composer_env
+from dags.common.vm_resource import DockerImage
 
 from dags.tpu_observability.configs.common import (
     MachineConfigMap,
@@ -60,6 +61,7 @@ def compare_metric_values(
     pod_name: str,
     metric_display_name: str,
     tolerance_percent: float,
+    labels: list[str] | None = None,
 ):
   """Compares two lists of metric values and checks if they are within a tolerance range."""
   if len(cmd_values) != len(monitoring_values):
@@ -75,15 +77,15 @@ def compare_metric_values(
       metric_display_name,
   )
   logging.info(
-      "%-12s%-15s%-17s%-12s%-15s%-10s",
-      "Device",
+      "%-20s%-15s%-17s%-12s%-15s%-10s",
+      "Label" if labels else "Device",
       "TPU-Info Val",
       "Monitoring Val",
       "Difference",
       "Allowed Diff",
       "Result",
   )
-  logging.info("-" * 85)
+  logging.info("-" * 95)
 
   all_passed = True
   for i, (log_val, mon_val) in enumerate(zip(cmd_values, monitoring_values)):
@@ -92,9 +94,10 @@ def compare_metric_values(
     passed = diff <= allowed_diff
     if not passed:
       all_passed = False
+    label = labels[i] if labels else f"Device {i}"
     logging.info(
-        "%-12s%-15.2f%-17.2f%-12.2f%-15.2f%-10s",
-        f"Device {i}",
+        "%-20s%-15.2f%-17.2f%-12.2f%-15.2f%-10s",
+        label,
         log_val,
         mon_val,
         diff,
@@ -171,12 +174,14 @@ def run_metric_verification(
       metric_strategy.dag_id_suffix,
   )
 
+  labels = metric_strategy.get_labels(tpu_info_output)
   compare_metric_values(
       cmd_values,
       monitoring_values,
       pod_name,
       metric_display_name=metric_strategy.dag_id_suffix,
       tolerance_percent=tolerance_for_metric,
+      labels=labels,
   )
 
   return True
@@ -275,6 +280,11 @@ with models.DAG(
       pools.
     """,
 ) as dag:
+  docker_images = {
+      "stable": DockerImage.LIBTPU_STABLE.value,
+      "nightly": DockerImage.LIBTPU_NIGHTLY.value,
+  }
+
   for machine in MachineConfigMap:
     config = machine.value
 
@@ -316,72 +326,84 @@ with models.DAG(
 
         _ = [create_first_node_pool, create_second_node_pool]
 
-      startup = jobset.create_jobset_startup_tasks(
-          node_pool=cluster_info,
-          jobset_config=jobset_config,
-          workload_type=Workload.JAX_TPU_BENCHMARK,
-      )
-
-      verification_results = {}
-      all_verification_groups = []
-
-      for strategy in ALL_METRIC_STRATEGIES:
-        group_id = f"verify_{strategy.dag_id_suffix}"
-
-        with TaskGroup(group_id=group_id) as verification_group:
-          tpu_info_metric_outputs = (
-              get_tpu_info_metric_from_pod.override(
-                  task_id="get_tpu_info_metric_table"
-              )
-              .partial(
-                  node_pool=cluster_info,
-                  jobset_config=jobset_config,
-                  metric_name=strategy.tpu_info_metric_name,
-              )
-              .expand(pod_name=startup.running_pods)
+      image_task_groups = []
+      for type_name, image_url in docker_images.items():
+        with TaskGroup(  # pylint: disable=unexpected-keyword-arg
+            group_id=f"v{config.tpu_version.value}_{type_name}"
+        ) as image_tg:
+          startup = jobset.create_jobset_startup_tasks(
+              node_pool=cluster_info,
+              jobset_config=jobset_config,
+              workload_type=Workload.JAX_TPU_BENCHMARK,
           )
 
-          tpu_info_metric_output = (
-              tpu_info.parse_tpu_info_output.override(
-                  task_id="get_each_metric_table"
-              )
-              .partial()
-              .expand(output=tpu_info_metric_outputs)
-          )
+          verification_results = {}
+          all_verification_groups = []
 
-          verify_metric = (
-              run_metric_verification.override(task_id="run_verification")
-              .partial(
-                  node_pool=cluster_info,
-                  job_apply_time=startup.jobset_start_time,
-                  metric_strategy=strategy,
+          for strategy in ALL_METRIC_STRATEGIES:
+            group_id = f"verify_{strategy.dag_id_suffix}"
+
+            with TaskGroup(group_id=group_id) as verification_group:
+              tpu_info_metric_outputs = (
+                  get_tpu_info_metric_from_pod.override(
+                      task_id="get_tpu_info_metric_table"
+                  )
+                  .partial(
+                      node_pool=cluster_info,
+                      jobset_config=jobset_config,
+                      metric_name=strategy.tpu_info_metric_name,
+                  )
+                  .expand(pod_name=startup.running_pods)
               )
-              .expand(
-                  comparison_data=startup.running_pods.zip(
-                      tpu_info_metric_output
+
+              tpu_info_metric_output = (
+                  tpu_info.parse_tpu_info_output.override(
+                      task_id="get_each_metric_table"
+                  )
+                  .partial()
+                  .expand(output=tpu_info_metric_outputs)
+              )
+
+              verify_metric = (
+                  run_metric_verification.override(task_id="run_verification")
+                  .partial(
+                      node_pool=cluster_info,
+                      job_apply_time=startup.jobset_start_time,
+                      metric_strategy=strategy,
+                  )
+                  .expand(
+                      comparison_data=startup.running_pods.zip(
+                          tpu_info_metric_output
+                      )
                   )
               )
+
+            all_verification_groups.append(verification_group)
+            verification_results[strategy.dag_id_suffix] = verify_metric
+
+          summary = summarize_results.override(
+              task_id="summarize_results", trigger_rule=TriggerRule.ALL_DONE
+          )(
+              verification_results_dict=verification_results,
+              active_pods=startup.running_pods,
           )
 
-        all_verification_groups.append(verification_group)
+          clean_up_workload = jobset.end_workload.override(
+              task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
+          )(
+              node_pool=cluster_info,
+              jobset_config=jobset_config,
+          ).as_teardown(
+              setups=startup.jobset_start_time
+          )
 
-        verification_results[strategy.dag_id_suffix] = verify_metric
-
-      summary = summarize_results.override(
-          task_id="summarize_results", trigger_rule=TriggerRule.ALL_DONE
-      )(
-          verification_results_dict=verification_results,
-          active_pods=startup.running_pods,
-      )
-
-      clean_up_workload = jobset.end_workload.override(
-          task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
-      )(
-          node_pool=cluster_info,
-          jobset_config=jobset_config,
-      ).as_teardown(
-          setups=startup.jobset_start_time
-      )
+          chain(
+              *startup.tasks,
+              all_verification_groups,
+              summary,
+              clean_up_workload,
+          )
+          image_task_groups.append(image_tg)
 
       with TaskGroup(group_id="cleanup_node_pool") as cleanup_node_pool:
         cleanup_first_node_pool = node_pool.delete.override(
@@ -400,12 +422,11 @@ with models.DAG(
 
         chain(cleanup_first_node_pool, cleanup_second_node_pool)
 
-      chain(
-          selector,
-          create_node_pool,
-          *startup.tasks,
-          all_verification_groups,
-          summary,
-          clean_up_workload,
-          cleanup_node_pool,
-      )
+      chain(selector, cluster_info, cluster_info_2, create_node_pool)
+
+      current_node = create_node_pool
+      for tg in image_task_groups:
+        chain(current_node, tg)
+        current_node = tg
+
+      chain(current_node, cleanup_node_pool)
