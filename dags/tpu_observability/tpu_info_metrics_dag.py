@@ -305,8 +305,8 @@ with models.DAG(
     """,
 ) as dag:
   docker_images = {
-      "stable": DockerImage.TPU_OBS_LIBTPU_STABLE.value,
-      "nightly": DockerImage.TPU_OBS_LIBTPU_NIGHTLY.value,
+      "stable": DockerImage.LIBTPU_STABLE.value,
+      "nightly": DockerImage.LIBTPU_NIGHTLY.value,
   }
 
   for machine in MachineConfigMap:

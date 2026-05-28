@@ -23,6 +23,7 @@ from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
 from dags import composer_env
+from dags.common.vm_resource import DockerImage
 from dags.common.scheduling_helper.scheduling_helper import (
     SchedulingHelper,
     get_dag_timeout,
@@ -129,6 +130,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     with TaskGroup(  # pylint: disable=unexpected-keyword-arg
         group_id=f"v{config.tpu_version.value}"
     ):
+
       cluster_info = node_pool.build_node_pool_info_from_gcs_yaml(
           gcs_path=GCS_CONFIG_PATH,
           dag_name=DAG_ID,
@@ -140,6 +142,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       jobset_config = jobset.build_jobset_from_gcs_yaml(
           gcs_path=GCS_JOBSET_CONFIG_PATH,
           dag_name=DAG_ID,
+          image=DockerImage.LIBTPU_STABLE.value,
       )
 
       selector = jobset.generate_node_pool_selector(DAG_ID)
