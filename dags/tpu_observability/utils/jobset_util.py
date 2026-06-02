@@ -32,6 +32,7 @@ from airflow.sensors.base import PokeReturnValue
 from airflow.models import BaseOperator
 from airflow.models.xcom_arg import XComArg
 from airflow.models.baseoperator import chain
+from airflow.providers.standard.operators.python import get_current_context
 from google.cloud.monitoring_v3 import types
 from websocket import WebSocketConnectionClosedException
 import kubernetes
@@ -572,7 +573,6 @@ def run_workload(
     node_pool: node_pool_info,
     jobset_config: JobSet,
     workload_type: Workload,
-    **context: dict,
 ) -> TimeUtil:
   """Applies the specified YAML file to the GKE cluster.
 
@@ -587,6 +587,7 @@ def run_workload(
   with tempfile.NamedTemporaryFile() as temp_config_file:
     env = os.environ.copy()
     env["KUBECONFIG"] = temp_config_file.name
+    context = get_current_context()
     arg = node_pool.node_pool_selector
     selector = arg.resolve(context)
     yaml_config = jobset_config.generate_yaml(

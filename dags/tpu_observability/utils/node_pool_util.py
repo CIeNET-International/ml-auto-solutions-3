@@ -26,6 +26,7 @@ import tempfile
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
+from airflow.providers.standard.operators.python import get_current_context
 from google.cloud import monitoring_v3
 
 from dags.tpu_observability.utils.time_util import TimeUtil
@@ -165,7 +166,6 @@ def _node_pool_exists(node_pool: Info) -> bool:
 def create(
     node_pool: Info,
     ignore_failure: bool = False,
-    **context: dict,
 ) -> None:
   """Creates a GKE node pool by the given node pool information.
 
@@ -206,6 +206,7 @@ def create(
     command += " --spot"
 
   if node_pool.node_pool_selector:
+    context = get_current_context()
     arg = node_pool.node_pool_selector
     selector = arg.resolve(context)
     command += f" --node-labels={NODE_POOL_SELECTOR_KEY}={selector}"
@@ -597,7 +598,10 @@ def rollback(node_pool: Info) -> None:
       f"--quiet"
   )
 
+  current_time_utc = datetime.datetime.now(datetime.timezone.utc)
   subprocess.run_exec(command)
+
+  return TimeUtil.from_datetime(current_time_utc)
 
 
 @task.sensor(poke_interval=30, timeout=1200, mode="poke")
