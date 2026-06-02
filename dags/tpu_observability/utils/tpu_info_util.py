@@ -1,9 +1,8 @@
 """Utility for parsing the output of the 'tpu-info' command."""
 
-from dataclasses import dataclass
-from enum import auto
-from enum import IntEnum
 import re
+from dataclasses import dataclass
+from enum import IntEnum, auto
 
 from airflow.decorators import task
 

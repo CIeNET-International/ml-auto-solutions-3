@@ -1,5 +1,5 @@
-from dataclasses import dataclass
 import enum
+from dataclasses import dataclass
 
 from dags.common.vm_resource import MachineVersion, TpuVersion
 

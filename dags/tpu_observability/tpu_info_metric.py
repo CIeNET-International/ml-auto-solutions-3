@@ -13,20 +13,21 @@
 # limitations under the License.
 """Metric verification strategies for the tpu-info CLI tool."""
 
-from abc import ABC, abstractmethod
 import enum
 import logging
 import re
 import textwrap
+from abc import ABC, abstractmethod
 from typing import Any
 
+from airflow.exceptions import AirflowException
 from google.cloud import monitoring_v3
 from google.cloud.monitoring_v3 import types as monitoring_types
-from airflow.exceptions import AirflowException
 
 from dags.tpu_observability.utils import tpu_info_util as tpu_info
+from dags.tpu_observability.utils.gcp_util import (list_time_series,
+                                                   query_time_series)
 from dags.tpu_observability.utils.time_util import TimeUtil
-from dags.tpu_observability.utils.gcp_util import list_time_series, query_time_series
 
 
 class _Percentiles(enum.Enum):

@@ -23,16 +23,15 @@ from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
 from dags import composer_env
-from dags.tpu_observability.configs.common import (
-    MachineConfigMap,
-    GCS_CONFIG_PATH,
-    GCS_JOBSET_CONFIG_PATH,
-)
+from dags.common.scheduling_helper.scheduling_helper import (SchedulingHelper,
+                                                             get_dag_timeout)
+from dags.tpu_observability.configs.common import (GCS_CONFIG_PATH,
+                                                   GCS_JOBSET_CONFIG_PATH,
+                                                   MachineConfigMap)
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils.jobset_util import Workload
 from dags.tpu_observability.utils.time_util import TimeUtil
-from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper, get_dag_timeout
 
 DAG_ID = "jobset_uptime_validation"
 DAGRUN_TIMEOUT = get_dag_timeout(DAG_ID)

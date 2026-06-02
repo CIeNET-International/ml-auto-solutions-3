@@ -10,14 +10,13 @@ from airflow.decorators import task
 from airflow.exceptions import AirflowSkipException
 from airflow.models.baseoperator import chain
 from airflow.utils.task_group import TaskGroup
+from google.cloud import monitoring_v3
 
+from dags import composer_env
 from dags.common import test_owner
 from dags.common.vm_resource import Project
 from dags.multipod.configs.common import Platform
 from dags.tpu_observability.utils import gcp_util, time_util
-from google.cloud import monitoring_v3
-from dags import composer_env
-
 
 _UNKNOWN_RESOURCE_NAME = 'Unknown'
 
@@ -432,7 +431,9 @@ def validate_interruption_count(
 
     if len(log_timestamps) != len(metric.record_timestamps):
       mismatch_nodes.append(
-          f'mismatch resource name: {resource_name}, metric_count: {len(metric.record_timestamps)}, log_count: {len(log_timestamps)}'
+          f'mismatch resource name: {resource_name}, '
+          f'metric_count: {len(metric.record_timestamps)}, '
+          f'log_count: {len(log_timestamps)}'
       )
 
   if mismatch_nodes:
