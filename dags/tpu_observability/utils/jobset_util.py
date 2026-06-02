@@ -582,8 +582,7 @@ def run_workload(
     jobset_name: str,
     node_pool_selector: str = None,
 ) -> TimeUtil:
-  """
-  Applies the specified YAML file to the GKE cluster.
+  """Applies the specified YAML file to the GKE cluster.
 
   Args:
     node_pool: Configuration object with cluster details.
