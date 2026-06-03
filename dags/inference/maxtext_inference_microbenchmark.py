@@ -19,8 +19,9 @@ import pytz
 import itertools
 import numpy
 from airflow import models
-from dags.common.vm_resource import TpuVersion, Zone, Project, V5_NETWORKS, V5E_SUBNETWORKS, V5P_SUBNETWORKS, RuntimeVersion, V6E_GCE_NETWORK, V6E_GCE_SUBNETWORK
+
 from dags.inference.configs import maxtext_inference_microbenchmark_gce_config
+from dags.inference.maxtext_model_config_generator import TpuConfig
 from dags.multipod.configs.common import SetupMode
 
 USER_PREFIX = ""
@@ -110,6 +111,8 @@ def generate_model_configs(
     tpu_version,
     tpu_cores,
 ):
+  config = tpu_version.value
+
   model_configs = {}
   model_configs["model_config_name"] = model_config_name
 
@@ -177,32 +180,18 @@ def generate_model_configs(
   test_name = f"{test_name_prefix}-{test_run_tag}"
   model_configs["run_name"] = test_run_tag
 
-  if tpu_version == TpuVersion.V5E:
-    # v5e benchmarks
-    project_name = Project.TPU_PROD_ENV_AUTOMATED.value
-    zone = Zone.US_EAST1_C.value
-    network = V5_NETWORKS
-    subnetwork = V5E_SUBNETWORKS
-    runtime_version = RuntimeVersion.V2_ALPHA_TPUV5_LITE.value
-  if tpu_version == TpuVersion.TRILLIUM:
-    project_name = Project.TPU_PROD_ENV_AUTOMATED.value
-    zone = Zone.US_EAST5_A.value
-    network = V6E_GCE_NETWORK
-    subnetwork = V6E_GCE_SUBNETWORK
-    runtime_version = RuntimeVersion.V2_ALPHA_TPUV6.value
-
   maxtext_kv_cache_layout_optimization = (
       maxtext_inference_microbenchmark_gce_config.config(
-          tpu_version=tpu_version,
+          tpu_version=config.tpu_version_name,
           tpu_cores=tpu_cores,
-          tpu_zone=zone,
+          tpu_zone=config.zone,
           time_out_in_min=sweep_model_configs["time_out_in_min"],
           test_name=test_name,
           test_mode=SetupMode.STABLE,
-          project_name=project_name,
-          runtime_version=runtime_version,
-          network=network,
-          subnetwork=subnetwork,
+          project_name=config.project_name,
+          runtime_version=config.runtime_version,
+          network=config.network,
+          subnetwork=config.subnetwork,
           is_tpu_reserved=True,
           model_configs=model_configs,
           maxtext_branch=model_configs["maxtext_branch"],
@@ -247,7 +236,7 @@ with models.DAG(
           if not MAXTEXT_BRANCH
           else f"-b {MAXTEXT_BRANCH}",
           "sleep_time": 60,
-          "tpu_version_cores": [(TpuVersion.V5E, 8), (TpuVersion.TRILLIUM, 8)],
+          "tpu_version_cores": [(TpuConfig.V5E, 8), (TpuConfig.TRILLIUM, 8)],
           "model_name": LLAMA2_7B,
           "tokenizer": "tokenizer.llama2",
           "weight_dtype": "bfloat16",

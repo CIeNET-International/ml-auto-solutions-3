@@ -15,59 +15,73 @@
 """Utility for startup scripts."""
 
 import shlex
+import textwrap
+
+
+block_background_upgrade_services_script = textwrap.dedent(
+    """\
+    sudo systemctl stop apt-daily.timer apt-daily-upgrade.timer apt-daily.service apt-daily-upgrade.service unattended-upgrades.service
+    sudo systemctl mask apt-daily.timer apt-daily-upgrade.timer apt-daily.service apt-daily-upgrade.service unattended-upgrades.service
+    sudo fuser -k -KILL /usr/bin/apt /usr/bin/apt-get /usr/bin/dpkg || true
+    sudo fuser -k -KILL /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock || true
+    sudo dpkg --configure -a
+"""
+)
 
 
 def generate_startup_script(main_command: str) -> str:
   escaped_command = shlex.quote(main_command)
-  return f"""
-set -o pipefail
-bash -c {escaped_command} 2>&1 | tee /tmp/logs &
-pid=$!
-echo $pid > /tmp/main_process_id.txt
-wait $pid
-exit_status=$?
-echo $exit_status > /tmp/process_exit_status.txt
-"""
+  return block_background_upgrade_services_script + textwrap.dedent(
+      f"""\
+      set -o pipefail
+      bash -c {escaped_command} 2>&1 | tee /tmp/logs &
+      pid=$!
+      echo $pid > /tmp/main_process_id.txt
+      wait $pid
+      exit_status=$?
+      echo $exit_status > /tmp/process_exit_status.txt
+  """
+  )
 
 
 def monitor_startup_script() -> str:
   return """
-# File paths
-pid_file="/tmp/main_process_id.txt"
-status_file="/tmp/process_exit_status.txt"
-log_file="/tmp/logs"
+      # File paths
+      pid_file="/tmp/main_process_id.txt"
+      status_file="/tmp/process_exit_status.txt"
+      log_file="/tmp/logs"
 
-echo "LOGGER: Waiting for the workload to show up in $pid_file"
+      echo "LOGGER: Waiting for the workload to show up in $pid_file"
 
-# Wait until the PID file exists
-while [ ! -f "$pid_file" ]; do
-  sleep 1
-done
+      # Wait until the PID file exists
+      while [ ! -f "$pid_file" ]; do
+        sleep 1
+      done
 
-# Extract PID from pid_file
-pid=$(cat "$pid_file")
+      # Extract PID from pid_file
+      pid=$(cat "$pid_file")
 
-echo "LOGGER: Streaming worker 0 logs."
-# Tail the log file and terminate when the process with $pid exits
-tail -f --pid=$pid --retry $log_file
+      echo "LOGGER: Streaming worker 0 logs."
+      # Tail the log file and terminate when the process with $pid exits
+      tail -f --pid=$pid --retry $log_file
 
-echo "LOGGER: Process $pid has finished."
+      echo "LOGGER: Process $pid has finished."
 
-# Check if status_file contain any number
-if ! grep -q '[0-9]' "$status_file"; then
-  echo "LOGGER: The status file contains no exit status."
-  exit 1
-fi
+      # Check if status_file contain any number
+      if ! grep -q '[0-9]' "$status_file"; then
+        echo "LOGGER: The status file contains no exit status."
+        exit 1
+      fi
 
-# Read and output the exit status
-exit_status=$(cat "$status_file")
+      # Read and output the exit status
+      exit_status=$(cat "$status_file")
 
-# Check the exit_status
-if [ "$exit_status" -eq 0 ]; then
-  echo "LOGGER: The process exited successfully."
-  exit 0
-else
-  echo "LOGGER: The process failed with exit status $exit_status."
-  exit 1
-fi
+      # Check the exit_status
+      if [ "$exit_status" -eq 0 ]; then
+        echo "LOGGER: The process exited successfully."
+        exit 0
+      else
+        echo "LOGGER: The process failed with exit status $exit_status."
+        exit 1
+      fi
 """

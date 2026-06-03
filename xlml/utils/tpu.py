@@ -119,15 +119,16 @@ def create_queued_resource(
           )
       )
 
-    startup_script_command = ''
-
+    startup_cmds = []
     if use_startup_script:
-      main_command = '\n'.join(
+      startup_cmds.extend(
           task_test_config.set_up_cmds + task_test_config.run_model_cmds
       )
-      startup_script_command = startup_script.generate_startup_script(
-          main_command
-      )
+
+    main_command = '\n'.join(startup_cmds)
+    startup_script_command = startup_script.generate_startup_script(
+        main_command
+    )
 
     metadata = {
         'ssh-keys': f'{ssh_keys.user}:{ssh_keys.public}',

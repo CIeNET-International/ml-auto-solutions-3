@@ -18,8 +18,8 @@ import datetime
 import numpy as np
 from airflow import models
 from dags import composer_env
-from dags.common.vm_resource import TpuVersion
-from dags.inference.maxtext_model_config_generator import generate_model_configs
+
+from dags.inference.maxtext_model_config_generator import generate_model_configs, TpuConfig
 
 USER_PREFIX = ""
 
@@ -117,7 +117,10 @@ with models.DAG(
           "jetstream_branch": jetstream_branch,
           "sleep_time": 360,
           "time_out_in_min": 120,
-          "tpu_version_cores": [(TpuVersion.V5E, 8), (TpuVersion.TRILLIUM, 8)],
+          "tpu_version_cores": [
+              (TpuConfig.temp_V5E, 8),
+              (TpuConfig.temp_TRILLIUM, 8),
+          ],
           "model_name": LLAMA2_7B,
           "tokenizer": "tokenizer.llama2",
           "weight_dtype": "bfloat16",
@@ -155,7 +158,10 @@ with models.DAG(
           "jetstream_branch": jetstream_branch,
           "sleep_time": 360,
           "time_out_in_min": 120,
-          "tpu_version_cores": [(TpuVersion.V5E, 8), (TpuVersion.TRILLIUM, 8)],
+          "tpu_version_cores": [
+              (TpuConfig.temp_V5E, 8),
+              (TpuConfig.temp_TRILLIUM, 8),
+          ],
           "model_name": LLAMA2_13B,
           "tokenizer": "tokenizer.llama2",
           "weight_dtype": "bfloat16",
@@ -193,7 +199,10 @@ with models.DAG(
           "jetstream_branch": jetstream_branch,
           "sleep_time": 360,
           "time_out_in_min": 240,
-          "tpu_version_cores": [(TpuVersion.V5P, 8), (TpuVersion.TRILLIUM, 8)],
+          "tpu_version_cores": [
+              (TpuConfig.V5P, 8),
+              (TpuConfig.temp_TRILLIUM, 8),
+          ],
           "model_name": LLAMA2_70B,
           "tokenizer": "tokenizer.llama2",
           "weight_dtype": "bfloat16",
@@ -230,7 +239,10 @@ with models.DAG(
           "jetstream_branch": jetstream_branch,
           "sleep_time": 360,
           "time_out_in_min": 120,
-          "tpu_version_cores": [(TpuVersion.V5E, 8), (TpuVersion.TRILLIUM, 8)],
+          "tpu_version_cores": [
+              (TpuConfig.temp_V5E, 8),
+              (TpuConfig.temp_TRILLIUM, 8),
+          ],
           "model_name": GEMMA_7B,
           "tokenizer": "tokenizer.gemma",
           "weight_dtype": "bfloat16",
@@ -269,7 +281,10 @@ with models.DAG(
           "jetstream_branch": jetstream_branch,
           "sleep_time": 240,
           "time_out_in_min": 240,
-          "tpu_version_cores": [(TpuVersion.V5P, 8), (TpuVersion.TRILLIUM, 8)],
+          "tpu_version_cores": [
+              (TpuConfig.V5P, 8),
+              (TpuConfig.temp_TRILLIUM, 8),
+          ],
           "model_name": MIXTRAL_8_7B,
           "tokenizer": "gs://maxtext-external/mixtral-8x7B-v0.1-Instruct/tokenizer.mistral",
           "weight_dtype": "bfloat16",
@@ -576,7 +591,6 @@ with models.DAG(
           },
       }
   )
-
   # run_configs = [
   #     f"{LLAMA2_7B}-{BASE_MODE}-{W_BF16_KV_BF16}",
   #     f"{LLAMA2_7B}-{BASE_MODE}-{W_INT8_KV_INT8}",

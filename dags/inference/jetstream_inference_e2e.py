@@ -16,8 +16,7 @@
 
 import datetime
 from airflow import models
-from dags.common.vm_resource import TpuVersion
-from dags.inference.maxtext_model_config_generator import generate_model_configs
+from dags.inference.maxtext_model_config_generator import generate_model_configs, TpuConfig
 
 """A JetStream inference E2E test (JAX nightly, no schedule) DAG.
 
@@ -72,7 +71,7 @@ with models.DAG(
           "jetstream_branch": "",
           "sleep_time": 360,
           "time_out_in_min": 60,
-          "tpu_version_cores": [(TpuVersion.V5E, 8), (TpuVersion.TRILLIUM, 8)],
+          "tpu_version_cores": [(TpuConfig.V5E, 8), (TpuConfig.TRILLIUM, 8)],
           "model_name": LLAMA2_7B,
           "tokenizer": "tokenizer.llama2",
           "weight_dtype": "bfloat16",
@@ -100,7 +99,7 @@ with models.DAG(
           "jetstream_branch": "",
           "sleep_time": 360,
           "time_out_in_min": 60,
-          "tpu_version_cores": [(TpuVersion.V5E, 8), (TpuVersion.TRILLIUM, 8)],
+          "tpu_version_cores": [(TpuConfig.V5E, 8), (TpuConfig.TRILLIUM, 8)],
           "model_name": GEMMA_7B,
           "tokenizer": "tokenizer.gemma",
           "weight_dtype": "bfloat16",
