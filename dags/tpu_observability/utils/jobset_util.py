@@ -570,9 +570,7 @@ def build_jobset_from_gcs_yaml(
 
   merged.update({k: v for k, v in overrides.items() if k in known_fields})
 
-  logging.info(
-      f"Final JobSet config created for DAG '{dag_name}'"
-  )
+  logging.info(f"Final JobSet config created for DAG '{dag_name}'")
   return JobSet(**merged)
 
 
@@ -1065,9 +1063,7 @@ def wait_for_jobset_uptime_data(
   """Verify uptime data exists after jobset application."""
   start_time = jobset_apply_time
   end_time = TimeUtil.now()
-  data = query_uptime_metrics(
-      node_pool, jobset_name, start_time, end_time
-  )
+  data = query_uptime_metrics(node_pool, jobset_name, start_time, end_time)
 
   logging.info(f"Uptime data query result: {data}")
   if len(data) > 0:
@@ -1085,9 +1081,7 @@ def ensure_no_jobset_uptime_data(
   """Ensure no uptime data is recorded after jobset deletion."""
   start_time = jobset_clear_time
   now = TimeUtil.now()
-  data = query_uptime_metrics(
-      node_pool, jobset_name, start_time, now
-  )
+  data = query_uptime_metrics(node_pool, jobset_name, start_time, now)
 
   logging.info(f"Uptime data query result: {data}")
   if len(data) > 0:
