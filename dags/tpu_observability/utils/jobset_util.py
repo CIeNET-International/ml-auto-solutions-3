@@ -280,15 +280,17 @@ class JobSet:
   container_name: str
   image: str
   tpu_cores_per_pod: int
-  node_pool_selector: str
   privileged: bool = False
 
-  def generate_yaml(self, workload_script: Workload) -> str:
+  def generate_yaml(
+      self, workload_script: Workload, node_pool_selector: str = None
+  ) -> str:
     """Generates the final JobSet YAML content.
 
     Args:
         workload_script: A pre-formatted, JSON-escaped string from the Workload
           class.
+        node_pool_selector: The node pool selector to use.
 
     Returns:
         A string containing the complete JobSet YAML.
@@ -296,7 +298,7 @@ class JobSet:
     params = dataclasses.asdict(self)
     params["command"] = ["bash", "-c"]
     params["args"] = workload_script
-    params["node_pool_selector"] = self.node_pool_selector or ""
+    params["node_pool_selector"] = node_pool_selector or ""
     params["privileged"] = "true" if self.privileged else "false"
     params["host_pid"] = "true" if self.privileged else "false"
 
@@ -568,7 +570,10 @@ def build_jobset_from_gcs_yaml(
 
 @task
 def run_workload(
-    node_pool: node_pool_info, jobset_config: JobSet, workload_type: Workload
+    node_pool: node_pool_info,
+    jobset_config: JobSet,
+    workload_type: Workload,
+    node_pool_selector: str = None,
 ) -> TimeUtil:
   """
   Applies the specified YAML file to the GKE cluster.
@@ -577,13 +582,17 @@ def run_workload(
     node_pool: Configuration object with cluster details.
     jobset_config: The JobSet object containing YAML configuration.
     workload_type: The workload script to execute.
+    node_pool_selector: The node pool selector to use.
   Returns:
     The UTC time when the workload was started.
   """
   with tempfile.NamedTemporaryFile() as temp_config_file:
     env = os.environ.copy()
     env["KUBECONFIG"] = temp_config_file.name
-    yaml_config = jobset_config.generate_yaml(workload_script=workload_type)
+    yaml_config = jobset_config.generate_yaml(
+        workload_script=workload_type,
+        node_pool_selector=node_pool_selector,
+    )
 
     cmd = " && ".join([
         Command.get_credentials_command(node_pool),
@@ -952,6 +961,7 @@ def wait_for_all_pods_running(
 def create_jobset_startup_tasks(
     node_pool: node_pool_info,
     jobset_config: JobSet,
+    node_pool_selector: str = None,
     workload_type: str = Workload.JAX_TPU_BENCHMARK,
 ) -> JobSetStartupOutput:
   """Provides a standardized sequence of tasks for JobSet startup and preparation.
@@ -964,6 +974,7 @@ def create_jobset_startup_tasks(
   Args:
     node_pool: Configuration object containing cluster and project details.
     jobset_config: The JobSet object containing YAML and scaling configurations.
+    node_pool_selector: The node pool selector to use.
     workload_type: The predefined workload script to execute.
 
   Returns:
@@ -974,6 +985,7 @@ def create_jobset_startup_tasks(
       node_pool=node_pool,
       jobset_config=jobset_config,
       workload_type=workload_type,
+      node_pool_selector=node_pool_selector,
   )
 
   running_pods = wait_for_all_pods_running.override(

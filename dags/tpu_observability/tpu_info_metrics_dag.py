@@ -286,7 +286,6 @@ with models.DAG(
       jobset_config = jobset.build_jobset_from_gcs_yaml(
           gcs_path=GCS_JOBSET_CONFIG_PATH,
           dag_name=DAG_ID,
-          node_pool_selector=selector,
       )
 
       cluster_info = node_pool.build_node_pool_info_from_gcs_yaml(
@@ -295,7 +294,6 @@ with models.DAG(
           is_prod=composer_env.is_prod_env(),
           machine_type=config.machine_version.value,
           tpu_topology=config.tpu_topology,
-          node_pool_selector=selector,
       )
 
       cluster_info_2 = copy.deepcopy(cluster_info)
@@ -306,12 +304,14 @@ with models.DAG(
             task_id="node_pool_1",
         )(
             node_pool=cluster_info,
+            node_pool_selector=selector,
         )
 
         create_second_node_pool = node_pool.create.override(
             task_id="node_pool_2",
         )(
             node_pool=cluster_info_2,
+            node_pool_selector=selector,
         )
 
         _ = [create_first_node_pool, create_second_node_pool]
@@ -319,6 +319,7 @@ with models.DAG(
       startup = jobset.create_jobset_startup_tasks(
           node_pool=cluster_info,
           jobset_config=jobset_config,
+          node_pool_selector=selector,
           workload_type=Workload.JAX_TPU_BENCHMARK,
       )
 
