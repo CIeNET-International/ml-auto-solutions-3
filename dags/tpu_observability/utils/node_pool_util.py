@@ -163,13 +163,14 @@ def _node_pool_exists(node_pool: Info) -> bool:
 @task
 def create(
     node_pool: Info,
-    node_pool_selector: str,
+    node_pool_selector: str = None,
     ignore_failure: bool = False,
 ) -> None:
   """Creates a GKE node pool by the given node pool information.
 
   Args:
     node_pool: The node pool configuration.
+    node_pool_selector: The selector for the node pool.
     ignore_failure: If True, command failures are ignored.
   """
 
@@ -201,6 +202,8 @@ def create(
 
   if node_pool.reservation:
     command += f" --reservation-affinity=specific --reservation={node_pool.reservation}"
+  else:
+    command += " --spot "
 
   if node_pool_selector:
     command += f" --node-labels={NODE_POOL_SELECTOR_KEY}={node_pool_selector}"
