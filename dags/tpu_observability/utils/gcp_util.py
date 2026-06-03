@@ -15,8 +15,13 @@ from google.api_core.exceptions import ResourceExhausted
 from google.cloud import logging_v2, monitoring_v3
 from google.cloud.logging_v2 import types as logging_types
 from google.cloud.monitoring_v3 import types as monitoring_types
-from tenacity import (RetryCallState, retry, retry_if_exception,
-                      stop_after_attempt, wait_exponential)
+from tenacity import (
+    RetryCallState,
+    retry,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from dags.tpu_observability.utils.time_util import TimeUtil
 

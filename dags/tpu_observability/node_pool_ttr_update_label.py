@@ -22,10 +22,14 @@ from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
 from dags import composer_env
-from dags.common.scheduling_helper.scheduling_helper import (SchedulingHelper,
-                                                             get_dag_timeout)
-from dags.tpu_observability.configs.common import (GCS_CONFIG_PATH,
-                                                   MachineConfigMap)
+from dags.common.scheduling_helper.scheduling_helper import (
+    SchedulingHelper,
+    get_dag_timeout,
+)
+from dags.tpu_observability.configs.common import (
+    GCS_CONFIG_PATH,
+    MachineConfigMap,
+)
 from dags.tpu_observability.utils import node_pool_util as node_pool
 
 DAG_ID = "node_pool_ttr_update_label"
