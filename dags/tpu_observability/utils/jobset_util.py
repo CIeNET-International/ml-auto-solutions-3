@@ -280,6 +280,7 @@ class JobSet:
   image: str
   tpu_cores_per_pod: int
   privileged: bool = False
+  dag_id_prefix: str = ""
 
   def generate_yaml(
       self,
@@ -540,7 +541,7 @@ def build_jobset_from_gcs_yaml(
     gcs_path: str,
     dag_name: str,
     **overrides,
-) -> tuple[JobSet, str]:
+) -> JobSet:
   """Builds a JobSet instance by merging YAML defaults.
 
   Args:
@@ -549,7 +550,7 @@ def build_jobset_from_gcs_yaml(
     **overrides: Additional parameters to override default configurations.
 
   Returns:
-    A tuple containing the JobSet instance and the dag_id_prefix.
+    The JobSet instance.
   """
   config = gcs.load_yaml_from_gcs(gcs_path)
   known_fields = {f.name for f in dataclasses.fields(JobSet)}
@@ -565,12 +566,14 @@ def build_jobset_from_gcs_yaml(
     if k in known_fields and v is not None:
       merged[k] = v
 
+  merged["dag_id_prefix"] = dag_id_prefix
+
   merged.update({k: v for k, v in overrides.items() if k in known_fields})
 
   logging.info(
       f"Final JobSet config created for DAG '{dag_name}'"
   )
-  return JobSet(**merged), dag_id_prefix
+  return JobSet(**merged)
 
 
 @task

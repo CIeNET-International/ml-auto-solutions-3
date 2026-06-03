@@ -356,14 +356,14 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           tpu_topology=config.tpu_topology,
       )
 
-      jobset_config, dag_id_prefix = jobset.build_jobset_from_gcs_yaml(
+      jobset_config = jobset.build_jobset_from_gcs_yaml(
           gcs_path=GCS_JOBSET_CONFIG_PATH,
           dag_name=DAG_ID,
       )
 
       selector = jobset.generate_node_pool_selector(DAG_ID)
 
-      jobset_name = jobset.generate_jobset_name(dag_id_prefix)
+      jobset_name = jobset.generate_jobset_name(jobset_config.dag_id_prefix)
 
       cluster_info_2 = copy.deepcopy(cluster_info)
       cluster_info_2.node_pool_name = f"{cluster_info.node_pool_name}-2"

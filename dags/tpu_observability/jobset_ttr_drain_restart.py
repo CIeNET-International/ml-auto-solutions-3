@@ -131,13 +131,13 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           tpu_topology=config.tpu_topology,
       )
 
-      jobset_config, dag_id_prefix = jobset.build_jobset_from_gcs_yaml(
+      jobset_config = jobset.build_jobset_from_gcs_yaml(
           gcs_path=GCS_JOBSET_CONFIG_PATH,
           dag_name=DAG_ID,
       )
 
       selector = jobset.generate_node_pool_selector(DAG_ID)
-      jobset_name = jobset.generate_jobset_name(dag_id_prefix)
+      jobset_name = jobset.generate_jobset_name(jobset_config.dag_id_prefix)
 
       create_node_pool = node_pool.create.override(task_id="create_node_pool")(
           node_pool=cluster_info,
