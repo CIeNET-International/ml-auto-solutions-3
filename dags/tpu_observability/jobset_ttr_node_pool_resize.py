@@ -171,7 +171,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           jobset_name,
           create_node_pool,
           *startup.tasks,
-          node_pool_resize,
+          node_pool_resize_start_time,
           wait_for_metric_upload,
           cleanup_workload,
           cleanup_node_pool,
