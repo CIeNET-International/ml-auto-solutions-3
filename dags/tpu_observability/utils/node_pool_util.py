@@ -165,7 +165,6 @@ def create(
     node_pool: Info,
     node_pool_selector: str = None,
     ignore_failure: bool = False,
-    **context: dict,
 ) -> None:
   """Creates a GKE node pool by the given node pool information.
 

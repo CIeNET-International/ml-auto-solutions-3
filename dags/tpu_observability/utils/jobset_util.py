@@ -454,7 +454,18 @@ class Command:
       jobset_name: str,
       namespace: str,
   ) -> str:
-    """Generates the kubectl command to get events for a specific JobSet."""
+    """Generates a kubectl command to fetch filtered events for a specific
+    JobSet.
+
+    This command customizes the output format using custom columns to only
+    include essential event details and suppresses the default table headers for
+    easier parsing.
+
+    The customized output format consists of the following columns:
+      - LAST_SEEN: The timestamp of the last recorded event.
+      - REASON: The programmatic reason for the event (e.g., SuccessfulCreate).
+      - MESSAGE: A human-readable description of the event.
+    """
 
     columns = "LAST_SEEN:.lastTimestamp,REASON:.reason,MESSAGE:.message"
     selector = f"involvedObject.kind=JobSet,involvedObject.name={jobset_name}"
@@ -1208,9 +1219,8 @@ def wait_for_jobset_recovered(
     for line in reversed(lines):
       parts = line.split(maxsplit=2)
 
-      if len(parts) >= 2:
-        timestamp_str = parts[0]
-        reason = parts[1]
+      if len(parts) == 3:
+        timestamp_str, reason, _ = parts
 
         if reason == "RestartJobSetFailurePolicyAction":
           logging.info("Matched recovery log line: %s", line)
