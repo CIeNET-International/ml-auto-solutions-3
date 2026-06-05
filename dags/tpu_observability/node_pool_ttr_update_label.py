@@ -76,7 +76,7 @@ with models.DAG(
 ) as dag:
   for machine in MachineConfigMap:
     config = machine.value
-    LABELS_TO_UPDATE = {"test_key": "test_val"}
+    labels_to_update = {"test_key": "test_val"}
 
     with TaskGroup(group_id=f"v{config.tpu_version.value}"):
       node_pool_info = node_pool.build_node_pool_info_from_gcs_yaml(
@@ -105,7 +105,7 @@ with models.DAG(
       task_id = "update_node_pool_label"
       update_node_pool_label = node_pool.update.override(task_id=task_id)(
           node_pool=node_pool_info,
-          spec=node_pool.NodePoolUpdateSpec.Label(delta=LABELS_TO_UPDATE),
+          spec=node_pool.NodePoolUpdateSpec.Label(delta=labels_to_update),
       )
 
       task_id = "wait_for_recovered"

@@ -71,7 +71,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 ) as dag:
   for machine in MachineConfigMap:
     config = machine.value
-    LABELS_TO_UPDATE = (
+    labels_to_update = (
         {"env": "prod"} if composer_env.is_prod_env() else {"env": "dev"}
     )
 
@@ -103,7 +103,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           task_id="update_node_pool_label"
       )(
           node_pool=node_pool_info,
-          spec=node_pool.NodePoolUpdateSpec.Label(delta=LABELS_TO_UPDATE),
+          spec=node_pool.NodePoolUpdateSpec.Label(delta=labels_to_update),
       )
 
       wait_for_unavailable = node_pool.wait_for_availability.override(

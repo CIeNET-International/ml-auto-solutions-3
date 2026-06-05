@@ -214,7 +214,7 @@ class PodOperationSpec:
   extra_flags: str = ""
 
   @staticmethod
-  def Reboot() -> "PodOperationSpec":
+  def reboot() -> "PodOperationSpec":
     """
     Defines a node reboot operation executed via a Kubernetes Pod.
 

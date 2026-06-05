@@ -132,7 +132,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 
       reboot_node = jobset.operate_pod.override(task_id="reboot_node")(
           node_pool=cluster_info,
-          operation=jobset.PodOperationSpec.Reboot(),
+          operation=jobset.PodOperationSpec.reboot(),
           pod_name=target_pod,
           namespace="default",
       )

@@ -1,3 +1,5 @@
+"""Common configurations and constants for TPU observability DAGs."""
+
 import enum
 from dataclasses import dataclass
 

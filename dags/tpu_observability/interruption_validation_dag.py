@@ -537,7 +537,7 @@ def create_interruption_dag(
           with TaskGroup(
               group_id=f'validation_for_{project.value}',
               tooltip=f'Validation pipeline for Project ID: {project.value}',
-          ) as group:
+          ):
             configs = Configs(
                 project_id=project.value,
                 platform=platform,

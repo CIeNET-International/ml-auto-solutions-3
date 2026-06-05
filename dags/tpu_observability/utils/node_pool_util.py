@@ -156,6 +156,7 @@ def _node_pool_exists(node_pool: Info) -> bool:
   try:
     subprocess.run_exec(check_cmd)
     return True
+  # pylint: disable=broad-exception-caught
   except Exception:
     return False
 
@@ -235,7 +236,7 @@ def create(
 def delete(node_pool: Info) -> None:
   """Deletes the GKE node pool using gcloud command."""
 
-  """Check if the node pool is valid."""
+  # Check if the node pool is valid.
   if not _node_pool_exists(node_pool):
     logging.info(
         (
@@ -889,7 +890,8 @@ def update(node_pool: Info, spec: NodePoolUpdateSpec) -> TimeUtil:
         if current_labels.get(key) == val:
           val += val
         updated_labels.append(f"{key}={val}")
-      flags.append(f"--{spec.target.value}={','.join(updated_labels)}")
+      updated_labels_str = ",".join(updated_labels)
+      flags.append(f"--{spec.target.value}={updated_labels_str}")
 
     case _:
       raise ValueError(f"Unsupported target: {spec.target}")

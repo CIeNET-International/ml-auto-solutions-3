@@ -83,7 +83,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 ) as dag:
   for machine in MachineConfigMap:
     config = machine.value
-    LABELS_TO_UPDATE = (
+    labels_to_update = (
         {"env": "prod"} if composer_env.is_prod_env() else {"env": "dev"}
     )
 
