@@ -64,7 +64,8 @@ def compare_metric_values(
     metric_display_name: str,
     tolerance_percent: float,
 ):
-  """Compares two lists of metric values and checks if they are within a tolerance range."""
+  """Compares two lists of metric values and checks if they are within a
+  tolerance range."""
   if len(cmd_values) != len(monitoring_values):
     raise AirflowException(
         f"For pod {pod_name} ({metric_display_name}), data count mismatch. "
@@ -123,7 +124,8 @@ def get_tpu_info_metric_from_pod(
     jobset_config: jobset,
     metric_name: str,
 ) -> str:
-  """Executes the 'tpu-info' command in the specified pod and returns its output."""
+  """Executes the 'tpu-info' command in the specified pod and returns its
+  output."""
   with tempfile.TemporaryDirectory() as tmpdir:
     kube_dir = tmpdir + "/kubeconfig"
     env = os.environ.copy()

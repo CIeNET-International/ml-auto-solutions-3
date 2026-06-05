@@ -5,8 +5,8 @@ This module uses the **`tenacity`** package to implement a retry mechanism
 for API calls. This is specifically designed to handle **Quota issues**
 (e.g., hitting the limit for requests per minute).
 When a specific error type and message indicating a quota limit is encountered,
-the function will wait for a set period and then automatically retry the data query,
-improving resilience.
+the function will wait for a set period and then automatically retry the data
+query, improving resilience.
 """
 import logging as logger
 
@@ -60,7 +60,8 @@ def list_time_series(
     page_size: int | None = 500,
     log_enable: bool = False,
 ) -> list[monitoring_types.TimeSeries]:
-  """A utility that queries metrics (time series data) from Google Cloud Monitoring API.
+  """A utility that queries metrics (time series data) from Google Cloud
+  Monitoring API.
 
   This function provides a flexible interface to the list_time_series API,
   with robust error handling and convenient parameter types.
@@ -78,8 +79,8 @@ def list_time_series(
     view: The level of detail to return. Can be the TimeSeriesView enum (e.g.,
       TimeSeriesView.FULL) or a string ("FULL", "HEADERS"). Defaults to FULL.
     page_size: The maximum number of results to return per page.
-      The API's default is 50, we use 500 to decrease the total number of requests
-      to avoid the quota issue.
+      The API's default is 50, we use 500 to decrease the total number of
+      requests to avoid the quota issue.
     log_enable: Whether to enable logging. Defaults to False.
 
   Returns:
@@ -143,8 +144,8 @@ def query_log_entries(
       Defaults to descending timestamp.
     max_results: Optional. The maximum number of results to return overall.
     page_size: The maximum number of results to return per page.
-      The API's default is 50, we use 500 to decrease the total number of requests
-      to avoid the quota issue.
+      The API's default is 50, we use 500 to decrease the total number of
+      requests to avoid the quota issue.
     log_enable: Whether to enable logging. Defaults to False.
 
   Returns:

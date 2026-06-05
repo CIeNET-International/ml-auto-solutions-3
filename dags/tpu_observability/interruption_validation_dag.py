@@ -48,8 +48,10 @@ class InterruptionReason(str, enum.Enum):
   def log_filter(self) -> str:
     """Returns the corresponding filter for the interruption reason.
 
-    These filters are in accordance with the definitions in this file from Google3:
-    //depot/google3/java/com/google/cloud/cluster/manager/compute/services/instancemanagerevent/InstanceEventNotificationAction.java
+    These filters are in accordance with the definitions in this file from
+    Google3:
+    //depot/google3/java/com/google/cloud/cluster/manager/compute/services/
+    instancemanagerevent/InstanceEventNotificationAction.java
     """
 
     filters = []
@@ -156,7 +158,8 @@ def fetch_interruption_metric_records(
       f'resource.labels.project_id = "{configs.project_id}" '
       f'metric.type = "{metric_type}" '
       f'resource.type = "{resource_type}" '
-      f'metric.labels.interruption_reason = "{configs.interruption_reason.metric_label()}" '
+      'metric.labels.interruption_reason = '
+      f'"{configs.interruption_reason.metric_label()}" '
   )
 
   # key: resource_name, value: EventRecord
@@ -528,7 +531,7 @@ def create_interruption_dag(
     for project in Project:
       match project:
         case Project.TPU_PROD_ENV_AUTOMATED | Project.CLOUD_TPU_INFERENCE_TEST:
-          # Production composer lacks permission for these projects; ignore them.
+          # Production composer lacks permission for these projects; ignore them
           continue
         case _:
           with TaskGroup(

@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""A DAG to test JobSet Time-To-Recover (TTR) metric by triggering a node reboot."""
+"""A DAG to test JobSet Time-To-Recover (TTR) metric by triggering a node
+reboot."""
 
 import datetime
 from datetime import timedelta

@@ -205,7 +205,8 @@ class PodOperationSpec:
   """Defines the specification for a pod operation, including type.
 
   This setup mirrors NodeOperationSpec but focuses entirely on container-level
-  infrastructure tasks (e.g., triggering host reboots via an active privileged pod).
+  infrastructure tasks (e.g., triggering host reboots via an active privileged
+  pod).
   """
 
   target: PodOperation
@@ -802,7 +803,8 @@ def operate_pod(
     operation: PodOperationSpec,
     namespace: str = "default",
 ) -> str:
-  """Performs an operation through a specific pod based on the provided specification."""
+  """Performs an operation through a specific pod based on the provided
+  specification."""
   base_command = operation.command_template.format(
       pod_name=pod_name,
       namespace=namespace,
@@ -978,7 +980,8 @@ def create_jobset_startup_tasks(
     node_pool_selector: str = None,
     workload_type: str = Workload.JAX_TPU_BENCHMARK,
 ) -> JobSetStartupOutput:
-  """Provides a standardized sequence of tasks for JobSet startup and preparation.
+  """Provides a standardized sequence of tasks for JobSet startup and
+  preparation.
 
   This helper encapsulates and chains the three essential steps for a stable
   JobSet:

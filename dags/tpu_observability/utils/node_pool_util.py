@@ -89,16 +89,17 @@ def build_node_pool_info_from_gcs_yaml(
 ) -> Info:
   """Builds a node_pool.Info instance by merging configurations.
 
-  This function merges values from the 'common' section of the provided dag_config,
-  a DAG-specific section (given by dag_name), and any provided overrides.
-  Only fields that exist in the node_pool.Info dataclass are included.
+  This function merges values from the 'common' section of the provided
+  dag_config, a DAG-specific section (given by dag_name), and any provided
+  overrides. Only fields that exist in the node_pool.Info dataclass are
+  included.
 
   Args:
       gcs_path: The GCS path to the DAG configuration YAML file.
       dag_name: The top-level key in the YAML representing the
         specific DAG's configuration (e.g., 'dag_gke_node_pool_label_update').
-      is_prod: Boolean indicating whether to load the 'prod' or 'dev' environment
-        from the YAML configuration.
+      is_prod: Boolean indicating whether to load the 'prod' or 'dev'
+        environment from the YAML configuration.
       **overrides: Additional key-value pairs to override any settings
         from the YAML.
 
@@ -200,7 +201,10 @@ def create(
   )
 
   if node_pool.reservation:
-    command += f" --reservation-affinity=specific --reservation={node_pool.reservation}"
+    command += (
+        " --reservation-affinity=specific "
+        f"--reservation={node_pool.reservation}"
+    )
   else:
     command += " --spot "
 
@@ -234,7 +238,10 @@ def delete(node_pool: Info) -> None:
   """Check if the node pool is valid."""
   if not _node_pool_exists(node_pool):
     logging.info(
-        f"Node pool {node_pool.node_pool_name} already deleted or does not exist. Skipping."
+        (
+            f"Node pool {node_pool.node_pool_name} "
+            "already deleted or does not exist. Skipping."
+        )
     )
     return
 

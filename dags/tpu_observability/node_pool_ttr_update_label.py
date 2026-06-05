@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""A DAG to validate GKE node pool Times To Recover(TTR) metrics by triggering a label update."""
+"""A DAG to validate GKE node pool Times To Recover(TTR) metrics by
+triggering a label update."""
 
 import datetime
 

@@ -22,7 +22,8 @@ class Table:
     """Parses the raw_body string to populate the structured body attribute."""
 
     class TableLineIndex(IntEnum):
-      """Below is an example of the text returned by tpu-info, formatted as a table.
+      """Below is an example of the text returned by tpu-info, formatted as a
+      table.
 
       TPU Chips
       ┏━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━┓

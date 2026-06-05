@@ -152,8 +152,10 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           task_id="get_current_time"
       )()
 
-      ensure_no_jobset_uptime_data = jobset.ensure_no_jobset_uptime_data.override(
-          task_id="ensure_no_jobset_uptime_data"
+      ensure_no_jobset_uptime_data = (
+          jobset.ensure_no_jobset_uptime_data.override(
+              task_id="ensure_no_jobset_uptime_data"
+          )
       )(
           node_pool=cluster_info,
           jobset_name=jobset_name,

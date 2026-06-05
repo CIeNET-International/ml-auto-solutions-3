@@ -185,7 +185,8 @@ class _BaseSimplePointStrategy(BaseMetricStrategy):
 
 
 class _BaseDistributionStrategy(BaseMetricStrategy):
-  """Base strategy for parsing distribution (histogram) data and calculating percentiles.
+  """Base strategy for parsing distribution (histogram) data and calculating
+  percentiles.
 
   This abstract base class handles the common logic for processing metrics
   represented as distributions in Cloud Monitoring. It calculates specific
@@ -236,7 +237,8 @@ class _BaseDistributionStrategy(BaseMetricStrategy):
   def parse_from_monitoring(
       self, time_series_data: list[monitoring_types.TimeSeries]
   ) -> list[float]:
-    """Parses distribution data from Monitoring and calculates requested percentiles.
+    """Parses distribution data from Monitoring and calculates requested
+    percentiles.
 
     This method iterates through time series data, extracting distribution
     values (count, bucket bounds, bucket counts). It groups these distributions
@@ -453,9 +455,13 @@ class BufferTransferLatencyStrategy(_BaseDistributionStrategy):
 
 
 class HostToDeviceTransferLatenciesStrategy(_BaseDistributionStrategy):
-  """Strategy for verifying Host to Device Transfer Latency from distribution data."""
+  """Strategy for verifying Host to Device Transfer Latency from distribution
+  data."""
 
-  metric_name = "kubernetes.io/container/multislice/accelerator/host_to_device_transfer_latencies"
+  metric_name = (
+      "kubernetes.io/container/multislice/accelerator/"
+      "host_to_device_transfer_latencies"
+  )
   tpu_info_metric_name = "host_to_device_transfer_latency"
   dag_id_suffix = "host_to_device_transfer_latency"
   tolerance_percent = 3.0
@@ -469,7 +475,10 @@ class DeviceToHostTransferLatenciesStrategy(_BaseDistributionStrategy):
   Strategy for verifying Device to Host Transfer Latency from distribution data.
   """
 
-  metric_name = "kubernetes.io/container/multislice/accelerator/device_to_host_transfer_latencies"
+  metric_name = (
+      "kubernetes.io/container/multislice/accelerator/"
+      "device_to_host_transfer_latencies"
+  )
   tpu_info_metric_name = "device_to_host_transfer_latency"
   dag_id_suffix = "device_to_host_transfer_latency"
   tolerance_percent = 3.0
@@ -483,7 +492,10 @@ class CollectiveEndToEndLatencyLatenciesStrategy(_BaseDistributionStrategy):
   Strategy for verifying Collective End to End Latency from distribution data.
   """
 
-  metric_name = "kubernetes.io/container/multislice/network/collective_end_to_end_latencies"
+  metric_name = (
+      "kubernetes.io/container/multislice/network/"
+      "collective_end_to_end_latencies"
+  )
   tpu_info_metric_name = "collective_e2e_latency"
   dag_id_suffix = "collective_e2e_latency"
   tolerance_percent = 3.0
