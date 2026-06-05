@@ -1220,12 +1220,17 @@ def wait_for_jobset_recovered(
       parts = line.split(maxsplit=2)
 
       if len(parts) == 3:
+        # Unpack the split line based on custom-columns format:
+        # 1. TIMESTAMP 2. REASON 3. MESSAGE (ignored via '_')
         timestamp_str, reason, _ = parts
 
+        # Check if the event matches the target recovery action
         if reason == "RestartJobSetFailurePolicyAction":
           logging.info("Matched recovery log line: %s", line)
           end_time = TimeUtil.from_iso_string(timestamp_str)
           logging.info("JobSet recovery confirmed. Event time: %s", end_time)
+          # Return successful poke status along with the parsed recovery event
+          # time
           return PokeReturnValue(is_done=True, xcom_value=end_time)
 
     logging.info(
