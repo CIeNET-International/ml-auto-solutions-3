@@ -1168,13 +1168,16 @@ def ensure_no_jobset_uptime_data(
 
 @task.sensor(poke_interval=30, timeout=1200, mode="poke")
 def wait_for_jobset_recovered(
-    node_pool: node_pool_info, jobset_config: JobSet
+    node_pool: node_pool_info,
+    jobset_config: JobSet,
+    jobset_name: str,
 ) -> PokeReturnValue:
   """Executes the event command and extracts the LAST_SEEN timestamp.
 
   Args:
     node_pool: Configuration object with cluster details.
     jobset_config: The JobSet object containing configuration details.
+    jobset_name: The name of the JobSet.
     namespace: The Kubernetes namespace to query. Defaults to "default".
 
   Returns:
@@ -1188,7 +1191,7 @@ def wait_for_jobset_recovered(
     cmd = " && ".join([
         Command.get_credentials_command(node_pool),
         Command.k8s_get_jobset_events_command(
-            jobset_config.jobset_name,
+            jobset_name,
             jobset_config.namespace,
         ),
     ])
@@ -1199,9 +1202,7 @@ def wait_for_jobset_recovered(
     lines = stdout.strip().splitlines()
     logging.info(lines)
     if not lines:
-      logging.warning(
-          "No events found for JobSet %s", jobset_config.jobset_name
-      )
+      logging.warning("No events found for JobSet %s", jobset_name)
       return PokeReturnValue(is_done=False)
 
     for line in reversed(lines):

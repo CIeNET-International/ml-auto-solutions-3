@@ -167,25 +167,27 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           workload_type=Workload.JAX_TPU_BENCHMARK,
       )
 
-      kill_tasks = (
-          kill_tpu_pod_workload.override(task_id="kill_tpu_pod_workload")
-          .partial(info=cluster_info)
-          .expand(pod_name=startup.running_pods)
-      )
+      target_pod = pick_first(startup.running_pods)
 
-      single_start_time = pick_first(kill_tasks)
+      kill_tasks = kill_tpu_pod_workload.override(
+          task_id="kill_tpu_pod_workload"
+      )(
+          info=cluster_info,
+          pod_name=target_pod,
+      )
 
       wait_for_recovery = jobset.wait_for_jobset_recovered.override(
           task_id="wait_for_recovery"
       )(
           node_pool=cluster_info,
           jobset_config=jobset_config,
+          jobset_name=jobset_name,
       )
 
       verify_duration = jobset.verify_recovery_duration.override(
           task_id="verify_recovery_duration"
       )(
-          start_time=single_start_time,
+          start_time=kill_tasks,
           end_time=wait_for_recovery,
       )
 
@@ -194,7 +196,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       )(
           node_pool=cluster_info,
           jobset_name=jobset_name,
-          start_time=single_start_time,
+          start_time=kill_tasks,
       )
 
       cleanup_workload = jobset.end_workload.override(
@@ -218,8 +220,8 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           jobset_name,
           create_node_pool,
           *startup.tasks,
+          target_pod,
           kill_tasks,
-          single_start_time,
           wait_for_recovery,
           verify_duration,
           wait_for_metric_upload,
