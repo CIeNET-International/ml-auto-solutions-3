@@ -280,6 +280,11 @@ def worker_pod_interruption(
           workload_id=workload_id,
       )
 
+      # TODO(cienet): refine validation
+      #   1. more precise log content and order
+      #   2. use kubectl instead of CoreV1Api (since it doesn't support "since_time")
+      #   3. cache a timestamp, to skip the old logs
+
       wait_for_elastic_attempt = xpk.check_logs_exist.override(
           task_id=f"wait_for_elastic_attempt_{i}"
       )(

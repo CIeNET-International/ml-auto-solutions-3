@@ -22,11 +22,13 @@ import sys
 import re
 from typing import Tuple
 from absl import logging
+
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from airflow.hooks.subprocess import SubprocessHook
 from kubernetes import client as k8s_client
 from google.cloud import compute_v1
+
 from xlml.apis import metric_config
 from xlml.utils import gke, composer
 from dags.common.vm_resource import GpuVersion
@@ -549,6 +551,7 @@ def delete_node(
     sys.exit(1)
 
 
+# TODO(cienet): naming/description, interrupt <-> SIGILL?
 @task
 def interrupt_worker_pod(
     workload_id: str, cluster_name: str, region: str, project_id: str
@@ -560,6 +563,7 @@ def interrupt_worker_pod(
   namespace = "default"
   target_worker_index = "0-1"
 
+  # TODO(cienet): use Kubernetes API instead of kubectl CLI + raw command
   interrupt_command = [
       "set -xue",
       "export KUBECONFIG=/tmp/kubeconfig",
@@ -589,6 +593,7 @@ def interrupt_worker_pod(
     )
 
 
+# TODO(cienet): refactor and handle in DAG, rather than a shared util
 @task.sensor(poke_interval=30, timeout=3600, mode="reschedule")
 def check_last_logs(
     project_id: str,
@@ -637,6 +642,7 @@ def check_last_logs(
   return False
 
 
+# TODO(cienet): refactor and handle in DAG, rather than a shared util
 @task.sensor(poke_interval=10, timeout=3600, mode="reschedule")
 def check_logs_exist(
     project_id: str,
