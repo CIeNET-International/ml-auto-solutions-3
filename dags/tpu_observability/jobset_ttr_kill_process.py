@@ -19,8 +19,9 @@ killing the main process inside a worker Pod.
 
 import datetime
 import logging
-import tempfile
 import os
+import random
+import tempfile
 
 from airflow import models
 from airflow.decorators import task
@@ -48,7 +49,7 @@ SCHEDULE = SchedulingHelper.arrange_schedule_time(DAG_ID)
 
 
 @task
-def kill_tpu_pod_workload(info: node_pool.Info, pod_name: str) -> None:
+def kill_tpu_pod_workload(info: node_pool.Info, running_pods: list) -> None:
   """
   Kills the python process on a single pod.
 
@@ -56,13 +57,15 @@ def kill_tpu_pod_workload(info: node_pool.Info, pod_name: str) -> None:
   python process inside the specified pod. It ignores errors if the pod
   has already been deleted to ensure pipeline continuity.
   """
+  target_pod = random.choice(running_pods)
+
   with tempfile.NamedTemporaryFile() as temp_config_file:
     env = os.environ.copy()
     env["KUBECONFIG"] = temp_config_file.name
 
     cmd = " && ".join([
         jobset.Command.get_credentials_command(info),
-        f"kubectl exec {pod_name} -n default -- pkill -9 -f python",
+        f"kubectl exec {target_pod} -n default -- pkill -9 -f python",
     ])
 
     operation_start_time = TimeUtil.from_datetime(
@@ -77,11 +80,6 @@ def kill_tpu_pod_workload(info: node_pool.Info, pod_name: str) -> None:
       raise e
 
   return operation_start_time
-
-
-@task
-def pick_first(items):
-  return items[0] if items else None
 
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
@@ -167,13 +165,11 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           workload_type=Workload.JAX_TPU_BENCHMARK,
       )
 
-      target_pod = pick_first(startup.running_pods)
-
       kill_tasks = kill_tpu_pod_workload.override(
           task_id="kill_tpu_pod_workload"
       )(
           info=cluster_info,
-          pod_name=target_pod,
+          running_pods=startup.running_pods,
       )
 
       wait_for_recovery = jobset.wait_for_jobset_recovered.override(
@@ -220,7 +216,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           jobset_name,
           create_node_pool,
           *startup.tasks,
-          target_pod,
           kill_tasks,
           wait_for_recovery,
           verify_duration,
