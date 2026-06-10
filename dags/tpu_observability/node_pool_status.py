@@ -88,7 +88,13 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       )
 
       problematic_node_pool_info = copy.deepcopy(node_pool_info)
-      problematic_node_pool_info.location = f"{node_pool_info.location}-c"
+      yaml_config = node_pool.gcs.load_yaml_from_gcs(GCS_CONFIG_PATH)
+      wrong_node_loc = (
+          yaml_config.get("dag", {})
+          .get(DAG_ID, {})
+          .get("wrong_node_location", "asia-east1-c")
+      )
+      problematic_node_pool_info.node_location = wrong_node_loc
       problematic_node_pool_info.node_pool_name = (
           f"{node_pool_info.node_pool_name}-x"
       )
