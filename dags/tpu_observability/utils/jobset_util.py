@@ -884,6 +884,7 @@ def operate_pod(
         (f"{base_command} {operation.extra_flags}").strip(),
     ]
 
+    current_time_utc = datetime.datetime.now(datetime.timezone.utc)
     try:
       subprocess.run_exec(" && ".join(commands), env=env)
     except WebSocketConnectionClosedException:
@@ -891,10 +892,10 @@ def operate_pod(
         logging.info(
             "Node reboot initiated: WebSocket connection closed as expected."
         )
-        return pod_name
+        return TimeUtil.from_datetime(current_time_utc)
       raise
 
-  return pod_name
+  return TimeUtil.from_datetime(current_time_utc)
 
 
 @task.sensor(poke_interval=30, timeout=900, mode="poke")
