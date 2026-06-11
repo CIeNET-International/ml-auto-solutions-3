@@ -983,7 +983,7 @@ def verify_recovery_duration(start_time: TimeUtil, end_time: TimeUtil):
     )
 
 
-@task.sensor(poke_interval=60, timeout=3600, mode="poke")
+@task.sensor(poke_interval=60, timeout=3600, mode="poke", retries=0)
 def wait_for_jobset_ttr_to_be_found(
     node_pool: node_pool_info,
     jobset_name: str,
