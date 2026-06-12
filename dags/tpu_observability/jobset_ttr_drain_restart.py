@@ -160,6 +160,10 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             node_pool_selector=selector,
         )
 
+      with TaskGroupWithTimeout(
+          group_id="test",
+          timeout=TEST_TIMEOUT,
+      ) as test:
         startup = jobset.create_jobset_startup_tasks(
             node_pool=cluster_info,
             jobset_config=jobset_config,
@@ -168,10 +172,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             workload_type=Workload.JAX_TPU_BENCHMARK,
         )
 
-      with TaskGroupWithTimeout(
-          group_id="test",
-          timeout=TEST_TIMEOUT,
-      ) as test:
         select_node = node_pool.draw_random_node.override(
             task_id="select_node"
         )(node_pool=cluster_info)
@@ -207,6 +207,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
         )
 
         chain(
+            *startup.tasks,
             select_node,
             drained_node,
             check_nodes_number_task,

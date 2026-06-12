@@ -128,6 +128,10 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             node_pool_selector=selector,
         )
 
+      with TaskGroupWithTimeout(
+          group_id="test",
+          timeout=TEST_TIMEOUT,
+      ) as test:
         startup = jobset.create_jobset_startup_tasks(
             node_pool=cluster_info,
             jobset_config=jobset_config,
@@ -136,10 +140,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             workload_type=Workload.JAX_TPU_BENCHMARK,
         )
 
-      with TaskGroupWithTimeout(
-          group_id="test",
-          timeout=TEST_TIMEOUT,
-      ) as test:
         deletion_start_time = jobset.delete_one_random_pod.override(
             task_id="delete_random_pod"
         )(
@@ -174,6 +174,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
         )
 
         chain(
+            *startup.tasks,
             deletion_start_time,
             wait_for_recovery,
             verify_duration,
