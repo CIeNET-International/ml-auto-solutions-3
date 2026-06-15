@@ -35,7 +35,9 @@ from airflow.models import BaseOperator
 from airflow.models.baseoperator import chain
 from airflow.models.xcom_arg import XComArg
 from airflow.sensors.base import PokeReturnValue
+from google.cloud import monitoring_v3
 from google.cloud.monitoring_v3 import types
+from google.protobuf.message import Message
 from websocket import WebSocketConnectionClosedException
 
 from dags.tpu_observability.utils import subprocess_util as subprocess
@@ -1071,6 +1073,8 @@ def verify_recovery_duration(start_time: TimeUtil, end_time: TimeUtil):
         "The 'jobset_time_to_recover' metric requires > 60s to be recorded. "
         "Failing fast to avoid waiting for a missing metric."
     )
+
+
 @task.sensor(poke_interval=60, timeout=3600, mode="poke")
 def wait_for_jobset_metrics(
     metric_name: JobSetHealthiness,
@@ -1120,17 +1124,22 @@ def wait_for_jobset_metrics(
       end_time=TimeUtil.now(),
   )
 
-  if not time_series or len(time_series) == 0 or not time_series[0].points:
+  if not time_series or not time_series[0].points:
     return False
 
-  point_value = time_series[0].points[0].value
-  if (
-      hasattr(point_value, "double_value")
-      and point_value.double_value is not None
-  ):
-    latest_value = point_value.double_value
+  point = time_series[0].points[0]
+  msg = monitoring_v3.TypedValue.pb(point.value)
+
+  if isinstance(msg, Message):
+    match msg.WhichOneof("value"):
+      case "double_value":
+        latest_value = msg.double_value
+      case "int64_value":
+        latest_value = msg.int64_value
+      case field_type:
+        raise ValueError(f"Unexpected metric value type: {field_type}")
   else:
-    latest_value = float(point_value.int64_value)
+    raise TypeError("Failed to parse point value as a Protobuf Message")
 
   logging.info(
       f"Metric {name_str} for JobSet {jobset_name}: "

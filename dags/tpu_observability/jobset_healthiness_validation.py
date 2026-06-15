@@ -15,6 +15,7 @@
 """A DAG to test "Jobset Suspended Healthiness" metric."""
 
 import datetime
+from datetime import timedelta
 
 from airflow import models
 from airflow.utils.trigger_rule import TriggerRule
@@ -24,6 +25,7 @@ from airflow.models.baseoperator import chain
 from dags import composer_env
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
+from dags.common.task_group_with_timeout import TaskGroupWithTimeout
 from dags.tpu_observability.utils.jobset_util import Workload, JobSetHealthiness
 from dags.tpu_observability.configs.common import (
     MachineConfigMap,
@@ -85,8 +87,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 
     # Keyword arguments are generated dynamically at runtime (pylint does not
     # know this signature).
-    with TaskGroup(  # pylint: disable=unexpected-keyword-arg
-        group_id=f"v{config.tpu_version.value}"
+    with TaskGroupWithTimeout(  # pylint: disable=unexpected-keyword-arg
+        group_id=f"v{config.tpu_version.value}",
+        timeout=timedelta(minutes=90),
     ):
       cluster_info = node_pool.build_node_pool_info_from_gcs_yaml(
           gcs_path=GCS_CONFIG_PATH,
@@ -117,24 +120,25 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           workload_type=Workload.JAX_TPU_BENCHMARK,
       )
 
-      with TaskGroup(group_id="validate_running_metrics") as validate_running:
-        running_metrics = [
-            (JobSetHealthiness.SPECIFIED, jobset_config.replicas),
-            (JobSetHealthiness.ACTIVE, jobset_config.replicas),
-            (JobSetHealthiness.READY, jobset_config.replicas),
-            (JobSetHealthiness.FAILED, 0),
-            (JobSetHealthiness.SUCCEEDED, 0),
-            (JobSetHealthiness.SUSPENDED, 0),
-        ]
-        for status, expected in running_metrics:
-          jobset.wait_for_jobset_metrics.override(
-              task_id=f"wait_{status.value}"
-          )(
-              metric_name=status,
-              expected_value=expected,
-              node_pool=cluster_info,
-              jobset_name=jobset_name,
-          )
+      running_metrics = [
+          (JobSetHealthiness.SPECIFIED, jobset_config.replicas),
+          (JobSetHealthiness.ACTIVE, jobset_config.replicas),
+          (JobSetHealthiness.READY, jobset_config.replicas),
+          (JobSetHealthiness.FAILED, 0),
+          (JobSetHealthiness.SUCCEEDED, 0),
+          (JobSetHealthiness.SUSPENDED, 0),
+      ]
+      validate_running_tasks = []
+      for status, expected in running_metrics:
+        t = jobset.wait_for_jobset_metrics.override(
+            task_id=f"validate_running_wait_{status.value}"
+        )(
+            metric_name=status,
+            expected_value=expected,
+            node_pool=cluster_info,
+            jobset_name=jobset_name,
+        )
+        validate_running_tasks.append(t)
 
       suspend_action = jobset.suspended_jobset.override(
           task_id="suspend_jobset"
@@ -144,22 +148,21 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           jobset_name=jobset_name,
       )
 
-      with TaskGroup(
-          group_id="validate_suspended_metrics"
-      ) as validate_suspended:
-        suspended_metrics = [
-            (JobSetHealthiness.ACTIVE, 0),
-            (JobSetHealthiness.SUSPENDED, jobset_config.replicas),
-        ]
-        for status, expected in suspended_metrics:
-          jobset.wait_for_jobset_metrics.override(
-              task_id=f"wait_after_suspend_{status.value}"
-          )(
-              metric_name=status,
-              expected_value=expected,
-              node_pool=cluster_info,
-              jobset_name=jobset_name,
-          )
+      suspended_metrics = [
+          (JobSetHealthiness.ACTIVE, 0),
+          (JobSetHealthiness.SUSPENDED, jobset_config.replicas),
+      ]
+      validate_suspended_tasks = []
+      for status, expected in suspended_metrics:
+        t = jobset.wait_for_jobset_metrics.override(
+            task_id=f"validate_suspended_wait_after_suspend_{status.value}"
+        )(
+            metric_name=status,
+            expected_value=expected,
+            node_pool=cluster_info,
+            jobset_name=jobset_name,
+        )
+        validate_suspended_tasks.append(t)
 
       resume_action = jobset.resume_jobset.override(task_id="resume_jobset")(
           node_pool=cluster_info,
@@ -167,61 +170,55 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           jobset_name=jobset_name,
       )
 
-      with TaskGroup(group_id="inject_and_validate_success") as success_test:
-        cleanup_for_success = jobset.end_workload.override(
-            task_id="cleanup_before_success_injection"
-        )(
-            node_pool=cluster_info,
-            jobset_config=jobset_config,
-            jobset_name=jobset_name,
-        )
+      cleanup_for_success = jobset.end_workload.override(
+          task_id="cleanup_before_success_injection"
+      )(
+          node_pool=cluster_info,
+          jobset_config=jobset_config,
+          jobset_name=jobset_name,
+      )
 
-        start_success_job = jobset.run_workload.override(
-            task_id="start_success_job"
-        )(
-            node_pool=cluster_info,
-            jobset_config=jobset_config,
-            jobset_name=jobset_name,
-            workload_type=SUCCESS_WORKLOAD,
-        )
+      start_success_job = jobset.run_workload.override(
+          task_id="start_success_job"
+      )(
+          node_pool=cluster_info,
+          jobset_config=jobset_config,
+          jobset_name=jobset_name,
+          workload_type=SUCCESS_WORKLOAD,
+      )
 
-        validate_succeeded_metric = jobset.wait_for_jobset_metrics.override(
-            task_id="wait_for_succeeded_count"
-        )(
-            metric_name=JobSetHealthiness.SUCCEEDED,
-            expected_value=jobset_config.replicas,
-            node_pool=cluster_info,
-            jobset_name=jobset_name,
-        )
+      validate_succeeded_metric = jobset.wait_for_jobset_metrics.override(
+          task_id="wait_for_succeeded_count"
+      )(
+          metric_name=JobSetHealthiness.SUCCEEDED,
+          expected_value=jobset_config.replicas,
+          node_pool=cluster_info,
+          jobset_name=jobset_name,
+      )
 
-        chain(cleanup_for_success, start_success_job, validate_succeeded_metric)
+      cleanup_for_failure = jobset.end_workload.override(
+          task_id="cleanup_before_failure_injection"
+      )(
+          node_pool=cluster_info,
+          jobset_config=jobset_config,
+          jobset_name=jobset_name,
+      )
 
-      with TaskGroup(group_id="inject_and_validate_failure") as failure_test:
-        cleanup_for_failure = jobset.end_workload.override(
-            task_id="cleanup_before_failure_injection"
-        )(
-            node_pool=cluster_info,
-            jobset_config=jobset_config,
-            jobset_name=jobset_name,
-        )
+      start_fail_job = jobset.run_workload.override(task_id="start_fail_job")(
+          node_pool=cluster_info,
+          jobset_config=jobset_config,
+          jobset_name=jobset_name,
+          workload_type=FAIL_WORKLOAD,
+      )
 
-        start_fail_job = jobset.run_workload.override(task_id="start_fail_job")(
-            node_pool=cluster_info,
-            jobset_config=jobset_config,
-            jobset_name=jobset_name,
-            workload_type=FAIL_WORKLOAD,
-        )
-
-        validate_failed_metric = jobset.wait_for_jobset_metrics.override(
-            task_id="wait_for_failed_count"
-        )(
-            metric_name=JobSetHealthiness.FAILED,
-            expected_value=jobset_config.replicas,
-            node_pool=cluster_info,
-            jobset_name=jobset_name,
-        )
-
-        chain(cleanup_for_failure, start_fail_job, validate_failed_metric)
+      validate_failed_metric = jobset.wait_for_jobset_metrics.override(
+          task_id="wait_for_failed_count"
+      )(
+          metric_name=JobSetHealthiness.FAILED,
+          expected_value=jobset_config.replicas,
+          node_pool=cluster_info,
+          jobset_name=jobset_name,
+      )
 
       cleanup_workload = jobset.end_workload.override(
           task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
@@ -244,12 +241,24 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           jobset_name,
           create_node_pool,
           *startup.tasks,
-          validate_running,
+          *validate_running_tasks,
           suspend_action,
-          validate_suspended,
+          *validate_suspended_tasks,
           resume_action,
-          success_test,
-          failure_test,
+          cleanup_for_success,
+      )
+
+      chain(
+          cleanup_for_success,
+          start_success_job,
+          validate_succeeded_metric,
+          cleanup_for_failure,
+      )
+
+      chain(
+          cleanup_for_failure,
+          start_fail_job,
+          validate_failed_metric,
           cleanup_workload,
           cleanup_node_pool,
       )
