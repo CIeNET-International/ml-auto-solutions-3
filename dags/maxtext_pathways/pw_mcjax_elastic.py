@@ -122,6 +122,7 @@ def generate_derived_parameters(dag_params: dict) -> dict:
   if dag_params["selected_model_names"] == "customized_model_name":
     derived_params["selected_model_names"] = dag_params["customized_model_name"]
 
+  # TODO(cienet): Refine the parameter parsing logic
   core_calc = dag_params["core_count"] // 4
   if dag_params["elastic_type"] == "Pause-resume":
     derived_params["elastic_min_slice_count"] = -1
@@ -135,6 +136,8 @@ def generate_derived_parameters(dag_params: dict) -> dict:
   return derived_params
 
 
+# TODO(cienet): Remove the temporary local code once these changes have been
+# merged into the maxtext repository.
 @task
 def generate_commands(
     dag_params: dict, derived_params: dict, recipe_instance: recipe_cfg.Recipe
@@ -215,6 +218,8 @@ def generate_commands(
   return commands
 
 
+# TODO(cienet): Remove the temporary local code once these changes have been
+# merged into the maxtext repository.
 @task
 def generate_commands_replica(
     dag_params: dict, derived_params: dict, recipe_instance: recipe_cfg.Recipe
@@ -382,6 +387,7 @@ def worker_pod_interruption(
           expected_count=i + 1,
       )
 
+      # TODO(cienet): Refine the mechanism to chain tasks
       _ = (
           wait_for_step
           >> trigger_interrupt
@@ -425,10 +431,13 @@ with models.DAG(
     # A DAG to run a MaxText {RECIPE_NAME} with elastic training on GKE.
 
     ### Description
-    Specify different models and number of slices to test the MaxText
-    {RECIPE_NAME} on different clusters. The DAG first generates recipe
-    command through UI parameters, then runs the workload, waits and monitors
-    the workload logs, and finally cleans up the workload.
+    Pause-resume refers to the process of halting the training execution,
+    saving its state (typically to a checkpoint), and later restarting
+    the training, loading the state from the checkpoint to continue.
+    Stop the training process when slices become unavailable, and starts it
+    again later on the new set inherently. This mechanism is crucial for
+    fault tolerance and elasticity. Resuming can occur on the same
+    set of resources or a different set.
 
     ### Prerequisites
     - This test requires an existing cluster.
@@ -466,6 +475,8 @@ with models.DAG(
       image_full_url=fetched_params["runner"],
   )
 
+  # TODO(cienet): Add comments or documentation to explain the expected log
+  # patterns.
   interruption_task = worker_pod_interruption(
       project_id=fetched_params["project"],
       region=calculated_params["region"],
@@ -521,6 +532,8 @@ replica_params.update({
         description="Number of slices",
     ),
     "runner": ui_params.Param(
+        # TODO(cienet): Replace with an official or production-ready image
+        # TODO(cienet): Use an image tag instead of the full SHA hash
         "gcr.io/cloud-tpu-multipod-dev/lidanny_rr_dag@sha256:08dfca25461e3f2fb736e7313a742e1ceea6123858c0aec5dfe43d0c51d14e38",
         type="string",
         title="Runner Image",
@@ -557,10 +570,17 @@ with models.DAG(
     # A DAG to run a MaxText {RECIPE_NAME} with elastic replica resize on GKE.
 
     ### Description
-    Specify different models and number of slices to test the MaxText
-    {RECIPE_NAME} on different clusters. The DAG first generates recipe
-    command through UI parameters, then runs the workload, waits and monitors
-    the workload logs, and finally cleans up the workload.
+    Replica-resize refers to the ability of the training job to dynamically
+    adjust the number of active TPU slices (replicas) it uses during execution.
+    Expected Behavior:
+    - A change in slice availability (failure or addition)
+    triggers an event. Often, a slice failure results in an error.
+    - The elastic training framework detects this change.
+    - Training on the previous configuration halts, and try to identify
+    the new set of healthy, available slice.
+    - The training job is automatically relaunched, loading the model
+    state from the most recent checkpoint. The relaunched job now runs on
+    the new set of available slices.
 
     ### Prerequisites
     - This test requires an existing cluster.
@@ -598,6 +618,8 @@ with models.DAG(
       image_full_url=fetched_params["runner"],
   )
 
+  # TODO(cienet): Add comments or documentation to explain the expected log
+  # patterns.
   interruption_task = worker_pod_interruption(
       project_id=fetched_params["project"],
       region=calculated_params["region"],
