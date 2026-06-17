@@ -97,6 +97,13 @@ def load_yaml_from_gcs(gcs_path: str) -> dict:
   """Loads and parses the DAG configuration YAML file from GCS."""
   logging.info(f"Attempting to load config from: {gcs_path}")
 
+  is_ci_env = os.getenv("GITHUB_ACTIONS", "false").lower() == "true"
+  if is_ci_env:
+    logging.info(
+        "In GitHub Actions, skip load_yaml_from_gcs and return an empty dict."
+    )
+    return {}
+
   if not gcs_path.startswith("gs://"):
     raise ValueError(
         f"Invalid GCS path: '{gcs_path}'. Path must start with 'gs://'."

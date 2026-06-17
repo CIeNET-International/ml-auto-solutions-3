@@ -21,6 +21,8 @@ from airflow.models import Variable
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
+from dags.common.quarantined_tests import safe_get_from_variable
+
 
 @dataclasses.dataclass
 class SshKeys:
@@ -59,9 +61,9 @@ def generate_ssh_keys() -> SshKeys:
 def obtain_persist_ssh_keys() -> SshKeys:
   """Obtain persistent SSH keys and user from Airflow Variables."""
   try:
-    user = Variable.get("os-login-ssh-user")
-    private_key = Variable.get("os-login-ssh-private-key")
-    public_key = Variable.get("os-login-ssh-public-key")
+    user = safe_get_from_variable("os-login-ssh-user", None)
+    private_key = safe_get_from_variable("os-login-ssh-private-key", None)
+    public_key = safe_get_from_variable("os-login-ssh-public-key", None)
   except KeyError as e:
     raise ValueError(
         f"Required Airflow Variable {e} is not set. "

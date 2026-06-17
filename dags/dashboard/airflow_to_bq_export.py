@@ -5,19 +5,20 @@ from airflow.models import Variable
 
 from dags import composer_env
 from dags.dashboard.configs import export_config
+from dags.common.quarantined_tests import safe_get_from_variable
 
 # Scheduled time
 SCHEDULED_TIME = "15 0 * * *" if composer_env.is_prod_env() else None
 
 
 # Load default config values from Airflow Variables
-DEFAULT_GCP_PROJECT_ID = Variable.get(
-    "gcp_target_project_id_default", default_var=""
+DEFAULT_GCP_PROJECT_ID = safe_get_from_variable(
+    "gcp_target_project_id_default", ""
 )
-DEFAULT_BQ_DATASET_ID = Variable.get(
-    "bq_target_dataset_id_default", default_var=""
+DEFAULT_BQ_DATASET_ID = safe_get_from_variable(
+    "bq_target_dataset_id_default", ""
 )
-DEFAULT_GCS_BUCKET = Variable.get("gcs_target_bucket_default", default_var="")
+DEFAULT_GCS_BUCKET = safe_get_from_variable("gcs_target_bucket_default", "")
 
 params = {
     "target_project_id": Param(
