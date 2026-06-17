@@ -97,6 +97,13 @@ def load_yaml_from_gcs(gcs_path: str) -> dict:
   """Loads and parses the DAG configuration YAML file from GCS."""
   logging.info(f"Attempting to load config from: {gcs_path}")
 
+  is_ci_env = os.getenv("GITHUB_ACTIONS", "false").lower() == "true"
+  if is_ci_env:
+    logging.info(
+        "In GitHub Actions, skip load_yaml_from_gcs and return an empty dict."
+    )
+    return {}
+
   if not gcs_path.startswith("gs://"):
     raise ValueError(
         f"Invalid GCS path: '{gcs_path}'. Path must start with 'gs://'."
@@ -106,8 +113,8 @@ def load_yaml_from_gcs(gcs_path: str) -> dict:
       gcs_path.lower().endswith(".yaml") or gcs_path.lower().endswith(".yml")
   ):
     logging.warning(
-        f"GCS path '{gcs_path}' does not have a typical YAML extension (.yaml or .yml). "
-        "Proceeding, but be aware this might not be a YAML file."
+        f"GCS path '{gcs_path}' does not have a typical YAML extension (.yaml "
+        "or .yml). Proceeding, but be aware this might not be a YAML file."
     )
 
   with tempfile.TemporaryDirectory() as tmpdir:
@@ -123,8 +130,9 @@ def load_yaml_from_gcs(gcs_path: str) -> dict:
 
     if not os.path.exists(temp_file_path):
       logging.error(
-          f"gcloud storage cp command completed, but '{temp_file_path}' was not created. "
-          "This often means the copy failed. Check gcloud storage stdout/stderr in logs."
+          f"gcloud storage cp command completed, but '{temp_file_path}' "
+          "was not created. This often means the copy failed. "
+          "Check gcloud storage stdout/stderr in logs."
       )
       raise FileNotFoundError(
           f"[Errno 2] Failed to download file from GCS path: {gcs_path}"
