@@ -11,13 +11,13 @@ import google
 from airflow import DAG
 from airflow.decorators import task
 from airflow.models.param import Param
-from airflow.models import Variable
 from airflow.operators.python import get_current_context
 from airflow.providers.google.suite.hooks.sheets import GSheetsHook
 from google.api_core.exceptions import NotFound
 from google.cloud import bigquery, container_v1
 
 from dags.common import test_owner
+from dags.common.quarantined_tests import safe_get_from_variable
 
 # --- Airflow DAG Schedule ---
 SCHEDULED_TIME = "0 */4 * * *"  # Per 4 hours
@@ -28,7 +28,7 @@ DEFAULT_DATASET_ID = "amy_xlml_poc_prod"
 
 # --- Google Sheets Config ---
 GSPREAD_INSERT_ENABLED = True
-DEFAULT_GSPREAD_SHEET_ID = Variable.get("buganizer_sheet_id", default_var="")
+DEFAULT_GSPREAD_SHEET_ID = safe_get_from_variable("buganizer_sheet_id", "")
 GSPREAD_WORKSHEET_NAME = "unhealthy_clusters"
 
 
