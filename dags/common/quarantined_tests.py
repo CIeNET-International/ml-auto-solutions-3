@@ -16,7 +16,6 @@
 
 import dataclasses
 import fnmatch
-import logging
 import os
 from typing import Set
 
@@ -73,12 +72,13 @@ def safe_get_from_variable(key: str, default_var: str):
   Check whether the current runtime is GitHub Actions. Skip retrieving variables
   in GitHub Actions to avoid excessive log output.
   """
-  value = default_var
   if is_ci_environment():
-    logging.info("In GitHub Actions, skip getting variables")
+    raise RuntimeError(
+        f"CI Environment Blocked: Fetching Airflow Variable '{key}' "
+        "is not allowed in GitHub Actions."
+    )
   else:
-    value = Variable.get(key, default_var=default_var)
-  return value
+    return Variable.get(key, default_var=default_var)
 
 
 """
