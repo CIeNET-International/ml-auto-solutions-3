@@ -14,16 +14,17 @@
 
 """Functions for GCS Bucket"""
 
+from absl import logging
 import os
 import re
 import tempfile
 from typing import List
+import yaml
 
-from absl import logging
 from airflow.decorators import task
 from airflow.hooks.subprocess import SubprocessHook
 from airflow.providers.google.cloud.operators.gcs import GCSHook
-import yaml
+from dags.common.quarantined_tests import is_ci_environment
 
 
 def obtain_file_list(gcs_path: str) -> List[str]:
@@ -97,8 +98,9 @@ def load_yaml_from_gcs(gcs_path: str) -> dict:
   """Loads and parses the DAG configuration YAML file from GCS."""
   logging.info(f"Attempting to load config from: {gcs_path}")
 
-  is_ci_env = os.getenv("GITHUB_ACTIONS", "false").lower() == "true"
-  if is_ci_env:
+  # Workflows triggered by fork PRs do not have access to upstream secrets.
+  # Bypass GCS loading strictly to allow the CI workflow to pass successfully.
+  if is_ci_environment():
     logging.info(
         "In GitHub Actions, skip load_yaml_from_gcs and return an empty dict."
     )
