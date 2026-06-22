@@ -14,13 +14,12 @@
 
 """Utilities to construct configs for solutionsteam_jax_bite DAG."""
 
-from dags.common import test_owner
+import datetime
+from typing import Iterable, Optional
+
+from dags.common.vm_resource import Project, XpkClusters
 from xlml.apis import gcp_config, metric_config, task, test_config
 from xlml.apis.xpk_cluster_config import XpkClusterConfig
-from dags import gcs_bucket
-from dags.common.vm_resource import TpuVersion, Project, XpkClusters, GpuVersion, CpuVersion, Zone
-from typing import Iterable, Optional
-import datetime
 
 clusters = {
     # accelerator: cluster names
@@ -49,7 +48,9 @@ def get_gke_config(
     test_owner: str,
     cluster: XpkClusterConfig = XpkClusters.TPU_V4_8_MAXTEXT_CLUSTER,
     num_slices: int = 1,
-    dataset_name: metric_config.DatasetOption = metric_config.DatasetOption.XLML_DATASET,
+    dataset_name: metric_config.DatasetOption = (
+        metric_config.DatasetOption.XLML_DATASET
+    ),
     dataset_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
     composer_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
     tensorboard_summary_config: Optional[metric_config.SummaryConfig] = None,
