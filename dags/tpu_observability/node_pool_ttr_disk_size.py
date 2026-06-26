@@ -145,7 +145,6 @@ with models.DAG(
         )(node_pool=node_pool_info)
 
       chain(
-          node_pool_info,
           pre_test,
           test,
           post_test,

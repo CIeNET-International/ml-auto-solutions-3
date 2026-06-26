@@ -221,8 +221,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
         )(node_pool=problematic_node_pool_info)
 
       chain(
-          node_pool_info,
-          problematic_node_pool_info,
           pre_test,
           test,
           post_test,
