@@ -117,6 +117,20 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             node_pool=node_pool_info,
         )
 
+        # Intentionally create a node pool with problematic configurations
+        # to validate that it enters the ERROR state.
+        task_id = "create_problematic_node_pool_info"
+        create_problematic_node_pool_info = node_pool.create.override(
+            task_id=task_id,
+            owner=test_owner.YUNA_T,
+        )(
+            node_pool=problematic_node_pool_info,
+            # The failure is intentionally ignored because we want to validate
+            # that the status of the node pool (which fails to be created) is
+            # "ERROR".
+            ignore_failure=True,
+        )
+
         task_id = "wait_for_provisioning"
         wait_for_provisioning = node_pool.wait_for_status.override(
             task_id=task_id
@@ -165,30 +179,12 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             node_pool=node_pool_info, status=node_pool.Status.STOPPING
         )
 
-        # Intentionally create a node pool with problematic configurations
-        # to validate that it enters the ERROR state.
-        task_id = "create_problematic_node_pool_info"
-        create_problematic_node_pool_info = node_pool.create.override(
-            task_id=task_id,
-            owner=test_owner.YUNA_T,
-        )(
-            node_pool=problematic_node_pool_info,
-            # The failure is intentionally ignored because we want to validate
-            # that the status of the node pool (which fails to be created) is
-            # "ERROR".
-            ignore_failure=True,
-        )
-
         task_id = "wait_for_error"
-        wait_for_error = node_pool.wait_for_status.override(task_id=task_id)(
-            node_pool=problematic_node_pool_info, status=node_pool.Status.ERROR
-        )
-
-        task_id = "cleanup_wrong_node_pool"
-        cleanup_wrong_node_pool = node_pool.delete.override(
-            task_id=task_id, trigger_rule=TriggerRule.ALL_DONE
-        )(node_pool=problematic_node_pool_info).as_teardown(
-            setups=create_problematic_node_pool_info,
+        validate_problematic_node_pool_enter_error_state = (
+            node_pool.wait_for_status.override(task_id=task_id)(
+                node_pool=problematic_node_pool_info,
+                status=node_pool.Status.ERROR,
+            )
         )
 
         chain(
@@ -202,7 +198,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 
         chain(
             create_problematic_node_pool_info,
-            wait_for_error,
+            validate_problematic_node_pool_enter_error_state,
         )
 
       with TaskGroupWithTimeout(
