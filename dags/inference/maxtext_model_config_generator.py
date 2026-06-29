@@ -14,9 +14,64 @@
 
 """A helper to generate maxtext model configs."""
 
+from dataclasses import dataclass
+from enum import Enum
 from dags.common.vm_resource import TpuVersion, Zone, Project, V5_NETWORKS, V5E_SUBNETWORKS, V5P_SUBNETWORKS, RuntimeVersion, V6E_GCE_NETWORK, V6E_GCE_SUBNETWORK
 from dags.inference.configs import jetstream_benchmark_serving_gce_config
 from dags.multipod.configs.common import SetupMode
+
+
+@dataclass
+class TpuResource:
+  tpu_version_name: TpuVersion
+  runtime_version: str
+  project_name: str
+  zone: str
+  network: str
+  subnetwork: str
+
+
+class TpuConfig(Enum):
+  V5E = TpuResource(
+      tpu_version_name=TpuVersion.V5E,
+      runtime_version=RuntimeVersion.V2_ALPHA_TPUV5_LITE.value,
+      project_name=Project.TPU_PROD_ENV_AUTOMATED.value,
+      zone=Zone.US_EAST1_C.value,
+      network=V5_NETWORKS,
+      subnetwork=V5E_SUBNETWORKS,
+  )
+  V5P = TpuResource(
+      tpu_version_name=TpuVersion.V5P,
+      runtime_version=RuntimeVersion.V2_ALPHA_TPUV5.value,
+      project_name=Project.TPU_PROD_ENV_AUTOMATED.value,
+      zone=Zone.US_EAST5_A.value,
+      network=V5_NETWORKS,
+      subnetwork=V5P_SUBNETWORKS,
+  )
+  TRILLIUM = TpuResource(
+      tpu_version_name=TpuVersion.TRILLIUM,
+      runtime_version=RuntimeVersion.V2_ALPHA_TPUV6.value,
+      project_name=Project.TPU_PROD_ENV_AUTOMATED.value,
+      zone=Zone.US_EAST5_A.value,
+      network=V6E_GCE_NETWORK,
+      subnetwork=V6E_GCE_SUBNETWORK,
+  )
+  temp_V5E = TpuResource(
+      tpu_version_name=TpuVersion.V5E,
+      runtime_version=RuntimeVersion.V2_ALPHA_TPUV5_LITE.value,
+      project_name="cienet-cmcs",
+      zone=Zone.US_WEST4_A.value,
+      network="projects/cienet-cmcs/global/networks/mas-test",
+      subnetwork="projects/cienet-cmcs/regions/us-west4/subnetworks/mas-test",
+  )
+  temp_TRILLIUM = TpuResource(
+      tpu_version_name=TpuVersion.TRILLIUM,
+      runtime_version=RuntimeVersion.V2_ALPHA_TPUV6.value,
+      project_name=Project.TPU_PROD_ENV_AUTOMATED.value,
+      zone=Zone.SOUTHAMERICA_WEST1_A.value,
+      network=V5_NETWORKS,
+      subnetwork="projects/tpu-prod-env-automated/regions/southamerica-west1-a/subnetworks/mas-test",
+  )
 
 
 def generate_model_configs(
@@ -99,37 +154,20 @@ def generate_model_configs(
 
   test_name = f"{test_name_prefix}-{test_run_tag}"
 
-  if tpu_version == TpuVersion.V5E:
-    # v5e benchmarks
-    project_name = Project.TPU_PROD_ENV_AUTOMATED.value
-    zone = Zone.US_EAST1_C.value
-    network = V5_NETWORKS
-    subnetwork = V5E_SUBNETWORKS
-    runtime_version = RuntimeVersion.V2_ALPHA_TPUV5_LITE.value
-  elif tpu_version == TpuVersion.V5P:
-    zone = Zone.US_EAST5_A.value
-    runtime_version = RuntimeVersion.V2_ALPHA_TPUV5.value
-    project_name = Project.TPU_PROD_ENV_AUTOMATED.value
-    network = V5_NETWORKS
-    subnetwork = V5P_SUBNETWORKS
-  elif tpu_version == TpuVersion.TRILLIUM:
-    zone = Zone.US_EAST5_A.value
-    runtime_version = RuntimeVersion.V2_ALPHA_TPUV6.value
-    project_name = Project.TPU_PROD_ENV_AUTOMATED.value
-    network = V6E_GCE_NETWORK
-    subnetwork = V6E_GCE_SUBNETWORK
+  config = tpu_version.value
+
   jetstream_benchmark_serving = (
       jetstream_benchmark_serving_gce_config.get_config(
-          tpu_version=tpu_version,
+          tpu_version=config.tpu_version_name,
           tpu_cores=tpu_cores,
-          tpu_zone=zone,
+          tpu_zone=config.zone,
           time_out_in_min=sweep_model_configs["time_out_in_min"],
           test_name=test_name,
           test_mode=SetupMode.STABLE,
-          project_name=project_name,
-          runtime_version=runtime_version,
-          network=network,
-          subnetwork=subnetwork,
+          project_name=config.project_name,
+          runtime_version=config.runtime_version,
+          network=config.network,
+          subnetwork=config.subnetwork,
           is_tpu_reserved=True,
           model_configs=model_configs,
           maxtext_branch=model_configs["maxtext_branch"],
