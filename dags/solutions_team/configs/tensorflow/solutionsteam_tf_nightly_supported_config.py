@@ -51,7 +51,7 @@ def get_tf_keras_config(
   keras_test_name = f"tf_keras_api_{test_name}"
   benchmark_id = f"{keras_test_name}-v{tpu_version.value}-{tpu_cores}"
   # Add default_var to pass DAG check
-  # TODO(ranran): replace Variable.get() to XCOM when it applies
+  # TODO(ranran): replace variable get usage to XCOM when it applies
   tpu_name = safe_get_from_variable(benchmark_id, None) if is_pod else "local"
   env_variable = (
       common.export_env_variables(tpu_name, is_pod, is_pjrt)
@@ -147,7 +147,7 @@ def get_tf_resnet_config(
   test_name = "tf_resnet_imagenet"
   benchmark_id = f"{test_name}-v{tpu_version.value}-{tpu_cores}"
   # Add default_var to pass DAG check
-  # TODO(ranran): replace Variable.get() to XCOM when it applies
+  # TODO(ranran): replace variable get usage to XCOM when it applies
   tpu_name = safe_get_from_variable(benchmark_id, None) if is_pod else "local"
   env_variable = common.export_env_variables(tpu_name, is_pod, is_pjrt)
 
@@ -213,7 +213,7 @@ def get_tf_dlrm_v1_config(
   )
 
   # Add default_var to pass DAG check
-  # TODO(ranran): replace Variable.get() to XCOM when it applies
+  # TODO(ranran): replace variable get usage to XCOM when it applies
   test_name = "tf_dlrm_criteo"
   benchmark_id = f"{test_name}-v{tpu_version.value}-{tpu_cores}"
   tpu_name = safe_get_from_variable(benchmark_id, None) if is_pod else "local"
@@ -385,7 +385,7 @@ def get_tf_dlrm_v2_config(
   )
 
   # Add default_var to pass DAG check
-  # TODO(ranran): replace Variable.get() to XCOM when it applies
+  # TODO(ranran): replace variable get usage to XCOM when it applies
   test_name = "tf_dlrm_criteo"
   benchmark_id = f"{test_name}-v{tpu_version.value}-{tpu_cores}"
   tpu_name = safe_get_from_variable(benchmark_id, None) if is_pod else "local"
