@@ -48,6 +48,15 @@ if [[ -z "${CHANGED_PY_FILES}" ]]; then
   exit 1
 fi
 
+IF_VARIABLE_GET="$(echo "${CHANGED_PY_FILES}" | grep -v "dags/common/quarantined_tests.py" | xargs grep -n "Variable.get" || true)"
+
+if [[ -n "${IF_VARIABLE_GET}" ]]; then
+  echo "${IF_VARIABLE_GET}" | awk -F: '{
+    print $1 ":" $2 ": [code-style] native '\''Variable.get()'\'' is prohibited. Please use '\''safe_get_from_variable()'\''."
+  }'
+  exit 1
+fi
+
 pyink ${CHANGED_PY_FILES} --pyink-indentation=2 --pyink-use-majority-quotes --line-length=80 --check --diff
 
 pylint ${CHANGED_PY_FILES} --fail-under=9.6 --disable=E1123
