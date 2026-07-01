@@ -15,6 +15,7 @@ from airflow.utils.task_group import TaskGroup
 
 from dags import composer_env
 from dags.common import test_owner
+from dags.common.quarantined_tests import safe_get_from_variable
 from dags.common.vm_resource import XpkClusters
 from dags.multipod.configs import gke_config
 from dags.post_training.util import validation_util, test_config_util
@@ -86,7 +87,7 @@ with models.DAG(
       ],
   )
   # HF token retrieved from Airflow Variables for secure credential management
-  HF_TOKEN_LLAMA3_1 = models.Variable.get("HF_TOKEN_CIENET", None)
+  HF_TOKEN_LLAMA3_1 = safe_get_from_variable("HF_TOKEN_CIENET", None)
 
   tests = []
   for mode, image in test_config_util.POST_TRAINING_DOCKER_IMAGES:

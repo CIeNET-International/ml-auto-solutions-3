@@ -12,6 +12,7 @@ from airflow import models
 from dags import composer_env
 from dags import gcs_bucket
 from dags.common import test_owner
+from dags.common.quarantined_tests import safe_get_from_variable
 from dags.post_training.util import notebook_util
 
 
@@ -63,7 +64,7 @@ with models.DAG(
     concurrency=1,
 ) as dag:
   # HF token retrieved from Airflow Variables
-  HF_TOKEN_LLAMA31 = models.Variable.get("HF_TOKEN_CIENET", None)
+  HF_TOKEN_LLAMA31 = safe_get_from_variable("HF_TOKEN_CIENET", None)
 
   # Test configuration
   test_run_name = "llama31_rl_notebook"
