@@ -75,10 +75,11 @@ def validate_training(
         project_id=config.cluster.project,
         location=zone_to_region(config.cluster.zone),
         cluster_name=config.cluster.name,
-        text_filter=(
-            f"(jsonPayload.message: \"'event_type': 'save'\" "
-            f"AND jsonPayload.message: \"'step': {steps}\")"
-        ),
+        text_filters=[
+            f"'event_type': 'save'.*'step': {steps}",
+            f"'step': {steps}.*'event_type': 'save'"
+        ],
+        filter_mode=validation_util.FilterMode.textPayload | validation_util.FilterMode.jsonPayload_message,
         namespace="default",
         container_name="jax-tpu",
         pod_pattern=f"{config.short_id}.*",

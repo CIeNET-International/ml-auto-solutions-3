@@ -16,6 +16,7 @@ from google.cloud import storage
 from dags.orbax.util.validation_util import (
     generate_timestamp,
     validate_log_exist,
+    FilterMode,
 )
 
 
@@ -78,4 +79,5 @@ __all__ = [
     "generate_timestamp",
     "validate_log_exist",
     "upload_to_vertex_ai",
+    "FilterMode",
 ]

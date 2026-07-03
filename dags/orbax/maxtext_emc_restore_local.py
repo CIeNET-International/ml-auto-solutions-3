@@ -166,7 +166,8 @@ with models.DAG(
             project_id=test_config.cluster.project,
             location=zone_to_region(test_config.cluster.zone),
             cluster_name=test_config.cluster.name,
-            text_filter=" AND ".join(log_filters),
+            text_filters=log_filters,
+            filter_mode=validation_util.FilterMode.textPayload | validation_util.FilterMode.jsonPayload_message,
             start_time=start_time,
             end_time=end_time,
         )

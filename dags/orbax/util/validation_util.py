@@ -4,11 +4,16 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 from absl import logging
 import re
+from enum import Flag, auto
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from google.cloud import logging as logging_api
 from xlml.apis import gcs
+
+class FilterMode(Flag):
+  textPayload = auto()
+  jsonPayload_message = auto()
 
 
 @task
@@ -60,11 +65,8 @@ def validate_checkpoint_at_steps_are_saved(
       location=location,
       cluster_name=cluster_name,
       pod_pattern=pod_pattern,
-      text_filter=(
-          "\"'event_type': 'save'\" AND "
-          f'(textPayload=~"{log_pattern}" OR '
-          f'jsonPayload.message=~"{log_pattern}")'
-      ),
+      text_filters=[r"'event_type': 'save'"],
+      filter_mode=FilterMode.textPayload | FilterMode.jsonPayload_message,
       start_time=start_time,
       end_time=end_time,
   )
@@ -137,7 +139,8 @@ def validate_log_with_gcs(
     namespace: str = "default",
     pod_pattern: str = ".*",
     container_name: Optional[str] = None,
-    text_filter: Optional[str] = None,
+    text_filters: Optional[list[str]] = None,
+    filter_mode: Optional["FilterMode"] = None,
     start_time: Optional[datetime] = None,
     end_time: Optional[datetime] = None,
 ) -> None:
@@ -158,8 +161,8 @@ def validate_log_with_gcs(
     namespace: The Kubernetes namespace. Defaults to "default".
     pod_pattern: A glob pattern to match pod names. Defaults to "*".
     container_name: An optional container name to filter logs by.
-    text_filter: An optional string to filter log entries by their
-      `textPayload`.
+    text_filters: An optional list of strings to filter log entries.
+    filter_mode: A FilterMode flag to specify which payload fields to search.
     start_time: The start time for log retrieval.
     end_time: The end time for log retrieval.
 
@@ -181,7 +184,8 @@ def validate_log_with_gcs(
       namespace=namespace,
       pod_pattern=pod_pattern,
       container_name=container_name,
-      text_filter=f'textPayload=~"{text_filter}"',
+      text_filters=text_filters,
+      filter_mode=filter_mode,
       start_time=start_time,
       end_time=end_time,
   )
@@ -352,7 +356,8 @@ def list_log_entries(
     namespace: str = "default",
     pod_pattern: str = ".*",
     container_name: Optional[str] = None,
-    text_filter: Optional[str] = None,
+    text_filters: Optional[list[str]] = None,
+    filter_mode: Optional["FilterMode"] = None,
     start_time: Optional[datetime] = None,
     end_time: Optional[datetime] = None,
 ) -> list[logging_api.LogEntry]:
@@ -373,8 +378,8 @@ def list_log_entries(
     namespace: Kubernetes namespace (defaults to "default")
     pod_pattern: Pattern to match pod names (defaults to "*")
     container_name: Optional container name to filter logs
-    text_filter: Optional comma-separated string to
-      filter log entries by textPayload content
+    text_filters: Optional list of strings to filter log entries
+    filter_mode: Optional FilterMode to specify which payload fields to search
     start_time: Optional start time for log retrieval
       (defaults to 12 hours ago)
     end_time: Optional end time for log retrieval (defaults to now)
@@ -408,8 +413,15 @@ def list_log_entries(
 
   if container_name:
     conditions.append(f'resource.labels.container_name="{container_name}"')
-  if text_filter:
-    conditions.append(f"{text_filter}")
+  if text_filters and filter_mode is not None:
+    filters = []
+    for txt in text_filters:
+      if FilterMode.textPayload in filter_mode:
+        filters.append(f'textPayload=~"{txt}"')
+      if FilterMode.jsonPayload_message in filter_mode:
+        filters.append(f'jsonPayload.message=~"{txt}"')
+    if filters:
+      conditions.append(f"({' OR '.join(filters)})")
 
   log_filter = " AND ".join(conditions)
 
@@ -425,7 +437,8 @@ def validate_log_exist(
     namespace: str = "default",
     pod_pattern: str = ".*",
     container_name: Optional[str] = None,
-    text_filter: Optional[str] = None,
+    text_filters: Optional[list[str]] = None,
+    filter_mode: Optional["FilterMode"] = None,
     start_time: Optional[datetime] = None,
     end_time: Optional[datetime] = None,
 ) -> None:
@@ -438,7 +451,8 @@ def validate_log_exist(
       namespace=namespace,
       pod_pattern=pod_pattern,
       container_name=container_name,
-      text_filter=text_filter,
+      text_filters=text_filters,
+      filter_mode=filter_mode,
       start_time=start_time,
       end_time=end_time,
   )
@@ -460,21 +474,24 @@ def validate_restored_correct_checkpoint(
 ) -> None:
   """Validate the restored step is in the expected range."""
 
+  reg_save_event = r"'event_type': 'save'"
+  reg_restor_event = r"'event_type': '(emergency_)?restore'"
+  reg_restoring = r"restoring from this run's directory step (\d+)"
+
   entries = list_log_entries(
       project_id=project_id,
       location=location,
       cluster_name=cluster_name,
       namespace="default",
       pod_pattern=pod_pattern,
-      text_filter=(
-          "(textPayload:\"'event_type'\" OR jsonPayload.message:\"'event_type'\")"
-      ),
+      text_filters=[reg_save_event, reg_restor_event, reg_restoring],
+      filter_mode=FilterMode.textPayload | FilterMode.jsonPayload_message,
       start_time=start_time,
       end_time=end_time,
   )
 
   if not entries:
-    raise AirflowFailException("No event_type found in the log.")
+    raise AirflowFailException("No event_type or restore log found in the log.")
 
   local_saved_steps_before_restore = []
   for entry in entries:
@@ -488,7 +505,7 @@ def validate_restored_correct_checkpoint(
       logging.warning(f"Could not extract message from log entry: {entry}")
       continue
 
-    if re.search(r"'event_type': 'save'", message):
+    if re.search(reg_save_event, message):
       saved_step_match = re.search(r"'step': (\d+)", message)
       if not saved_step_match:
         raise AirflowFailException(
@@ -497,7 +514,7 @@ def validate_restored_correct_checkpoint(
 
       local_saved_steps_before_restore.append(int(saved_step_match.group(1)))
 
-    elif re.search(r"'event_type': '(emergency_)?restore'", message):
+    elif re.search(reg_restor_event, message) or re.search(reg_restoring, message):
       logging.info("Found restore event: %s", message)
       logging.info(
           "Saved steps before restore: %s", local_saved_steps_before_restore
@@ -505,7 +522,7 @@ def validate_restored_correct_checkpoint(
 
       restored_step_match = re.search(
           r"'step':\s*(?:np\.int32\()?(\d+)", message
-      )
+      ) or re.search(reg_restoring, message)
       restored_step = (
           int(restored_step_match.group(1)) if restored_step_match else None
       )
@@ -585,7 +602,8 @@ def validate_replicator_gcs_restore_log(
       namespace=namespace,
       pod_pattern=pod_pattern,
       container_name=container_name,
-      text_filter="Restoring from backup",
+      text_filters=["Restoring from backup"],
+      filter_mode=FilterMode.textPayload | FilterMode.jsonPayload_message,
       start_time=start_time,
       end_time=end_time,
   )
@@ -680,7 +698,8 @@ def validate_replicator_gcs_backup_log(
       namespace=namespace,
       pod_pattern=pod_pattern,
       container_name=container_name,
-      text_filter=f'textPayload=~"{step_regex}"',
+      text_filters=[step_regex],
+      filter_mode=FilterMode.textPayload,
       start_time=start_time,
       end_time=end_time,
   )
@@ -737,7 +756,8 @@ def validate_checkpoints_save_regular_axlearn(
       location=location,
       cluster_name=cluster_name,
       pod_pattern=pod_pattern,
-      text_filter=f'jsonPayload.message=~"{log_pattern}"',
+      text_filters=[log_pattern],
+      filter_mode=FilterMode.jsonPayload_message,
       start_time=start_time,
       end_time=end_time,
   )
