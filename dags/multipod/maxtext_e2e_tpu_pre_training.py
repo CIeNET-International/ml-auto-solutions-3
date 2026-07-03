@@ -16,9 +16,12 @@
 A DAG to run MaxText E2E TPU Pre-Training tests.
 """
 import datetime
+
 from airflow import models
+from airflow.models.baseoperator import chain
 from airflow.models.param import Param
 from airflow.utils.task_group import TaskGroup
+
 from dags.common import test_owner
 from dags.common.quarantined_tests import safe_get_from_variable
 from dags.common.vm_resource import XpkClusters
@@ -46,12 +49,19 @@ with models.DAG(
   test_models = {
       "gemma3-4b": {
           "checkpoint_conversion": {
-              "to_maxtext": "bash tests/end_to_end/tpu/gemma3/4b/test_gemma3_to_mt.sh",
-              "to_huggingface": "bash tests/end_to_end/tpu/gemma3/4b/test_gemma3_to_hf.sh",
+              "to_maxtext": (
+                  "bash tests/end_to_end/tpu/gemma3/4b/test_gemma3_to_mt.sh"
+              ),
+              "to_huggingface": (
+                  "bash tests/end_to_end/tpu/gemma3/4b/test_gemma3_to_hf.sh"
+              ),
           },
           "training": {
               "command": "bash tests/end_to_end/tpu/gemma3/4b/test_gemma3.sh",
-              "maxtext_ckpt_path": "gs://runner-maxtext-logs/gemma3-4b/train/{run_name}/checkpoints/4/items",
+              "maxtext_ckpt_path": (
+                  "gs://runner-maxtext-logs/gemma3-4b/train/"
+                  "{run_name}/checkpoints/4/items"
+              ),
           },
       },
   }
@@ -88,7 +98,8 @@ with models.DAG(
           run_name=run_name
       )
       convert_to_huggingface_cmd = (f"export HF_TOKEN={HF_TOKEN}",) + (
-          f"{test_config['checkpoint_conversion']['to_huggingface']} {run_name} {model_path}",
+          f"{test_config['checkpoint_conversion']['to_huggingface']} "
+          f"{run_name} {model_path}",
       )
       convert_to_huggingface_task = gke_config.get_gke_config(
           time_out_in_min=60,
@@ -99,4 +110,4 @@ with models.DAG(
           test_owner=test_owner.SURBHI_J,
       ).run(skip_post_process=True)
 
-      convert_to_maxtext_task >> training_task >> convert_to_huggingface_task
+      chain(convert_to_maxtext_task, training_task, convert_to_huggingface_task)
