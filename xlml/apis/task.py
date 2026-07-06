@@ -581,7 +581,7 @@ class XpkTask(BaseTask):
           zone=self.task_gcp_config.zone,
           cluster_name=self.task_test_config.cluster_name,
           xpk_branch=xpk_branch,
-      ).as_teardown(setups=launch_workload)
+      ).as_teardown(setups=launch_workload, on_failure_fail_dagrun=True)
 
       if expect_reach_to_step is not None:
         run_node_interruption = xpk.delete_node.override(
