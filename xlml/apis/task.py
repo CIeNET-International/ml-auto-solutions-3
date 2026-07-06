@@ -691,10 +691,10 @@ class XpkTask(BaseTask):
         maybe_check_file_exists = task_path_decider(check_file_exists)
 
         _ = (
-              wait_for_workload_start
-              >> wait_for_workload_to_reach_step
-              >> maybe_check_file_exists
-          )
+            wait_for_workload_start
+            >> wait_for_workload_to_reach_step
+            >> maybe_check_file_exists
+        )
         _ = maybe_check_file_exists >> [wait_for_file_to_exist, do_nothing]
 
       return group
