@@ -42,7 +42,7 @@ class BaseTask(abc.ABC):
     Returns:
       A DAG node that executes this test.
     """
-    ...
+    pass
 
   def run_with_quarantine(self, quarantine_task_group):
     """Run a test job. If the test job is flaky, wrap it in a special task grop.
@@ -67,7 +67,7 @@ def run_queued_resource_test(
     tpu_name_env_var: bool = False,
     all_workers: bool = True,
     skip_post_process: bool = False,
-    custom_env: dict[str, str] = {},
+    custom_env: Optional[dict[str, str]] = None,
 ):
   """This is a class to set up tasks for TPU provisioned by Queued Resource.
 
@@ -93,6 +93,9 @@ def run_queued_resource_test(
       A task group with the following tasks chained: provision, run_model,
       post_process and clean_up.
   """
+
+  if custom_env is None:
+    custom_env = {}
 
   with TaskGroup(
       group_id=task_test_config.benchmark_id, prefix_group_id=True
@@ -324,7 +327,8 @@ class XpkTask(BaseTask):
   task_gcp_config: gcp_config.GCPConfig
   task_metric_config: Optional[metric_config.MetricConfig] = None
   workload_provision_timeout: datetime.timedelta = datetime.timedelta(
-      # Set the provision timeout from 300 to 60 minutes for decreasing the duration of failed tasks
+      # Set the provision timeout from 300 to 60 minutes for decreasing the
+      # duration of failed tasks
       minutes=60
   )
 
@@ -658,7 +662,8 @@ class XpkTask(BaseTask):
       )
       _ = run_workload >> wait_for_workload_start
 
-      # If we are expecting to reach a step (Node Interruption path), add the monitoring tasks
+      # If we are expecting to reach a step (Node Interruption path), add the
+      # monitoring tasks
       if expect_reach_to_step is not None:
         wait_for_workload_to_reach_step = (
             xpk.wait_for_workload_reach_step.override(
@@ -675,7 +680,9 @@ class XpkTask(BaseTask):
         wait_for_file_to_exist = gcs.wait_for_file_to_exist.override(
             task_id=task_id_wait_file_exist
         )(
-            file_path=f"{gcs_path}/{str(expect_reach_to_step)}/commit_success.txt",
+            file_path=(
+                f"{gcs_path}/{str(expect_reach_to_step)}/commit_success.txt"
+            ),
         )
         task_id_do_nothing = "do_nothing"
         do_nothing = EmptyOperator(task_id=task_id_do_nothing)
