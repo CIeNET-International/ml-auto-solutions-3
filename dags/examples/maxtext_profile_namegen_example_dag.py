@@ -31,8 +31,7 @@ BASE_OUTPUT_PATH = "gs://runner-maxtext-logs"
 
 docker_image = {
     "stable": (
-        "gcr.io/tpu-prod-env-multipod/"
-        "maxtext_jax_stable_stack:2025-05-20"
+        "gcr.io/tpu-prod-env-multipod/" "maxtext_jax_stable_stack:2025-05-20"
     ),
 }
 
@@ -63,8 +62,7 @@ test_models_tpu = {
         "cluster": XpkClusters.TPU_V4_128_CLUSTER,
         "time_out_in_min": 60,
         "train_command": [
-            base_command
-            + " steps=10 profiler=xplane "
+            base_command + " steps=10 profiler=xplane "
             "skip_first_n_steps_for_profiler=5 profiler_steps=3",
         ],
     },
