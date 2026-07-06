@@ -14,7 +14,7 @@
 
 """
 An example DAG to extract profile metrics from pretraining mixtral-8x7b model on 1xv4-128.
-Profile extraction can be easily integrated with gke_config + run_with_run_name_generation.
+Profile extraction can be easily integrated with gke_config + run(generate_run_name=True).
 """
 
 import datetime
@@ -88,7 +88,7 @@ with models.DAG(
 ) as dag:
   for run_name, test_scripts_details in test_models_tpu.items():
     for image in docker_image.keys():
-      # file_location: pass in base_output_directory, will be altered in `run_with_run_name_generation`
+      # file_location: pass in base_output_directory, will be altered in `run(generate_run_name=True)`
       job_metric_config = metric_config.MetricConfig()
       # optionally, add tensorboard metrics
       job_metric_config.tensorboard_summary = metric_config.SummaryConfig(
@@ -114,4 +114,4 @@ with models.DAG(
           test_owner=test_owner.SHUNING_J,
           cluster=test_scripts_details["cluster"],
           user_specified_job_metric_config=job_metric_config,  # customize config
-      ).run_with_run_name_generation(run_name_env="RUN_NAME")
+      ).run(generate_run_name=True, run_name_env="RUN_NAME")

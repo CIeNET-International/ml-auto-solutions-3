@@ -96,7 +96,7 @@ with models.DAG(
         test_owner=test_owner.MATT_D,
         base_output_directory=base_output_directory,
         metric_aggregation_strategy=metric_config.AggregationStrategy.LAST,
-    ).run_with_run_name_generation()
+    ).run(generate_run_name=True)
     if test_name not in parallel_test_names:
       sequential_tests.append(test_task)
 

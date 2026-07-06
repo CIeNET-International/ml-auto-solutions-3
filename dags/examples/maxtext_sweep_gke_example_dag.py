@@ -57,4 +57,4 @@ with models.DAG(
 
   # Run jobs
   for test in maxtext_sweep_gke_test:
-    test.run_with_run_name_generation()
+    test.run(generate_run_name=True)
