@@ -138,13 +138,14 @@ with models.DAG(
             run_model_cmds=workload_command,
             docker_image=image.value,
             test_owner=test_owner.SHARON_Y,
-        ).run_with_node_interruption(
+        ).to_node_interruption_task(
+            expect_reach_to_step=step_to_interrupt,
+            check_file_exists=True,
+        ).run(
             gcs_location=gcs_location,
             xpk_branch=MAIN_BRANCH,
             skip_post_process=True,
-            expect_reach_to_step=step_to_interrupt,
             max_restart=15,
-            check_file_exists=True,
         )
 
         end_time = validation_util.generate_timestamp.override(
