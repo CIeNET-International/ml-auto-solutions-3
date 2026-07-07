@@ -120,22 +120,26 @@ with models.DAG(
             task_id="generate_start_time"
         )()
 
-        maxtext_chkpt_run_test = gke_config.get_gke_config(
-            num_slices=slice_num,
-            cluster=test_config.cluster,
-            time_out_in_min=60,
-            test_name=f"{test_config.short_id}-emc",
-            run_model_cmds=workload_command,
-            docker_image=image.value,
-            test_owner=test_owner.DEPP_L,
-        ).to_node_interruption_task(
-            expect_reach_to_step=step_to_interrupt,
-            last_node=True,
-        ).run(
-            ramdisk_directory=test_config_util.DEFAULT_RAM_DISK,
-            mtc_enabled=True,
-            skip_post_process=True,
-            max_restart=15,
+        maxtext_chkpt_run_test = (
+            gke_config.get_gke_config(
+                num_slices=slice_num,
+                cluster=test_config.cluster,
+                time_out_in_min=60,
+                test_name=f"{test_config.short_id}-emc",
+                run_model_cmds=workload_command,
+                docker_image=image.value,
+                test_owner=test_owner.DEPP_L,
+            )
+            .to_node_interruption_task(
+                expect_reach_to_step=step_to_interrupt,
+                last_node=True,
+            )
+            .run(
+                ramdisk_directory=test_config_util.DEFAULT_RAM_DISK,
+                mtc_enabled=True,
+                skip_post_process=True,
+                max_restart=15,
+            )
         )
 
         end_time = validation_util.generate_timestamp.override(
