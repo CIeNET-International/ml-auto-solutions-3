@@ -128,12 +128,13 @@ with models.DAG(
             run_model_cmds=workload_command,
             docker_image=image.value,
             test_owner=test_owner.DEPP_L,
-        ).run_with_node_interruption(
+        ).to_node_interruption_task(
+            expect_reach_to_step=step_to_interrupt,
+            last_node=True,
+        ).run(
             ramdisk_directory=test_config_util.DEFAULT_RAM_DISK,
             mtc_enabled=True,
             skip_post_process=True,
-            last_node=True,
-            expect_reach_to_step=step_to_interrupt,
             max_restart=15,
         )
 

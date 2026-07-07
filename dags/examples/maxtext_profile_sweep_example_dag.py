@@ -14,7 +14,7 @@
 
 """
 An example DAG to extract profile metrics from pretraining mixtral-8x7b model on v6-256.
-Profile extraction can be seamlessly integrated with maxtext_sweep_gke_config + run_with_name_gen_and_quarantine.
+Profile extraction can be seamlessly integrated with maxtext_sweep_gke_config + (to_name_gen_and_quarantine_task + run).
 """
 
 import datetime
@@ -142,4 +142,4 @@ with models.DAG(
       )
 
       for test in maxtext_sweep_gke_test:
-        test.run_with_name_gen_and_quarantine(quarantine_task_group)
+        test.to_name_gen_and_quarantine_task(quarantine_task_group).run()
