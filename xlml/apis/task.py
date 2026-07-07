@@ -18,7 +18,7 @@ import abc
 import dataclasses
 import datetime
 import shlex
-from typing import Optional, Tuple, Union
+from typing import Any, Optional, Tuple, Union
 
 import airflow
 from airflow.models.taskmixin import DAGNode
@@ -42,7 +42,7 @@ class BaseTask(abc.ABC):
     Returns:
       A DAG node that executes this test.
     """
-    ...
+    pass
 
   def run_with_quarantine(self, quarantine_task_group):
     """Run a test job. If the test job is flaky, wrap it in a special task grop.
@@ -67,7 +67,7 @@ def run_queued_resource_test(
     tpu_name_env_var: bool = False,
     all_workers: bool = True,
     skip_post_process: bool = False,
-    custom_env: dict[str, str] = {},
+    custom_env: Optional[dict[str, str]] = None,
 ):
   """This is a class to set up tasks for TPU provisioned by Queued Resource.
 
@@ -93,6 +93,9 @@ def run_queued_resource_test(
       A task group with the following tasks chained: provision, run_model,
       post_process and clean_up.
   """
+
+  if custom_env is None:
+    custom_env = {}
 
   with TaskGroup(
       group_id=task_test_config.benchmark_id, prefix_group_id=True
@@ -335,7 +338,8 @@ class XpkTask(BaseTask):
   task_gcp_config: gcp_config.GCPConfig
   task_metric_config: Optional[metric_config.MetricConfig] = None
   workload_provision_timeout: datetime.timedelta = datetime.timedelta(
-      # Set the provision timeout from 300 to 60 minutes for decreasing the duration of failed tasks
+      # Set the provision timeout from 300 to 60 minutes for decreasing the
+      # duration of failed tasks
       minutes=60
   )
 
@@ -624,26 +628,7 @@ class XpkNodeInterruptionTask(XpkTask):
   ) -> DAGNode:
     """Run the TPU/GPU test in `task_test_config` using xpk.
 
-      Different behavior for testing node interruption.
-
-    Attributes:
-      gcs_location: GCS path for all artifacts of the test.
-      use_vertex_tensorboard: Set to True to view workload data on
-        Vertex AI Tensorboard.
-      expect_reach_to_step: The training step at which the node interruption
-        should be triggered.
-      use_pathways: Set to True to use the Pathways execution framework.
-      ramdisk_directory: The directory for enabling emergency checkpointing.
-      mtc_enabled: Set to True to enable Multi-tier Checkpointing (MTC).
-      xpk_branch: The specific git branch of the xpk tool to use.
-      last_node: If True, the interruption will target the last node in the
-        workload; otherwise, it targets the first node.
-      max_restart: By default, this is 0.
-        This will restart the job with flag "--max-restarts"
-      check_file_exists: By default, this is False. If set to True,
-        task branch task_path_decider will be performed.
-    Returns:
-      A DAG node that executes the model test.
+    with interruption.
     """
     with TaskGroup(group_id="run_model") as group:
       workload_id = xpk.generate_workload_id(self.task_test_config.benchmark_id)
@@ -772,15 +757,17 @@ class XpkNodeInterruptionTask(XpkTask):
       wait_for_file_to_exist = gcs.wait_for_file_to_exist.override(
           task_id=task_id_wait_file_exist
       )(
-          file_path=f"{gcs_path}/{str(expect_reach_to_step)}/commit_success.txt",
+          file_path=(
+              f"{gcs_path}/{str(expect_reach_to_step)}/commit_success.txt"
+          ),
       )
       task_id_do_nothing = "do_nothing"
       do_nothing = EmptyOperator(task_id=task_id_do_nothing)
 
       @task.branch
       def task_path_decider(check_file_exists: bool = False) -> str:
-        """
-        Dynamically route the workflow depending on the `check_file_exists`.
+        """Dynamically route the workflow depending on the
+        `check_file_exists`.
         """
         if check_file_exists:
           return f"{group.group_id}.{task_id_wait_file_exist}"
