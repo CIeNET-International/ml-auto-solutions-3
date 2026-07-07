@@ -471,6 +471,8 @@ class XpkTask(BaseTask):
             self.task_test_config.benchmark_id,
         )
 
+      setup_workload = EmptyOperator(task_id="setup_workload").as_setup()
+
       launch_workload_and_wait_for_reach_step = (
           self.launch_workload_with_node_reach_to_step(
               workload_id,
@@ -512,13 +514,11 @@ class XpkTask(BaseTask):
           zone=self.task_gcp_config.zone,
           cluster_name=self.task_test_config.cluster_name,
           xpk_branch=xpk_branch,
-      ).as_teardown(
-          setups=launch_workload_and_wait_for_reach_step,
-          on_failure_fail_dagrun=True,
-      )
+      ).as_teardown(setups=setup_workload, on_failure_fail_dagrun=True)
 
       _ = (
           (workload_id, gcs_path)
+          >> setup_workload
           >> launch_workload_and_wait_for_reach_step
           >> run_node_interruption
           >> wait_for_workload_completion
@@ -734,6 +734,9 @@ class XpkTask(BaseTask):
             self.task_test_config.gcs_subfolder,
             self.task_test_config.benchmark_id,
         )
+
+      setup_workload = EmptyOperator(task_id="setup_workload").as_setup()
+
       launch_workload = self.launch_workload(
           workload_id,
           gcs_path,
@@ -759,10 +762,11 @@ class XpkTask(BaseTask):
           zone=self.task_gcp_config.zone,
           cluster_name=self.task_test_config.cluster_name,
           xpk_branch=xpk_branch,
-      ).as_teardown(setups=launch_workload, on_failure_fail_dagrun=True)
+      ).as_teardown(setups=setup_workload, on_failure_fail_dagrun=True)
 
       _ = (
           (workload_id, gcs_path)
+          >> setup_workload
           >> launch_workload
           >> wait_for_workload_completion
           >> clean_up_workload
