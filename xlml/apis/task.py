@@ -512,7 +512,7 @@ class XpkTask(BaseTask):
           zone=self.task_gcp_config.zone,
           cluster_name=self.task_test_config.cluster_name,
           xpk_branch=xpk_branch,
-      ).as_teardown(setups=launch_workload, on_failure_fail_dagrun=True)
+      ).as_teardown(setups=launch_workload_and_wait_for_reach_step, on_failure_fail_dagrun=True)
 
       _ = (
           (workload_id, gcs_path)
@@ -756,7 +756,7 @@ class XpkTask(BaseTask):
           zone=self.task_gcp_config.zone,
           cluster_name=self.task_test_config.cluster_name,
           xpk_branch=xpk_branch,
-      )
+      ).as_teardown(setups=launch_workload, on_failure_fail_dagrun=True)
 
       _ = (
           (workload_id, gcs_path)
