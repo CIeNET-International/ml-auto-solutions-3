@@ -15,17 +15,16 @@
 """Utilities to construct configs for solutionsteam_tf_nightly_supported DAG."""
 
 from __future__ import annotations
-
 import datetime
 import time
-from typing import List
-
-from dags import gcs_bucket
+from datetime import date
 from dags.common import test_owner
 from dags.common.quarantined_tests import safe_get_from_variable
-from dags.common.vm_resource import Project, RuntimeVersion, TpuVersion
-from dags.solutions_team.configs.tensorflow import common
 from xlml.apis import gcp_config, metric_config, task, test_config
+from dags import gcs_bucket
+from dags.solutions_team.configs.tensorflow import common
+from dags.common.vm_resource import TpuVersion, Project, RuntimeVersion
+
 
 MAJOR_VERSION = "2"
 MINOR_VERSION = "18"
@@ -154,7 +153,7 @@ def get_tf_dlrm_config(
     runtime_version: str = RuntimeVersion.TPU_VM_TF_NIGHTLY.value,
     is_pod: bool = False,
     is_pjrt: bool = True,
-    # criteo_dir: str = gcs_bucket.CRITEO_DIR,
+    criteo_dir: str = gcs_bucket.CRITEO_DIR,
     network: str = "default",
     subnetwork: str = "default",
 ):
@@ -190,15 +189,11 @@ def get_tf_dlrm_config(
           "use_synthetic_data": "false",
           "use_tf_record_reader": "true",
           "train_data": {
-              "input_path": (
-                  "gs://zyc_dlrm/dataset/tb_tf_record_train_val/train/day_*/*"
-              ),
+              "input_path": "gs://zyc_dlrm/dataset/tb_tf_record_train_val/train/day_*/*",
               "global_batch_size": global_batch_size,
           },
           "validation_data": {
-              "input_path": (
-                  "gs://zyc_dlrm/dataset/tb_tf_record_train_val/eval/day_*/*"
-              ),
+              "input_path": "gs://zyc_dlrm/dataset/tb_tf_record_train_val/eval/day_*/*",
               "global_batch_size": global_batch_size,
           },
           "model": {
@@ -298,13 +293,11 @@ def get_tf_dlrm_config(
   model_dir = "/tmp"
 
   params_override["trainer"]["pipeline_sparse_and_dense_execution"] = "true"
-  # TODO (ericlefort): Replace the model_dir with this line
-  #  when the var is available
+  tpu_id = safe_get_from_variable(benchmark_id, None)
+  # TODO (ericlefort): Replace the model_dir with this line when the var is available
+  # model_dir = metric_config.SshEnvVars.GCS_OUTPUT.value + f"/dlrm/v5p/{benchmark_id}"
   epoch = time.time()
-  model_dir = (
-      f"{gcs_bucket.BASE_OUTPUT_DIR}/{test_owner.Team.SOLUTIONS_TEAM.value}/"
-      f"dlrm/{benchmark_id}/{epoch}"
-  )
+  model_dir = f"{gcs_bucket.BASE_OUTPUT_DIR}/{test_owner.Team.SOLUTIONS_TEAM.value}/dlrm/{benchmark_id}/{epoch}"
 
   # Clean out the prior checkpoint if it exists
   run_model_cmds = (

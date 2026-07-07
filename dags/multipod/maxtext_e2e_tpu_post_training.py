@@ -18,12 +18,10 @@ A DAG to run MaxText E2E TPU Post-Training tests.
 import datetime
 import hashlib
 
+from click import command
 from airflow import models
-from airflow.models.baseoperator import chain
 from airflow.models.param import Param
 from airflow.utils.task_group import TaskGroup
-from click import command
-
 from dags.common import test_owner
 from dags.common.quarantined_tests import safe_get_from_variable
 from dags.common.vm_resource import XpkClusters
@@ -33,8 +31,8 @@ from dags.multipod.configs import gke_config
 HF_TOKEN = safe_get_from_variable("HF_TOKEN", None)
 
 
-def get_workload_name(model_id, mode_name, length=6):
-  hex_code = f"{mode_name}-{hashlib.sha256(model_id.encode()).hexdigest()}"
+def get_workload_name(model, mode, length=6):
+  hex_code = f"{mode}-{hashlib.sha256(model.encode()).hexdigest()}"
   return hex_code[:length]
 
 
@@ -91,7 +89,7 @@ with models.DAG(
       )
       convert_to_maxtext_task = gke_config.get_gke_config(
           time_out_in_min=60,
-          test_name="convert-to-maxtext",
+          test_name=f"convert-to-maxtext",
           run_model_cmds=convert_to_maxtext_cmd,
           docker_image="{{ params.docker_image }}",
           cluster=XpkClusters.TPU_V5P_8_CLUSTER_V2,
@@ -121,7 +119,7 @@ with models.DAG(
                 time_out_in_min=60,
                 num_slices=1,
                 cluster=XpkClusters.TPU_V5P_128_CLUSTER,
-                test_name=get_workload_name(model_id=model, mode_name=mode),
+                test_name=get_workload_name(model, mode),
                 run_model_cmds=training_cmd,
                 docker_image="{{ params.docker_image }}",
                 test_owner=test_owner.SURBHI_J,
@@ -133,8 +131,7 @@ with models.DAG(
               run_name=run_name
           )
           convert_to_huggingface_cmd = (f"export HF_TOKEN={HF_TOKEN}",) + (
-              f"{test_config['checkpoint_conversion']['to_huggingface']} "
-              f"{run_name} {model_path} false true",
+              f"{test_config['checkpoint_conversion']['to_huggingface']} {run_name} {model_path} false true",
           )
           convert_to_huggingface_task = gke_config.get_gke_config(
               time_out_in_min=60,
@@ -145,8 +142,8 @@ with models.DAG(
               test_owner=test_owner.SURBHI_J,
           ).run(skip_post_process=True)
 
-          chain(
-              convert_to_maxtext_task,
-              training_task,
-              convert_to_huggingface_task,
+          (
+              convert_to_maxtext_task
+              >> training_task
+              >> convert_to_huggingface_task
           )

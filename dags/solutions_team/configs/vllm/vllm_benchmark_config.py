@@ -17,20 +17,15 @@
 
 import datetime
 import json
+import os
+from typing import Dict
 
-from dags.common import test_owner
 from dags.common.quarantined_tests import safe_get_from_variable
-from dags.common.vm_resource import (
-    GpuVersion,
-    ImageFamily,
-    ImageProject,
-    MachineVersion,
-    Project,
-    RuntimeVersion,
-    TpuVersion,
-    Zone,
-)
 from xlml.apis import gcp_config, metric_config, task, test_config
+from dags.common import test_owner
+from dags.multipod.configs import common
+from dags.common.vm_resource import MachineVersion, ImageFamily, ImageProject, GpuVersion, TpuVersion, Project, RuntimeVersion, Zone
+
 
 PROJECT_NAME = Project.CLOUD_ML_AUTO_SOLUTIONS.value
 RUNTIME_IMAGE = RuntimeVersion.TPU_UBUNTU2204_BASE.value
@@ -82,7 +77,7 @@ def get_vllm_tpu_setup_cmds():
 
 
 def _get_vllm_benchmark_parameters(
-    model_id: str, num_chips: int, test_run_id: str, model_configs: dict
+    model_id: str, num_chips: int, test_run_id: str, model_configs: Dict = {}
 ):
   base_model_id = model_id.split("/")[-1]
   request_rates = model_configs["request_rates"].split(",")
@@ -96,8 +91,7 @@ def _get_vllm_benchmark_parameters(
       "num_accelerators": num_chips,
   }
 
-  # Get the GCS destination path *before* constructing the command,
-  # OUTSIDE the list.
+  # Get the GCS destination path *before* constructing the command, OUTSIDE the list.
   gcs_destination = metric_config.SshEnvVars.GCS_OUTPUT.value
   if not gcs_destination:
     raise ValueError("GCS_OUTPUT environment variable is not set or is empty.")
@@ -108,7 +102,7 @@ def _get_vllm_benchmark_parameters(
 
 
 def get_gpu_vllm_benchmark_cmds(
-    model_id: str, num_chips: int, test_run_id: str, model_configs: dict
+    model_id: str, num_chips: int, test_run_id: str, model_configs: Dict = {}
 ):
   (
       base_model_id,
@@ -169,7 +163,7 @@ def get_gpu_vllm_benchmark_cmds(
 
 
 def get_tpu_vllm_benchmark_cmds(
-    model_id: str, num_chips: int, test_run_id: str, model_configs: dict
+    model_id: str, num_chips: int, test_run_id: str, model_configs: Dict = {}
 ):
   (
       base_model_id,
@@ -234,7 +228,7 @@ def get_gpu_vllm_gce_config(
     project: Project,
     network: str,
     subnetwork: str,
-    model_configs: dict,
+    model_configs: Dict = {},
     reservation: bool = False,
 ) -> task.GpuCreateResourceTask:
   job_gcp_config = gcp_config.GCPConfig(
@@ -303,12 +297,12 @@ def get_tpu_vllm_gce_config(
     test_name: str,
     test_run_id: str,
     project: Project,
-    model_configs: dict,
     runtime_version: str = RUNTIME_IMAGE,
     network: str = "default",
     subnetwork: str = "default",
     is_tpu_reserved: bool = True,
     num_slices: int = 1,
+    model_configs: Dict = {},
 ):
   job_gcp_config = gcp_config.GCPConfig(
       project_name=project.value,
