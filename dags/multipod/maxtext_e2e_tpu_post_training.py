@@ -69,6 +69,22 @@ with models.DAG(
               },
           },
       },
+      "llama3_1_70b": {
+          "checkpoint_conversion": {
+              "to_maxtext": "bash tests/end_to_end/tpu/llama3.1/70b/test_llama3.1_70b_to_mt.sh",
+              "to_huggingface": "bash tests/end_to_end/tpu/llama3.1/70b/test_llama3.1_70b_to_hf.sh",
+          },
+          "post_training": {
+              "sft": {
+                  "command": "bash tests/end_to_end/tpu/llama3.1/70b/test_llama3.1_70b_sft.sh",
+                  "maxtext_ckpt_path": "gs://runner-maxtext-logs/llama3.1-70b/sft/{run_name}/checkpoints/5/model_params",
+              },
+              "rl": {
+                  "command": "bash tests/end_to_end/tpu/llama3.1/70b/test_llama3.1_70b_rl.sh",
+                  "maxtext_ckpt_path": "gs://runner-maxtext-logs/llama3.1-70b/rl/{run_name}/checkpoints/actor/5/model_params",
+              },
+          },
+      },
   }
 
   for model, test_config in test_models.items():
