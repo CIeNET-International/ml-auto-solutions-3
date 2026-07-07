@@ -25,6 +25,7 @@ from dags.common.vm_resource import TpuVersion, Project, RuntimeVersion
 PROJECT_NAME = Project.CLOUD_ML_AUTO_SOLUTIONS.value
 RUNTIME_IMAGE = RuntimeVersion.TPU_UBUNTU2204_BASE.value
 GCS_SUBFOLDER_PREFIX = test_owner.Team.INFERENCE.value
+VENV_DIR = "venv-312"
 
 
 def get_config(
@@ -70,11 +71,14 @@ def get_config(
       # Make the PATH change permanent for subsequent sessions (optional, but good practice)
       "echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> ~/.bashrc",
       "source ~/.bashrc",
-      "uv venv --python 3.12 venv-312 --seed",
-      "source venv-312/bin/activate",
+      f"uv venv --python 3.12 {VENV_DIR} --seed --clear",
+      f"source {VENV_DIR}/bin/activate",
       "pip install uv",
       "uv pip install maxtext --resolution=lowest",
       "install_maxtext_github_deps",
+      "uv pip install rouge-score",
+      "sudo apt-get install -y git-lfs",
+      "git lfs install",
   )
 
   set_up_cmds += setup_maxtext_cmds
@@ -113,15 +117,19 @@ def get_config(
 
   # Let gcs path be directly used, else use maxtext/assets dir
   if not model_configs["tokenizer"].startswith("gs://"):
-    tokenizer_path = f"assets/{model_configs['tokenizer']}"
-    full_tokenizer_path = f"maxtext/assets/{model_configs['tokenizer']}"
+    tokenizer_path = (
+        f"src/maxtext/assets/tokenizers/{model_configs['tokenizer']}"
+    )
+    full_tokenizer_path = (
+        f"maxtext/src/maxtext/assets/tokenizers/{model_configs['tokenizer']}"
+    )
   else:
     tokenizer_path = model_configs["tokenizer"]
     full_tokenizer_path = model_configs["tokenizer"]
 
   run_model_cmds = (
       # Start virtual environment
-      "source .env/bin/activate",
+      f"source {VENV_DIR}/bin/activate",
       "wget https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split.json > /dev/null 2>&1",
       # Get commit hash of the maxtext and jetstream repos
       f"export METADATA_DICT='{json.dumps(additional_metadata_dict)}'",
@@ -131,58 +139,37 @@ def get_config(
       'export METADATA_DICT=$(jq -c \'. + { "jetstream_commit_hash": $newVal}\' --arg newVal ${JETSTREAM_COMMIT_HASH} <<<"$METADATA_DICT")',
       ### Benchmark
       "cd maxtext",
-      # Configure flags
-      f"export MODEL_NAME={model_configs['model_name']}",
-      f"export TOKENIZER_PATH={tokenizer_path}",
-      f"export WEIGHT_DTYPE={model_configs['weight_dtype']}",
-      f"export SCAN_LAYERS={model_configs['scan_layers']}",
-      f"export MAX_PREFILL_PREDICT_LENGTH={model_configs['max_prefill_predict_length']}",
-      f"export MAX_TARGET_LENGTH={model_configs['max_target_length']}",
-      f"export ATTENTION={model_configs['attention']}",
-      f"export ICI_FSDP_PARALLELISM={model_configs['ici_fsdp_parallelism']}",
-      f"export ICI_AUTOREGRESSIVE_PARALLELISM={model_configs['ici_autoregressive_parallelism']}",
-      f"export ICI_TENSOR_PARALLELISM={model_configs['ici_tensor_parallelism']}",
-      f"export UNSCANNED_CKPT_PATH={model_configs['checkpoint']}",
-      "export LOAD_PARAMETERS_PATH=${UNSCANNED_CKPT_PATH}",
-      f"export QUANTIZATION={model_configs['quantization']}",
-      f"export QUANTIZE_KVCACHE={model_configs['quantize_kvcache']}",
-      f"export KV_QUANT_DTYPE={model_configs['kv_quant_dtype']}",
-      f"export PER_DEVICE_BATCH_SIZE={model_configs['per_device_batch_size']}",
-      f"export PREFILL_CACHE_AXIS_ORDER={model_configs['prefill_cache_axis_order']}",
-      f"export AR_CACHE_AXIS_ORDER={model_configs['ar_cache_axis_order']}",
-      f"export COMPUTE_AXIS_ORDER={model_configs['compute_axis_order']}",
-      f"export RESHAPE_Q={model_configs['reshape_q']}",
-      f"export KV_QUANT_AXIS={model_configs['kv_quant_axis']}",
       # Start JetStream MaxText server in the background
-      """python3 -m MaxText.maxengine_server \
-        src/maxtext/configs/inference/inference_jetstream.yml \
-        model_name=${MODEL_NAME} \
-        tokenizer_path=${TOKENIZER_PATH} \
-        weight_dtype=${WEIGHT_DTYPE} \
-        scan_layers=${SCAN_LAYERS} \
-        max_prefill_predict_length=${MAX_PREFILL_PREDICT_LENGTH} \
-        max_target_length=${MAX_TARGET_LENGTH} \
-        attention=${ATTENTION} \
-        ici_fsdp_parallelism=${ICI_FSDP_PARALLELISM} \
-        ici_autoregressive_parallelism=${ICI_AUTOREGRESSIVE_PARALLELISM} \
-        ici_tensor_parallelism=${ICI_TENSOR_PARALLELISM} \
-        load_parameters_path=${LOAD_PARAMETERS_PATH} \
-        quantization=${QUANTIZATION} \
-        quantize_kvcache=${QUANTIZE_KVCACHE} \\"""
-      + (
-          """kv_quant_dtype=${KV_QUANT_DTYPE} \\"""
-          if model_configs["kv_quant_dtype"]
-          else ""
-      )
-      + """per_device_batch_size=${PER_DEVICE_BATCH_SIZE} \
-        prefill_cache_axis_order=${PREFILL_CACHE_AXIS_ORDER} \
-        ar_cache_axis_order=${AR_CACHE_AXIS_ORDER} \
-        compute_axis_order=${COMPUTE_AXIS_ORDER} \
-        reshape_q=${RESHAPE_Q} \
-        kv_quant_axis=${KV_QUANT_AXIS} &""",
+      f"""python3 -m MaxText.maxengine_server \\
+        src/maxtext/configs/inference/inference_jetstream.yml \\
+        model_name='{model_configs['model_name']}' \\
+        tokenizer_path='{tokenizer_path}' \\
+        weight_dtype='{model_configs['weight_dtype']}' \\
+        scan_layers='{model_configs['scan_layers']}' \\
+        max_prefill_predict_length='{model_configs['max_prefill_predict_length']}' \\
+        max_target_length='{model_configs['max_target_length']}' \\
+        attention='{model_configs['attention']}' \\
+        ici_fsdp_parallelism='{model_configs['ici_fsdp_parallelism']}' \\
+        ici_autoregressive_parallelism='{model_configs['ici_autoregressive_parallelism']}' \\
+        ici_tensor_parallelism='{model_configs['ici_tensor_parallelism']}' \\
+        load_parameters_path='{model_configs['checkpoint']}' \\
+        quantization='"{model_configs.get('quantization') or ""}"' \\
+        quantize_kvcache='{model_configs['quantize_kvcache']}' \\
+        kv_quant_dtype='"{model_configs.get('kv_quant_dtype') or ""}"' \\
+        per_device_batch_size='{model_configs['per_device_batch_size']}' \\
+        prefill_cache_axis_order='{model_configs['prefill_cache_axis_order']}' \\
+        ar_cache_axis_order='{model_configs['ar_cache_axis_order']}' \\
+        compute_axis_order='{model_configs['compute_axis_order']}' \\
+        reshape_q='{model_configs['reshape_q']}' \\
+        kv_quant_axis='"{model_configs.get('kv_quant_axis') or ""}"' &""",
       "cd ..",
       # Give server time to start
       f"sleep {model_configs['sleep_time']}",
+      "cd JetStream",
+      # Since we change to the Jetstream dir as root, we need to change the ownership of the dir to the user running the script
+      "sudo chown -R $USER:$USER $HOME/JetStream",
+      "git lfs pull",
+      "cd ..",
       # Run benchmark, run eval, save benchmark and eval results, and save predictions to /tmp/request-outputs.json
       f"""python JetStream/benchmarks/benchmark_serving.py \
       --tokenizer {full_tokenizer_path} \
@@ -233,7 +220,6 @@ def get_config(
       json_lines=metric_config.JSONLinesConfig("metric_report.jsonl"),
       use_runtime_generated_gcs_folder=True,
   )
-
   return task.run_queued_resource_test(
       task_test_config=job_test_config,
       task_gcp_config=job_gcp_config,

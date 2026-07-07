@@ -124,6 +124,8 @@ class Zone(enum.Enum):
   US_EAST5_C = "us-east5-c"
   # reserved v5e in tpu-prod-env-multipod
   US_WEST4_B = "us-west4-b"
+  US_WEST4_A = "us-west4-a"
+  US_EAST4_B = "us-east4-b"
   # reserved v5e in cloud-tpu-inference-test
   US_WEST1_C = "us-west1-c"
   # reserved a3+ cluster in supercomputer-testing
