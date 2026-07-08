@@ -54,7 +54,8 @@ def get_maxtext_sweep_gke_config(
     dataset_project: str = None,
     composer_project: str = None,
     enable_profile_config: bool = False,
-) -> List[task.XpkTask]:
+    quarantine_task_group: Any = None,
+) -> List[task.XpkNameGenAndQuarantineTask]:
   if not dataset_project:
     dataset_project = cluster.project
   if not composer_project:
@@ -122,10 +123,11 @@ def get_maxtext_sweep_gke_config(
           file_location=base_output_directory,
       )
 
-    xpk_task = task.XpkTask(
+    xpk_task = task.XpkNameGenAndQuarantineTask(
         task_test_config=job_test_config,
         task_gcp_config=job_gcp_config,
         task_metric_config=job_metric_config,
+        quarantine_task_group=quarantine_task_group,
     )
     xpk_task_list.append(xpk_task)
 

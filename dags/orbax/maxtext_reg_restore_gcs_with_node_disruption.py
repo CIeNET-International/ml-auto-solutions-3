@@ -130,26 +130,21 @@ with models.DAG(
             task_id="generate_start_time"
         )()
 
-        maxtext_chkpt_run_test = (
-            gke_config.get_gke_config(
-                num_slices=slice_num,
-                cluster=test_config.cluster,
-                time_out_in_min=60,
-                test_name=f"{test_config.short_id}",
-                run_model_cmds=workload_command,
-                docker_image=image.value,
-                test_owner=test_owner.SHARON_Y,
-            )
-            .to_node_interruption_task(
-                expect_reach_to_step=step_to_interrupt,
-                check_file_exists=True,
-            )
-            .run(
-                gcs_location=gcs_location,
-                xpk_branch=MAIN_BRANCH,
-                skip_post_process=True,
-                max_restart=15,
-            )
+        maxtext_chkpt_run_test = gke_config.get_gke_config_with_interrupt(
+            num_slices=slice_num,
+            cluster=test_config.cluster,
+            time_out_in_min=60,
+            test_name=f"{test_config.short_id}",
+            run_model_cmds=workload_command,
+            docker_image=image.value,
+            test_owner=test_owner.SHARON_Y,
+            expect_reach_to_step=step_to_interrupt,
+            check_file_exists=True,
+        ).run(
+            gcs_location=gcs_location,
+            xpk_branch=MAIN_BRANCH,
+            skip_post_process=True,
+            max_restart=15,
         )
 
         end_time = validation_util.generate_timestamp.override(

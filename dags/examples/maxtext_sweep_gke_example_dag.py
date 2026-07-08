@@ -63,4 +63,4 @@ with models.DAG(
 
   # Run jobs
   for test in maxtext_sweep_gke_test:
-    test.to_name_gen_and_quarantine_task().run()
+    test.run()

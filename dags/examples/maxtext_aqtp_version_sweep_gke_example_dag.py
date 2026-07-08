@@ -102,4 +102,4 @@ with models.DAG(
 
   # Run jobs
   for test in tests:
-    test.to_name_gen_and_quarantine_task().run()
+    test.run()

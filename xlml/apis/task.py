@@ -381,38 +381,6 @@ class XpkTask(BaseTask):
 
     return group
 
-  def run_with_node_interruption(
-      self,
-      expect_reach_to_step: int,
-      last_node: bool = False,
-      check_file_exists: bool = False,
-  ) -> "XpkNodeInterruptionTask":
-    return XpkNodeInterruptionTask(
-        task_test_config=self.task_test_config,
-        task_gcp_config=self.task_gcp_config,
-        task_metric_config=self.task_metric_config,
-        workload_provision_timeout=self.workload_provision_timeout,
-        expect_reach_to_step=expect_reach_to_step,
-        last_node=last_node,
-        check_file_exists=check_file_exists,
-    )
-
-  def to_name_gen_and_quarantine_task(
-      self,
-      quarantine_task_group: Any = None,
-      run_name_env: str = "M_RUN_NAME",
-      nested_run_name_in_tb_file_location: bool = True,
-  ) -> "XpkNameGenAndQuarantineTask":
-    return XpkNameGenAndQuarantineTask(
-        task_test_config=self.task_test_config,
-        task_gcp_config=self.task_gcp_config,
-        task_metric_config=self.task_metric_config,
-        workload_provision_timeout=self.workload_provision_timeout,
-        quarantine_task_group=quarantine_task_group,
-        run_name_env=run_name_env,
-        nested_run_name_in_tb_file_location=nested_run_name_in_tb_file_location,
-    )
-
   def run_model(
       self,
       gcs_location: Optional[airflow.XComArg] = None,
@@ -582,50 +550,16 @@ class XpkNodeInterruptionTask(XpkTask):
   last_node: bool = False
   check_file_exists: bool = False
 
-  def run(
+  def run_model(
       self,
-      *,
       gcs_location: Optional[airflow.XComArg] = None,
       use_vertex_tensorboard: bool = False,
       use_pathways: bool = False,
-      skip_post_process: bool = False,
       ramdisk_directory: str = "",
       mtc_enabled: bool = False,
       xpk_branch: str = xpk.MAIN_BRANCH,
       max_restart: int = 0,
-  ) -> DAGNode:
-    """Run a test job with node interruption."""
-    with TaskGroup(group_id=self.task_test_config.benchmark_id) as group:
-      run_model, gcs_path = self.run_model_with_node_interruption(
-          gcs_location=gcs_location,
-          use_vertex_tensorboard=use_vertex_tensorboard,
-          expect_reach_to_step=expect_reach_to_step,
-          use_pathways=use_pathways,
-          ramdisk_directory=ramdisk_directory,
-          mtc_enabled=mtc_enabled,
-          xpk_branch=xpk_branch,
-          last_node=last_node,
-          max_restart=max_restart,
-          check_file_exists=check_file_exists,
-      )
-      if not skip_post_process:
-        _ = run_model >> self.post_process(gcs_path)
-    return group
-
-  def run_model_with_node_interruption(
-      self,
-      *,
-      gcs_location: Optional[airflow.XComArg] = None,
-      use_vertex_tensorboard: bool = False,
-      expect_reach_to_step: int,
-      use_pathways: bool = False,
-      ramdisk_directory: str = "",
-      mtc_enabled: bool = False,
-      xpk_branch: str = xpk.MAIN_BRANCH,
-      last_node: bool = False,
-      max_restart: int = 0,
-      check_file_exists: bool = False,
-  ) -> DAGNode:
+  ) -> Tuple[DAGNode, str]:
     """Run the TPU/GPU test in `task_test_config` using xpk.
 
     with interruption.

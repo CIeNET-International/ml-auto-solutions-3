@@ -19,7 +19,7 @@ from xlml.apis import gcp_config, metric_config, task, test_config
 from xlml.apis.xpk_cluster_config import XpkClusterConfig
 from dags import gcs_bucket
 from dags.common.vm_resource import TpuVersion, Project, XpkClusters, GpuVersion, CpuVersion
-from typing import Iterable
+from typing import Any, Iterable
 import datetime
 
 
@@ -78,6 +78,134 @@ def get_gke_config(
       task_test_config=job_test_config,
       task_gcp_config=job_gcp_config,
       task_metric_config=job_metric_config,
+  )
+
+
+def get_gke_config_with_interrupt(
+    time_out_in_min: int,
+    test_name: str,
+    docker_image: str,
+    test_owner: str,
+    run_model_cmds: Iterable[str],
+    expect_reach_to_step: int,
+    cluster: XpkClusterConfig = XpkClusters.TPU_V4_8_MAXTEXT_CLUSTER,
+    num_slices: int = 1,
+    dataset_name: metric_config.DatasetOption = metric_config.DatasetOption.XLML_DATASET,
+    dataset_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
+    composer_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
+    base_output_directory: str = None,
+    metric_aggregation_strategy: metric_config.AggregationStrategy = None,
+    user_specified_job_metric_config: metric_config.MetricConfig = None,
+    last_node: bool = False,
+    check_file_exists: bool = False,
+) -> task.XpkNodeInterruptionTask:
+  job_gcp_config = gcp_config.GCPConfig(
+      project_name=cluster.project,
+      zone=cluster.zone,
+      dataset_name=dataset_name,
+      dataset_project=dataset_project,
+      composer_project=composer_project,
+  )
+
+  job_test_config = test_config.TpuGkeTest(
+      test_config.Tpu(
+          version=cluster.device_version,
+          cores=cluster.core_count,
+      ),
+      test_name=test_name,
+      run_model_cmds=run_model_cmds,
+      set_up_cmds=None,
+      timeout=datetime.timedelta(minutes=time_out_in_min),
+      task_owner=test_owner,
+      num_slices=num_slices,
+      cluster_name=cluster.name,
+      docker_image=docker_image,
+  )
+  job_metric_config = user_specified_job_metric_config
+  if job_metric_config is None:
+    job_metric_config = (
+        metric_config.MetricConfig(
+            tensorboard_summary=metric_config.SummaryConfig(
+                file_location=base_output_directory,
+                aggregation_strategy=metric_aggregation_strategy,
+                use_regex_file_location=True,
+            ),
+        )
+        if base_output_directory and metric_aggregation_strategy
+        else None
+    )
+
+  return task.XpkNodeInterruptionTask(
+      task_test_config=job_test_config,
+      task_gcp_config=job_gcp_config,
+      task_metric_config=job_metric_config,
+      expect_reach_to_step=expect_reach_to_step,
+      last_node=last_node,
+      check_file_exists=check_file_exists,
+  )
+
+
+def get_gke_config_with_name_gen_and_quarantine(
+    time_out_in_min: int,
+    test_name: str,
+    docker_image: str,
+    test_owner: str,
+    run_model_cmds: Iterable[str],
+    cluster: XpkClusterConfig = XpkClusters.TPU_V4_8_MAXTEXT_CLUSTER,
+    num_slices: int = 1,
+    dataset_name: metric_config.DatasetOption = metric_config.DatasetOption.XLML_DATASET,
+    dataset_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
+    composer_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
+    base_output_directory: str = None,
+    metric_aggregation_strategy: metric_config.AggregationStrategy = None,
+    user_specified_job_metric_config: metric_config.MetricConfig = None,
+    quarantine_task_group: Any = None,
+    run_name_env: str = "M_RUN_NAME",
+    nested_run_name_in_tb_file_location: bool = True,
+) -> task.XpkNameGenAndQuarantineTask:
+  job_gcp_config = gcp_config.GCPConfig(
+      project_name=cluster.project,
+      zone=cluster.zone,
+      dataset_name=dataset_name,
+      dataset_project=dataset_project,
+      composer_project=composer_project,
+  )
+
+  job_test_config = test_config.TpuGkeTest(
+      test_config.Tpu(
+          version=cluster.device_version,
+          cores=cluster.core_count,
+      ),
+      test_name=test_name,
+      run_model_cmds=run_model_cmds,
+      set_up_cmds=None,
+      timeout=datetime.timedelta(minutes=time_out_in_min),
+      task_owner=test_owner,
+      num_slices=num_slices,
+      cluster_name=cluster.name,
+      docker_image=docker_image,
+  )
+  job_metric_config = user_specified_job_metric_config
+  if job_metric_config is None:
+    job_metric_config = (
+        metric_config.MetricConfig(
+            tensorboard_summary=metric_config.SummaryConfig(
+                file_location=base_output_directory,
+                aggregation_strategy=metric_aggregation_strategy,
+                use_regex_file_location=True,
+            ),
+        )
+        if base_output_directory and metric_aggregation_strategy
+        else None
+    )
+
+  return task.XpkNameGenAndQuarantineTask(
+      task_test_config=job_test_config,
+      task_gcp_config=job_gcp_config,
+      task_metric_config=job_metric_config,
+      quarantine_task_group=quarantine_task_group,
+      run_name_env=run_name_env,
+      nested_run_name_in_tb_file_location=nested_run_name_in_tb_file_location,
   )
 
 
