@@ -227,6 +227,8 @@ class AXLearnTask(BaseTask):
       A task group with the following task : run_model.
     """
     with TaskGroup(group_id=self.test_cfg.benchmark_id) as group:
+      setup_workload = EmptyOperator(task_id="setup_workload").as_setup()
+
       update_image_tag_cmd = axlearn.update_image_tag_cmd.override(
           owner=self.test_cfg.task_owner
       )(
@@ -293,6 +295,8 @@ class AXLearnTask(BaseTask):
           zone=self.gcp_cfg.zone,
           cluster_name=self.test_cfg.cluster_name,
           xpk_branch=xpk.MAIN_BRANCH,
+      ).as_teardown(
+          setups=setup_workload, on_failure_fail_dagrun=True
       )
 
       # flow1: The launcher task (Kubernetes Pod) that runs the workload.
@@ -302,7 +306,7 @@ class AXLearnTask(BaseTask):
       flow1 = run_workload
       flow2 = wait_for_workload_start >> wait_for_workload_completion >> cleanup
 
-      _ = update_image_tag_cmd >> gen_cmds >> [flow1, flow2]
+      _ = update_image_tag_cmd >> gen_cmds >> setup_workload >> [flow1, flow2]
 
     return group
 
