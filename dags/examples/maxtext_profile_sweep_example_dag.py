@@ -24,7 +24,7 @@ from airflow import models
 from airflow.utils.task_group import TaskGroup
 from dags.common import test_owner
 from dags.common.vm_resource import XpkClusters, Project
-from dags.multipod.configs import maxtext_sweep_gke_config
+from dags.multipod.configs import maxtext_sweep_gke_config as sweep_config
 from xlml.apis import metric_config
 
 SCHEDULED_TIME = None
@@ -139,7 +139,7 @@ with models.DAG(
       # generate run_name and tensorboard/profile location for extraction
       num_slices = [1]
       sweep_params = {}
-      maxtext_sweep_gke_test = maxtext_sweep_gke_config.get_maxtext_sweep_gke_config(
+      maxtext_sweep_gke_test = sweep_config.get_maxtext_sweep_gke_config(
           test_owner=test_owner.SHUNING_J,
           dataset_project=Project.CLOUD_ML_AUTO_SOLUTIONS.value,
           composer_project=Project.CLOUD_ML_AUTO_SOLUTIONS.value,
