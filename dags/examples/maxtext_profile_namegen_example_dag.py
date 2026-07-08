@@ -14,7 +14,7 @@
 
 """
 An example DAG to extract profile metrics from pretraining mixtral-8x7b model on 1xv4-128.
-Profile extraction can be easily integrated with gke_config + run_with_run_name_generation.
+Profile extraction can be easily integrated with gke_config + (to_name_gen_and_quarantine_task + run).
 """
 
 import datetime
@@ -88,7 +88,8 @@ with models.DAG(
 ) as dag:
   for run_name, test_scripts_details in test_models_tpu.items():
     for image in docker_image.keys():
-      # file_location: pass in base_output_directory, will be altered in `run_with_run_name_generation`
+      # file_location: pass in base_output_directory, will be altered in
+      # XpkNameGenAndQuarantineTask.run_with_run_name_generation
       job_metric_config = metric_config.MetricConfig()
       # optionally, add tensorboard metrics
       job_metric_config.tensorboard_summary = metric_config.SummaryConfig(
@@ -105,13 +106,17 @@ with models.DAG(
       if "not_add_profile_config" in test_scripts_details:
         job_metric_config.profile = None
 
-      tpu_task = gke_config.get_gke_config(
-          num_slices=1,
-          time_out_in_min=test_scripts_details["time_out_in_min"],
-          test_name=f"maxtext_{image}_{run_name}",
-          run_model_cmds=test_scripts_details["train_command"],
-          docker_image=docker_image[image],
-          test_owner=test_owner.SHUNING_J,
-          cluster=test_scripts_details["cluster"],
-          user_specified_job_metric_config=job_metric_config,  # customize config
-      ).run_with_run_name_generation(run_name_env="RUN_NAME")
+      tpu_task = (
+          gke_config.get_gke_config(
+              num_slices=1,
+              time_out_in_min=test_scripts_details["time_out_in_min"],
+              test_name=f"maxtext_{image}_{run_name}",
+              run_model_cmds=test_scripts_details["train_command"],
+              docker_image=docker_image[image],
+              test_owner=test_owner.SHUNING_J,
+              cluster=test_scripts_details["cluster"],
+              user_specified_job_metric_config=job_metric_config,  # customize config
+          )
+          .to_name_gen_and_quarantine_task(run_name_env="RUN_NAME")
+          .run()
+      )

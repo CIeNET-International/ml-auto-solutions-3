@@ -38,8 +38,7 @@ def dict_to_arg(param_dict):
 
 docker_image = {
     "stable": (
-        "gcr.io/tpu-prod-env-multipod/"
-        "maxtext_jax_stable_stack:2025-05-20"
+        "gcr.io/tpu-prod-env-multipod/" "maxtext_jax_stable_stack:2025-05-20"
     ),
 }
 
@@ -140,22 +139,20 @@ with models.DAG(
       # generate run_name and tensorboard/profile location for extraction
       num_slices = [1]
       sweep_params = {}
-      maxtext_sweep_gke_test = (
-          maxtext_sweep_gke_config.get_maxtext_sweep_gke_config(
-              test_owner=test_owner.SHUNING_J,
-              dataset_project=Project.CLOUD_ML_AUTO_SOLUTIONS.value,
-              composer_project=Project.CLOUD_ML_AUTO_SOLUTIONS.value,
-              dataset_name=metric_config.DatasetOption.XLML_DATASET,
-              cluster=test_scripts_details["cluster"],
-              time_out_in_min=test_scripts_details["time_out_in_min"],
-              base_output_directory=BASE_OUTPUT_PATH,
-              num_slices=num_slices,
-              docker_image=img_val,
-              run_name_prefix=f"maxtext_{image}_{run_name}",
-              base_run_model_cmds=test_scripts_details["train_command"],
-              sweep_params=sweep_params,
-              enable_profile_config=True,  # add flag to enable profile extraction
-          )
+      maxtext_sweep_gke_test = maxtext_sweep_gke_config.get_maxtext_sweep_gke_config(
+          test_owner=test_owner.SHUNING_J,
+          dataset_project=Project.CLOUD_ML_AUTO_SOLUTIONS.value,
+          composer_project=Project.CLOUD_ML_AUTO_SOLUTIONS.value,
+          dataset_name=metric_config.DatasetOption.XLML_DATASET,
+          cluster=test_scripts_details["cluster"],
+          time_out_in_min=test_scripts_details["time_out_in_min"],
+          base_output_directory=BASE_OUTPUT_PATH,
+          num_slices=num_slices,
+          docker_image=img_val,
+          run_name_prefix=f"maxtext_{image}_{run_name}",
+          base_run_model_cmds=test_scripts_details["train_command"],
+          sweep_params=sweep_params,
+          enable_profile_config=True,  # add flag to enable profile extraction
       )
 
       for test in maxtext_sweep_gke_test:
