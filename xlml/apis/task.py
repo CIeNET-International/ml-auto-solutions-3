@@ -227,7 +227,9 @@ class AXLearnTask(BaseTask):
       A task group with the following task : run_model.
     """
     with TaskGroup(group_id=self.test_cfg.benchmark_id) as group:
-      setup_workload = EmptyOperator(task_id="setup_workload").as_setup()
+      dummy_op_for_teardown = EmptyOperator(
+          task_id="dummy_op_for_teardown"
+      ).as_setup()
 
       update_image_tag_cmd = axlearn.update_image_tag_cmd.override(
           owner=self.test_cfg.task_owner
@@ -296,7 +298,7 @@ class AXLearnTask(BaseTask):
           cluster_name=self.test_cfg.cluster_name,
           xpk_branch=xpk.MAIN_BRANCH,
       ).as_teardown(
-          setups=setup_workload, on_failure_fail_dagrun=True
+          setups=dummy_op_for_teardown, on_failure_fail_dagrun=True
       )
 
       # flow1: The launcher task (Kubernetes Pod) that runs the workload.
@@ -306,7 +308,12 @@ class AXLearnTask(BaseTask):
       flow1 = run_workload
       flow2 = wait_for_workload_start >> wait_for_workload_completion >> cleanup
 
-      _ = update_image_tag_cmd >> gen_cmds >> setup_workload >> [flow1, flow2]
+      _ = (
+          update_image_tag_cmd
+          >> gen_cmds
+          >> dummy_op_for_teardown
+          >> [flow1, flow2]
+      )
 
     return group
 
@@ -475,7 +482,9 @@ class XpkTask(BaseTask):
             self.task_test_config.benchmark_id,
         )
 
-      setup_workload = EmptyOperator(task_id="setup_workload").as_setup()
+      dummy_op_for_teardown = EmptyOperator(
+          task_id="dummy_op_for_teardown"
+      ).as_setup()
 
       launch_workload_and_wait_for_reach_step = (
           self.launch_workload_with_node_reach_to_step(
@@ -518,11 +527,11 @@ class XpkTask(BaseTask):
           zone=self.task_gcp_config.zone,
           cluster_name=self.task_test_config.cluster_name,
           xpk_branch=xpk_branch,
-      ).as_teardown(setups=setup_workload, on_failure_fail_dagrun=True)
+      ).as_teardown(setups=dummy_op_for_teardown, on_failure_fail_dagrun=True)
 
       _ = (
           (workload_id, gcs_path)
-          >> setup_workload
+          >> dummy_op_for_teardown
           >> launch_workload_and_wait_for_reach_step
           >> run_node_interruption
           >> wait_for_workload_completion
@@ -739,7 +748,9 @@ class XpkTask(BaseTask):
             self.task_test_config.benchmark_id,
         )
 
-      setup_workload = EmptyOperator(task_id="setup_workload").as_setup()
+      dummy_op_for_teardown = EmptyOperator(
+          task_id="dummy_op_for_teardown"
+      ).as_setup()
 
       launch_workload = self.launch_workload(
           workload_id,
@@ -766,11 +777,11 @@ class XpkTask(BaseTask):
           zone=self.task_gcp_config.zone,
           cluster_name=self.task_test_config.cluster_name,
           xpk_branch=xpk_branch,
-      ).as_teardown(setups=setup_workload, on_failure_fail_dagrun=True)
+      ).as_teardown(setups=dummy_op_for_teardown, on_failure_fail_dagrun=True)
 
       _ = (
           (workload_id, gcs_path)
-          >> setup_workload
+          >> dummy_op_for_teardown
           >> launch_workload
           >> wait_for_workload_completion
           >> clean_up_workload
