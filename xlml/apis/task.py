@@ -796,8 +796,8 @@ class XpkNodeInterruptionTask(XpkTask):
       nested_run_name_in_tb_file_location: bool = True,
   ) -> DAGNode:
     test_name = self.task_test_config.benchmark_id
-    if QuarantineTests.is_quarantined(test_name):
-      with quarantine_task_group:
+    if QuarantineTests.is_quarantined(test_name) and self.quarantine_task_group:
+      with self.quarantine_task_group:
         return self.run_with_run_name_generation(
             use_pathways,
             xpk_branch,

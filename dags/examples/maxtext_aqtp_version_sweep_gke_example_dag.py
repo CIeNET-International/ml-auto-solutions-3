@@ -98,4 +98,4 @@ with models.DAG(
 
   # Run jobs
   for test in tests:
-    test.run_with_run_name_generation()
+    test.to_name_gen_and_quarantine_task().run()
