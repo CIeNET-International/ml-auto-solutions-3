@@ -399,7 +399,7 @@ class XpkTask(BaseTask):
 
   def to_name_gen_and_quarantine_task(
       self,
-      quarantine_task_group,
+      quarantine_task_group: Any = None,
       run_name_env: str = "M_RUN_NAME",
       nested_run_name_in_tb_file_location: bool = True,
   ) -> "XpkNameGenAndQuarantineTask":
