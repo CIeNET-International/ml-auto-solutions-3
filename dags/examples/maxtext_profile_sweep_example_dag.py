@@ -153,7 +153,8 @@ with models.DAG(
           base_run_model_cmds=test_scripts_details["train_command"],
           sweep_params=sweep_params,
           enable_profile_config=True,  # add flag to enable profile extraction
+          quarantine_task_group=quarantine_task_group,
       )
 
       for test in maxtext_sweep_gke_test:
-        test.to_name_gen_and_quarantine_task(quarantine_task_group).run()
+        test.run()

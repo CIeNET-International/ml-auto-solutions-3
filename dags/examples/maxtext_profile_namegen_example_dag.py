@@ -122,19 +122,16 @@ with models.DAG(
       if "not_add_profile_config" in test_scripts_details:
         job_metric_config.profile = None
 
-      tpu_task = (
-          gke_config.get_gke_config(
-              num_slices=1,
-              time_out_in_min=test_scripts_details["time_out_in_min"],
-              test_name=f"maxtext_{image}_{run_name}",
-              run_model_cmds=test_scripts_details["train_command"],
-              docker_image=img_val,
-              test_owner=test_owner.SHUNING_J,
-              cluster=test_scripts_details["cluster"],
-              user_specified_job_metric_config=(
-                  job_metric_config
-              ),  # customize config
-          )
-          .to_name_gen_and_quarantine_task(run_name_env="RUN_NAME")
-          .run()
-      )
+      tpu_task = gke_config.get_gke_config_with_name_gen_and_quarantine(
+          num_slices=1,
+          time_out_in_min=test_scripts_details["time_out_in_min"],
+          test_name=f"maxtext_{image}_{run_name}",
+          run_model_cmds=test_scripts_details["train_command"],
+          docker_image=img_val,
+          test_owner=test_owner.SHUNING_J,
+          cluster=test_scripts_details["cluster"],
+          user_specified_job_metric_config=(
+              job_metric_config
+          ),  # customize config
+          run_name_env="RUN_NAME",
+      ).run()
