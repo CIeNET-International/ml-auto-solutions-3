@@ -492,7 +492,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           )
 
           chain(
-              startup.task_group,
+              *startup.tasks,
               outputs_of_tpu_info,
               output_of_tpu_info,
               verification_group,
