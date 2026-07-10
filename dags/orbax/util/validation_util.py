@@ -467,14 +467,16 @@ def validate_restored_correct_checkpoint(
       namespace="default",
       pod_pattern=pod_pattern,
       text_filter=(
-          "(textPayload:\"'event_type'\" OR jsonPayload.message:\"'event_type'\")"
+          "(textPayload:\"'event_type'\" OR jsonPayload.message:\"'event_type'\" OR "
+          'textPayload:"restoring from this run\'s directory step" OR '
+          'jsonPayload.message:"restoring from this run\'s directory step")'
       ),
       start_time=start_time,
       end_time=end_time,
   )
 
   if not entries:
-    raise AirflowFailException("No event_type found in the log.")
+    raise AirflowFailException("No event_type or restore log found in the log.")
 
   local_saved_steps_before_restore = []
   for entry in entries:
@@ -497,7 +499,9 @@ def validate_restored_correct_checkpoint(
 
       local_saved_steps_before_restore.append(int(saved_step_match.group(1)))
 
-    elif re.search(r"'event_type': '(emergency_)?restore'", message):
+    elif re.search(
+        r"'event_type': '(emergency_)?restore'", message
+    ) or re.search(r"restoring from this run's directory step \d+", message):
       logging.info("Found restore event: %s", message)
       logging.info(
           "Saved steps before restore: %s", local_saved_steps_before_restore
@@ -505,7 +509,7 @@ def validate_restored_correct_checkpoint(
 
       restored_step_match = re.search(
           r"'step':\s*(?:np\.int32\()?(\d+)", message
-      )
+      ) or re.search(r"restoring from this run's directory step (\d+)", message)
       restored_step = (
           int(restored_step_match.group(1)) if restored_step_match else None
       )
