@@ -165,7 +165,7 @@ def insert_cluster_status_lists(
             now_utc=now_utc,
         )
     )
-  except RuntimeError as e:
+  except Exception as e:  # pylint: disable=broad-exception-caught
     logging.info(
         f"Error fetching details for {project_name}/{cluster_name}: {e}"
     )
@@ -208,7 +208,7 @@ def insert_gspread_rows(rows: List[List[str]], sheet_id: str):
         f"Inserting {len(rows)} rows into Google Sheet ID: {sheet_id}..."
     )
     if len(sheet_id) == 0:
-      raise ValueError(
+      raise Exception(  # pylint: disable=broad-exception-raised
           "Sheet ID is empty. Please insert Sheet ID or "
           "set 'buganizer_sheet_id' in Variables"
       )
@@ -220,7 +220,7 @@ def insert_gspread_rows(rows: List[List[str]], sheet_id: str):
         value_input_option="RAW",
     )
     logging.info(f"Successfully appended {len(rows)} rows to Google Sheet.")
-  except RuntimeError as e:
+  except Exception as e:  # pylint: disable=broad-exception-caught
     logging.error(f"An error occurred while writing to Google Sheet: {e}")
 
 
