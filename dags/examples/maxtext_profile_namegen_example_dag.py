@@ -15,7 +15,8 @@
 """An example DAG to extract profile metrics.
 
 Pretraining mixtral-8x7b model on 1xv4-128.
-Profile extraction can be easily integrated with gke_config + (to_name_gen_and_quarantine_task + run).
+Profile extraction can be easily integrated with gke_config
++ (to_name_gen_and_quarantine_task + run).
 """
 
 import datetime

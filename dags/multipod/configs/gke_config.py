@@ -14,13 +14,13 @@
 
 """Utilities to construct configs for maxtext DAG on GKE."""
 
-from dags.common import test_owner
+import datetime
+from typing import Any, Iterable
+
+from dags import gcs_bucket
+from dags.common.vm_resource import Project, XpkClusters
 from xlml.apis import gcp_config, metric_config, task, test_config
 from xlml.apis.xpk_cluster_config import XpkClusterConfig
-from dags import gcs_bucket
-from dags.common.vm_resource import TpuVersion, Project, XpkClusters, GpuVersion, CpuVersion
-from typing import Any, Iterable
-import datetime
 
 
 def get_gke_config(
@@ -31,7 +31,9 @@ def get_gke_config(
     run_model_cmds: Iterable[str],
     cluster: XpkClusterConfig = XpkClusters.TPU_V4_8_MAXTEXT_CLUSTER,
     num_slices: int = 1,
-    dataset_name: metric_config.DatasetOption = metric_config.DatasetOption.XLML_DATASET,
+    dataset_name: metric_config.DatasetOption = (
+        metric_config.DatasetOption.XLML_DATASET
+    ),
     dataset_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
     composer_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
     base_output_directory: str = None,
@@ -90,7 +92,9 @@ def get_gke_config_with_interrupt(
     expect_reach_to_step: int,
     cluster: XpkClusterConfig = XpkClusters.TPU_V4_8_MAXTEXT_CLUSTER,
     num_slices: int = 1,
-    dataset_name: metric_config.DatasetOption = metric_config.DatasetOption.XLML_DATASET,
+    dataset_name: metric_config.DatasetOption = (
+        metric_config.DatasetOption.XLML_DATASET
+    ),
     dataset_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
     composer_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
     base_output_directory: str = None,
@@ -153,7 +157,9 @@ def get_gke_config_with_name_gen_and_quarantine(
     run_model_cmds: Iterable[str],
     cluster: XpkClusterConfig = XpkClusters.TPU_V4_8_MAXTEXT_CLUSTER,
     num_slices: int = 1,
-    dataset_name: metric_config.DatasetOption = metric_config.DatasetOption.XLML_DATASET,
+    dataset_name: metric_config.DatasetOption = (
+        metric_config.DatasetOption.XLML_DATASET
+    ),
     dataset_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
     composer_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
     base_output_directory: str = None,
@@ -216,7 +222,9 @@ def get_gke_maxtext_nightly_config(
     test_owner: str,
     cluster: XpkClusterConfig = XpkClusters.TPU_V4_8_MAXTEXT_CLUSTER,
     num_slices: int = 1,
-    dataset_name: metric_config.DatasetOption = metric_config.DatasetOption.XLML_DATASET,
+    dataset_name: metric_config.DatasetOption = (
+        metric_config.DatasetOption.XLML_DATASET
+    ),
     dataset_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
     composer_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
 ) -> task.XpkTask:
@@ -234,18 +242,25 @@ def get_gke_maxtext_nightly_config(
   base_output_directory = (
       f"{gcs_bucket.BASE_OUTPUT_DIR}/maxtext/nightly/automated/{current_date}"
   )
-  run_name = f"{num_slices}slice-V{cluster.device_version.value}_{cluster.core_count}-maxtext-nightly-{current_datetime}"
+  run_name = (
+      f"{num_slices}slice-V{cluster.device_version.value}_{cluster.core_count}"
+      f"-maxtext-nightly-{current_datetime}"
+  )
 
   run_model_cmds = (
       "bash src/dependencies/scripts/preflight.sh PLATFORM=GKE",
       (
           "JAX_PLATFORM_NAME=TPU XLA_FLAGS='--xla_dump_to=/tmp/xla_dump/'"
           " ENABLE_PJRT_COMPATIBILITY=true"
-          f" python3 -m maxtext.trainers.pre_train.train src/maxtext/configs/base.yml run_name={run_name}"
-          f" base_output_directory={base_output_directory}"
+          " python3 -m maxtext.trainers.pre_train.train"
+          " src/maxtext/configs/base.yml"
+          f" run_name={run_name} base_output_directory={base_output_directory}"
           " dataset_path=gs://max-datasets-rogue dataset_type=synthetic"
-          " model_name=llama3-8b per_device_batch_size=12 reuse_example_batch=1 metrics_file='metrics.txt'"
-          " steps=50 enable_checkpointing=false profiler=xplane upload_all_profiler_results=true skip_first_n_steps_for_profiler=10 profiler_steps=10 gcs_metrics=true"
+          " model_name=llama3-8b per_device_batch_size=12 reuse_example_batch=1"
+          " metrics_file='metrics.txt' steps=50 enable_checkpointing=false"
+          " profiler=xplane upload_all_profiler_results=true"
+          " skip_first_n_steps_for_profiler=10 profiler_steps=10"
+          " gcs_metrics=true"
       ),
   )
 
@@ -316,7 +331,9 @@ def get_gke_gpt3_6b_nightly_config(
     test_owner: str,
     cluster: XpkClusterConfig = XpkClusters.TPU_V4_8_MAXTEXT_CLUSTER,
     num_slices: int = 1,
-    dataset_name: metric_config.DatasetOption = metric_config.DatasetOption.XLML_DATASET,
+    dataset_name: metric_config.DatasetOption = (
+        metric_config.DatasetOption.XLML_DATASET
+    ),
     dataset_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
     composer_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
 ) -> task.XpkTask:
@@ -334,18 +351,26 @@ def get_gke_gpt3_6b_nightly_config(
   base_output_directory = (
       f"{gcs_bucket.BASE_OUTPUT_DIR}/maxtext/nightly/automated/{current_date}"
   )
-  run_name = f"{num_slices}slice-V{cluster.device_version.value}_{cluster.core_count}-gpt3-6b-nightly-{current_datetime}"
+  run_name = (
+      f"{num_slices}slice-V{cluster.device_version.value}_{cluster.core_count}"
+      f"-gpt3-6b-nightly-{current_datetime}"
+  )
 
   run_model_cmds = (
       "bash src/dependencies/scripts/preflight.sh PLATFORM=GKE",
       (
           "JAX_PLATFORM_NAME=TPU XLA_FLAGS='--xla_dump_to=/tmp/xla_dump/'"
           " ENABLE_PJRT_COMPATIBILITY=true"
-          f" python3 -m maxtext.trainers.pre_train.train src/maxtext/configs/base.yml run_name={run_name} model_name=gpt3-6b"
+          " python3 -m maxtext.trainers.pre_train.train"
+          " src/maxtext/configs/base.yml"
+          f" run_name={run_name} model_name=gpt3-6b"
           f" base_output_directory={base_output_directory}"
           " dataset_path=gs://max-datasets-rogue dataset_type=synthetic"
-          " per_device_batch_size=12 reuse_example_batch=1 global_parameter_scale=1 metrics_file='metrics.txt'"
-          " steps=50 enable_checkpointing=false profiler=xplane upload_all_profiler_results=true skip_first_n_steps_for_profiler=10 profiler_steps=10 gcs_metrics=true"
+          " per_device_batch_size=12 reuse_example_batch=1"
+          " global_parameter_scale=1 metrics_file='metrics.txt' steps=50"
+          " enable_checkpointing=false profiler=xplane"
+          " upload_all_profiler_results=true skip_first_n_steps_for_profiler=10"
+          " profiler_steps=10 gcs_metrics=true"
       ),
   )
 
@@ -379,7 +404,9 @@ def get_maxtext_cpu_end_to_end_gke_config(
     cluster: XpkClusterConfig = XpkClusters.CPU_N2_STANDARD_64_CLUSTER,
     machine_count: int = 1,
     num_slices: int = 1,
-    dataset_name: metric_config.DatasetOption = metric_config.DatasetOption.XLML_DATASET,
+    dataset_name: metric_config.DatasetOption = (
+        metric_config.DatasetOption.XLML_DATASET
+    ),
     dataset_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
     composer_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
     base_output_directory: str = None,
