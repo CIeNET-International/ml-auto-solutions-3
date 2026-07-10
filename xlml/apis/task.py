@@ -681,6 +681,7 @@ class XpkNodeInterruptionTask(XpkTask):
 
     return group
 
+
 @dataclasses.dataclass
 class XpkNameGenAndQuarantineTask(XpkTask):
   """Task for running XPK workloads with name generation and quarantine."""
@@ -691,8 +692,12 @@ class XpkNameGenAndQuarantineTask(XpkTask):
 
   # Temporary variables to pass tasks from run() to intermediary_flow()
   _run_name_task: Any = dataclasses.field(default=None, init=False, repr=False)
-  _tb_file_location_task: Any = dataclasses.field(default=None, init=False, repr=False)
-  _profile_file_location_task: Any = dataclasses.field(default=None, init=False, repr=False)
+  _tb_file_location_task: Any = dataclasses.field(
+      default=None, init=False, repr=False
+  )
+  _profile_file_location_task: Any = dataclasses.field(
+      default=None, init=False, repr=False
+  )
 
   def run(
       self,
@@ -733,10 +738,14 @@ class XpkNameGenAndQuarantineTask(XpkTask):
 
     # Update profile file location if profile config exists
     if self.task_metric_config.profile:
-      self._profile_file_location_task = name_format.generate_profile_file_location(
-          self._run_name_task, self.task_metric_config.profile.file_location
+      self._profile_file_location_task = (
+          name_format.generate_profile_file_location(
+              self._run_name_task, self.task_metric_config.profile.file_location
+          )
       )
-      self.task_metric_config.profile.file_location = self._profile_file_location_task
+      self.task_metric_config.profile.file_location = (
+          self._profile_file_location_task
+      )
 
     # 2. Run under quarantine task group if applicable
     if QuarantineTests.is_quarantined(test_name) and self.quarantine_task_group:
@@ -781,13 +790,9 @@ class XpkNameGenAndQuarantineTask(XpkTask):
       )
     else:
       flow = (
-          self._run_name_task
-          >> self._tb_file_location_task
-          >> launch_workload
+          self._run_name_task >> self._tb_file_location_task >> launch_workload
       )
     return flow
-
-
 
 
 @dataclasses.dataclass
