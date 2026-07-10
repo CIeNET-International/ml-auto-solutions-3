@@ -387,13 +387,13 @@ class XpkTask(BaseTask):
       gcs_location: Optional[airflow.XComArg] = None,
       use_vertex_tensorboard: bool = False,
       use_pathways: bool = False,
-      skip_post_process: bool = False,
+      skip_post_process: bool = False,  # pylint: disable=unused-argument
       ramdisk_directory: str = "",
       mtc_enabled: bool = False,
       xpk_branch: str = xpk.MAIN_BRANCH,
-      last_node: bool = False,
+      last_node: bool = False,  # pylint: disable=unused-argument
       max_restart: int = 0,
-      check_file_exists: bool = False,
+      check_file_exists: bool = False,  # pylint: disable=unused-argument
   ) -> DAGNode:
     """Run a test job within a docker image.
 
@@ -554,9 +554,9 @@ class XpkTask(BaseTask):
   def intermediary_flow(
       self,
       launch_workload: DAGNode,
-      workload_id: str,
-      gcs_path: str,
-      xpk_branch: str,
+      workload_id: str,  # pylint: disable=unused-argument
+      gcs_path: str,  # pylint: disable=unused-argument
+      xpk_branch: str,  # pylint: disable=unused-argument
   ) -> DAGNode:
     return launch_workload
 
@@ -610,7 +610,7 @@ class XpkNodeInterruptionTask(XpkTask):
       launch_workload: DAGNode,
       workload_id: str,
       gcs_path: str,
-      xpk_branch: str,
+      xpk_branch: str,  # pylint: disable=unused-argument
   ) -> DAGNode:
     """Wait for workload to reach specific step and trigger node deletion."""
     with TaskGroup(
@@ -706,7 +706,8 @@ class XpkNameGenAndQuarantineTask(XpkTask):
     """Run a test job with name generation and quarantine."""
     test_name = self.task_test_config.benchmark_id
 
-    # 1. Generate run name and file location tasks first (they are Airflow task objects)
+    # 1. Generate run name and file location tasks first
+    # (they are Airflow task objects)
     self._run_name_task = name_format.generate_run_name(
         self.task_test_config.benchmark_id
     )

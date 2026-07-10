@@ -16,7 +16,7 @@
 
 import datetime
 from xlml.apis import gcp_config, metric_config, task, test_config
-from dags.common.vm_resource import TpuVersion, XpkClusterConfig
+from dags.common.vm_resource import XpkClusterConfig
 import itertools
 from typing import List, Iterable, Dict, Any
 
@@ -49,8 +49,12 @@ def get_maxtext_sweep_gke_config(
     docker_image: str,
     base_output_directory: str,
     base_run_model_cmds: Iterable[str],
-    dataset_name: metric_config.DatasetOption = metric_config.DatasetOption.BENCHMARK_DATASET,
-    metric_aggregation_strategy: metric_config.AggregationStrategy = metric_config.AggregationStrategy.MEDIAN,
+    dataset_name: metric_config.DatasetOption = (
+        metric_config.DatasetOption.BENCHMARK_DATASET
+    ),
+    metric_aggregation_strategy: metric_config.AggregationStrategy = (
+        metric_config.AggregationStrategy.MEDIAN
+    ),
     dataset_project: str = None,
     composer_project: str = None,
     enable_profile_config: bool = False,
@@ -77,7 +81,8 @@ def get_maxtext_sweep_gke_config(
   for param, values in sweep_params.items():
     sweep_params_list.append([(param, val) for val in values])
 
-  # Generate all combinations of sweep param configurations and create a XpkTask for each one
+  # Generate all combinations of sweep param configurations
+  # and create a XpkTask for each one
   xpk_task_list = []
   for idx, config in enumerate(itertools.product(*sweep_params_list)):
     config_dict = {key: value for (key, value) in config}
