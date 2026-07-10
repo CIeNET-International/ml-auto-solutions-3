@@ -458,12 +458,13 @@ class XpkTask(BaseTask):
           zone=self.task_gcp_config.zone,
           cluster_name=self.task_test_config.cluster_name,
           xpk_branch=xpk_branch,
-      )
+      ).as_teardown(setups=dummy_op_for_teardown, on_failure_fail_dagrun=True)
 
       intermediary_flow = self.intermediary_flow(
           launch_workload, workload_id, gcs_path, xpk_branch
       )
 
+      _ = dummy_op_for_teardown >> launch_workload
       _ = (
           (workload_id, gcs_path)
           >> intermediary_flow
