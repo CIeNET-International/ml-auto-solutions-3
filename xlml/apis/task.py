@@ -368,13 +368,14 @@ class XpkTask(BaseTask):
     """
     with TaskGroup(group_id=self.task_test_config.benchmark_id) as group:
       run_model, gcs_path = self.run_model(
-          gcs_location,
-          use_vertex_tensorboard,
-          use_pathways,
-          ramdisk_directory,
-          mtc_enabled,
-          xpk_branch,
-          max_restart,
+          gcs_location=gcs_location,
+          use_vertex_tensorboard=use_vertex_tensorboard,
+          use_pathways=use_pathways,
+          skip_post_process=skip_post_process,
+          ramdisk_directory=ramdisk_directory,
+          mtc_enabled=mtc_enabled,
+          xpk_branch=xpk_branch,
+          max_restart=max_restart,
       )
       if not skip_post_process:
         _ = run_model >> self.post_process(gcs_path)
