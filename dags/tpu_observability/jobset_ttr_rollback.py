@@ -154,11 +154,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             jobset_name=jobset_name,
         )
 
-        intentional_failure = BashOperator(
-            task_id="intentional_failure",
-            bash_command="exit 1"
-        )
-
         verify_duration = jobset.verify_recovery_duration.override(
             task_id="verify_recovery_duration"
         )(
@@ -181,7 +176,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             *startup.tasks,
             rollback_node_pool,
             wait_for_recovery,
-            intentional_failure,
             verify_duration,
             wait_for_metric_upload,
         )
