@@ -20,6 +20,7 @@ from airflow import models
 from airflow.models.baseoperator import chain
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
+from airflow.operators.bash import BashOperator
 
 from dags import composer_env
 from dags.common.scheduling_helper.scheduling_helper import (
@@ -153,6 +154,11 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             jobset_name=jobset_name,
         )
 
+        intentional_failure = BashOperator(
+            task_id="intentional_failure",
+            bash_command="exit 1"
+        )
+
         verify_duration = jobset.verify_recovery_duration.override(
             task_id="verify_recovery_duration"
         )(
@@ -170,10 +176,12 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             )
         )
 
+
         chain(
             *startup.tasks,
             rollback_node_pool,
             wait_for_recovery,
+            intentional_failure,
             verify_duration,
             wait_for_metric_upload,
         )
@@ -189,15 +197,11 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             node_pool=cluster_info,
             jobset_config=jobset_config,
             jobset_name=jobset_name,
-        ).as_teardown(
-            setups=startup.jobset_start_time
         )
 
         cleanup_node_pool = node_pool.delete.override(
             task_id="cleanup_node_pool", trigger_rule=TriggerRule.ALL_DONE
-        )(node_pool=cluster_info).as_teardown(
-            setups=create_node_pool,
-        )
+        )(node_pool=cluster_info)
 
         chain(
             cleanup_workload,
