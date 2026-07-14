@@ -171,7 +171,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             )
         )
 
-
         chain(
             *startup.tasks,
             rollback_node_pool,
