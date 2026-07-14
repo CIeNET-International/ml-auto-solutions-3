@@ -69,6 +69,7 @@ class TaskGroupWithTimeout(TaskGroup):
     super().__init__(group_id=group_id, **kwargs)
     self.group_name = f"{self.__class__.__name__}: '{group_id}'"
     self.timeout = timeout
+    self.is_teardown_group = is_teardown
     self.trigger_rule = (
         TriggerRule.ALL_DONE if is_teardown else TriggerRule.ALL_SUCCESS
     )
@@ -96,6 +97,9 @@ class TaskGroupWithTimeout(TaskGroup):
     """
     children_ids = set(self.children.keys())
     for child in self.children.values():
+      if self.is_teardown_group and isinstance(child, BaseOperator):
+        child.is_teardown = True
+
       if child is self._root_node:
         continue
       # If a sibling already chains into this child, the dependency on
