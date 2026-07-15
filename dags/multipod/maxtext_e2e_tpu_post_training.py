@@ -123,7 +123,7 @@ with models.DAG(
                 run_model_cmds=training_cmd,
                 docker_image="{{ params.docker_image }}",
                 test_owner=test_owner.SURBHI_J,
-            ).run_model(
+            ).run(
                 use_pathways=True,
             )
 
