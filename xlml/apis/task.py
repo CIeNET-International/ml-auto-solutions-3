@@ -371,7 +371,6 @@ class XpkTask(BaseTask):
           gcs_location=gcs_location,
           use_vertex_tensorboard=use_vertex_tensorboard,
           use_pathways=use_pathways,
-          skip_post_process=skip_post_process,
           ramdisk_directory=ramdisk_directory,
           mtc_enabled=mtc_enabled,
           xpk_branch=xpk_branch,
