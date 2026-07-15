@@ -18,7 +18,7 @@ import abc
 import dataclasses
 import datetime
 import shlex
-from typing import Optional, Tuple, Union
+from typing import Any, Optional, Tuple, Union
 
 import airflow
 from airflow.models.taskmixin import DAGNode
@@ -42,7 +42,7 @@ class BaseTask(abc.ABC):
     Returns:
       A DAG node that executes this test.
     """
-    ...
+    pass
 
   def run_with_quarantine(self, quarantine_task_group):
     """Run a test job. If the test job is flaky, wrap it in a special task grop.
@@ -67,7 +67,7 @@ def run_queued_resource_test(
     tpu_name_env_var: bool = False,
     all_workers: bool = True,
     skip_post_process: bool = False,
-    custom_env: dict[str, str] = {},
+    custom_env: Optional[dict[str, str]] = None,
 ):
   """This is a class to set up tasks for TPU provisioned by Queued Resource.
 
@@ -93,6 +93,9 @@ def run_queued_resource_test(
       A task group with the following tasks chained: provision, run_model,
       post_process and clean_up.
   """
+
+  if custom_env is None:
+    custom_env = {}
 
   with TaskGroup(
       group_id=task_test_config.benchmark_id, prefix_group_id=True
@@ -335,7 +338,8 @@ class XpkTask(BaseTask):
   task_gcp_config: gcp_config.GCPConfig
   task_metric_config: Optional[metric_config.MetricConfig] = None
   workload_provision_timeout: datetime.timedelta = datetime.timedelta(
-      # Set the provision timeout from 300 to 60 minutes for decreasing the duration of failed tasks
+      # Set the provision timeout from 300 to 60 minutes for decreasing the
+      # duration of failed tasks
       minutes=60
   )
 
@@ -363,34 +367,29 @@ class XpkTask(BaseTask):
       post_process.
     """
     with TaskGroup(group_id=self.task_test_config.benchmark_id) as group:
-      run_model, gcs_path = self.run_model(
-          gcs_location,
-          use_vertex_tensorboard,
-          use_pathways,
-          ramdisk_directory,
-          mtc_enabled,
-          xpk_branch,
-          max_restart,
+      run_model, gcs_path = self._run_model(
+          gcs_location=gcs_location,
+          use_vertex_tensorboard=use_vertex_tensorboard,
+          use_pathways=use_pathways,
+          ramdisk_directory=ramdisk_directory,
+          mtc_enabled=mtc_enabled,
+          xpk_branch=xpk_branch,
+          max_restart=max_restart,
       )
       if not skip_post_process:
-        _ = run_model >> self.post_process(gcs_path)
+        _ = run_model >> self._post_process(gcs_path)
 
     return group
 
-  def run_with_node_interruption(
+  def _run_model(
       self,
-      *,
       gcs_location: Optional[airflow.XComArg] = None,
       use_vertex_tensorboard: bool = False,
-      expect_reach_to_step: int,
       use_pathways: bool = False,
-      skip_post_process: bool = False,
       ramdisk_directory: str = "",
       mtc_enabled: bool = False,
       xpk_branch: str = xpk.MAIN_BRANCH,
-      last_node: bool = False,
       max_restart: int = 0,
-      check_file_exists: bool = False,
   ) -> DAGNode:
     """Run a test job within a docker image.
 
@@ -401,79 +400,18 @@ class XpkTask(BaseTask):
       gcs_location: GCS path for all artifacts of the test.
       use_vertex_tensorboard: Set to True to view workload data on
         Vertex AI Tensorboard.
-      expect_reach_to_step: The training step at which the node interruption
-        should be triggered.
-      use_pathways: Set to True to use the Pathways execution framework.
-      skip_post_process: If True, the post processing step will be skipped.
-      ramdisk_directory: The directory for enabling emergency checkpointing.
-      mtc_enabled: Set to True to enable Multi-tier Checkpointing (MTC).
-      xpk_branch: The specific git branch of the xpk tool to use.
-      last_node: If True, the interruption will target the last node in the
-        workload; otherwise, it targets the first node.
-      max_restart: By default, this is 0.
-        This will restart the job with flag "--max-restarts"
-      check_file_exists: By default, this is False. If set to True,
-        task branch task_path_decider will be performed.
-    Returns:
-      A task group with the following tasks chained: run_model and
-      post_process.
-    """
-    with TaskGroup(group_id=self.task_test_config.benchmark_id) as group:
-      run_model, gcs_path = self.run_model_with_node_interruption(
-          gcs_location=gcs_location,
-          use_vertex_tensorboard=use_vertex_tensorboard,
-          expect_reach_to_step=expect_reach_to_step,
-          use_pathways=use_pathways,
-          ramdisk_directory=ramdisk_directory,
-          mtc_enabled=mtc_enabled,
-          xpk_branch=xpk_branch,
-          last_node=last_node,
-          max_restart=max_restart,
-          check_file_exists=check_file_exists,
-      )
-      if not skip_post_process:
-        _ = run_model >> self.post_process(gcs_path)
-    return group
-
-  def run_model_with_node_interruption(
-      self,
-      *,
-      gcs_location: Optional[airflow.XComArg] = None,
-      use_vertex_tensorboard: bool = False,
-      expect_reach_to_step: int,
-      use_pathways: bool = False,
-      ramdisk_directory: str = "",
-      mtc_enabled: bool = False,
-      xpk_branch: str = xpk.MAIN_BRANCH,
-      last_node: bool = False,
-      max_restart: int = 0,
-      check_file_exists: bool = False,
-  ) -> DAGNode:
-    """Run the TPU/GPU test in `task_test_config` using xpk.
-
-      Different behavior for testing node interruption.
-
-    Attributes:
-      gcs_location: GCS path for all artifacts of the test.
-      use_vertex_tensorboard: Set to True to view workload data on
-        Vertex AI Tensorboard.
-      expect_reach_to_step: The training step at which the node interruption
-        should be triggered.
       use_pathways: Set to True to use the Pathways execution framework.
       ramdisk_directory: The directory for enabling emergency checkpointing.
       mtc_enabled: Set to True to enable Multi-tier Checkpointing (MTC).
       xpk_branch: The specific git branch of the xpk tool to use.
-      last_node: If True, the interruption will target the last node in the
-        workload; otherwise, it targets the first node.
       max_restart: By default, this is 0.
         This will restart the job with flag "--max-restarts"
-      check_file_exists: By default, this is False. If set to True,
-        task branch task_path_decider will be performed.
     Returns:
       A DAG node that executes the model test.
     """
     with TaskGroup(group_id="run_model") as group:
       workload_id = xpk.generate_workload_id(self.task_test_config.benchmark_id)
+
       if gcs_location:
         gcs_path = gcs_location
       else:
@@ -486,273 +424,7 @@ class XpkTask(BaseTask):
           task_id="dummy_op_for_teardown"
       ).as_setup()
 
-      launch_workload_and_wait_for_reach_step = (
-          self.launch_workload_with_node_reach_to_step(
-              workload_id,
-              gcs_path,
-              expect_reach_to_step,
-              use_vertex_tensorboard,
-              use_pathways,
-              ramdisk_directory,
-              mtc_enabled,
-              xpk_branch,
-              max_restart,
-              check_file_exists,
-          )
-      )
-
-      run_node_interruption = xpk.delete_node.override(
-          owner=self.task_test_config.task_owner, trigger_rule="none_failed"
-      )(
-          project=self.task_gcp_config.project_name,
-          zone=self.task_gcp_config.zone,
-          cluster_name=self.task_test_config.cluster_name,
-          workload_id=workload_id,
-          dry_run=False,
-          last_node=last_node,
-      )
-
-      wait_for_workload_completion = xpk.wait_for_workload_completion.override(
-          timeout=int(self.task_test_config.timeout.total_seconds()),
-      )(
-          workload_id=workload_id,
-          project_id=self.task_gcp_config.project_name,
-          region=gke.zone_to_region(self.task_gcp_config.zone),
-          cluster_name=self.task_test_config.cluster_name,
-      )
-
-      clean_up_workload = xpk.clean_up_workload(
-          workload_id=workload_id,
-          project_id=self.task_gcp_config.project_name,
-          zone=self.task_gcp_config.zone,
-          cluster_name=self.task_test_config.cluster_name,
-          xpk_branch=xpk_branch,
-      ).as_teardown(setups=dummy_op_for_teardown, on_failure_fail_dagrun=True)
-
-      _ = (
-          (workload_id, gcs_path)
-          >> dummy_op_for_teardown
-          >> launch_workload_and_wait_for_reach_step
-          >> run_node_interruption
-          >> wait_for_workload_completion
-          >> clean_up_workload
-      )
-    return group, gcs_path
-
-  def launch_workload_with_node_reach_to_step(
-      self,
-      workload_id: str,
-      gcs_path: str,
-      expect_reach_to_step: int,
-      use_vertex_tensorboard: bool,
-      use_pathways: bool = False,
-      ramdisk_directory: str = "",
-      mtc_enabled: bool = False,
-      xpk_branch: str = xpk.MAIN_BRANCH,
-      max_restart: int = 0,
-      check_file_exists: bool = False,
-  ) -> DAGNode:
-    """Create the workload and wait for it to provision."""
-    with TaskGroup(group_id="launch_workload_with_node_reach_to_step") as group:
-      run_workload = xpk.run_workload.override(
-          owner=self.task_test_config.task_owner
-      )(
-          task_id="run_workload",
-          cluster_project=self.task_gcp_config.project_name,
-          zone=self.task_gcp_config.zone,
-          cluster_name=self.task_test_config.cluster_name,
-          benchmark_id=self.task_test_config.benchmark_id,
-          workload_id=workload_id,
-          gcs_path=gcs_path,
-          docker_image=self.task_test_config.docker_image,
-          accelerator_type=self.task_test_config.accelerator.name,
-          run_cmds=self.task_test_config.test_script,
-          num_slices=self.task_test_config.num_slices,
-          use_vertex_tensorboard=use_vertex_tensorboard,
-          use_pathways=use_pathways,
-          ramdisk_directory=ramdisk_directory,
-          mtc_enabled=mtc_enabled,
-          xpk_branch=xpk_branch,
-          max_restart=max_restart,
-      )
-      wait_for_workload_start = xpk.wait_for_workload_start.override(
-          timeout=self.workload_provision_timeout.total_seconds()
-      )(
-          workload_id=workload_id,
-          project_id=self.task_gcp_config.project_name,
-          region=gke.zone_to_region(self.task_gcp_config.zone),
-          cluster_name=self.task_test_config.cluster_name,
-      )
-      wait_for_workload_to_reach_step = (
-          xpk.wait_for_workload_reach_step.override(
-              task_id="wait_for_workload_reach_step"
-          )(
-              workload_id=workload_id,
-              project_id=self.task_gcp_config.project_name,
-              region=gke.zone_to_region(self.task_gcp_config.zone),
-              cluster_name=self.task_test_config.cluster_name,
-              expect_reach_to_step=str(expect_reach_to_step),
-          )
-      )
-
-      task_id_wait_file_exist = "wait_for_file_to_exist"
-      wait_for_file_to_exist = gcs.wait_for_file_to_exist.override(
-          task_id=task_id_wait_file_exist
-      )(
-          file_path=f"{gcs_path}/{str(expect_reach_to_step)}/commit_success.txt",
-      )
-      task_id_do_nothing = "do_nothing"
-      do_nothing = EmptyOperator(task_id=task_id_do_nothing)
-
-      @task.branch
-      def task_path_decider(check_file_exists: bool = False) -> str:
-        """
-        Dynamically route the workflow depending on the `check_file_exists`.
-        """
-        if check_file_exists:
-          return f"{group.group_id}.{task_id_wait_file_exist}"
-        return f"{group.group_id}.{task_id_do_nothing}"
-
-      # Conditional checks: depending on the `check_file_exists` argument
-      # specified by the upper-level caller.
-      maybe_check_file_exists = task_path_decider(check_file_exists)
-
-      _ = (
-          run_workload
-          >> wait_for_workload_start
-          >> wait_for_workload_to_reach_step
-          >> maybe_check_file_exists
-      )
-      _ = maybe_check_file_exists >> [wait_for_file_to_exist, do_nothing]
-
-      return group
-
-  def run_with_name_gen_and_quarantine(
-      self,
-      quarantine_task_group,
-      use_pathways: bool = False,
-      xpk_branch: str = xpk.MAIN_BRANCH,
-      run_name_env: str = "M_RUN_NAME",
-      nested_run_name_in_tb_file_location: bool = True,
-  ) -> DAGNode:
-    test_name = self.task_test_config.benchmark_id
-    if QuarantineTests.is_quarantined(test_name):
-      with quarantine_task_group:
-        return self.run_with_run_name_generation(
-            use_pathways,
-            xpk_branch,
-            run_name_env,
-            nested_run_name_in_tb_file_location,
-        )
-    else:
-      return self.run_with_run_name_generation(
-          use_pathways,
-          xpk_branch,
-          run_name_env,
-          nested_run_name_in_tb_file_location,
-      )
-
-  def run_with_run_name_generation(
-      self,
-      use_pathways: bool = False,
-      xpk_branch: str = xpk.MAIN_BRANCH,
-      run_name_env: str = "M_RUN_NAME",
-      nested_run_name_in_tb_file_location: bool = True,
-  ) -> DAGNode:
-    """Generate a unique run name, tensorboard file location,
-    and profile file location (if metric config has profile),
-    then run a test job within a docker image.
-
-    Returns:
-      A task group with the following tasks chained: generate_run_name,
-      generate_tb_file_location, generate_profile_file_location (optional),
-      run provision, run_model, post_process.
-    """
-    with TaskGroup(
-        group_id=self.task_test_config.benchmark_id, prefix_group_id=True
-    ) as group:
-      run_name = name_format.generate_run_name(
-          self.task_test_config.benchmark_id
-      )
-      tb_file_location = name_format.generate_tb_file_location(
-          run_name,
-          self.task_metric_config.tensorboard_summary.file_location,
-          nested_run_name_in_tb_file_location,
-      )
-
-      # Set run_name in run_model_cmds
-      new_run_model_cmds = [f"export {run_name_env}={run_name}"]
-      for cmd in self.task_test_config.run_model_cmds:
-        new_run_model_cmds.append(cmd)
-      self.task_test_config.run_model_cmds = new_run_model_cmds
-
-      # Update tensorboard file location
-      self.task_metric_config.tensorboard_summary.file_location = (
-          tb_file_location
-      )
-
-      # Update profile file location
-      if self.task_metric_config.profile:
-        profile_file_location = name_format.generate_profile_file_location(
-            run_name, self.task_metric_config.profile.file_location
-        )
-        self.task_metric_config.profile.file_location = profile_file_location
-        run_model, gcs_path = self.run_model(
-            use_pathways=use_pathways, xpk_branch=xpk_branch
-        )
-        _ = (
-            run_name
-            >> (tb_file_location, profile_file_location)
-            >> run_model
-            >> self.post_process(gcs_path)
-        )
-      else:
-        run_model, gcs_path = self.run_model(
-            use_pathways=use_pathways, xpk_branch=xpk_branch
-        )
-        _ = (
-            run_name
-            >> tb_file_location
-            >> run_model
-            >> self.post_process(gcs_path)
-        )
-    return group
-
-  def run_model(
-      self,
-      gcs_location: Optional[airflow.XComArg] = None,
-      use_vertex_tensorboard: bool = False,
-      use_pathways: bool = False,
-      ramdisk_directory: str = "",
-      mtc_enabled: bool = False,
-      xpk_branch: str = xpk.MAIN_BRANCH,
-      max_restart: int = 0,
-  ) -> DAGNode:
-    """Run the TPU/GPU test in `task_test_config` using xpk.
-
-    Attributes:
-      gcs_location: GCS path for all artifacts of the test.
-      use_vertex_tensorboard: Set to True to view workload data on
-        Vertex AI Tensorboard.
-
-    Returns:
-      A DAG node that executes the model test.
-    """
-    with TaskGroup(group_id="run_model") as group:
-      workload_id = xpk.generate_workload_id(self.task_test_config.benchmark_id)
-      if gcs_location:
-        gcs_path = gcs_location
-      else:
-        gcs_path = name_format.generate_gcs_folder_location(
-            self.task_test_config.gcs_subfolder,
-            self.task_test_config.benchmark_id,
-        )
-
-      dummy_op_for_teardown = EmptyOperator(
-          task_id="dummy_op_for_teardown"
-      ).as_setup()
-
-      launch_workload = self.launch_workload(
+      launch_workload = self._launch_workload(
           workload_id,
           gcs_path,
           use_vertex_tensorboard,
@@ -762,21 +434,13 @@ class XpkTask(BaseTask):
           xpk_branch,
           max_restart,
       )
-      wait_for_workload_completion = xpk.wait_for_workload_completion.override(
-          timeout=int(self.task_test_config.timeout.total_seconds()),
-      )(
-          workload_id=workload_id,
-          project_id=self.task_gcp_config.project_name,
-          region=gke.zone_to_region(self.task_gcp_config.zone),
-          cluster_name=self.task_test_config.cluster_name,
+
+      wait_for_workload_completion = self._get_wait_for_workload_completion(
+          workload_id
       )
 
-      clean_up_workload = xpk.clean_up_workload(
-          workload_id=workload_id,
-          project_id=self.task_gcp_config.project_name,
-          zone=self.task_gcp_config.zone,
-          cluster_name=self.task_test_config.cluster_name,
-          xpk_branch=xpk_branch,
+      clean_up_workload = self._get_clean_up_workload(
+          workload_id, xpk_branch
       ).as_teardown(setups=dummy_op_for_teardown, on_failure_fail_dagrun=True)
 
       _ = (
@@ -788,7 +452,28 @@ class XpkTask(BaseTask):
       )
       return group, gcs_path
 
-  def launch_workload(
+  def _get_wait_for_workload_completion(self, workload_id: str) -> DAGNode:
+    return xpk.wait_for_workload_completion.override(
+        timeout=int(self.task_test_config.timeout.total_seconds()),
+    )(
+        workload_id=workload_id,
+        project_id=self.task_gcp_config.project_name,
+        region=gke.zone_to_region(self.task_gcp_config.zone),
+        cluster_name=self.task_test_config.cluster_name,
+    )
+
+  def _get_clean_up_workload(
+      self, workload_id: str, xpk_branch: str
+  ) -> DAGNode:
+    return xpk.clean_up_workload(
+        workload_id=workload_id,
+        project_id=self.task_gcp_config.project_name,
+        zone=self.task_gcp_config.zone,
+        cluster_name=self.task_test_config.cluster_name,
+        xpk_branch=xpk_branch,
+    )
+
+  def _launch_workload(
       self,
       workload_id: str,
       gcs_path: str,
@@ -833,7 +518,7 @@ class XpkTask(BaseTask):
       _ = run_workload >> wait_for_workload_start
       return group
 
-  def post_process(self, result_location: Optional[str] = None) -> DAGNode:
+  def _post_process(self, result_location: Optional[str] = None) -> DAGNode:
     """Process metrics and metadata, and insert them into BigQuery tables.
 
     Returns:
@@ -862,6 +547,245 @@ class XpkTask(BaseTask):
         )
       else:
         _ = process_id >> post_process_metrics
+
+      return group
+
+
+@dataclasses.dataclass
+class XpkNodeInterruptionTask(XpkTask):
+  """Task for running XPK workloads with node interruption."""
+
+  expect_reach_to_step: int = 0
+  last_node: bool = False
+  check_file_exists: bool = False
+
+  def _run_model(
+      self,
+      gcs_location: Optional[airflow.XComArg] = None,
+      use_vertex_tensorboard: bool = False,
+      use_pathways: bool = False,
+      ramdisk_directory: str = "",
+      mtc_enabled: bool = False,
+      xpk_branch: str = xpk.MAIN_BRANCH,
+      max_restart: int = 0,
+  ) -> DAGNode:
+    """Run a test job within a docker image.
+
+       Will run a workload with an injected interruption of a GKE node.
+       Then is expected to automatically restart and continuing running.
+
+    Attributes:
+      gcs_location: GCS path for all artifacts of the test.
+      use_vertex_tensorboard: Set to True to view workload data on
+        Vertex AI Tensorboard.
+      use_pathways: Set to True to use the Pathways execution framework.
+      ramdisk_directory: The directory for enabling emergency checkpointing.
+      mtc_enabled: Set to True to enable Multi-tier Checkpointing (MTC).
+      xpk_branch: The specific git branch of the xpk tool to use.
+      max_restart: By default, this is 0.
+        This will restart the job with flag "--max-restarts"
+    Returns:
+      A DAG node that executes the model test.
+    """
+    with TaskGroup(group_id="run_model") as group:
+      workload_id = xpk.generate_workload_id(self.task_test_config.benchmark_id)
+
+      if gcs_location:
+        gcs_path = gcs_location
+      else:
+        gcs_path = name_format.generate_gcs_folder_location(
+            self.task_test_config.gcs_subfolder,
+            self.task_test_config.benchmark_id,
+        )
+
+      dummy_op_for_teardown = EmptyOperator(
+          task_id="dummy_op_for_teardown"
+      ).as_setup()
+
+      launch_workload = self._launch_workload(
+          workload_id,
+          gcs_path,
+          use_vertex_tensorboard,
+          use_pathways,
+          ramdisk_directory,
+          mtc_enabled,
+          xpk_branch,
+          max_restart,
+      )
+
+      wait_for_workload_reach_step_and_interruption = (
+          self._wait_for_workload_reach_step_and_interruption(
+              workload_id, gcs_path
+          )
+      )
+
+      wait_for_workload_completion = self._get_wait_for_workload_completion(
+          workload_id
+      )
+
+      clean_up_workload = self._get_clean_up_workload(
+          workload_id, xpk_branch
+      ).as_teardown(setups=dummy_op_for_teardown, on_failure_fail_dagrun=True)
+
+      _ = (
+          dummy_op_for_teardown
+          >> launch_workload
+          >> wait_for_workload_reach_step_and_interruption
+          >> wait_for_workload_completion
+          >> clean_up_workload
+      )
+      return group, gcs_path
+
+  def _wait_for_workload_reach_step_and_interruption(
+      self,
+      workload_id: str,
+      gcs_path: str,
+  ) -> DAGNode:
+    """Wait for workload to reach specific step and trigger node deletion."""
+    with TaskGroup(
+        group_id="wait_for_workload_reach_step_and_interruption"
+    ) as group:
+      wait_for_workload_to_reach_step = (
+          xpk.wait_for_workload_reach_step.override(
+              task_id="wait_for_workload_reach_step"
+          )(
+              workload_id=workload_id,
+              project_id=self.task_gcp_config.project_name,
+              region=gke.zone_to_region(self.task_gcp_config.zone),
+              cluster_name=self.task_test_config.cluster_name,
+              expect_reach_to_step=str(self.expect_reach_to_step),
+          )
+      )
+
+      task_id_wait_file_exist = "wait_for_file_to_exist"
+      wait_for_file_to_exist = gcs.wait_for_file_to_exist.override(
+          task_id=task_id_wait_file_exist
+      )(
+          file_path=(
+              f"{gcs_path}/{str(self.expect_reach_to_step)}/commit_success.txt"
+          ),
+      )
+      task_id_do_nothing = "do_nothing"
+      do_nothing = EmptyOperator(task_id=task_id_do_nothing)
+
+      @task.branch
+      def task_path_decider(check_file_exists: bool = False) -> str:
+        """Dynamically route the workflow depending on the
+        `check_file_exists`.
+        """
+        if check_file_exists:
+          return f"{group.group_id}.{task_id_wait_file_exist}"
+        return f"{group.group_id}.{task_id_do_nothing}"
+
+      # Conditional checks: depending on the `check_file_exists` argument
+      # specified by the upper-level caller.
+      maybe_check_file_exists = task_path_decider(self.check_file_exists)
+
+      run_node_interruption = xpk.delete_node.override(
+          owner=self.task_test_config.task_owner, trigger_rule="none_failed"
+      )(
+          project=self.task_gcp_config.project_name,
+          zone=self.task_gcp_config.zone,
+          cluster_name=self.task_test_config.cluster_name,
+          workload_id=workload_id,
+          dry_run=False,
+          last_node=self.last_node,
+      )
+
+      _ = wait_for_workload_to_reach_step >> maybe_check_file_exists
+      _ = maybe_check_file_exists >> [wait_for_file_to_exist, do_nothing]
+      _ = [wait_for_file_to_exist, do_nothing] >> run_node_interruption
+
+    return group
+
+
+@dataclasses.dataclass
+class XpkNameGenAndQuarantineTask(XpkTask):
+  """Task for running XPK workloads with name generation and quarantine."""
+
+  quarantine_task_group: Any = None
+  run_name_env: str = "M_RUN_NAME"
+  nested_run_name_in_tb_file_location: bool = True
+
+  def run(
+      self,
+      use_pathways: bool = False,
+      xpk_branch: str = xpk.MAIN_BRANCH,
+  ) -> DAGNode:
+    """Generate a unique run name, tensorboard file location,
+    and profile file location (if metric config has profile),
+    then run a test job within a docker image.
+
+    Returns:
+      A task group with the following tasks chained: generate_run_name,
+      generate_tb_file_location, generate_profile_file_location (optional),
+      run provision, run_model, post_process.
+    """
+    test_name = self.task_test_config.benchmark_id
+    if QuarantineTests.is_quarantined(test_name):
+      with self.quarantine_task_group:
+        return self._run_with_run_name_generation(
+            use_pathways,
+            xpk_branch,
+        )
+    else:
+      return self._run_with_run_name_generation(
+          use_pathways,
+          xpk_branch,
+      )
+
+  def _run_with_run_name_generation(
+      self, use_pathways: bool = False, xpk_branch: str = xpk.MAIN_BRANCH
+  ) -> DAGNode:
+    with TaskGroup(
+        group_id=self.task_test_config.benchmark_id, prefix_group_id=True
+    ) as group:
+      run_name = name_format.generate_run_name(
+          self.task_test_config.benchmark_id
+      )
+      tb_file_location = name_format.generate_tb_file_location(
+          run_name,
+          self.task_metric_config.tensorboard_summary.file_location,
+          self.nested_run_name_in_tb_file_location,
+      )
+
+      # Set run_name in run_model_cmds
+      new_run_model_cmds = [f"export {self.run_name_env}={run_name}"]
+      for cmd in self.task_test_config.run_model_cmds:
+        new_run_model_cmds.append(cmd)
+      self.task_test_config.run_model_cmds = new_run_model_cmds
+
+      # Update tensorboard file location
+      self.task_metric_config.tensorboard_summary.file_location = (
+          tb_file_location
+      )
+
+      # Update profile file location
+      if self.task_metric_config.profile:
+        profile_file_location = name_format.generate_profile_file_location(
+            run_name, self.task_metric_config.profile.file_location
+        )
+        self.task_metric_config.profile.file_location = profile_file_location
+
+        run_model, gcs_path = self._run_model(
+            use_pathways=use_pathways, xpk_branch=xpk_branch
+        )
+        _ = (
+            run_name
+            >> (tb_file_location, profile_file_location)
+            >> run_model
+            >> self._post_process(gcs_path)
+        )
+      else:
+        run_model, gcs_path = self._run_model(
+            use_pathways=use_pathways, xpk_branch=xpk_branch
+        )
+        _ = (
+            run_name
+            >> tb_file_location
+            >> run_model
+            >> self._post_process(gcs_path)
+        )
 
       return group
 
