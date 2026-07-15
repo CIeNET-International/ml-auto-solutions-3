@@ -614,7 +614,7 @@ class XpkNodeInterruptionTask(XpkTask):
       )
 
       wait_for_workload_reach_step_and_interruption = (
-          self.wait_for_workload_reach_step_and_interruption(
+          self._wait_for_workload_reach_step_and_interruption(
               workload_id, gcs_path
           )
       )
@@ -636,7 +636,7 @@ class XpkNodeInterruptionTask(XpkTask):
       )
       return group, gcs_path
 
-  def wait_for_workload_reach_step_and_interruption(
+  def _wait_for_workload_reach_step_and_interruption(
       self,
       workload_id: str,
       gcs_path: str,
