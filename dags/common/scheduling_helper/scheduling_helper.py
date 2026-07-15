@@ -96,6 +96,7 @@ REGISTERED_DAGS: dict[str, DagIdToTimeout] = {
         "pw_elastic_pause_resume": DefaultTimeout,
         "pw_elastic_replica_resize": DefaultTimeout,
         "pw_elastic_goodput": DefaultTimeout,
+        "pw_elastic_goodput_replica": DefaultTimeout,
     },
 }
 

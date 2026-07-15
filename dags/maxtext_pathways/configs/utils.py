@@ -26,7 +26,7 @@ from xlml.utils import gke, xpk
 def generate_recipe_workload_id(dag_id: str) -> tuple[str, str]:
   """Generate a workload_id following the standard naming convention."""
   time.localtime()
-  timestamp = time.strftime("%Y%m%d%H%M%S", time.localtime())
+  timestamp = time.strftime("%m%d%H%M%S", time.localtime())
   name = f"{dag_id[:10]}-{timestamp[:10]}"
   name = name[:40].replace("_", "-")
 
