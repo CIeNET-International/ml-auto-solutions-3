@@ -728,15 +728,11 @@ class XpkNameGenAndQuarantineTask(XpkTask):
         return self._run_with_run_name_generation(
             use_pathways,
             xpk_branch,
-            self.run_name_env,
-            self.nested_run_name_in_tb_file_location,
         )
     else:
       return self._run_with_run_name_generation(
           use_pathways,
           xpk_branch,
-          self.run_name_env,
-          self.nested_run_name_in_tb_file_location,
       )
 
   def _run_with_run_name_generation(
