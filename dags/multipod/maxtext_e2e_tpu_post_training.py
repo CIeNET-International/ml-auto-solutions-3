@@ -67,6 +67,7 @@ with models.DAG(
               "multimodal_sft": {
                   "command": "bash tests/end_to_end/tpu/gemma3/4b/test_gemma3_multimodal_sft.sh",
                   "maxtext_ckpt_path": "gs://runner-maxtext-logs/gemma3-4b/multimodal/sft/{run_name}/checkpoints/4/items",
+                  "to_hf_flags": "true true",
               },
               "lora": {
                   "command": "bash tests/end_to_end/tpu/gemma3/4b/test_gemma3_lora.sh",
@@ -128,10 +129,7 @@ with models.DAG(
                 priority="very-high",
             )
 
-          if model == "gemma3-4b" and mode == "multimodal_sft":
-            to_hf_flags = "true true"
-          else:
-            to_hf_flags = "false true"
+          to_hf_flags = mode_test_config.get("to_hf_flags", "false true")
 
           model_path = mode_test_config["maxtext_ckpt_path"].format(
               run_name=run_name
