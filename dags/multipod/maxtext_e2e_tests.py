@@ -20,10 +20,48 @@ repository_dispatch callback with the aggregated result.
 import datetime
 import requests
 from airflow import models
+from airflow.exceptions import AirflowFailException
 from airflow.models.param import Param
 from airflow.operators.python import PythonOperator
 from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.utils.trigger_rule import TriggerRule
+
+
+def validate_git_trigger(**context):
+  params = context["params"]
+  run_id = params.get("github_run_id")
+  repo = params.get("github_repo")
+  token = params.get("github_callback_token")
+
+  if not run_id or not repo or not token:
+    raise AirflowFailException(
+        "Missing required GitHub parameters (run_id, repo, token). "
+        "This DAG should not be run manually from the Airflow UI."
+    )
+
+  # Call GitHub API to check the event type
+  url = f"https://api.github.com/repos/{repo}/actions/runs/{run_id}"
+  headers = {
+      "Authorization": f"Bearer {token}",
+      "Accept": "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+  }
+  try:
+    response = requests.get(url, headers=headers, timeout=30)
+    response.raise_for_status()
+  except requests.RequestException as e:
+    raise AirflowFailException(
+        f"Failed to fetch workflow run info from GitHub API: {e}"
+    )
+
+  run_data = response.json()
+  event = run_data.get("event")
+
+  if event != "schedule":
+    raise AirflowFailException(
+        f"This DAG can only be triggered by GitHub schedule events. Current event: {event}"
+    )
+
 
 with models.DAG(
     dag_id="maxtext_e2e_tests",
@@ -110,4 +148,13 @@ with models.DAG(
       trigger_rule=TriggerRule.ALL_SUCCESS,  # Only fire if all upstream tasks succeeded
   )
 
-  [trigger_pre_training, trigger_post_training] >> github_callback
+  validate_task = PythonOperator(
+      task_id="validate_trigger",
+      python_callable=validate_git_trigger,
+  )
+
+  (
+      validate_task
+      >> [trigger_pre_training, trigger_post_training]
+      >> github_callback
+  )
