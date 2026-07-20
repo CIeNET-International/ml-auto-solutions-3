@@ -57,6 +57,7 @@ PW_MCJAX_CLUSTER = XpkClusterConfig(
 
 DagIdToTimeout: TypeAlias = dict[str, dt.timedelta]
 DefaultTimeout: dt.timedelta = dt.timedelta(minutes=30)
+# pylint: disable=line-too-long
 REGISTERED_DAGS: dict[str, DagIdToTimeout] = {
     TPU_OBS_MOCK_CLUSTER.name: {
         "gke_node_pool_label_update": DefaultTimeout,
@@ -99,6 +100,7 @@ REGISTERED_DAGS: dict[str, DagIdToTimeout] = {
         "pw_elastic_goodput_replica": DefaultTimeout,
     },
 }
+# pylint: enable=line-too-long
 
 
 def get_dag_timeout(dag_id: str) -> dt.timedelta:

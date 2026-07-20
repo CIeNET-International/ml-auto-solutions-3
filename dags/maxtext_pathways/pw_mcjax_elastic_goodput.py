@@ -20,9 +20,11 @@ from absl import logging
 
 from airflow import models
 from airflow.decorators import task
-from airflow.utils.trigger_rule import TriggerRule
+from airflow.models.baseoperator import chain
 from airflow.models.taskmixin import DAGNode
 from airflow.utils.task_group import TaskGroup
+from airflow.utils.trigger_rule import TriggerRule
+from google.cloud import logging as gcp_logging
 from ml_goodput_measurement import goodput
 
 from dags import composer_env
@@ -30,16 +32,22 @@ from dags.common import test_owner
 from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper
 from dags.maxtext_pathways.configs import parameters as ui_params
 from dags.maxtext_pathways.configs import recipe_config as recipe_cfg
-from dags.maxtext_pathways.configs.utils import get_dag_parameters, generate_install_dependencies_commands, generate_derived_parameters, check_gcp_logs_exist
-from google.cloud import logging as gcp_logging
+from dags.maxtext_pathways.configs.utils import (
+    get_dag_parameters,
+    generate_install_dependencies_commands,
+    generate_derived_parameters,
+    check_gcp_logs_exist,
+    COLOCATED_PYTHON_IMAGE,
+)
 from xlml.utils import kpo, xpk
 
 ELASTIC_TYPE = ["Pause-resume", "Replica-resize"]
+
 # Pause resume configuration
 elastic_params = ui_params.PARAMETERS.copy()
 elastic_params.update({
     "colocated_python_image": ui_params.Param(
-        "gcr.io/tpu-prod-env-multipod/lidanny_maxtext-colocated-python:latest",
+        COLOCATED_PYTHON_IMAGE,
         type="string",
         title="Colocated Python Image",
         description="Colocated Python image for pathways.",
@@ -337,15 +345,15 @@ def worker_pod_interruption(
           expected_count=i + 1,
       )
 
-      _ = (
-          wait_for_step
-          >> trigger_interrupt
-          >> wait_for_elastic_attempt
-          >> wait_for_slices_active
+      chain(
+          wait_for_step,
+          trigger_interrupt,
+          wait_for_elastic_attempt,
+          wait_for_slices_active,
       )
 
       if previous_cycle_tail:
-        previous_cycle_tail >> wait_for_step
+        chain(previous_cycle_tail, wait_for_step)
       previous_cycle_tail = wait_for_slices_active
     return group
 
@@ -474,17 +482,17 @@ def create_elastic_goodput_dag(
         cluster_name=fetched_params["cluster_name"],
     )
 
-    (
-        fetched_params
-        >> calculated_params
-        >> generated_cmds
-        >> start_recipe
-        >> interruption_task
-        >> wait_for_workload_complete
-        >> goodput_logname
-        >> check_goodput_logs
-        >> workload_goodput
-        >> clean_up_recipe
+    chain(
+        fetched_params,
+        calculated_params,
+        generated_cmds,
+        start_recipe,
+        interruption_task,
+        wait_for_workload_complete,
+        goodput_logname,
+        check_goodput_logs,
+        workload_goodput,
+        clean_up_recipe,
     )
 
     return dag
