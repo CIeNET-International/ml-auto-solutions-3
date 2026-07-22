@@ -20,8 +20,6 @@ from absl import logging
 from airflow import models
 from airflow.decorators import task
 from airflow.models.baseoperator import chain
-from airflow.models.taskmixin import DAGNode
-from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
 from dags import composer_env
@@ -33,6 +31,7 @@ from dags.maxtext_pathways.configs.utils import (
     get_dag_parameters,
     generate_install_dependencies_commands,
     generate_derived_parameters,
+    worker_pod_interruption,
     COLOCATED_PYTHON_IMAGE,
 )
 from xlml.utils import kpo, xpk
@@ -57,8 +56,6 @@ elastic_params.update({
 })
 
 
-# TODO(cienet): Remove the temporary local code once these changes have been
-# merged into the maxtext repository.
 @task
 def generate_commands(
     dag_params: dict, derived_params: dict, recipe_instance: recipe_cfg.Recipe
@@ -72,21 +69,35 @@ def generate_commands(
   env_cmds = generate_install_dependencies_commands()
   recipe_cmd = recipe_instance.run_command
 
-  # Patch command for enabling elastic training & colocated Python data input.
+  # Patch command for enabling elastic training, good put and
+  # colocated Python data input.
   patch_cmd_runner = (
       r'sed -i "/python3 -m maxtext.trainers.pre_train.train/a '
+      # enable elastice training
       r"          f\"elastic_enabled=True\",\n"
       r"          f\"enable_single_controller=True\",\n"
       f'          \\"elastic_min_slice_count='
       f'{derived_params["elastic_min_slice_count"]}\\",\\n'
+      # enanble checkpointing for elastic training
+      r"          f\"async_checkpointing=True\",\n"
+      r"          f\"enable_checkpoint_cloud_logger=True\",\n"
+      r"          f\"checkpoint_period=10\","
+      # enable colocated python data input
       r"          f\"colocated_python_data_input=True\",\n"
       r"          f\"tokenizer_path="
       r'"src/maxtext/assets/tokenizers/tokenizer.llama2"\"," '
       r"benchmarks/maxtext_xpk_runner.py"
   )
 
+  model_configs_checkpointing = (
+      r'sed -i "/model_name=\"default-basic-1\"/,/xla_flags/ { '
+      r"s/\"enable_checkpointing\": False/\"enable_checkpointing\": True/; "
+      r"/\"profiler\":/d; "
+      r'}" benchmarks/maxtext_trillium_model_configs.py'
+  )
+
   # Patch command to modify dataset configuration for default_basic_1.
-  patch_cmd_model_configs_sub = (
+  model_configs_grain = (
       r'sed -i "/model_name=\"default-basic-1\"/,/)/ { '
       r"s/\"dataset_type\": \"synthetic\"/\"dataset_type\": \"grain\"/; "
       r"s/\"dataset_path\":/# \"dataset_path\":/; "
@@ -98,7 +109,7 @@ def generate_commands(
       r"us-central1/array-record/c4/en/3.0.1/c4-train.array_record*\","
   )
   # Patch command to modify dataset configuration: append grain_train_files.
-  patch_cmd_model_configs_add = (
+  model_configs_grain_sub = (
       'sed -i $\'/"dataset_type": "grain"/a \\\n'
       + insert_line
       + "' benchmarks/maxtext_trillium_model_configs.py"
@@ -131,8 +142,9 @@ def generate_commands(
   commands = " && ".join([
       env_cmds,
       patch_cmd_runner,
-      patch_cmd_model_configs_sub,
-      patch_cmd_model_configs_add,
+      model_configs_checkpointing,
+      model_configs_grain,
+      model_configs_grain_sub,
       recipe_cmd,
   ])
 
@@ -210,79 +222,6 @@ def generate_commands_replica(
   ])
 
   return commands
-
-
-def worker_pod_interruption(
-    project_id: str = "",
-    region: str = "",
-    cluster_name: str = "",
-    workload_id: str = "",
-    entry_log_pattern: str = "completed step:",
-    elastic_log_pattern: str = "Elastic attempt",
-    end_log_pattern: str = "Sufficient slices active:",
-) -> DAGNode:
-  """Run a test job with worker pod interruption."""
-  with TaskGroup(group_id="worker_pod_interruption") as group:
-    previous_cycle_tail = None
-    for i in range(1, 4):
-      wait_for_step = xpk.check_last_logs.override(
-          task_id=f"wait_for_step_starts_{i}"
-      )(
-          project_id=project_id,
-          region=region,
-          cluster_name=cluster_name,
-          workload_id=workload_id,
-          expect_log_contains=entry_log_pattern,
-      )
-
-      trigger_interrupt = xpk.interrupt_worker_pod.override(
-          task_id=f"interrupt_worker_{i}"
-      )(
-          project_id=project_id,
-          region=region,
-          cluster_name=cluster_name,
-          workload_id=workload_id,
-      )
-
-      # TODO(cienet): refine validation
-      #   1. more precise log content and order
-      #   2. use kubectl instead of CoreV1Api
-      #   (since it doesn't support "since_time")
-      #   3. cache a timestamp, to skip the old logs
-
-      wait_for_elastic_attempt = xpk.check_logs_exist.override(
-          task_id=f"wait_for_elastic_attempt_{i}"
-      )(
-          project_id=project_id,
-          region=region,
-          cluster_name=cluster_name,
-          workload_id=workload_id,
-          expect_log_contains=elastic_log_pattern,
-      )
-
-      wait_for_slices_active = xpk.check_logs_exist.override(
-          task_id=f"wait_for_slices_active_{i}"
-      )(
-          project_id=project_id,
-          region=region,
-          cluster_name=cluster_name,
-          workload_id=workload_id,
-          expect_log_contains=end_log_pattern,
-          expected_count=i + 1,
-      )
-
-      # TODO(cienet): Refine the mechanism to chain tasks
-      chain(
-          wait_for_step,
-          trigger_interrupt,
-          wait_for_elastic_attempt,
-          wait_for_slices_active,
-      )
-
-      if previous_cycle_tail:
-        chain(previous_cycle_tail, wait_for_step)
-      previous_cycle_tail = wait_for_slices_active
-    return group
 
 
 RECIPE_INSTANCE = recipe_cfg.Recipe.PW_MCJAX_BENCHMARK_RECIPE
