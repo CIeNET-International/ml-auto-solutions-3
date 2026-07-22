@@ -16,24 +16,24 @@
 
 # TODO(cienet): circle back for the whole file
 
-# TODO(cienet): import grouping
-
-import os
 import ast
-from absl import logging
-from ml_goodput_measurement import goodput, goodput_elastic
+import os
 
+from absl import logging
 from airflow.decorators import task
-from airflow.sensors.base import PokeReturnValue
 from airflow.models.taskmixin import DAGNode
-from airflow.utils.task_group import TaskGroup
 from airflow.models.baseoperator import chain
+from airflow.sensors.base import PokeReturnValue
+from airflow.utils.task_group import TaskGroup
 from google.cloud import logging as gcp_logging
 from google.cloud.monitoring_v3 import types
+from ml_goodput_measurement import goodput
+from ml_goodput_measurement import goodput_elastic
+
 # TODO(cienet): promote them as shared utility
-from dags.tpu_observability.utils.time_util import TimeUtil
 from dags.tpu_observability.utils.gcp_util import list_time_series
-from google.cloud import logging as gcp_logging
+from dags.tpu_observability.utils.time_util import TimeUtil
+
 
 GOODPUT_LOG_LIST = [
     "Cumulative goodput monitoring process started for job: {workload_id}",
@@ -347,7 +347,7 @@ def phase1_validate(
     times: int = 0,
 ) -> DAGNode:
   """Run a test job with worker pod interruption."""
-  with TaskGroup(group_id=f"phase1_validate_{times}") as group:
+  with TaskGroup(group_id=f"phase1_validate_{times}"):
     slices_phase1 = check_slice_counts.override(
         task_id="check_slices_phase1",
         timeout=180,
@@ -384,7 +384,7 @@ def phase2_validate(
     times: int = 0,
 ) -> DAGNode:
   """Run a test job with worker pod interruption."""
-  with TaskGroup(group_id=f"phase2_validate_{times}") as group:
+  with TaskGroup(group_id=f"phase2_validate_{times}"):
     slices_phase2 = check_slice_counts.override(
         task_id="check_slices_phase2",
         timeout=180,

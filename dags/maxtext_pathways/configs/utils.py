@@ -14,24 +14,25 @@
 
 """Common funcitons and tasks for MaxText Pathways DAGs"""
 
-# TODO(cienet): import grouping
-
-from itertools import chain
+from datetime import datetime, timezone
+import json
 import os
 import re
-import time
-import json
 import tempfile
-from datetime import datetime, timezone
+import time
 
 from absl import logging
 from airflow.decorators import task
+from airflow.exceptions import AirflowException, AirflowFailException
+from airflow.decorators import task_group
 from airflow.models.taskmixin import DAGNode
-from airflow.utils.task_group import TaskGroup
-from airflow.exceptions import AirflowFailException, AirflowException
+from airflow.models.baseoperator import chain
 from airflow.operators.python import get_current_context
+from airflow.utils.task_group import TaskGroup
 from google.cloud import logging as gcp_logging
-from xlml.utils import xpk, gke, subprocess_utils
+
+from xlml.utils import gke, subprocess_utils, xpk
+
 
 # TODO(cienet): Replace this with an official one.
 COLOCATED_PYTHON_IMAGE = (
@@ -198,7 +199,6 @@ def check_gcp_logs_exist(
 
   all_patterns_found = True
   for pattern in patterns:
-    # re.escape matches your original literal string search logic
     log_matches = re.findall(re.escape(pattern), full_logs_text)
     log_count = len(log_matches)
     logging.info(f"Logs: '{pattern}' found {log_count} times, ")
@@ -221,10 +221,58 @@ def check_gcp_logs_exist(
   return False
 
 
+@task
+def get_pod_list(
+    workload_id: str,
+    cluster_name: str,
+    region: str,
+    project_id: str,
+) -> str | None:
+  """Returns the name of the first pod that matches the given prefix."""
+  with tempfile.NamedTemporaryFile() as temp_config_file:
+    env = _get_kubeconfig_env(
+        project_id, region, cluster_name, kubeconfig_path=temp_config_file.name
+    )
+    pods = _list_workload_pods_kubectl(workload_id, env=env)
+    return pods
+
+
+@task
+def get_target_name(
+    pods: list,
+    workload_id: str,
+    find_head_pod: bool = False,
+    worker_index: str | None = "0-1",
+) -> str | None:
+  """Returns the name of the first pod that matches the given prefix."""
+
+  head_pod_prefix = f"{workload_id}-pathways-head-0-0-"
+  worker_pod_prefix = f"{workload_id}-worker-{worker_index}-"
+
+  if find_head_pod:
+    pod_prefix = head_pod_prefix
+  else:
+    pod_prefix = worker_pod_prefix
+
+  for pod in pods:
+    pod_name = pod.get("metadata", {}).get("name", "")
+    if pod_name.startswith(pod_prefix):
+      return pod_name
+
+
+@task
+def check_pod_health(pods: list) -> None:
+  """Checks the health of pods and raises an exception if any pod is in a bad phase."""
+  for pod in pods:
+    phase = pod.get("status", {}).get("phase")
+    if phase in ("Failed", "Unknown"):
+      raise AirflowFailException(f"Bad pod phase: {phase}")
+
+
 # TODO(cienet): remove pod detection logic (caller must specify it)
 @task
 def interrupt_worker_pod(
-    workload_id: str, cluster_name: str, region: str, project_id: str
+    target_pod_name: str, cluster_name: str, region: str, project_id: str
 ) -> str:
   """
   Authenticates with the GKE cluster and sends SIGILL to worker pod 0-1.
@@ -233,32 +281,7 @@ def interrupt_worker_pod(
     env = _get_kubeconfig_env(
         project_id, region, cluster_name, kubeconfig_path=temp_config_file.name
     )
-
-    target_worker_index = "0-1"
-    # container_name = "pathways-worker"
-    pod_prefix = f"{workload_id}-worker-{target_worker_index}-"
-    pods = _list_workload_pods_kubectl(workload_id, env=env)
-
-    if not pods:
-      raise AirflowException(
-          f"No pods found for workload selector: {workload_id}"
-      )
-
-    target_pod_name = None
-    for pod in pods:
-      phase = pod.get("status", {}).get("phase")
-      if phase in ("Failed", "Unknown"):
-        raise AirflowFailException(f"Bad pod phase: {phase}")
-
-      pod_name = pod.get("metadata", {}).get("name", "")
-      if pod_name.startswith(pod_prefix):
-        target_pod_name = pod_name
-        break
-
-    if not target_pod_name:
-      raise AirflowFailException(f"No pod found matching prefix: {pod_prefix}")
-
-    logging.info(f"Found target pod: {target_pod_name}")
+    logging.info(f"Target pod name: {target_pod_name}")
 
     cmd = f"kubectl exec -it {target_pod_name} -n default -- /bin/sh -c 'kill -s SIGILL 1'"
 
@@ -268,6 +291,51 @@ def interrupt_worker_pod(
       logging.info("Process was terminated with SIGKILL")
 
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+@task_group
+def interruption(
+    project_id: str = "",
+    workload_id: str = "",
+    region: str = "",
+    cluster_name: str = "",
+) -> DAGNode:
+  """Run a test job with worker pod interruption."""
+  pod_list = get_pod_list.override(
+      task_id="get_pod_list",
+  )(
+      workload_id=workload_id,
+      cluster_name=cluster_name,
+      region=region,
+      project_id=project_id,
+  )
+
+  get_worker_pod_name = get_target_name.override(
+      task_id="get_worker_pod_name",
+  )(
+      pods=pod_list,
+      workload_id=workload_id,
+      find_head_pod=False,
+  )
+
+  pod_health = check_pod_health.override(task_id="check_pod_health")(
+      pods=pod_list,
+  )
+
+  interrupt = interrupt_worker_pod.override(task_id="interrupt_worker_pod")(
+      target_pod_name=get_worker_pod_name,
+      cluster_name=cluster_name,
+      region=region,
+      project_id=project_id,
+  )
+
+  chain(
+      pod_list,
+      [get_worker_pod_name, pod_health],
+      interrupt,
+  )
+
+  return interrupt
 
 
 # TODO(cienet): timeout might have conflict with steam
@@ -340,6 +408,8 @@ def check_logs_stream(
     region: str,
     project_id: str,
     expect_log_contains: str,
+    pods: list,
+    pod_name: str,
     since_time: str | None = None,
 ) -> str:
   """
@@ -352,24 +422,11 @@ def check_logs_stream(
     env = _get_kubeconfig_env(
         project_id, region, cluster_name, kubeconfig_path=temp_config_file.name
     )
-    pods = _list_workload_pods_kubectl(workload_id, env=env)
 
     if not pods:
       raise AirflowException(
           f"No pods found for workload selector: {workload_id}"
       )
-
-    first_pod = pods[0]
-    pod_prefix = f"{workload_id}-head-0-0-"
-    # Validate pod health
-    for pod in pods:
-      phase = pod.get("status", {}).get("phase")
-      if phase in ("Failed", "Unknown"):
-        raise AirflowFailException(f"Bad pod phase: {phase}")
-
-      pod_name = pod.get("metadata", {}).get("name", "")
-      if pod_name.startswith(pod_prefix):
-        first_pod = pod_name
 
     if since_time:
       effective_since_time = since_time
@@ -384,8 +441,7 @@ def check_logs_stream(
       )
 
     container_name = "jax-tpu"
-    pod_name = first_pod["metadata"]["name"]
-    pod_namespace = first_pod["metadata"].get("namespace", "default")
+    pod_namespace = pods[0]["metadata"].get("namespace", "default")
 
     # Stream logs continuously until string is found
     timestamp = _stream_pod_logs(
@@ -398,6 +454,61 @@ def check_logs_stream(
     )
 
   return timestamp
+
+
+@task_group
+def stream_logs(
+    project_id: str = "",
+    workload_id: str = "",
+    region: str = "",
+    cluster_name: str = "",
+    expect_log_contains: str = "",
+    since_time: str | None = None,
+) -> DAGNode:
+  """Run a test job with worker pod interruption."""
+
+  pod_list = get_pod_list.override(
+      task_id="get_pod_list",
+  )(
+      workload_id=workload_id,
+      cluster_name=cluster_name,
+      region=region,
+      project_id=project_id,
+  )
+
+  get_head_pod_name = get_target_name.override(
+      task_id="get_head_pod_name",
+  )(
+      pods=pod_list,
+      workload_id=workload_id,
+      find_head_pod=True,
+  )
+
+  pod_health = check_pod_health.override(task_id="check_pod_health")(
+      pods=pod_list,
+  )
+
+  logs_stream = check_logs_stream.override(
+      task_id="check_logs_stream",
+  )(
+      pod_name=get_head_pod_name,
+      cluster_name=cluster_name,
+      region=region,
+      project_id=project_id,
+      workload_id=workload_id,
+      pods=pod_list,
+      expect_log_contains=expect_log_contains,
+      since_time=since_time,
+  )
+
+  chain(
+      pod_list,
+      get_head_pod_name,
+      pod_health,
+      logs_stream,
+  )
+
+  return logs_stream
 
 
 def worker_pod_interruption(
@@ -414,9 +525,8 @@ def worker_pod_interruption(
   with TaskGroup(group_id="worker_pod_interruption") as group:
     last_timestamp = None
     for i in range(1, times + 1):
-      wait_for_step = check_logs_stream.override(
-          task_id=f"wait_for_step_starts_{i}",
-          retries=5,
+      wait_for_step = stream_logs.override(
+          group_id=f"wait_for_step_starts_{i}",
       )(
           project_id=project_id,
           region=region,
@@ -426,8 +536,8 @@ def worker_pod_interruption(
           since_time=last_timestamp,
       )
 
-      trigger_interrupt = interrupt_worker_pod.override(
-          task_id=f"interrupt_worker_{i}"
+      trigger_interrupt = interruption.override(
+          group_id=f"trigger_interrupt_{i}"
       )(
           project_id=project_id,
           region=region,
@@ -435,10 +545,10 @@ def worker_pod_interruption(
           workload_id=workload_id,
       )
 
-      wait_for_step >> trigger_interrupt
+      # wait_for_step >> trigger_interrupt
 
-      wait_for_elastic_attempt = check_logs_stream.override(
-          task_id=f"wait_for_elastic_attempt_{i}"
+      wait_for_elastic_attempt = stream_logs.override(
+          group_id=f"wait_for_elastic_attempt_{i}"
       )(
           project_id=project_id,
           region=region,
@@ -448,8 +558,8 @@ def worker_pod_interruption(
           since_time=trigger_interrupt,
       )
 
-      wait_for_slices_active = check_logs_stream.override(
-          task_id=f"wait_for_slices_active_{i}"
+      wait_for_slices_active = stream_logs.override(
+          group_id=f"wait_for_slices_active_{i}"
       )(
           project_id=project_id,
           region=region,
