@@ -14,13 +14,27 @@
 
 """Common funcitons and tasks for MaxText Pathways DAGs"""
 
+import os
 import re
+import json
+import tempfile
 import time
-
 from absl import logging
+from datetime import datetime, timezone
+from kubernetes.stream import stream
+from kubernetes import client as k8s_client
+
 from airflow.decorators import task
+from airflow.exceptions import AirflowFailException, AirflowException
+from airflow.models.taskmixin import DAGNode
+from airflow.utils.task_group import TaskGroup
+from airflow.models.baseoperator import chain
 from google.cloud import logging as gcp_logging
-from xlml.utils import gke, xpk
+from xlml.utils import gke, subprocess_utils
+from xlml.utils.xpk import (
+    get_xpk_setup_cmd,
+    MAIN_BRANCH,
+)
 
 
 # TODO(cienet): Replace this with an official one.
@@ -53,7 +67,7 @@ def generate_install_dependencies_commands() -> str:
       "sudo apt-get install google-cloud-sdk-gke-gcloud-auth-plugin -y",
 
       # Install xpk
-      *xpk.get_xpk_setup_cmd("/root", xpk.MAIN_BRANCH),
+      *get_xpk_setup_cmd("/root", MAIN_BRANCH),
 
       # Install dependencies for maxtext
       "pip install omegaconf",
@@ -107,6 +121,80 @@ def generate_derived_parameters(dag_params: dict, dag_id: str) -> dict:
       derived_params["num_elastic_slices"] = 2
 
   return derived_params
+
+
+def authenticate_kubectl(
+    project_id: str,
+    region: str,
+    cluster_name: str,
+    workload_id: str,
+    namespace: str = "default",
+) -> tuple[k8s_client.CoreV1Api, k8s_client.V1PodList]:
+  """Authenticates kubectl against the specified GKE cluster."""
+  auth_client = gke.get_authenticated_client(project_id, region, cluster_name)
+  core_api = k8s_client.CoreV1Api(auth_client)
+  pods = core_api.list_namespaced_pod(
+      label_selector=f"jobset.sigs.k8s.io/jobset-name={workload_id}",
+      namespace=namespace,
+  )
+  return core_api, pods
+
+
+@task
+def interrupt_worker_pod(
+    workload_id: str, cluster_name: str, region: str, project_id: str
+) -> bool:
+  """
+  Authenticates with the GKE cluster and sends SIGILL to worker pod 0-1.
+  """
+
+  namespace = "default"
+  target_worker_index = "0-1"
+  container_name = "pathways-worker"
+  pod_prefix = f"{workload_id}-worker-{target_worker_index}-"
+  core_api, pods = authenticate_kubectl(
+      project_id, region, cluster_name, workload_id, namespace
+  )
+
+  if not pods.items:
+    logging.info("No pods found for workload selector: %s.", workload_id)
+    return False
+
+  target_pod_name = None
+  for pod in pods.items:
+    if pod.metadata.name.startswith(pod_prefix):
+      target_pod_name = pod.metadata.name
+      break
+
+  if not target_pod_name:
+    logging.error("No pod found matching prefix: %s", pod_prefix)
+    return False
+
+  logging.info(f"Found target pod: {target_pod_name}")
+
+  # Execute command (kubectl exec ...)
+  exec_command = ["sh", "-c", "kill -s SIGILL 1"]
+  try:
+    resp = stream(
+        core_api.connect_get_namespaced_pod_exec,
+        name=target_pod_name,
+        namespace=namespace,
+        container=container_name,
+        command=exec_command,
+        stderr=True,
+        stdin=False,
+        stdout=True,
+        tty=False,
+    )
+    logging.info(
+        "Successfully executed kill command on %s. Response: %s",
+        target_pod_name,
+        resp,
+    )
+    return True
+  except Exception as e:
+    logging.error("Failed to execute command on pod %s: %s", target_pod_name, e)
+    raise
 
 
 @task.sensor(poke_interval=10, timeout=3600, mode="reschedule")
@@ -167,7 +255,6 @@ def check_gcp_logs_exist(
 
   all_patterns_found = True
   for pattern in patterns:
-    # re.escape matches your original literal string search logic
     log_matches = re.findall(re.escape(pattern), full_logs_text)
     log_count = len(log_matches)
     logging.info(f"Logs: '{pattern}' found {log_count} times, ")
@@ -187,4 +274,238 @@ def check_gcp_logs_exist(
     return True
 
   logging.info("Waiting for matching log pattern in GCP...")
+  return False
+
+
+def _authenticate_kubectl(
+    project_id: str, region: str, cluster_name: str, kubeconfig_path: str
+) -> dict[str, str]:
+  """Authenticates kubectl against the specified GKE cluster."""
+  env = os.environ.copy()
+  env["KUBECONFIG"] = kubeconfig_path
+  cmd = f"gcloud container clusters get-credentials {cluster_name} --region {region} --project {project_id}"
+  logging.info(f"Authenticating kubectl for cluster: {cluster_name}")
+  subprocess_utils.run_exec(cmd, env=env)
+  return env
+
+
+def _list_workload_pods_kubectl(
+    workload_id: str, env: dict[str, str] | None = None
+) -> list:
+  """Lists pods matching the workload label using kubectl and returns them as a list of dicts."""
+  logging.info(f"Getting pods for workload_id: {workload_id}")
+  cmd = f"kubectl get pods -n default -l jobset.sigs.k8s.io/jobset-name={workload_id} -o json"
+  result = subprocess_utils.run_exec(cmd, env=env, log_output=False)
+  pod_list_json = json.loads(result)
+  # Returns the 'items' list from the Kubernetes List object
+  return pod_list_json.get("items", [])
+
+
+def _stream_pod_logs(
+    pod_name: str,
+    namespace: str,
+    pattern: str,
+    since_time: str | None = None,
+    env: dict[str, str] | None = None,
+) -> str:
+  """Streams pod logs in real time and exits as soon as pattern is found."""
+
+  cmd = f"kubectl logs -f {pod_name} -n {namespace} --timestamps=true"
+  if since_time:
+    cmd += f" --since-time={since_time}"
+
+  # Open persistent streaming process
+  process = subprocess_utils.run_streaming(cmd, env=env)
+
+  try:
+    for line in iter(process.stdout.readline, ""):
+      # Direct line-by-line read prevents internal buffer locking
+      clean_line = line.strip()
+      if not clean_line:
+        continue
+
+      logging.info("[pod-log] %s", clean_line)
+
+      # Check for target pattern match
+      if pattern in clean_line:
+        logging.info("Target log pattern '%s' matched!", pattern)
+
+        if "Z " in clean_line:
+          return clean_line.split("Z ")[0] + "Z"
+
+        return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # Process ended naturally (container finished) without finding the string
+    raise AirflowException(
+        f"Log stream ended, but pattern '{pattern}' was not found."
+    )
+
+  # Exceptional outcome: the pipe crashed or dropped prematurely
+  except (IOError, OSError) as e:
+    raise AirflowException(f"Failed while reading process output: {e}") from e
+
+  finally:
+    process.kill()
+    # Close the pipe to prevent resource leaks
+    process.stdout.close()
+    # Reaps the process to prevent zombie processes
+    process.wait()
+
+
+@task
+def check_logs_stream(
+    workload_id: str,
+    cluster_name: str,
+    region: str,
+    project_id: str,
+    expect_log_contains: str,
+    since_time: str | None = None,
+    **kwargs,
+) -> str:
+  """
+  Checks if the running pod's logs contain a specific substring.
+  """
+  ti = kwargs["task_instance"]
+
+  with tempfile.NamedTemporaryFile() as temp_config_file:
+    env = _authenticate_kubectl(
+        project_id, region, cluster_name, kubeconfig_path=temp_config_file.name
+    )
+    pods = _list_workload_pods_kubectl(workload_id, env=env)
+
+    if not pods:
+      raise AirflowException(
+          f"No pods found for workload selector: {workload_id}"
+      )
+
+    # Validate pod health
+    for pod in pods:
+      phase = pod.get("status", {}).get("phase")
+      if phase in ("Failed", "Unknown"):
+        raise AirflowFailException(f"Bad pod phase: {phase}")
+    if since_time:
+      effective_since_time = since_time
+      logging.info("Using upstream XCom since_time: %s", effective_since_time)
+    else:
+      effective_since_time = ti.start_date.astimezone(timezone.utc).strftime(
+          "%Y-%m-%dT%H:%M:%SZ"
+      )
+      logging.info(
+          "No upstream or internal since_time. Using task start time: %s",
+          effective_since_time,
+      )
+
+    first_pod = pods[0]
+    pod_name = first_pod["metadata"]["name"]
+    pod_namespace = first_pod["metadata"].get("namespace", "default")
+
+    # Stream logs continuously until string is found or timeout occurs
+    timestamp = _stream_pod_logs(
+        pod_name=pod_name,
+        namespace=pod_namespace,
+        pattern=expect_log_contains,
+        since_time=effective_since_time,
+        env=env,
+    )
+
+  return timestamp
+
+
+def worker_pod_interruption(
+    project_id: str = "",
+    region: str = "",
+    cluster_name: str = "",
+    workload_id: str = "",
+    times: int = 3,
+    entry_log_pattern: str = "completed step:",
+    elastic_log_pattern: str = "Elastic attempt",
+    end_log_pattern: str = "Sufficient slices active:",
+) -> DAGNode:
+  """Run a test job with worker pod interruption."""
+  with TaskGroup(group_id="worker_pod_interruption") as group:
+    last_timestamp = None
+    for i in range(1, times + 1):
+      wait_for_step = check_logs_stream.override(
+          task_id=f"wait_for_step_starts_{i}",
+          retries=5,
+      )(
+          project_id=project_id,
+          region=region,
+          cluster_name=cluster_name,
+          workload_id=workload_id,
+          expect_log_contains=entry_log_pattern,
+          since_time=last_timestamp,
+      )
+
+      trigger_interrupt = interrupt_worker_pod.override(
+          task_id=f"interrupt_worker_{i}"
+      )(
+          project_id=project_id,
+          region=region,
+          cluster_name=cluster_name,
+          workload_id=workload_id,
+      )
+
+      wait_for_elastic_attempt = check_logs_stream.override(
+          task_id=f"wait_for_elastic_attempt_{i}"
+      )(
+          project_id=project_id,
+          region=region,
+          cluster_name=cluster_name,
+          workload_id=workload_id,
+          expect_log_contains=elastic_log_pattern,
+          since_time=wait_for_step,
+      )
+
+      wait_for_slices_active = check_logs_stream.override(
+          task_id=f"wait_for_slices_active_{i}"
+      )(
+          project_id=project_id,
+          region=region,
+          cluster_name=cluster_name,
+          workload_id=workload_id,
+          expect_log_contains=end_log_pattern,
+          since_time=wait_for_elastic_attempt,
+      )
+
+      chain(
+          wait_for_step,
+          trigger_interrupt,
+          wait_for_elastic_attempt,
+          wait_for_slices_active,
+      )
+
+      last_timestamp = wait_for_slices_active
+
+    return group
+
+
+@task.sensor(poke_interval=30, timeout=3600, mode="reschedule")
+def check_pod_status(
+    project_id: str,
+    region: str,
+    cluster_name: str,
+    workload_id: str,
+) -> bool:
+  """
+  Checks if the last 45 seconds of a running pod's logs
+  contain a specific substring.
+  """
+  _, pods = authenticate_kubectl(project_id, region, cluster_name, workload_id)
+
+  if not pods.items:
+    logging.info("No pods found for workload selector: %s.", workload_id)
+    return False
+
+  for pod in pods.items:
+    if pod.status.phase == "Failed":
+      # Don't keep retrying if the pod has failed
+      raise AirflowFailException(f"Bad pod phase: {pod.status.phase}")
+    elif pod.status.phase in ["Unknown"]:
+      raise RuntimeError(f"Bad pod phase: {pod.status.phase}")
+
+  if all(pod.status.phase in ["Running"] for pod in pods.items):
+    return True
+
+  logging.info("Waiting for matching log pattern...")
   return False
