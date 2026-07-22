@@ -41,9 +41,9 @@ from dags.tpu_observability.configs.common import (
 )
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
-from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.tpu_observability.utils.jobset_util import Workload
 from dags.tpu_observability.utils.time_util import TimeUtil
+from xlml.utils import subprocess_utils as subprocess
 
 DAG_ID = "jobset_ttr_kill_process"
 DAGRUN_TIMEOUT = get_dag_timeout(DAG_ID)
@@ -78,8 +78,6 @@ def kill_tpu_pod_workload(info: node_pool.Info, running_pods: list) -> None:
       subprocess.run_exec(cmd, env=env)
     except subprocess.ProcessKilledException:
       logging.info("Process was terminated with SIGKILL")
-    except Exception as e:
-      raise e
 
   return operation_start_time
 

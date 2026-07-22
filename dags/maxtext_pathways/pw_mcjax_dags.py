@@ -28,7 +28,7 @@ from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper
 from dags.maxtext_pathways.configs import parameters as ui_params
 from dags.maxtext_pathways.configs import recipe_config as recipe_cfg
 from dags.maxtext_pathways.configs.utils import get_dag_parameters, generate_install_dependencies_commands, generate_derived_parameters
-from xlml.utils import kpo, xpk, gke
+from xlml.utils import gke, kpo, xpk
 
 
 @task

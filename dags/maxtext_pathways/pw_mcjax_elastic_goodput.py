@@ -21,8 +21,6 @@ from absl import logging
 from airflow import models
 from airflow.decorators import task
 from airflow.models.baseoperator import chain
-from airflow.models.taskmixin import DAGNode
-from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 from google.cloud import logging as gcp_logging
 from ml_goodput_measurement import goodput
@@ -36,6 +34,7 @@ from dags.maxtext_pathways.configs.utils import (
     get_dag_parameters,
     generate_install_dependencies_commands,
     generate_derived_parameters,
+    worker_pod_interruption,
     check_gcp_logs_exist,
     COLOCATED_PYTHON_IMAGE,
 )
@@ -269,75 +268,6 @@ def generate_commands(
   return commands
 
 
-def worker_pod_interruption(
-    project_id: str = "",
-    region: str = "",
-    cluster_name: str = "",
-    workload_id: str = "",
-) -> DAGNode:
-  """Run a test job with worker pod interruption."""
-  with TaskGroup(group_id="worker_pod_interruption") as group:
-    previous_cycle_tail = None
-    for i in range(1, 2):
-      wait_for_step = xpk.check_last_logs.override(
-          task_id=f"wait_for_step_starts_{i}"
-      )(
-          project_id=project_id,
-          region=region,
-          cluster_name=cluster_name,
-          workload_id=workload_id,
-          expect_log_contains="completed step:",
-      )
-
-      trigger_interrupt = xpk.interrupt_worker_pod.override(
-          task_id=f"interrupt_worker_{i}"
-      )(
-          project_id=project_id,
-          region=region,
-          cluster_name=cluster_name,
-          workload_id=workload_id,
-      )
-
-      # TODO(cienet): refine validation
-      #   1. more precise log content and order
-      #   2. use kubectl instead of CoreV1Api
-      #   (since it doesn't support "since_time")
-      #   3. cache a timestamp, to skip the old logs
-
-      wait_for_elastic_attempt = xpk.check_logs_exist.override(
-          task_id=f"wait_for_elastic_attempt_{i}"
-      )(
-          project_id=project_id,
-          region=region,
-          cluster_name=cluster_name,
-          workload_id=workload_id,
-          expect_log_contains=f"Elastic attempt {i+1}",
-      )
-
-      wait_for_slices_active = xpk.check_logs_exist.override(
-          task_id=f"wait_for_slices_active_{i}"
-      )(
-          project_id=project_id,
-          region=region,
-          cluster_name=cluster_name,
-          workload_id=workload_id,
-          expect_log_contains="Sufficient slices active:",
-          expected_count=i + 1,
-      )
-
-      chain(
-          wait_for_step,
-          trigger_interrupt,
-          wait_for_elastic_attempt,
-          wait_for_slices_active,
-      )
-
-      if previous_cycle_tail:
-        chain(previous_cycle_tail, wait_for_step)
-      previous_cycle_tail = wait_for_slices_active
-    return group
-
-
 RECIPE_INSTANCE = recipe_cfg.Recipe.PW_MCJAX_BENCHMARK_RECIPE
 RECIPE_NAME = RECIPE_INSTANCE.value.lower()
 
@@ -410,12 +340,25 @@ def create_elastic_goodput_dag(
         workload_run_timeout=datetime.timedelta(minutes=15),
         image_full_url=fetched_params["runner"],
     )
-
+    check_pod = gke.wait_for_workload_start.override(
+        task_id="wait_for_workload_start",
+    )(
+        project_id=fetched_params["project"],
+        region=calculated_params["region"],
+        cluster_name=fetched_params["cluster_name"],
+        workload_id=calculated_params["workload_id"],
+    )
+    entry_log_pattern = (
+        "live slice count: 2"
+        if params == replica_params
+        else "live slice count: 1"
+    )
     interruption_task = worker_pod_interruption(
         project_id=fetched_params["project"],
         region=calculated_params["region"],
         cluster_name=fetched_params["cluster_name"],
         workload_id=calculated_params["workload_id"],
+        entry_log_pattern=entry_log_pattern,
     )
 
     wait_for_workload_complete = gke.wait_for_workload_completion.override(
@@ -467,6 +410,7 @@ def create_elastic_goodput_dag(
         calculated_params,
         generated_cmds,
         start_recipe,
+        check_pod,
         interruption_task,
         wait_for_workload_complete,
         goodput_logname,
