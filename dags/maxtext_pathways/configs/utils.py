@@ -19,12 +19,16 @@
 from itertools import chain
 import os
 import re
+import json
+import tempfile
 import time
 import json
 import tempfile
 from datetime import datetime, timezone
 
 from absl import logging
+from datetime import datetime, timezone
+
 from airflow.decorators import task
 from airflow.models.taskmixin import DAGNode
 from airflow.utils.task_group import TaskGroup
@@ -198,7 +202,6 @@ def check_gcp_logs_exist(
 
   all_patterns_found = True
   for pattern in patterns:
-    # re.escape matches your original literal string search logic
     log_matches = re.findall(re.escape(pattern), full_logs_text)
     log_count = len(log_matches)
     logging.info(f"Logs: '{pattern}' found {log_count} times, ")
