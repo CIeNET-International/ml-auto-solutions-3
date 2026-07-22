@@ -45,9 +45,9 @@ from dags.tpu_observability.configs.common import (
 )
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
-from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.tpu_observability.utils import tpu_info_util as tpu_info
 from dags.tpu_observability.utils.jobset_util import Workload
+from xlml.utils import subprocess_utils
 
 DAG_ID = "tpu_info_format_validation_dag"
 DAGRUN_TIMEOUT = get_dag_timeout(DAG_ID)
@@ -79,7 +79,7 @@ def get_tpu_info_from_pod(info: node_pool.Info, pod_name: str) -> str:
         f"kubectl exec {pod_name} -n default -- tpu-info",
     ])
 
-    return subprocess.run_exec(cmd, env=env)
+    return subprocess_utils.run_exec(cmd, env=env)
 
 
 @task
