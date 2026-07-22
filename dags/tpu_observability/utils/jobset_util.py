@@ -38,13 +38,13 @@ from airflow.sensors.base import PokeReturnValue
 from google.cloud.monitoring_v3 import types
 from websocket import WebSocketConnectionClosedException
 
-from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.tpu_observability.utils.gcp_util import list_time_series
 from dags.tpu_observability.utils.node_pool_util import NODE_POOL_SELECTOR_KEY
 from dags.tpu_observability.utils.node_pool_util import Info as node_pool_info
 from dags.tpu_observability.utils.time_util import TimeUtil
 from xlml.apis import gcs
 from xlml.utils import composer, gke
+from xlml.utils import subprocess_utils
 
 
 @task
@@ -567,7 +567,7 @@ def get_running_pods(
         ),
     ])
 
-    stdout = subprocess.run_exec(cmd, env=env)
+    stdout = subprocess_utils.run_exec(cmd, env=env)
     data = json.loads(stdout)
 
     running_pods = [
@@ -671,7 +671,7 @@ def run_workload(
         ),
     ])
 
-    subprocess.run_exec(cmd, env=env)
+    subprocess_utils.run_exec(cmd, env=env)
 
     # Log metadata for XLML dashboard
     # Pod names follow the pattern:
@@ -723,7 +723,7 @@ def end_workload(
         ),
     ])
 
-    subprocess.run_exec(cmd, env=env)
+    subprocess_utils.run_exec(cmd, env=env)
 
 
 @task
@@ -763,7 +763,7 @@ def list_pod_names(
         ),
     ])
 
-    stdout = subprocess.run_exec(cmd, env=env)
+    stdout = subprocess_utils.run_exec(cmd, env=env)
 
     if not stdout or not stdout.strip():
       logging.warning("Received empty pod list from bash task.")
@@ -824,7 +824,7 @@ def delete_one_random_pod(
     ])
 
     current_time_utc = datetime.datetime.now(datetime.timezone.utc)
-    subprocess.run_exec(cmd, env=env)
+    subprocess_utils.run_exec(cmd, env=env)
     logging.info("Successfully initiated deletion for pod: %s", target_pod)
 
     return TimeUtil.from_datetime(current_time_utc)
@@ -887,7 +887,7 @@ def operate_pod(
 
     current_time_utc = datetime.datetime.now(datetime.timezone.utc)
     try:
-      subprocess.run_exec(" && ".join(commands), env=env)
+      subprocess_utils.run_exec(" && ".join(commands), env=env)
     except WebSocketConnectionClosedException:
       if operation.target == PodOperation.REBOOT:
         logging.info(

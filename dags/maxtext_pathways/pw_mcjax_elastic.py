@@ -20,8 +20,6 @@ from absl import logging
 from airflow import models
 from airflow.decorators import task
 from airflow.models.baseoperator import chain
-from airflow.models.taskmixin import DAGNode
-from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
 from dags import composer_env
@@ -33,12 +31,17 @@ from dags.maxtext_pathways.configs.utils import (
     get_dag_parameters,
     generate_install_dependencies_commands,
     generate_derived_parameters,
+    worker_pod_interruption,
+    check_pod_status,
     COLOCATED_PYTHON_IMAGE,
 )
 from xlml.utils import kpo, xpk
 
 
 ELASTIC_TYPE = ["Pause-resume", "Replica-resize"]
+RECIPE_INSTANCE = recipe_cfg.Recipe.PW_MCJAX_BENCHMARK_RECIPE
+RECIPE_NAME = RECIPE_INSTANCE.value.lower()
+
 elastic_params = ui_params.PARAMETERS.copy()
 elastic_params.update({
     "colocated_python_image": ui_params.Param(
@@ -47,18 +50,9 @@ elastic_params.update({
         title="Colocated Python Image",
         description="Colocated Python image for pathways.",
     ),
-    "elastic_type": ui_params.Param(
-        ELASTIC_TYPE[0],
-        type="string",
-        title="Elastic Type",
-        description="Pause-resume/Replica-resize",
-        enum=ELASTIC_TYPE,
-    ),
 })
 
 
-# TODO(cienet): Remove the temporary local code once these changes have been
-# merged into the maxtext repository.
 @task
 def generate_commands(
     dag_params: dict, derived_params: dict, recipe_instance: recipe_cfg.Recipe
@@ -68,122 +62,73 @@ def generate_commands(
   Runtime modifications are made to the recipe command to enable elastic
   training and colocated Python data input.
   """
-  # Initialization command.
   env_cmds = generate_install_dependencies_commands()
   recipe_cmd = recipe_instance.run_command
+  elastic_type = dag_params.get("elastic_type", ELASTIC_TYPE[0])
 
-  # Patch command for enabling elastic training & colocated Python data input.
-  patch_cmd_runner = (
-      r'sed -i "/python3 -m maxtext.trainers.pre_train.train/a '
-      r"          f\"elastic_enabled=True\",\n"
-      r"          f\"enable_single_controller=True\",\n"
-      f'          \\"elastic_min_slice_count='
-      f'{derived_params["elastic_min_slice_count"]}\\",\\n'
-      r"          f\"colocated_python_data_input=True\",\n"
-      r"          f\"tokenizer_path="
-      r'"src/maxtext/assets/tokenizers/tokenizer.llama2"\"," '
-      r"benchmarks/maxtext_xpk_runner.py"
-  )
+  # Patch benchmarks/maxtext_xpk_runner.py
+  if elastic_type == "Pause-resume":
+    patch_cmd_runner = (
+        r'sed -i "/python3 -m maxtext.trainers.pre_train.train/a '
+        r"          f\"elastic_enabled=True\",\n"
+        r"          f\"enable_single_controller=True\",\n"
+        f'          \\"elastic_min_slice_count='
+        f'{derived_params["elastic_min_slice_count"]}\\",\\n'
+        r"          f\"async_checkpointing=True\",\n"
+        r"          f\"enable_checkpoint_cloud_logger=True\",\n"
+        r"          f\"checkpoint_period=10\","
+        r"          f\"colocated_python_data_input=True\",\n"
+        r"          f\"tokenizer_path="
+        r'"src/maxtext/assets/tokenizers/tokenizer.llama2"\"," '
+        r"benchmarks/maxtext_xpk_runner.py"
+    )
+  else:  # Replica-resize
+    patch_cmd_runner = (
+        r'sed -i "/python3 -m maxtext.trainers.pre_train.train/a '
+        r"          f\"elastic_enabled=True\",\n"
+        r"          f\"enable_single_controller=True\",\n"
+        f'          \\"elastic_min_slice_count='
+        f'{derived_params["elastic_min_slice_count"]}\\",\\n'
+        r"          f\"enable_pathways_goodput=True\",\n"
+        r"          f\"enable_goodput_recording=True\",\n"
+        r"          f\"goodput_upload_interval_seconds=30\",\n"
+        r"          f\"monitor_goodput=True\",\n"
+        r"          f\"async_checkpointing=True\",\n"
+        r"          f\"enable_checkpoint_cloud_logger=True\",\n"
+        r"          f\"checkpoint_period=10\",\n"
+        r'" benchmarks/maxtext_xpk_runner.py'
+    )
 
-  # Patch command to modify dataset configuration for default_basic_1.
-  patch_cmd_model_configs_sub = (
-      r'sed -i "/model_name=\"default-basic-1\"/,/)/ { '
-      r"s/\"dataset_type\": \"synthetic\"/\"dataset_type\": \"grain\"/; "
-      r"s/\"dataset_path\":/# \"dataset_path\":/; "
-      r'}" benchmarks/maxtext_trillium_model_configs.py'
-  )
-  # Text to be inserted after the line matching '"dataset_type": "grain"'
-  insert_line = (
-      r"            \"grain_train_files\": \"gs://tess-tpu-dataloading-"
-      r"us-central1/array-record/c4/en/3.0.1/c4-train.array_record*\","
-  )
-  # Patch command to modify dataset configuration: append grain_train_files.
-  patch_cmd_model_configs_add = (
-      'sed -i $\'/"dataset_type": "grain"/a \\\n'
-      + insert_line
-      + "' benchmarks/maxtext_trillium_model_configs.py"
-  )
-
-  # Combine parameters to further generate the final command.
-  all_params = {**dag_params, **derived_params}
-  for key, value in all_params.items():
-    if key in recipe_cfg.RECIPE_FLAG:
-      if isinstance(value, int):
-        recipe_cmd += f" --{key}={value}"
-      else:
-        recipe_cmd += f" --{key}='{value}'"
-  # Override the default benchmark_steps too bigger.
-  recipe_cmd += " --benchmark_steps=1000"
-  # Specify the image for the colocated Python container.
-  recipe_cmd += (
-      f" --colocated_python_image='{dag_params['colocated_python_image']}'"
-  )
-  # Add proxy_flags to enable elastic training and colocated Python data input.
-  recipe_cmd += (
-      f" --proxy_flags='--virtual_slices={derived_params['topology']} "
-      f"--num_elastic_slices={derived_params['num_elastic_slices']} "
-      " --sidecar_name=external'"
-  )
-  # Add the skip-validation flag in the recipe to bypass xpk checks.
-  recipe_cmd += " --skip-validation"
-  formatted_cmds = recipe_cmd.replace(" --", " \n  --")
-  logging.info(f"\n {formatted_cmds}")
-  commands = " && ".join([
-      env_cmds,
-      patch_cmd_runner,
-      patch_cmd_model_configs_sub,
-      patch_cmd_model_configs_add,
-      recipe_cmd,
-  ])
-
-  return commands
-
-
-# TODO(cienet): Remove the temporary local code once these changes have been
-# merged into the maxtext repository.
-@task
-def generate_commands_replica(
-    dag_params: dict, derived_params: dict, recipe_instance: recipe_cfg.Recipe
-) -> str:
-  """Generates a command string using config and derived parameters.
-
-  Runtime modifications are made to the recipe command to enable elastic
-  training and colocated Python data input.
-  """
-  # Initialization command.
-  env_cmds = generate_install_dependencies_commands()
-  recipe_cmd = recipe_instance.run_command
-
-  # Patch command for enabling elastic training & colocated Python data input.
-  patch_cmd_runner = (
-      r'sed -i "/python3 -m maxtext.trainers.pre_train.train/a '
-      # enable elastice training
-      r"          f\"elastic_enabled=True\",\n"
-      r"          f\"enable_single_controller=True\",\n"
-      f'          \\"elastic_min_slice_count='
-      f'{derived_params["elastic_min_slice_count"]}\\",\\n'
-      # enable goodput setting
-      r"          f\"enable_pathways_goodput=True\",\n"
-      r"          f\"enable_goodput_recording=True\",\n"
-      r"          f\"goodput_upload_interval_seconds=30\",\n"
-      r"          f\"monitor_goodput=True\",\n"
-      # enanble checkpointing for elastic training
-      r"          f\"async_checkpointing=True\",\n"
-      r"          f\"enable_checkpoint_cloud_logger=True\",\n"
-      r"          f\"checkpoint_period=10\",\n"
-      r'" benchmarks/maxtext_xpk_runner.py'
-  )
-
-  # changing to synthetic and disabling colocated_python:
-  # https://b.corp.google.com/issues/511164291#comment26
-  patch_cmd_model_configs_sub = (
+  # 2. Patch benchmarks/maxtext_trillium_model_configs.py
+  model_configs_checkpointing = (
       r'sed -i "/model_name=\"default-basic-1\"/,/xla_flags/ { '
       r"s/\"enable_checkpointing\": False/\"enable_checkpointing\": True/; "
       r"/\"profiler\":/d; "
       r'}" benchmarks/maxtext_trillium_model_configs.py'
   )
 
-  # Combine parameters to further generate the final command.
+  cmds_to_run = [env_cmds, patch_cmd_runner, model_configs_checkpointing]
+
+  # Additional patches specifically for Pause-resume
+  if elastic_type == "Pause-resume":
+    model_configs_grain = (
+        r'sed -i "/model_name=\"default-basic-1\"/,/)/ { '
+        r"s/\"dataset_type\": \"synthetic\"/\"dataset_type\": \"grain\"/; "
+        r"s/\"dataset_path\":/# \"dataset_path\":/; "
+        r'}" benchmarks/maxtext_trillium_model_configs.py'
+    )
+    insert_line = (
+        r"            \"grain_train_files\": \"gs://tess-tpu-dataloading-"
+        r"us-central1/array-record/c4/en/3.0.1/c4-train.array_record*\","
+    )
+    model_configs_grain_sub = (
+        'sed -i $\'/"dataset_type": "grain"/a \\\n'
+        + insert_line
+        + "' benchmarks/maxtext_trillium_model_configs.py"
+    )
+    cmds_to_run.extend([model_configs_grain, model_configs_grain_sub])
+
+  # Combine parameter flags
   all_params = {**dag_params, **derived_params}
   for key, value in all_params.items():
     if key in recipe_cfg.RECIPE_FLAG:
@@ -191,346 +136,230 @@ def generate_commands_replica(
         recipe_cmd += f" --{key}={value}"
       else:
         recipe_cmd += f" --{key}='{value}'"
-  # Override the default benchmark_steps too bigger.
-  recipe_cmd += " --benchmark_steps=3000"
-  # Add proxy_flags to enable elastic training and colocated Python data input.
-  recipe_cmd += (
-      f" --proxy_flags='--virtual_slices={derived_params['topology']} "
-      f"--num_elastic_slices={derived_params['num_elastic_slices']}'"
-  )
-  # Add the skip-validation flag in the recipe to bypass xpk checks.
+
+  # Apply step overrides and proxy flags
+  if elastic_type == "Pause-resume":
+    recipe_cmd += " --benchmark_steps=1000"
+    recipe_cmd += (
+        f" --colocated_python_image='{dag_params['colocated_python_image']}'"
+    )
+    recipe_cmd += (
+        f" --proxy_flags='--virtual_slices={derived_params['topology']} "
+        f"--num_elastic_slices={derived_params['num_elastic_slices']} "
+        " --sidecar_name=external'"
+    )
+  else:  # Replica-resize
+    recipe_cmd += " --benchmark_steps=3000"
+    recipe_cmd += (
+        f" --proxy_flags='--virtual_slices={derived_params['topology']} "
+        f"--num_elastic_slices={derived_params['num_elastic_slices']}'"
+    )
+
   recipe_cmd += " --skip-validation"
   formatted_cmds = recipe_cmd.replace(" --", " \n  --")
   logging.info(f"\n {formatted_cmds}")
-  commands = " && ".join([
-      env_cmds,
-      patch_cmd_runner,
-      patch_cmd_model_configs_sub,
-      recipe_cmd,
-  ])
 
-  return commands
+  cmds_to_run.append(recipe_cmd)
+  return " && ".join(cmds_to_run)
 
 
-def worker_pod_interruption(
-    project_id: str = "",
-    region: str = "",
-    cluster_name: str = "",
-    workload_id: str = "",
-    entry_log_pattern: str = "completed step:",
-    elastic_log_pattern: str = "Elastic attempt",
-    end_log_pattern: str = "Sufficient slices active:",
-) -> DAGNode:
-  """Run a test job with worker pod interruption."""
-  with TaskGroup(group_id="worker_pod_interruption") as group:
-    previous_cycle_tail = None
-    for i in range(1, 4):
-      wait_for_step = xpk.check_last_logs.override(
-          task_id=f"wait_for_step_starts_{i}"
-      )(
-          project_id=project_id,
-          region=region,
-          cluster_name=cluster_name,
-          workload_id=workload_id,
-          expect_log_contains=entry_log_pattern,
-      )
+def create_elastic_dag(
+    dag_id: str,
+    elastic_type: str,
+    doc_md: str,
+    entry_log_pattern: str,
+    end_log_pattern: str,
+    extra_params: dict = None,
+) -> models.DAG:
+  """Factory function to build Elastic training DAGs."""
 
-      trigger_interrupt = xpk.interrupt_worker_pod.override(
-          task_id=f"interrupt_worker_{i}"
-      )(
-          project_id=project_id,
-          region=region,
-          cluster_name=cluster_name,
-          workload_id=workload_id,
-      )
+  params = elastic_params.copy()
+  params["elastic_type"] = ui_params.Param(
+      elastic_type,
+      type="string",
+      title="Elastic Type",
+      description="Pause-resume/Replica-resize",
+      enum=ELASTIC_TYPE,
+  )
+  if extra_params:
+    params.update(extra_params)
 
-      # TODO(cienet): refine validation
-      #   1. more precise log content and order
-      #   2. use kubectl instead of CoreV1Api
-      #   (since it doesn't support "since_time")
-      #   3. cache a timestamp, to skip the old logs
+  schedule = SchedulingHelper.arrange_schedule_time(dag_id)
 
-      wait_for_elastic_attempt = xpk.check_logs_exist.override(
-          task_id=f"wait_for_elastic_attempt_{i}"
-      )(
-          project_id=project_id,
-          region=region,
-          cluster_name=cluster_name,
-          workload_id=workload_id,
-          expect_log_contains=elastic_log_pattern,
-      )
+  dag = models.DAG(
+      dag_id=dag_id,
+      start_date=datetime.datetime(2025, 1, 1),
+      schedule_interval=schedule if composer_env.is_prod_env() else None,
+      catchup=False,
+      default_args={"retries": 0},
+      tags=[
+          "maxtext",
+          "pathways",
+          "mcjax",
+          "benchmark",
+          "nightly",
+          "TPU",
+          "v6e",
+      ],
+      description=f"A DAG to run a MaxText {RECIPE_NAME} with elastic training on GKE.",
+      params=params,
+      doc_md=doc_md,
+  )
 
-      wait_for_slices_active = xpk.check_logs_exist.override(
-          task_id=f"wait_for_slices_active_{i}"
-      )(
-          project_id=project_id,
-          region=region,
-          cluster_name=cluster_name,
-          workload_id=workload_id,
-          expect_log_contains=end_log_pattern,
-          expected_count=i + 1,
-      )
+  with dag:
+    fetched_params = get_dag_parameters()
+    calculated_params = generate_derived_parameters(fetched_params, dag_id)
+    generated_cmds = generate_commands(
+        fetched_params, calculated_params, RECIPE_INSTANCE
+    )
 
-      # TODO(cienet): Refine the mechanism to chain tasks
-      chain(
-          wait_for_step,
-          trigger_interrupt,
-          wait_for_elastic_attempt,
-          wait_for_slices_active,
-      )
+    start_recipe = kpo.run_command_in_kpo(
+        start_cli_command=generated_cmds,
+        workload_id="start_recipe",
+        task_owner=test_owner.DORA_H,
+        provisioning_timeout=datetime.timedelta(minutes=5),
+        workload_run_timeout=datetime.timedelta(minutes=15),
+        image_full_url=fetched_params["runner"],
+    )
 
-      if previous_cycle_tail:
-        chain(previous_cycle_tail, wait_for_step)
-      previous_cycle_tail = wait_for_slices_active
-    return group
+    check_pod = check_pod_status.override(
+        task_id="check_pod_status",
+        timeout=180,
+    )(
+        project_id=fetched_params["project"],
+        region=calculated_params["region"],
+        cluster_name=fetched_params["cluster_name"],
+        workload_id=calculated_params["workload_id"],
+    )
+
+    # TODO(cienet): Add comments or documentation to explain expected log patterns.
+    interruption_task = worker_pod_interruption(
+        project_id=fetched_params["project"],
+        region=calculated_params["region"],
+        cluster_name=fetched_params["cluster_name"],
+        workload_id=calculated_params["workload_id"],
+        entry_log_pattern=entry_log_pattern,
+        elastic_log_pattern="Elastic attempt",
+        end_log_pattern=end_log_pattern,
+    )
+
+    wait_for_workload_complete = xpk.wait_for_workload_completion.override(
+        task_id="wait_for_workload_complete",
+        timeout=3600,
+        trigger_rule=TriggerRule.ALL_DONE,
+    )(
+        workload_id=calculated_params["workload_id"],
+        project_id=fetched_params["project"],
+        region=calculated_params["region"],
+        cluster_name=fetched_params["cluster_name"],
+    )
+
+    clean_up_recipe = xpk.clean_up_workload.override(
+        task_id="clean_up_recipe", trigger_rule=TriggerRule.ALL_DONE
+    )(
+        workload_id=calculated_params["workload_id"],
+        project_id=fetched_params["project"],
+        zone=fetched_params["zone"],
+        cluster_name=fetched_params["cluster_name"],
+    )
+
+    chain(
+        fetched_params,
+        calculated_params,
+        generated_cmds,
+        start_recipe,
+        check_pod,
+        interruption_task,
+        wait_for_workload_complete,
+        clean_up_recipe,
+    )
+
+  return dag
 
 
-RECIPE_INSTANCE = recipe_cfg.Recipe.PW_MCJAX_BENCHMARK_RECIPE
-RECIPE_NAME = RECIPE_INSTANCE.value.lower()
-DAG_ID = "pw_elastic_pause_resume"
-SCHEDULE = SchedulingHelper.arrange_schedule_time(DAG_ID)
+# Instantiate Pause-resume DAG
+PAUSE_RESUME_DOC = f"""
+# A DAG to run a MaxText {RECIPE_NAME} with elastic training on GKE.
 
-with models.DAG(
-    dag_id=DAG_ID,
-    start_date=datetime.datetime(2025, 1, 1),
-    schedule_interval=SCHEDULE if composer_env.is_prod_env() else None,
-    catchup=False,
-    default_args={
-        "retries": 0,
+### Description
+Pause-resume refers to the process of halting the training execution,
+saving its state (typically to a checkpoint), and later restarting
+the training, loading the state from the checkpoint to continue.
+Stop the training process when slices become unavailable, and starts it
+again later on the new set inherently. This mechanism is crucial for
+fault tolerance and elasticity. Resuming can occur on the same
+set of resources or a different set.
+
+### Prerequisites
+- This test requires an existing cluster.
+- If you're using a service account to pull an image from a different
+  project, you need to grant the service account the
+  `Artifact Registry Reader` role in that project.
+
+### Procedures
+An Airflow Composer environment must be created, and the required DAG code
+must be deployed to the associated GCS bucket. To initiate the recipe, the
+user must access the Airflow UI, locate the specific DAG, and trigger it.
+
+### Model Configuration
+If you want to add other TPU type models, you need to manually modify
+`/ml-auto-solutions/dags/maxtext_pathways/configs/model_configs.py`.
+"""
+
+pause_resume_dag = create_elastic_dag(
+    dag_id="pw_elastic_pause_resume",
+    elastic_type=ELASTIC_TYPE[0],
+    doc_md=PAUSE_RESUME_DOC,
+    entry_log_pattern="completed step:",
+    end_log_pattern="Sufficient slices active: 1 >= 1",
+)
+
+
+# Instantiate Replica-resize DAG
+REPLICA_RESIZE_DOC = f"""
+# A DAG to run a MaxText {RECIPE_NAME} with elastic replica resize on GKE.
+
+### Description
+Replica-resize refers to the ability of the training job to dynamically
+adjust the number of active TPU slices (replicas) it uses during execution.
+Expected Behavior:
+- A change in slice availability (failure or addition)
+triggers an event. Often, a slice failure results in an error.
+- The elastic training framework detects this change.
+- Training on the previous configuration halts, and try to identify
+the new set of healthy, available slice.
+- The training job is automatically relaunched, loading the model
+state from the most recent checkpoint. The relaunched job now runs on
+the new set of available slices.
+
+### Prerequisites
+- This test requires an existing cluster.
+- If you're using a service account to pull an image from a different
+  project, you need to grant the service account the
+  `Artifact Registry Reader` role in that project.
+
+### Procedures
+An Airflow Composer environment must be created, and the required DAG code
+must be deployed to the associated GCS bucket. To initiate the recipe, the
+user must access the Airflow UI, locate the specific DAG, and trigger it.
+
+### Model Configuration
+If you want to add other TPU type models, you need to manually modify
+`/ml-auto-solutions/dags/maxtext_pathways/configs/model_configs.py`.
+"""
+
+replica_resize_dag = create_elastic_dag(
+    dag_id="pw_elastic_replica_resize",
+    elastic_type=ELASTIC_TYPE[1],
+    doc_md=REPLICA_RESIZE_DOC,
+    entry_log_pattern="live slice count: 2",
+    end_log_pattern="Sufficient slices active: 2 >= 1",
+    extra_params={
+        "num_slices_list": ui_params.Param(
+            2,
+            type="integer",
+            title="Number Slices",
+            description="Number of slices",
+        )
     },
-    tags=[
-        "maxtext",
-        "pathways",
-        "mcjax",
-        "benchmark",
-        "nightly",
-        "TPU",
-        "v6e",
-    ],
-    description=(
-        f"A DAG to run a MaxText {RECIPE_NAME} with elastic training on GKE."
-    ),
-    params=elastic_params,
-    doc_md=f"""
-    # A DAG to run a MaxText {RECIPE_NAME} with elastic training on GKE.
-
-    ### Description
-    Pause-resume refers to the process of halting the training execution,
-    saving its state (typically to a checkpoint), and later restarting
-    the training, loading the state from the checkpoint to continue.
-    Stop the training process when slices become unavailable, and starts it
-    again later on the new set inherently. This mechanism is crucial for
-    fault tolerance and elasticity. Resuming can occur on the same
-    set of resources or a different set.
-
-    ### Prerequisites
-    - This test requires an existing cluster.
-    - If you're using a service account to pull an image from a different
-      project, you need to grant the service account the
-      `Artifact Registry Reader` role in that project.
-
-    ### Procedures
-    An Airflow Composer environment must be created, and the required DAG code
-    must be deployed to the associated GCS bucket. To initiate the recipe, the
-    user must access the Airflow UI, locate the specific DAG, and trigger it.
-
-    ### Model Configuration
-    If you want to add other TPU type models, you need to manually modify
-    `/ml-auto-solutions/dags/maxtext_pathways/configs/model_configs.py`.
-    """,
-) as dag:
-  recipe_runtime = (
-      RECIPE_NAME.replace("_", "-") + '-{{ execution_date.strftime("%H%M%S") }}'
-  )
-
-  # Define task dependencies by instantiating and linking tasks.
-  fetched_params = get_dag_parameters()
-  calculated_params = generate_derived_parameters(fetched_params, DAG_ID)
-  generated_cmds = generate_commands(
-      fetched_params, calculated_params, RECIPE_INSTANCE
-  )
-
-  start_recipe = kpo.run_command_in_kpo(
-      start_cli_command=generated_cmds,
-      workload_id="start_recipe",
-      task_owner=test_owner.DORA_H,
-      provisioning_timeout=datetime.timedelta(minutes=5),
-      workload_run_timeout=datetime.timedelta(minutes=15),
-      image_full_url=fetched_params["runner"],
-  )
-
-  # TODO(cienet): Add comments or documentation to explain the expected log
-  # patterns.
-  interruption_task = worker_pod_interruption(
-      project_id=fetched_params["project"],
-      region=calculated_params["region"],
-      cluster_name=fetched_params["cluster_name"],
-      workload_id=calculated_params["workload_id"],
-      entry_log_pattern="completed step:",
-      elastic_log_pattern="Elastic attempt",
-      end_log_pattern="Sufficient slices active: 1 >= 1",
-  )
-
-  wait_for_workload_complete = xpk.wait_for_workload_completion.override(
-      task_id="wait_for_workload_complete",
-      timeout=3600,
-  )(
-      workload_id=calculated_params["workload_id"],
-      project_id=fetched_params["project"],
-      region=calculated_params["region"],
-      cluster_name=fetched_params["cluster_name"],
-  )
-
-  clean_up_recipe = xpk.clean_up_workload.override(
-      task_id="clean_up_recipe", trigger_rule=TriggerRule.ALL_DONE
-  )(
-      workload_id=calculated_params["workload_id"],
-      project_id=fetched_params["project"],
-      zone=fetched_params["zone"],
-      cluster_name=fetched_params["cluster_name"],
-  )
-
-  chain(
-      fetched_params,
-      calculated_params,
-      generated_cmds,
-      start_recipe,
-      interruption_task,
-      wait_for_workload_complete,
-      clean_up_recipe,
-  )
-
-replica_params = elastic_params.copy()
-replica_params.update({
-    "elastic_type": ui_params.Param(
-        ELASTIC_TYPE[1],
-        type="string",
-        title="Elastic Type",
-        description="Pause-resume/Replica-resize",
-        enum=ELASTIC_TYPE,
-    ),
-    "num_slices_list": ui_params.Param(
-        2,
-        type="integer",
-        title="Number Slices",
-        description="Number of slices",
-    ),
-})
-
-DAG_ID_RESIZE = "pw_elastic_replica_resize"
-SCHEDULE_RESIZE = SchedulingHelper.arrange_schedule_time(DAG_ID_RESIZE)
-
-with models.DAG(
-    dag_id=DAG_ID_RESIZE,
-    start_date=datetime.datetime(2025, 1, 1),
-    schedule_interval=SCHEDULE_RESIZE if composer_env.is_prod_env() else None,
-    catchup=False,
-    default_args={
-        "retries": 0,
-    },
-    tags=[
-        "maxtext",
-        "pathways",
-        "mcjax",
-        "benchmark",
-        "nightly",
-        "TPU",
-        "v6e",
-    ],
-    description=(
-        f"A DAG to run a MaxText {RECIPE_NAME}"
-        "with elastic replica resize on GKE."
-    ),
-    params=replica_params,
-    doc_md=f"""
-    # A DAG to run a MaxText {RECIPE_NAME} with elastic replica resize on GKE.
-
-    ### Description
-    Replica-resize refers to the ability of the training job to dynamically
-    adjust the number of active TPU slices (replicas) it uses during execution.
-    Expected Behavior:
-    - A change in slice availability (failure or addition)
-    triggers an event. Often, a slice failure results in an error.
-    - The elastic training framework detects this change.
-    - Training on the previous configuration halts, and try to identify
-    the new set of healthy, available slice.
-    - The training job is automatically relaunched, loading the model
-    state from the most recent checkpoint. The relaunched job now runs on
-    the new set of available slices.
-
-    ### Prerequisites
-    - This test requires an existing cluster.
-    - If you're using a service account to pull an image from a different
-      project, you need to grant the service account the
-      `Artifact Registry Reader` role in that project.
-
-    ### Procedures
-    An Airflow Composer environment must be created, and the required DAG code
-    must be deployed to the associated GCS bucket. To initiate the recipe, the
-    user must access the Airflow UI, locate the specific DAG, and trigger it.
-
-    ### Model Configuration
-    If you want to add other TPU type models, you need to manually modify
-    `/ml-auto-solutions/dags/maxtext_pathways/configs/model_configs.py`.
-    """,
-) as dag:
-  recipe_runtime = (
-      RECIPE_NAME.replace("_", "-") + '-{{ execution_date.strftime("%H%M%S") }}'
-  )
-
-  # Define task dependencies by instantiating and linking tasks.
-  fetched_params = get_dag_parameters()
-  calculated_params = generate_derived_parameters(fetched_params, DAG_ID_RESIZE)
-  generated_cmds = generate_commands_replica(
-      fetched_params, calculated_params, RECIPE_INSTANCE
-  )
-
-  start_recipe = kpo.run_command_in_kpo(
-      start_cli_command=generated_cmds,
-      workload_id="start_recipe",
-      task_owner=test_owner.DORA_H,
-      provisioning_timeout=datetime.timedelta(minutes=5),
-      workload_run_timeout=datetime.timedelta(minutes=15),
-      image_full_url=fetched_params["runner"],
-  )
-
-  # TODO(cienet): Add comments or documentation to explain the expected log
-  # patterns.
-  interruption_task = worker_pod_interruption(
-      project_id=fetched_params["project"],
-      region=calculated_params["region"],
-      cluster_name=fetched_params["cluster_name"],
-      workload_id=calculated_params["workload_id"],
-      entry_log_pattern="live slice count: 2",
-      elastic_log_pattern="Elastic attempt",
-      end_log_pattern="Sufficient slices active: 2 >= 1",
-  )
-
-  wait_for_workload_complete = xpk.wait_for_workload_completion.override(
-      task_id="wait_for_workload_complete",
-      timeout=3600,
-  )(
-      workload_id=calculated_params["workload_id"],
-      project_id=fetched_params["project"],
-      region=calculated_params["region"],
-      cluster_name=fetched_params["cluster_name"],
-  )
-
-  clean_up_recipe = xpk.clean_up_workload.override(
-      task_id="clean_up_recipe", trigger_rule=TriggerRule.ALL_DONE
-  )(
-      workload_id=calculated_params["workload_id"],
-      project_id=fetched_params["project"],
-      zone=fetched_params["zone"],
-      cluster_name=fetched_params["cluster_name"],
-  )
-
-  chain(
-      fetched_params,
-      calculated_params,
-      generated_cmds,
-      start_recipe,
-      interruption_task,
-      wait_for_workload_complete,
-      clean_up_recipe,
-  )
+)
