@@ -41,10 +41,10 @@ from dags.maxtext_pathways.configs.utils import (
     get_dag_parameters,
     generate_install_dependencies_commands,
     generate_derived_parameters,
-    interrupt_worker_pod,
+    interruption,
     check_gcp_logs_exist,
-    check_logs_stream,
     worker_pod_interruption,
+    validate_workload_health_and_logs,
     COLOCATED_PYTHON_IMAGE,
 )
 from xlml.utils import gke, kpo, xpk
@@ -202,9 +202,8 @@ def worker_pod_interruption_with_se(
   with TaskGroup(group_id="worker_pod_interruption") as group:
     last_timestamp = None
     for i in range(1, times + 1):
-      wait_for_step = check_logs_stream.override(
-          task_id=f"wait_for_step_starts_{i}",
-          retries=5,
+      wait_for_step = validate_workload_health_and_logs.override(
+          group_id=f"wait_for_step_starts_{i}",
       )(
           project_id=project_id,
           region=region,
@@ -220,10 +219,10 @@ def worker_pod_interruption_with_se(
           times=i,
       )
 
-      wait_for_step >> phase1_metrics
+      # wait_for_step >> phase1_metrics
 
-      trigger_interrupt = interrupt_worker_pod.override(
-          task_id=f"interrupt_worker_{i}"
+      trigger_interrupt = interruption.override(
+          group_id=f"trigger_interrupt_{i}"
       )(
           project_id=project_id,
           region=region,
@@ -231,8 +230,8 @@ def worker_pod_interruption_with_se(
           workload_id=workload_id,
       )
 
-      wait_for_elastic_attempt = check_logs_stream.override(
-          task_id=f"wait_for_elastic_attempt_{i}"
+      wait_for_elastic_attempt = validate_workload_health_and_logs.override(
+          group_id=f"wait_for_elastic_attempt_{i}"
       )(
           project_id=project_id,
           region=region,
@@ -252,8 +251,8 @@ def worker_pod_interruption_with_se(
 
       wait_for_elastic_attempt >> phase2_metrics
 
-      wait_for_slices_active = check_logs_stream.override(
-          task_id=f"wait_for_slices_active_{i}"
+      wait_for_slices_active = validate_workload_health_and_logs.override(
+          group_id=f"wait_for_slices_active_{i}"
       )(
           project_id=project_id,
           region=region,
@@ -360,7 +359,19 @@ def create_elastic_goodput_dag(
         workload_run_timeout=datetime.timedelta(minutes=15),
         image_full_url=fetched_params["runner"],
     )
-
+    check_pod = gke.wait_for_workload_start.override(
+        task_id="wait_for_workload_start",
+    )(
+        project_id=fetched_params["project"],
+        region=calculated_params["region"],
+        cluster_name=fetched_params["cluster_name"],
+        workload_id=calculated_params["workload_id"],
+    )
+    entry_log_pattern = (
+        "live slice count: 2"
+        if params == replica_params
+        else "live slice count: 1"
+    )
     if slice_efficiency:
       interruption_task = worker_pod_interruption_with_se(
           project_id=fetched_params["project"],
@@ -377,6 +388,7 @@ def create_elastic_goodput_dag(
           cluster_name=fetched_params["cluster_name"],
           workload_id=calculated_params["workload_id"],
           entry_log_pattern=entry_log_pattern,
+          elastic_log_pattern="Elastic attempt",
           end_log_pattern=end_log_pattern,
       )
 
@@ -430,6 +442,7 @@ def create_elastic_goodput_dag(
         calculated_params,
         generated_cmds,
         start_recipe,
+        check_pod,
         interruption_task,
         wait_for_workload_complete,
         workload_goodput,
