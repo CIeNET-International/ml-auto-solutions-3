@@ -76,7 +76,7 @@ with models.DAG(
           },
       },
   }
-  # pylint: disable=line-too-long
+  # pylint: enable=line-too-long
 
   for model, test_config in test_models.items():
     with TaskGroup(group_id=model) as model_group:

@@ -115,7 +115,7 @@ with models.DAG(
           },
       },
   }
-  # pylint: disable=line-too-long
+  # pylint: enable=line-too-long
 
   for model, test_config in test_models.items():
     with TaskGroup(group_id=model) as model_group:
@@ -128,7 +128,7 @@ with models.DAG(
       ) + (f"{test_config['checkpoint_conversion']['to_maxtext']} {run_name}",)
       convert_to_maxtext_task = gke_config.get_gke_config(
           time_out_in_min=60,
-          test_name=f"convert-to-maxtext",
+          test_name="convert-to-maxtext",
           run_model_cmds=convert_to_maxtext_cmd,
           docker_image="{{ params.docker_image }}",
           cluster=XpkClusters.TPU_V5P_8_CLUSTER_V2,
