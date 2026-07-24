@@ -20,6 +20,7 @@ from airflow import models
 from airflow.models.baseoperator import chain
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
+from airflow.operators.bash import BashOperator
 
 from dags import composer_env
 from dags.common.scheduling_helper.scheduling_helper import (
@@ -189,15 +190,11 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             node_pool=cluster_info,
             jobset_config=jobset_config,
             jobset_name=jobset_name,
-        ).as_teardown(
-            setups=startup.jobset_start_time
         )
 
         cleanup_node_pool = node_pool.delete.override(
             task_id="cleanup_node_pool", trigger_rule=TriggerRule.ALL_DONE
-        )(node_pool=cluster_info).as_teardown(
-            setups=create_node_pool,
-        )
+        )(node_pool=cluster_info)
 
         chain(
             cleanup_workload,
