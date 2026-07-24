@@ -53,6 +53,7 @@ with models.DAG(
         ),
     },
 ) as dag:
+  # pylint: disable=line-too-long
   test_models = {
       "gemma3-4b": {
           "checkpoint_conversion": {
@@ -114,6 +115,7 @@ with models.DAG(
           },
       },
   }
+  # pylint: disable=line-too-long
 
   for model, test_config in test_models.items():
     with TaskGroup(group_id=model) as model_group:
@@ -175,7 +177,8 @@ with models.DAG(
               'export HF_HOME="/dev/shm/hf_cache"',
               'export LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=20480"',
           ) + (
-              f"{test_config['checkpoint_conversion']['to_huggingface']} {run_name} {model_path} {to_hf_flags}",
+              f"{test_config['checkpoint_conversion']['to_huggingface']} "
+              f"{run_name} {model_path} {to_hf_flags}",
           )
           convert_to_huggingface_task = gke_config.get_gke_config(
               time_out_in_min=60,
