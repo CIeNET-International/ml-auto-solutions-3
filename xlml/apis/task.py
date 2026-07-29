@@ -368,6 +368,7 @@ class XpkTask(BaseTask):
       post_process.
     """
     with TaskGroup(group_id=self.task_test_config.benchmark_id) as group:
+      pre_process = self.pre_process()
       run_model, gcs_path = self.run_model(
           gcs_location=gcs_location,
           use_vertex_tensorboard=use_vertex_tensorboard,
@@ -379,6 +380,9 @@ class XpkTask(BaseTask):
           max_restart=max_restart,
           priority=priority,
       )
+      if pre_process:
+        _ = pre_process >> run_model
+
       if not skip_post_process:
         _ = run_model >> self.post_process(gcs_path)
 
@@ -393,35 +397,25 @@ class XpkTask(BaseTask):
       ramdisk_directory: str = "",
       mtc_enabled: bool = False,
       xpk_branch: str = xpk.MAIN_BRANCH,
-      last_node: bool = False,  # pylint: disable=unused-argument
       max_restart: int = 0,
       check_file_exists: bool = False,  # pylint: disable=unused-argument
       priority: str = "high",
-  ) -> DAGNode:
+  ) -> Tuple[DAGNode, str]:
     """Run a test job within a docker image.
-
-       Will run a workload with an injected interruption of a GKE node.
-       Then is expected to automatically restart and continuing running.
 
     Attributes:
       gcs_location: GCS path for all artifacts of the test.
       use_vertex_tensorboard: Set to True to view workload data on
         Vertex AI Tensorboard.
-      expect_reach_to_step: The training step at which the node interruption
-        should be triggered.
       use_pathways: Set to True to use the Pathways execution framework.
       skip_post_process: If True, the post processing step will be skipped.
       ramdisk_directory: The directory for enabling emergency checkpointing.
       mtc_enabled: Set to True to enable Multi-tier Checkpointing (MTC).
       xpk_branch: The specific git branch of the xpk tool to use.
-      last_node: If True, the interruption will target the last node in the
-        workload; otherwise, it targets the first node.
       max_restart: By default, this is 0.
         This will restart the job with flag "--max-restarts"
-      check_file_exists: By default, this is False. If set to True,
-        task branch task_path_decider will be performed.
     Returns:
-      A DAG node that executes the model test.
+      A tuple of a DAG node that executes the model test and the GCS path.
     """
     with TaskGroup(group_id="run_model") as group:
       workload_id = xpk.generate_workload_id(self.task_test_config.benchmark_id)
@@ -525,6 +519,14 @@ class XpkTask(BaseTask):
       _ = run_workload >> wait_for_workload_start
       return group
 
+  def pre_process(self) -> Optional[DAGNode]:
+    """Perform pre-processing tasks before running the workload.
+
+    Returns:
+      An optional DAG node that executes before run_model.
+    """
+    return None
+
   def post_process(self, result_location: Optional[str] = None) -> DAGNode:
     """Process metrics and metadata, and insert them into BigQuery tables.
 
@@ -574,32 +576,6 @@ class XpkNodeInterruptionTask(XpkTask):
   expect_reach_to_step: int = 0
   last_node: bool = False
   check_file_exists: bool = False
-
-  def run(
-      self,
-      *,
-      gcs_location: Optional[airflow.XComArg] = None,
-      use_vertex_tensorboard: bool = False,
-      use_pathways: bool = False,
-      skip_post_process: bool = False,
-      ramdisk_directory: str = "",
-      mtc_enabled: bool = False,
-      xpk_branch: str = xpk.MAIN_BRANCH,
-      max_restart: int = 0,
-      priority: str = "high",
-  ) -> DAGNode:
-    """Run a test job with node interruption."""
-    return super().run(
-        gcs_location=gcs_location,
-        use_vertex_tensorboard=use_vertex_tensorboard,
-        use_pathways=use_pathways,
-        skip_post_process=skip_post_process,
-        ramdisk_directory=ramdisk_directory,
-        mtc_enabled=mtc_enabled,
-        xpk_branch=xpk_branch,
-        max_restart=max_restart,
-        priority=priority,
-    )
 
   def intermediary_flow(
       self,
@@ -690,14 +666,46 @@ class XpkNameGenAndQuarantineTask(XpkTask):
   run_name_env: str = "M_RUN_NAME"
   nested_run_name_in_tb_file_location: bool = True
 
-  # Temporary variables to pass tasks from run() to intermediary_flow()
-  _run_name_task: Any = dataclasses.field(default=None, init=False, repr=False)
-  _tb_file_location_task: Any = dataclasses.field(
-      default=None, init=False, repr=False
-  )
-  _profile_file_location_task: Any = dataclasses.field(
-      default=None, init=False, repr=False
-  )
+  def pre_process(self) -> Optional[DAGNode]:
+    """Generate run name and update metric file locations."""
+    with TaskGroup(group_id="pre_process") as group:
+      run_name_task = name_format.generate_run_name(
+          self.task_test_config.benchmark_id
+      )
+      tb_file_location_task = name_format.generate_tb_file_location(
+          run_name_task,
+          self.task_metric_config.tensorboard_summary.file_location,
+          self.nested_run_name_in_tb_file_location,
+      )
+
+      # Set run_name in run_model_cmds
+      new_run_model_cmds = [f"export {self.run_name_env}={run_name_task}"]
+      for cmd in self.task_test_config.run_model_cmds:
+        new_run_model_cmds.append(cmd)
+      self.task_test_config.run_model_cmds = new_run_model_cmds
+
+      # Update tensorboard file location
+      self.task_metric_config.tensorboard_summary.file_location = (
+          tb_file_location_task
+      )
+
+      # Update profile file location if profile config exists
+      if self.task_metric_config and self.task_metric_config.profile:
+        profile_file_location_task = name_format.generate_profile_file_location(
+            run_name_task,
+            self.task_metric_config.profile.file_location,
+        )
+        self.task_metric_config.profile.file_location = (
+            profile_file_location_task
+        )
+        _ = run_name_task >> (
+            tb_file_location_task,
+            profile_file_location_task,
+        )
+      else:
+        _ = run_name_task >> tb_file_location_task
+
+      return group
 
   def run(
       self,
@@ -715,40 +723,7 @@ class XpkNameGenAndQuarantineTask(XpkTask):
     """Run a test job with name generation and quarantine."""
     test_name = self.task_test_config.benchmark_id
 
-    # 1. Generate run name and file location tasks first
-    # (they are Airflow task objects)
-    self._run_name_task = name_format.generate_run_name(
-        self.task_test_config.benchmark_id
-    )
-    self._tb_file_location_task = name_format.generate_tb_file_location(
-        self._run_name_task,
-        self.task_metric_config.tensorboard_summary.file_location,
-        self.nested_run_name_in_tb_file_location,
-    )
-
-    # Set run_name in run_model_cmds
-    new_run_model_cmds = [f"export {self.run_name_env}={self._run_name_task}"]
-    for cmd in self.task_test_config.run_model_cmds:
-      new_run_model_cmds.append(cmd)
-    self.task_test_config.run_model_cmds = new_run_model_cmds
-
-    # Update tensorboard file location
-    self.task_metric_config.tensorboard_summary.file_location = (
-        self._tb_file_location_task
-    )
-
-    # Update profile file location if profile config exists
-    if self.task_metric_config.profile:
-      self._profile_file_location_task = (
-          name_format.generate_profile_file_location(
-              self._run_name_task, self.task_metric_config.profile.file_location
-          )
-      )
-      self.task_metric_config.profile.file_location = (
-          self._profile_file_location_task
-      )
-
-    # 2. Run under quarantine task group if applicable
+    # Run under quarantine task group if applicable
     if QuarantineTests.is_quarantined(test_name) and self.quarantine_task_group:
       with self.quarantine_task_group:
         return super().run(
@@ -774,26 +749,6 @@ class XpkNameGenAndQuarantineTask(XpkTask):
           max_restart=max_restart,
           priority=priority,
       )
-
-  def intermediary_flow(
-      self,
-      launch_workload: DAGNode,
-      workload_id: str,
-      gcs_path: str,
-      xpk_branch: str,
-  ) -> DAGNode:
-    """Inject name generation tasks before launch_workload."""
-    if self.task_metric_config.profile:
-      flow = (
-          self._run_name_task
-          >> (self._tb_file_location_task, self._profile_file_location_task)
-          >> launch_workload
-      )
-    else:
-      flow = (
-          self._run_name_task >> self._tb_file_location_task >> launch_workload
-      )
-    return flow
 
 
 @dataclasses.dataclass
