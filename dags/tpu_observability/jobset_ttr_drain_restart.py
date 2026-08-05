@@ -21,17 +21,13 @@ from airflow.decorators import task
 from airflow.models.baseoperator import chain
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
-from airflow.utils.task_group import TaskGroup
-from dags.common.task_group_with_timeout import TaskGroupWithTimeout
-
-
-from airflow.decorators import task
 
 from dags import composer_env
 from dags.common.scheduling_helper.scheduling_helper import (
     SchedulingHelper,
     get_dag_timeout,
 )
+from dags.common.task_group_with_timeout import TaskGroupWithTimeout
 from dags.tpu_observability.configs.common import (
     GCS_CONFIG_PATH,
     GCS_JOBSET_CONFIG_PATH,
