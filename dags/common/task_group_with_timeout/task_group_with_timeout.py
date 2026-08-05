@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from airflow.decorators import task as task_decorators
 from airflow.exceptions import AirflowFailException
 from airflow.models import BaseOperator
+from airflow.models.abstractoperator import AbstractOperator
 from airflow.models.mappedoperator import MappedOperator
 from airflow.models.taskmixin import DAGNode
 from airflow.operators.python import PythonOperator, get_current_context
@@ -28,7 +29,6 @@ from airflow.utils.context import Context
 from airflow.utils.state import TaskInstanceState
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.timeout import timeout as AirflowTimeout
-from airflow.utils.trigger_rule import TriggerRule
 
 
 class TaskGroupWithTimeout(TaskGroup):
@@ -72,7 +72,7 @@ class TaskGroupWithTimeout(TaskGroup):
       self,
       group_id,
       timeout: timedelta,
-      is_teardown: bool = False,
+      as_teardown_of: BaseOperator | None = None,
       **kwargs,
   ):
     super().__init__(group_id=group_id, **kwargs)
@@ -199,7 +199,17 @@ class TaskGroupWithTimeout(TaskGroup):
         def wrapped_execute(context: Context):
           task_instance = context.get("task_instance")
 
-          start_time_str = task_instance.xcom_pull(task_ids=root_node_id)
+          current_task_id = task_instance.task_id
+          if "." in current_task_id:
+            group_prefix = current_task_id.rsplit(".", 1)[0]
+            full_root_node_id = f"{group_prefix}.{root_node_id}"
+          else:
+            full_root_node_id = root_node_id
+
+          start_time_str = task_instance.xcom_pull(task_ids=full_root_node_id)
+          if not start_time_str:
+            start_time_str = task_instance.xcom_pull(task_ids=root_node_id)
+
           if not start_time_str:
             raise AirflowFailException(
                 "Failed to overwrite timeout for task: "
