@@ -20,7 +20,6 @@ from airflow import models
 from airflow.models.baseoperator import chain
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
-from airflow.operators.bash import BashOperator
 
 from dags import composer_env
 from dags.common.scheduling_helper.scheduling_helper import (
