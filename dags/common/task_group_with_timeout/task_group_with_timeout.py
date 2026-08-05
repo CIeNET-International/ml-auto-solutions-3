@@ -73,27 +73,29 @@ class TaskGroupWithTimeout(TaskGroup):
     self._root_node = None
 
   def __exit__(self, *args):
-    """Wire `_root_node` as upstream of in-group root children on context exit."""
+    """Wire `_root_node` as upstream of in-group root children on context
+    exit."""
     self.initialize_task_group_session()
     self.mark_teardown()
     return super().__exit__(*args)
 
   def initialize_task_group_session(self):
-    """Initializes the session root task and wires it to in-group root children."""
+    """Initializes the session root task and wires it to in-group root
+    children."""
     root_task = PythonOperator(
-      task_id=self.ROOT_TASK_ID,
-      python_callable=lambda: datetime.now(timezone.utc).isoformat(),
+        task_id=self.ROOT_TASK_ID,
+        python_callable=lambda: datetime.now(timezone.utc).isoformat(),
     )
 
     if self.setup_op is not None:
       setups = (
-        self.setup_op
-        if isinstance(self.setup_op, (list, tuple, TaskGroup))
-        else [self.setup_op]
+          self.setup_op
+          if isinstance(self.setup_op, (list, tuple, TaskGroup))
+          else [self.setup_op]
       )
       root_task.as_teardown(
-        setups=setups,
-        on_failure_fail_dagrun=False,
+          setups=setups,
+          on_failure_fail_dagrun=False,
       )
 
     self._root_node = root_task
@@ -103,7 +105,7 @@ class TaskGroupWithTimeout(TaskGroup):
         continue
 
       has_ingroup_upstream = any(
-        up in self.children.values() for up in child.upstream_list
+          up in self.children.values() for up in child.upstream_list
       )
       if not has_ingroup_upstream:
         child.set_upstream(self._root_node)
@@ -114,9 +116,9 @@ class TaskGroupWithTimeout(TaskGroup):
       return
 
     setups = (
-      self.setup_op
-      if isinstance(self.setup_op, (list, tuple, TaskGroup))
-      else [self.setup_op]
+        self.setup_op
+        if isinstance(self.setup_op, (list, tuple, TaskGroup))
+        else [self.setup_op]
     )
 
     for child in self.children.values():
@@ -129,8 +131,8 @@ class TaskGroupWithTimeout(TaskGroup):
             continue
 
           child.as_teardown(
-            setups=setups,
-            on_failure_fail_dagrun=True,
+              setups=setups,
+              on_failure_fail_dagrun=True,
           )
 
   def add(self, node: DAGNode):
