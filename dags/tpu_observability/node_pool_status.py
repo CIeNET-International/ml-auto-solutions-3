@@ -115,7 +115,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             owner=test_owner.YUNA_T,
         )(
             node_pool=node_pool_info,
-        )
+        ).as_setup()
 
         # Intentionally create a node pool with problematic configurations
         # to validate that it enters the ERROR state.
@@ -204,7 +204,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       with TaskGroupWithTimeout(
           group_id="post_test",
           timeout=POST_TEST_TIMEOUT,
-          is_teardown=True,
+          as_teardown_of=create_node_pool,
       ) as post_test:
         task_id = "cleanup_node_pool"
         cleanup_node_pool = node_pool.delete.override(
