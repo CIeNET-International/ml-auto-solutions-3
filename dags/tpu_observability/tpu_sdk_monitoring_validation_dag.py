@@ -180,10 +180,12 @@ with models.DAG(
           workload_type=Workload.JAX_TPU_BENCHMARK,
       )
 
-    sdk_validation = validate_monitoring_sdk.override(task_id="sdk_validation")(
-        info=cluster_info,
-        pod_names=startup.running_pods,
-    )
+      sdk_validation = validate_monitoring_sdk.override(
+          task_id="sdk_validation"
+      )(
+          info=cluster_info,
+          pod_names=startup.running_pods,
+      )
 
       cleanup_workload = jobset.end_workload.override(
           task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
