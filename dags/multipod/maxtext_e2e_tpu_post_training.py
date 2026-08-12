@@ -165,7 +165,7 @@ with models.DAG(
           training_task = gke_config.get_gke_config(
               time_out_in_min=60,
               num_slices=1,
-              cluster=Gclusters.TPU_V5P_MLPERF_CLUSTER.override(core_count=128),
+              cluster=Gclusters.TPU_V5P_MLPERF_CLUSTER.override(core_count=64),
               test_name=f"train-{mode}-{model}",
               run_model_cmds=training_cmd,
               docker_image="{{ params.docker_image }}",
