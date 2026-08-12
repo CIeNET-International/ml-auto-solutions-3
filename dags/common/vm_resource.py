@@ -337,7 +337,7 @@ class Gclusters:
   TPU_V5P_MLPERF_CLUSTER = GclusterConfig(
       name="mlperf-v5p",
       device_version=TpuVersion.V5P,
-      core_count=8,
+      core_count=4,
       project=Project.CLOUD_TPU_MULTIPOD_DEV.value,
       zone=Zone.EUROPE_WEST4_B.value,
       namespace="automation-testing",

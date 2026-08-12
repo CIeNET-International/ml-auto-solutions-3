@@ -114,7 +114,7 @@ with models.DAG(
           test_name="training",
           run_model_cmds=training_cmd,
           docker_image="{{ params.docker_image }}",
-          cluster=Gclusters.TPU_V5P_MLPERF_CLUSTER.override(core_count=128),
+          cluster=Gclusters.TPU_V5P_MLPERF_CLUSTER.override(core_count=64),
           test_owner=test_owner.SURBHI_J,
       ).run(skip_post_process=True, priority="very-high")
 
