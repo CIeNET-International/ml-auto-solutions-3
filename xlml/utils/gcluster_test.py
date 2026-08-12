@@ -46,9 +46,6 @@ class GclusterTest(unittest.TestCase):
     self.assertFalse(gcluster.is_valid_gpu_version("v4-8"))
     self.assertFalse(gcluster.is_valid_gpu_version("v5e-16"))
 
-  def test_volume_mounts_constants(self):
-    self.assertEqual(gcluster.VolumeMounts.DSHM, "/dev/shm;/dev/shm;rw")
-
   def test_generate_workload_id_format_and_length(self):
     benchmark_id = "maxtext-e2e-pre-training-llama3-70b-tpu-test"
     workload_id = gcluster.generate_workload_id.function(benchmark_id)

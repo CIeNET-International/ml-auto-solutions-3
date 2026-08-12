@@ -17,8 +17,6 @@
 import dataclasses
 from typing import Optional, Union
 
-from xlml.utils.gcluster import VolumeMounts
-
 
 @dataclasses.dataclass
 class GclusterConfig:

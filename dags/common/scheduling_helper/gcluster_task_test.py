@@ -95,7 +95,7 @@ class GclusterTaskTest(unittest.TestCase):
       tg = self.gcluster_task.run(
           skip_post_process=True,
           priority="high",
-          mounts=gcluster.VolumeMounts.DSHM,
+          mounts="/dev/shm;/dev/shm;rw",
           gcluster_version="v1.99.0",
       )
 

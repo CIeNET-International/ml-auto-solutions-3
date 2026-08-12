@@ -24,7 +24,6 @@ from dags.common import test_owner
 from dags.common.quarantined_tests import safe_get_from_variable
 from dags.common.vm_resource import Gclusters
 from dags.multipod.configs import gke_config
-from xlml.utils.gcluster import VolumeMounts
 
 # HF token retrieved from Airflow Variables for secure credential management
 HF_TOKEN = safe_get_from_variable("HF_TOKEN", None)
@@ -146,7 +145,7 @@ with models.DAG(
       ).run(
           skip_post_process=True,
           priority="very-high",
-          mounts=VolumeMounts.DSHM,
+          mounts="/dev/shm;/dev/shm;rw",
       )
 
       for mode, mode_test_config in test_config["post_training"].items():
@@ -204,7 +203,7 @@ with models.DAG(
           ).run(
               skip_post_process=True,
               priority="very-high",
-              mounts=VolumeMounts.DSHM,
+              mounts="/dev/shm;/dev/shm;rw",
           )
 
           (

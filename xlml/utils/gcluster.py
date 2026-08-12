@@ -50,13 +50,6 @@ LOGGING_URL_FORMAT = (
 )
 
 
-class VolumeMounts:
-  """Standard volume mount configurations for Cluster Toolkit (gcluster) workloads."""
-
-  # Shared memory mount for multi-process PyTorch/JAX and HuggingFace caching
-  DSHM = "/dev/shm;/dev/shm;rw"
-
-
 def get_gcluster_setup_cmd(
     tmpdir: str, version: str = DEFAULT_GCLUSTER_VERSION
 ) -> List[str]:
