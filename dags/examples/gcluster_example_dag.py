@@ -17,8 +17,8 @@
 import datetime
 from airflow import models
 from dags.common import test_owner
-from dags.common.vm_resource import DockerImage, XpkClusters
-from xlml.apis import gcp_config, metric_config, task, test_config
+from dags.common.vm_resource import DockerImage, Gclusters
+from dags.multipod.configs import gke_config
 
 with models.DAG(
     dag_id="gcluster_example_dag",
@@ -35,32 +35,13 @@ with models.DAG(
     start_date=datetime.datetime(2026, 1, 1),
     catchup=False,
 ) as dag:
-  cluster = XpkClusters.TPU_V4_8_MAS_CLUSTER
-
-  job_gcp_config = gcp_config.GCPConfig(
-      project_name=cluster.project,
-      zone=cluster.zone,
-      dataset_name=metric_config.DatasetOption.XLML_DATASET,
-  )
-
-  job_test_config = test_config.TpuGkeTest(
-      test_config.Tpu(
-          version=cluster.device_version,
-          cores=cluster.core_count,
-      ),
-      test_name="gcluster-v4-8-smoke-test",
-      cluster_name=cluster.name,
+  gcluster_smoke_test = gke_config.get_gke_config(
+      test_name="gcluster-v5p-smoke-test",
+      cluster=Gclusters.TPU_V5P_MLPERF_CLUSTER,
       docker_image=DockerImage.MAXTEXT_TPU_JAX_STABLE.value,
       run_model_cmds=[
           "python3 -c \"import jax; print('=== TPU DEVICES ===', jax.devices('tpu')); assert len(jax.devices('tpu')) > 0, 'No TPU devices found'\""
       ],
-      set_up_cmds=None,
-      timeout=datetime.timedelta(minutes=15),
-      task_owner=test_owner.JACKY_F,
-      num_slices=1,
-  )
-
-  gcluster_smoke_test = task.GclusterTask(
-      task_test_config=job_test_config,
-      task_gcp_config=job_gcp_config,
+      time_out_in_min=15,
+      test_owner=test_owner.JACKY_F,
   ).run()

@@ -967,6 +967,11 @@ class GclusterTask(BaseTask):
       )
       gcs_path = self._maybe_generate_gcs_location(gcs_location)
       task_namespace = getattr(self.task_test_config, "namespace", namespace)
+      task_mounts = (
+          mounts
+          if mounts is not None
+          else getattr(self.task_test_config, "mounts", None)
+      )
 
       runner = GclusterRunner(
           task_test_config=self.task_test_config,
@@ -982,7 +987,7 @@ class GclusterTask(BaseTask):
           max_restart=max_restart,
           priority=priority,
           namespace=task_namespace,
-          mounts=mounts,
+          mounts=task_mounts,
       )
       _ = (workload_id, gcs_path)
 
@@ -1097,6 +1102,11 @@ class GclusterNameGenAndQuarantineTask(GclusterTask):
       )
       gcs_path = self._maybe_generate_gcs_location(gcs_location)
       task_namespace = getattr(self.task_test_config, "namespace", namespace)
+      task_mounts = (
+          mounts
+          if mounts is not None
+          else getattr(self.task_test_config, "mounts", None)
+      )
 
       nodes = [run_name]
 
@@ -1141,7 +1151,7 @@ class GclusterNameGenAndQuarantineTask(GclusterTask):
           max_restart=max_restart,
           priority=priority,
           namespace=task_namespace,
-          mounts=mounts,
+          mounts=task_mounts,
       )
 
       _ = run_name >> nodes[-1]
