@@ -35,6 +35,7 @@ class GclusterConfig:
       *,
       core_count: Optional[int] = None,
       namespace: Optional[str] = None,
+      mounts: Optional[Union[str, Iterable[str]]] = None,
   ) -> 'GclusterConfig':
     """Returns a copy of this cluster config with specified fields overridden."""
     changes = {}
@@ -42,4 +43,6 @@ class GclusterConfig:
       changes['core_count'] = core_count
     if namespace is not None:
       changes['namespace'] = namespace
+    if mounts is not None:
+      changes['mounts'] = mounts
     return dataclasses.replace(self, **changes)
