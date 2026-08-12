@@ -309,7 +309,7 @@ def _log_workload_pod_statuses(
         )
 
 
-@task
+@task.sensor(poke_interval=60, timeout=3600, mode="reschedule")
 def wait_for_workload_start(
     workload_id: str,
     project_id: str,
@@ -335,7 +335,7 @@ def wait_for_workload_start(
   return True
 
 
-@task
+@task.sensor(poke_interval=60, timeout=18000, mode="reschedule")
 def wait_for_workload_completion(
     workload_id: str,
     project_id: str,
