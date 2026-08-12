@@ -90,6 +90,18 @@ class GclusterTaskTest(unittest.TestCase):
         f"Missing clean_up_workload in {task_ids}",
     )
 
+  def test_gcluster_task_run_with_mounts(self):
+    with self.test_dag:
+      tg = self.gcluster_task.run(
+          skip_post_process=True,
+          priority="high",
+          mounts=gcluster.VolumeMounts.DSHM,
+          gcluster_version="v1.99.0",
+      )
+
+    self.assertIsNotNone(tg)
+    self.assertEqual(tg.group_id, self.test_cfg.benchmark_id)
+
   def test_gcluster_name_gen_and_quarantine_task(self):
     metric_cfg = metric_config.MetricConfig(
         tensorboard_summary=metric_config.SummaryConfig(

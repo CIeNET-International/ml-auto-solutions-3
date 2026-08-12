@@ -23,6 +23,7 @@ from dags.common import test_owner
 from dags.common.quarantined_tests import safe_get_from_variable
 from dags.common.vm_resource import Gclusters
 from dags.multipod.configs import gke_config
+from xlml.utils.gcluster import VolumeMounts
 
 HF_TOKEN = safe_get_from_variable("HF_TOKEN", None)
 
@@ -104,7 +105,11 @@ with models.DAG(
           docker_image="{{ params.docker_image }}",
           cluster=Gclusters.TPU_V5P_MLPERF_CLUSTER,
           test_owner=test_owner.SURBHI_J,
-      ).run(skip_post_process=True, priority="very-high")
+      ).run(
+          skip_post_process=True,
+          priority="very-high",
+          mounts=VolumeMounts.DSHM,
+      )
 
       training_cmd = (f"export HF_TOKEN={HF_TOKEN}",) + (
           f"{test_config['training']['command']} {run_name}",
@@ -136,6 +141,10 @@ with models.DAG(
           docker_image="{{ params.docker_image }}",
           cluster=Gclusters.TPU_V5P_MLPERF_CLUSTER,
           test_owner=test_owner.SURBHI_J,
-      ).run(skip_post_process=True, priority="very-high")
+      ).run(
+          skip_post_process=True,
+          priority="very-high",
+          mounts=VolumeMounts.DSHM,
+      )
 
       convert_to_maxtext_task >> training_task >> convert_to_huggingface_task

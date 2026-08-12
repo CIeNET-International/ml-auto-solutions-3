@@ -15,7 +15,9 @@
 """Cluster configuration for Cluster Toolkit (gcluster)."""
 
 import dataclasses
-from typing import Iterable, Optional, Union
+from typing import Optional, Union
+
+from xlml.utils.gcluster import VolumeMounts
 
 
 @dataclasses.dataclass
@@ -28,14 +30,12 @@ class GclusterConfig:
   project: str
   zone: str
   namespace: str = 'default'
-  mounts: Optional[Union[str, Iterable[str]]] = None
 
   def override(
       self,
       *,
       core_count: Optional[int] = None,
       namespace: Optional[str] = None,
-      mounts: Optional[Union[str, Iterable[str]]] = None,
   ) -> 'GclusterConfig':
     """Returns a copy of this cluster config with specified fields overridden."""
     changes = {}
@@ -43,6 +43,4 @@ class GclusterConfig:
       changes['core_count'] = core_count
     if namespace is not None:
       changes['namespace'] = namespace
-    if mounts is not None:
-      changes['mounts'] = mounts
     return dataclasses.replace(self, **changes)

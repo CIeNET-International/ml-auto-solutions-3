@@ -65,7 +65,6 @@ def get_gke_config(
       cluster_name=cluster.name,
       docker_image=docker_image,
       namespace=getattr(cluster, "namespace", "default"),
-      mounts=getattr(cluster, "mounts", None),
   )
   job_metric_config = user_specified_job_metric_config
   if job_metric_config is None:

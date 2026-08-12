@@ -341,7 +341,6 @@ class Gclusters:
       project=Project.CLOUD_TPU_MULTIPOD_DEV.value,
       zone=Zone.EUROPE_WEST4_B.value,
       namespace="automation-testing",
-      mounts=("/dev/shm;/dev/shm;rw",),
   )
 
 
