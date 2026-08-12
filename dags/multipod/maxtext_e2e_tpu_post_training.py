@@ -22,7 +22,7 @@ from airflow.models.param import Param
 from airflow.utils.task_group import TaskGroup
 from dags.common import test_owner
 from dags.common.quarantined_tests import safe_get_from_variable
-from dags.common.vm_resource import XpkClusters
+from dags.common.vm_resource import Gclusters
 from dags.multipod.configs import gke_config
 
 # HF token retrieved from Airflow Variables for secure credential management
@@ -140,7 +140,7 @@ with models.DAG(
           test_name="convert-to-maxtext",
           run_model_cmds=convert_to_maxtext_cmd,
           docker_image="{{ params.docker_image }}",
-          cluster=XpkClusters.TPU_V5P_8_CLUSTER_V2,
+          cluster=Gclusters.TPU_V5P_MLPERF_CLUSTER,
           test_owner=test_owner.SURBHI_J,
       ).run(skip_post_process=True, priority="very-high")
 
@@ -165,7 +165,7 @@ with models.DAG(
           training_task = gke_config.get_gke_config(
               time_out_in_min=60,
               num_slices=1,
-              cluster=XpkClusters.TPU_V5P_128_CLUSTER,
+              cluster=Gclusters.TPU_V5P_MLPERF_CLUSTER.override(core_count=128),
               test_name=f"train-{mode}-{model}",
               run_model_cmds=training_cmd,
               docker_image="{{ params.docker_image }}",
@@ -194,7 +194,7 @@ with models.DAG(
               test_name="convert-to-huggingface",
               run_model_cmds=convert_to_huggingface_cmd,
               docker_image="{{ params.docker_image }}",
-              cluster=XpkClusters.TPU_V5P_8_CLUSTER_V2,
+              cluster=Gclusters.TPU_V5P_MLPERF_CLUSTER,
               test_owner=test_owner.SURBHI_J,
           ).run(skip_post_process=True, priority="very-high")
 

@@ -15,11 +15,12 @@
 """Utilities to construct configs for maxtext DAG on GKE."""
 
 import datetime
-from typing import Any, Iterable
+from typing import Any, Iterable, Union
 
 from dags import gcs_bucket
 from dags.common.vm_resource import Project, XpkClusters
 from xlml.apis import gcp_config, metric_config, task, test_config
+from xlml.apis.gcluster_config import GclusterConfig
 from xlml.apis.xpk_cluster_config import XpkClusterConfig
 
 
@@ -29,7 +30,9 @@ def get_gke_config(
     docker_image: str,
     test_owner: str,
     run_model_cmds: Iterable[str],
-    cluster: XpkClusterConfig = XpkClusters.TPU_V4_8_MAXTEXT_CLUSTER,
+    cluster: Union[
+        GclusterConfig, XpkClusterConfig
+    ] = XpkClusters.TPU_V4_8_MAXTEXT_CLUSTER,
     num_slices: int = 1,
     dataset_name: metric_config.DatasetOption = (
         metric_config.DatasetOption.XLML_DATASET
@@ -39,7 +42,7 @@ def get_gke_config(
     base_output_directory: str = None,
     metric_aggregation_strategy: metric_config.AggregationStrategy = None,
     user_specified_job_metric_config: metric_config.MetricConfig = None,
-) -> task.XpkTask:
+) -> Union[task.GclusterTask, task.XpkTask]:
   job_gcp_config = gcp_config.GCPConfig(
       project_name=cluster.project,
       zone=cluster.zone,
@@ -61,6 +64,8 @@ def get_gke_config(
       num_slices=num_slices,
       cluster_name=cluster.name,
       docker_image=docker_image,
+      namespace=getattr(cluster, "namespace", "default"),
+      mounts=getattr(cluster, "mounts", None),
   )
   job_metric_config = user_specified_job_metric_config
   if job_metric_config is None:
@@ -74,6 +79,13 @@ def get_gke_config(
         )
         if base_output_directory and metric_aggregation_strategy
         else None
+    )
+
+  if isinstance(cluster, GclusterConfig):
+    return task.GclusterTask(
+        task_test_config=job_test_config,
+        task_gcp_config=job_gcp_config,
+        task_metric_config=job_metric_config,
     )
 
   return task.XpkTask(
