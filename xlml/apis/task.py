@@ -19,7 +19,7 @@ import contextlib
 import dataclasses
 import datetime
 import shlex
-from typing import Any, Tuple, Union
+from typing import Any, Optional, Tuple, Union
 
 import airflow
 from airflow.models import BaseOperator
@@ -31,7 +31,7 @@ from airflow.decorators import task
 from airflow.operators.empty import EmptyOperator
 
 from dags.common.quarantined_tests import QuarantineTests
-from xlml.utils import gpu, metric, name_format, ssh, tpu, xpk, axlearn, gke, kpo
+from xlml.utils import gpu, metric, name_format, ssh, tpu, xpk, axlearn, gke, kpo, gcluster
 from xlml.apis import gcp_config, metric_config, test_config, gcs
 
 
@@ -765,6 +765,388 @@ class XpkNameGenAndQuarantineTask(XpkTask):
       chain(*nodes)
 
     return group, xpk_runner
+
+
+@dataclasses.dataclass
+class GclusterRunner:
+  """GclusterRunner executes Cluster Toolkit workloads and manages their lifecycle."""
+
+  task_test_config: Union[
+      test_config.TpuGkeTest, test_config.GpuXpkTest, test_config.CpuGkeTest
+  ]
+  task_gcp_config: gcp_config.GCPConfig
+  workload_id: airflow.XComArg
+  gcs_path: airflow.XComArg
+  workload_provision_timeout: datetime.timedelta
+  use_vertex_tensorboard: bool = False
+  use_pathways: bool = False
+  ramdisk_directory: str = ""
+  mtc_enabled: bool = False
+  gcluster_version: str = gcluster.DEFAULT_GCLUSTER_VERSION
+  max_restart: int = 0
+  priority: str = "high"
+  namespace: str = "default"
+  mounts: Optional[Union[str, Iterable[str]]] = None
+
+  def launch_workload(self) -> DAGNode:
+    """Create the workload and wait for it to provision using gcluster."""
+    with TaskGroup(group_id="launch_workload") as group:
+      run_workload = gcluster.run_workload.override(
+          owner=self.task_test_config.task_owner
+      )(
+          task_id="run_workload",
+          cluster_project=self.task_gcp_config.project_name,
+          zone=self.task_gcp_config.zone,
+          cluster_name=self.task_test_config.cluster_name,
+          benchmark_id=self.task_test_config.benchmark_id,
+          workload_id=self.workload_id,
+          gcs_path=self.gcs_path,
+          docker_image=self.task_test_config.docker_image,
+          accelerator_type=self.task_test_config.accelerator.name,
+          run_cmds=self.task_test_config.test_script,
+          num_slices=self.task_test_config.num_slices,
+          use_vertex_tensorboard=self.use_vertex_tensorboard,
+          use_pathways=self.use_pathways,
+          ramdisk_directory=self.ramdisk_directory,
+          mtc_enabled=self.mtc_enabled,
+          gcluster_version=self.gcluster_version,
+          max_restart=self.max_restart,
+          priority=self.priority,
+          namespace=self.namespace,
+          mounts=self.mounts,
+      )
+      wait_for_workload_start = gcluster.wait_for_workload_start.override(
+          timeout=self.workload_provision_timeout.total_seconds()
+      )(
+          workload_id=self.workload_id,
+          project_id=self.task_gcp_config.project_name,
+          region=gke.zone_to_region(self.task_gcp_config.zone),
+          cluster_name=self.task_test_config.cluster_name,
+          namespace=self.namespace,
+      )
+      _ = run_workload >> wait_for_workload_start
+      return group
+
+  def wait_workload_complete(self) -> BaseOperator:
+    return gcluster.wait_for_workload_completion.override(
+        timeout=int(self.task_test_config.timeout.total_seconds()),
+    )(
+        workload_id=self.workload_id,
+        project_id=self.task_gcp_config.project_name,
+        region=gke.zone_to_region(self.task_gcp_config.zone),
+        cluster_name=self.task_test_config.cluster_name,
+        namespace=self.namespace,
+    )
+
+  def cleanup_workload(self, tear_down_of: BaseOperator) -> DAGNode:
+    return gcluster.clean_up_workload(
+        workload_id=self.workload_id,
+        project_id=self.task_gcp_config.project_name,
+        zone=self.task_gcp_config.zone,
+        cluster_name=self.task_test_config.cluster_name,
+        gcluster_version=self.gcluster_version,
+        namespace=self.namespace,
+    ).as_teardown(
+        setups=tear_down_of,
+        on_failure_fail_dagrun=True,
+    )
+
+
+@dataclasses.dataclass
+class GclusterTask(BaseTask):
+  """This is a class to set up tasks for TPU/GPU provisioned by Cluster Toolkit (gcluster).
+
+  Attributes:
+    task_test_config: Test configs to run on this TPU/GPU.
+    task_gcp_config: Runtime TPU/GPU creation parameters.
+    task_metric_config: Metric configs to process metrics.
+    workload_provision_timeout: Time allowed for provisioning a workload.
+  """
+
+  task_test_config: Union[
+      test_config.TpuGkeTest, test_config.GpuXpkTest, test_config.CpuGkeTest
+  ]
+  task_gcp_config: gcp_config.GCPConfig
+  task_metric_config: Optional[metric_config.MetricConfig] = None
+  workload_provision_timeout: datetime.timedelta = datetime.timedelta(
+      minutes=60
+  )
+
+  def run(
+      self,
+      *,
+      gcs_location: Optional[airflow.XComArg] = None,
+      use_vertex_tensorboard: bool = False,
+      use_pathways: bool = False,
+      skip_post_process: bool = False,
+      ramdisk_directory: str = "",
+      mtc_enabled: bool = False,
+      gcluster_version: str = gcluster.DEFAULT_GCLUSTER_VERSION,
+      max_restart: int = 0,
+      priority: str = "high",
+      namespace: str = "default",
+      mounts: Optional[Union[str, Iterable[str]]] = None,
+  ) -> DAGNode:
+    """Run a test job within a docker image using Cluster Toolkit.
+
+    Attributes:
+      gcs_location: GCS path for all artifacts of the test.
+      use_vertex_tensorboard: Set to True to view workload data on
+        Vertex AI Tensorboard.
+
+    Returns:
+      A task group with the following tasks chained: run_model and
+      post_process.
+    """
+    with TaskGroup(group_id=self.task_test_config.benchmark_id) as group:
+      pre_process, runner = self._pre_process(
+          gcs_location=gcs_location,
+          use_vertex_tensorboard=use_vertex_tensorboard,
+          use_pathways=use_pathways,
+          ramdisk_directory=ramdisk_directory,
+          mtc_enabled=mtc_enabled,
+          gcluster_version=gcluster_version,
+          max_restart=max_restart,
+          priority=priority,
+          namespace=namespace,
+          mounts=mounts,
+      )
+
+      run_model = self._run_model(runner)
+
+      nodes = [pre_process, run_model]
+      if not skip_post_process:
+        nodes.append(self._post_process(runner.gcs_path))
+
+      _ = pre_process >> run_model
+      if not skip_post_process:
+        _ = run_model >> nodes[-1]
+
+    return group
+
+  def _run_model(self, runner: GclusterRunner) -> DAGNode:
+    with TaskGroup(group_id="run_model") as group:
+      dummy_op = self._dummy_op_for_teardown()
+
+      _ = (
+          dummy_op
+          >> runner.launch_workload()
+          >> runner.wait_workload_complete()
+          >> runner.cleanup_workload(tear_down_of=dummy_op)
+      )
+      return group
+
+  def _maybe_generate_gcs_location(
+      self,
+      gcs_location: Optional[airflow.XComArg] = None,
+  ) -> airflow.XComArg:
+    if gcs_location:
+      return gcs_location
+
+    return name_format.generate_gcs_folder_location(
+        self.task_test_config.gcs_subfolder,
+        self.task_test_config.benchmark_id,
+    )
+
+  def _pre_process(
+      self,
+      gcs_location: Optional[airflow.XComArg] = None,
+      use_vertex_tensorboard: bool = False,
+      use_pathways: bool = False,
+      ramdisk_directory: str = "",
+      mtc_enabled: bool = False,
+      gcluster_version: str = gcluster.DEFAULT_GCLUSTER_VERSION,
+      max_restart: int = 0,
+      priority: str = "high",
+      namespace: str = "default",
+      mounts: Optional[Union[str, Iterable[str]]] = None,
+  ) -> tuple[DAGNode, GclusterRunner]:
+    with TaskGroup(group_id="pre_process") as group:
+      workload_id = gcluster.generate_workload_id(
+          self.task_test_config.benchmark_id
+      )
+      gcs_path = self._maybe_generate_gcs_location(gcs_location)
+      task_namespace = getattr(self.task_test_config, "namespace", namespace)
+
+      runner = GclusterRunner(
+          task_test_config=self.task_test_config,
+          task_gcp_config=self.task_gcp_config,
+          workload_id=workload_id,
+          gcs_path=gcs_path,
+          workload_provision_timeout=self.workload_provision_timeout,
+          use_vertex_tensorboard=use_vertex_tensorboard,
+          use_pathways=use_pathways,
+          ramdisk_directory=ramdisk_directory,
+          mtc_enabled=mtc_enabled,
+          gcluster_version=gcluster_version,
+          max_restart=max_restart,
+          priority=priority,
+          namespace=task_namespace,
+          mounts=mounts,
+      )
+      _ = (workload_id, gcs_path)
+
+    return group, runner
+
+  def _post_process(self, result_location: Optional[str] = None) -> DAGNode:
+    """Process metrics and metadata, and insert them into BigQuery tables."""
+    with TaskGroup(group_id="post_process") as group:
+      process_id = metric.generate_process_id.override(retries=0)()
+      post_process_metrics = metric.process_metrics.override(retries=0)(
+          process_id,
+          self.task_test_config,
+          self.task_metric_config,
+          self.task_gcp_config,
+          folder_location=result_location,
+      )
+
+      if self.task_metric_config and self.task_metric_config.profile:
+        self.task_metric_config.profile.metrics = (
+            metric.xplane_to_metrics.override(retries=0)(
+                self.task_metric_config.profile.file_location
+            )
+        )
+        _ = (
+            process_id
+            >> self.task_metric_config.profile.metrics
+            >> post_process_metrics
+        )
+      else:
+        _ = process_id >> post_process_metrics
+
+      return group
+
+  def _dummy_op_for_teardown(self) -> BaseOperator:
+    return EmptyOperator(task_id="dummy_op_for_teardown").as_setup()
+
+
+@dataclasses.dataclass
+class GclusterNameGenAndQuarantineTask(GclusterTask):
+  """Task for running Cluster Toolkit workloads with name generation and quarantine."""
+
+  quarantine_task_group: Any = None
+  run_name_env: str = "M_RUN_NAME"
+  nested_run_name_in_tb_file_location: bool = True
+
+  def run(
+      self,
+      *,
+      gcs_location: Optional[airflow.XComArg] = None,
+      use_vertex_tensorboard: bool = False,
+      use_pathways: bool = False,
+      skip_post_process: bool = False,
+      ramdisk_directory: str = "",
+      mtc_enabled: bool = False,
+      gcluster_version: str = gcluster.DEFAULT_GCLUSTER_VERSION,
+      max_restart: int = 0,
+      priority: str = "high",
+      namespace: str = "default",
+      mounts: Optional[Union[str, Iterable[str]]] = None,
+  ) -> DAGNode:
+    """Generate a unique run name, tensorboard file location,
+    and profile file location (if metric config has profile),
+    then run a test job within a docker image using gcluster.
+
+    Returns:
+      A task group with the following tasks chained: generate_run_name,
+      generate_tb_file_location, generate_profile_file_location (optional),
+      run provision, run_model, post_process.
+    """
+    test_name = self.task_test_config.benchmark_id
+    cm = (
+        self.quarantine_task_group
+        if QuarantineTests.is_quarantined(test_name)
+        and self.quarantine_task_group
+        else contextlib.nullcontext()
+    )
+
+    with cm:
+      return super().run(
+          gcs_location=gcs_location,
+          use_vertex_tensorboard=use_vertex_tensorboard,
+          use_pathways=use_pathways,
+          skip_post_process=skip_post_process,
+          ramdisk_directory=ramdisk_directory,
+          mtc_enabled=mtc_enabled,
+          gcluster_version=gcluster_version,
+          max_restart=max_restart,
+          priority=priority,
+          namespace=namespace,
+          mounts=mounts,
+      )
+
+  def _pre_process(
+      self,
+      gcs_location: Optional[airflow.XComArg] = None,
+      use_vertex_tensorboard: bool = False,
+      use_pathways: bool = False,
+      ramdisk_directory: str = "",
+      mtc_enabled: bool = False,
+      gcluster_version: str = gcluster.DEFAULT_GCLUSTER_VERSION,
+      max_restart: int = 0,
+      priority: str = "high",
+      namespace: str = "default",
+      mounts: Optional[Union[str, Iterable[str]]] = None,
+  ) -> tuple[DAGNode, GclusterRunner]:
+    with TaskGroup(group_id="pre_process") as group:
+      run_name = name_format.generate_run_name(
+          self.task_test_config.benchmark_id
+      )
+      workload_id = gcluster.generate_workload_id(
+          self.task_test_config.benchmark_id
+      )
+      gcs_path = self._maybe_generate_gcs_location(gcs_location)
+      task_namespace = getattr(self.task_test_config, "namespace", namespace)
+
+      nodes = [run_name]
+
+      tb_file_location = name_format.generate_tb_file_location(
+          run_name,
+          self.task_metric_config.tensorboard_summary.file_location,
+          self.nested_run_name_in_tb_file_location,
+      )
+
+      # Set run_name in run_model_cmds
+      new_run_model_cmds = [f"export {self.run_name_env}={run_name}"]
+      for cmd in self.task_test_config.run_model_cmds:
+        new_run_model_cmds.append(cmd)
+      self.task_test_config.run_model_cmds = new_run_model_cmds
+
+      # Update tensorboard file location
+      self.task_metric_config.tensorboard_summary.file_location = (
+          tb_file_location
+      )
+
+      # Update profile file location
+      if self.task_metric_config and self.task_metric_config.profile:
+        profile_file_location = name_format.generate_profile_file_location(
+            run_name, self.task_metric_config.profile.file_location
+        )
+        self.task_metric_config.profile.file_location = profile_file_location
+        nodes.append([tb_file_location, profile_file_location])
+      else:
+        nodes.append(tb_file_location)
+
+      runner = GclusterRunner(
+          task_test_config=self.task_test_config,
+          task_gcp_config=self.task_gcp_config,
+          workload_id=workload_id,
+          gcs_path=gcs_path,
+          workload_provision_timeout=self.workload_provision_timeout,
+          use_vertex_tensorboard=use_vertex_tensorboard,
+          use_pathways=use_pathways,
+          ramdisk_directory=ramdisk_directory,
+          mtc_enabled=mtc_enabled,
+          gcluster_version=gcluster_version,
+          max_restart=max_restart,
+          priority=priority,
+          namespace=task_namespace,
+          mounts=mounts,
+      )
+
+      _ = run_name >> nodes[-1]
+
+    return group, runner
 
 
 @dataclasses.dataclass
