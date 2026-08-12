@@ -15,7 +15,9 @@
 """Cluster configuration for Cluster Toolkit (gcluster)."""
 
 import dataclasses
-from typing import Iterable, Optional, Union
+from typing import Optional, Union
+
+from xlml.utils.gcluster import VolumeMounts
 
 
 @dataclasses.dataclass
@@ -28,7 +30,6 @@ class GclusterConfig:
   project: str
   zone: str
   namespace: str = 'default'
-  mounts: Optional[Union[str, Iterable[str]]] = None
 
   def override(
       self,

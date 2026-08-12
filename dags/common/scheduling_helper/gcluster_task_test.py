@@ -23,8 +23,10 @@ from airflow import models
 from airflow.utils.task_group import TaskGroup
 from dags.common import test_owner
 from dags.common.quarantined_tests import QuarantineTests
-from dags.common.vm_resource import Project, TpuVersion, XpkClusters
+from dags.common.vm_resource import Gclusters, Project, TpuVersion, XpkClusters
+from dags.multipod.configs import gke_config
 from xlml.apis import gcp_config, metric_config, task, test_config
+from xlml.apis.gcluster_config import GclusterConfig
 from xlml.utils import gcluster
 
 
@@ -88,6 +90,18 @@ class GclusterTaskTest(unittest.TestCase):
         f"Missing clean_up_workload in {task_ids}",
     )
 
+  def test_gcluster_task_run_with_mounts(self):
+    with self.test_dag:
+      tg = self.gcluster_task.run(
+          skip_post_process=True,
+          priority="high",
+          mounts=gcluster.VolumeMounts.DSHM,
+          gcluster_version="v1.99.0",
+      )
+
+    self.assertIsNotNone(tg)
+    self.assertEqual(tg.group_id, self.test_cfg.benchmark_id)
+
   def test_gcluster_name_gen_and_quarantine_task(self):
     metric_cfg = metric_config.MetricConfig(
         tensorboard_summary=metric_config.SummaryConfig(
@@ -142,6 +156,44 @@ class GclusterTaskTest(unittest.TestCase):
 
     self.assertIsNotNone(tg)
     mock_quarantine.assert_called_once_with(self.test_cfg.benchmark_id)
+
+  def test_gcluster_config_override(self):
+    base_config = GclusterConfig(
+        name="test-cluster",
+        device_version=TpuVersion.V5P,
+        core_count=8,
+        project="test-project",
+        zone="us-central1-a",
+        namespace="default",
+    )
+    overridden = base_config.override(core_count=128, namespace="custom-ns")
+    self.assertEqual(overridden.core_count, 128)
+    self.assertEqual(overridden.namespace, "custom-ns")
+    self.assertEqual(overridden.name, "test-cluster")
+    # Base config must remain unmodified
+    self.assertEqual(base_config.core_count, 8)
+    self.assertEqual(base_config.namespace, "default")
+
+  def test_get_gke_config_polymorphic_dispatch(self):
+    gcluster_t = gke_config.get_gke_config(
+        time_out_in_min=30,
+        test_name="test-gcluster",
+        docker_image="gcr.io/test/image:latest",
+        test_owner=test_owner.JACKY_F,
+        run_model_cmds=["echo test"],
+        cluster=Gclusters.TPU_V5P_MLPERF_CLUSTER,
+    )
+    self.assertIsInstance(gcluster_t, task.GclusterTask)
+
+    xpk_t = gke_config.get_gke_config(
+        time_out_in_min=30,
+        test_name="test-xpk",
+        docker_image="gcr.io/test/image:latest",
+        test_owner=test_owner.JACKY_F,
+        run_model_cmds=["echo test"],
+        cluster=XpkClusters.TPU_V4_8_MAXTEXT_CLUSTER,
+    )
+    self.assertIsInstance(xpk_t, task.XpkTask)
 
 
 if __name__ == "__main__":

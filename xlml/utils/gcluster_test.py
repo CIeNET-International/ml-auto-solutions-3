@@ -46,6 +46,9 @@ class GclusterTest(unittest.TestCase):
     self.assertFalse(gcluster.is_valid_gpu_version("v4-8"))
     self.assertFalse(gcluster.is_valid_gpu_version("v5e-16"))
 
+  def test_volume_mounts_constants(self):
+    self.assertEqual(gcluster.VolumeMounts.DSHM, "/dev/shm;/dev/shm;rw")
+
   def test_generate_workload_id_format_and_length(self):
     benchmark_id = "maxtext-e2e-pre-training-llama3-70b-tpu-test"
     workload_id = gcluster.generate_workload_id.function(benchmark_id)
@@ -343,6 +346,31 @@ class GclusterTest(unittest.TestCase):
         cluster_name="test-cluster",
     )
     self.assertTrue(completed)
+
+  @mock.patch("xlml.utils.gcluster._get_workload_job")
+  @mock.patch("xlml.utils.gcluster._get_batch_api_client")
+  @mock.patch("xlml.utils.gcluster._list_workload_pods")
+  @mock.patch("xlml.utils.gcluster._get_core_api_client")
+  def test_wait_for_workload_completion_no_pods_job_failed(
+      self, mock_get_client, mock_list_pods, mock_get_batch, mock_get_job
+  ):
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = []
+    mock_list_pods.return_value = mock_pod_list
+
+    mock_condition = mock.MagicMock()
+    mock_condition.type = "Failed"
+    mock_job = mock.MagicMock()
+    mock_job.status.conditions = [mock_condition]
+    mock_get_job.return_value = mock_job
+
+    with self.assertRaises(AirflowFailException):
+      gcluster.wait_for_workload_completion.function(
+          workload_id="test-workload",
+          project_id="test-project",
+          region="us-central1",
+          cluster_name="test-cluster",
+      )
 
 
 if __name__ == "__main__":

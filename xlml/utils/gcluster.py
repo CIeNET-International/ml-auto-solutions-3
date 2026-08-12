@@ -19,7 +19,7 @@ import os
 import re
 import shlex
 import tempfile
-from typing import Iterable, Optional, Union
+from typing import Iterable, List, Optional, Union
 import uuid
 from absl import logging
 
@@ -50,14 +50,21 @@ LOGGING_URL_FORMAT = (
 )
 
 
+class VolumeMounts:
+  """Standard volume mount configurations for Cluster Toolkit (gcluster) workloads."""
+
+  # Shared memory mount for multi-process PyTorch/JAX and HuggingFace caching
+  DSHM = "/dev/shm;/dev/shm;rw"
+
+
 def get_gcluster_setup_cmd(
     tmpdir: str, version: str = DEFAULT_GCLUSTER_VERSION
-) -> list[str]:
+) -> List[str]:
   """Construct shell commands to download and unpack the pinned gcluster binary."""
   bin_dir = f"{tmpdir}/bin"
   bundle_url = (
-      "https://github.com/GoogleCloudPlatform/cluster-toolkit/releases/download/"
-      f"{version}/gcluster_bundle_linux_amd64.tgz"
+      "https://github.com/GoogleCloudPlatform/cluster-toolkit/releases/"
+      f"download/{version}/gcluster_bundle_linux_amd64.tgz"
   )
 
   bash_setup = f"set -xueo pipefail; export PATH={bin_dir}:$PATH"
@@ -68,8 +75,10 @@ def get_gcluster_setup_cmd(
   )
   docker_auth = (
       "gcloud auth configure-docker"
-      " gcr.io,us-docker.pkg.dev,europe-docker.pkg.dev,asia-docker.pkg.dev,us-central1-docker.pkg.dev,us-central2-docker.pkg.dev,europe-west4-docker.pkg.dev,us-east5-docker.pkg.dev"
-      " --quiet 2>/dev/null || true"
+      " gcr.io,us-docker.pkg.dev,europe-docker.pkg.dev,asia-docker.pkg.dev,"
+      "us-central1-docker.pkg.dev,us-central2-docker.pkg.dev,"
+      "europe-west4-docker.pkg.dev,us-east5-docker.pkg.dev"
+      " --quiet || true"
   )
 
   return [bash_setup, download_and_extract, docker_auth]
@@ -85,9 +94,12 @@ def generate_workload_id(benchmark_id: str) -> str:
   """Generate a valid workload ID for gcluster (<= 28 characters)."""
   short_id = str(uuid.uuid4())[:8]
   # gcluster enforces a 28-character limit on workload names.
-  # Truncate sanitized benchmark prefix to at most 19 chars: 19 + 1 ('-') + 8 = 28 max.
+  # Truncate sanitized benchmark prefix to at most 19 chars:
+  # 19 + 1 ('-') + 8 = 28 max.
   clean_benchmark = (
-      re.sub(r"[^a-zA-Z0-9]+", "-", benchmark_id).strip("-")[:19].rstrip("-")
+      re.sub(r"[^a-z0-9]+", "-", benchmark_id.lower())
+      .strip("-")[:19]
+      .rstrip("-")
   )
   if not clean_benchmark:
     clean_benchmark = "job"
@@ -182,8 +194,8 @@ def run_workload(
 
     get_credentials_cmd = (
         f"gcloud container clusters get-credentials {cluster_name}"
-        f" --location={zone} --project={cluster_project} 2>/dev/null && "
-        f"kubectl config set-context --current --namespace={namespace} 2>/dev/null || true"
+        f" --location={zone} --project={cluster_project} && "
+        f"kubectl config set-context --current --namespace={namespace} || true"
     )
     cmds = get_gcluster_setup_cmd(tmpdir, gcluster_version)
     cmds.append(get_credentials_cmd)
@@ -249,7 +261,7 @@ def _get_workload_job(
     batch_api: k8s_client.BatchV1Api,
     workload_id: str,
     namespace: str = "default",
-) -> k8s_client.V1Job:
+) -> Optional[k8s_client.V1Job]:
   """Get the job for a given JobSet workload."""
   logging.info(
       f"Getting job for workload_id: {workload_id} in namespace: {namespace}"
@@ -271,38 +283,40 @@ def _get_workload_job(
   return jobs.items[0]
 
 
-def _log_workload_pod_statuses(workload_id: str, pods) -> None:
+def _log_workload_pod_statuses(
+    workload_id: str, pods: k8s_client.V1PodList
+) -> None:
   """Logs the status of each retrieved pod and its containers for troubleshooting."""
   if not pods.items:
     return
 
   logging.info(f"{f' Pod Statuses for Workload {workload_id} ':-^80}")
-
   for pod in pods.items:
-    logging.info(f"Pod: {pod.metadata.name}, Status: {pod.status.phase}")
-
-    if not pod.status.container_statuses:
-      continue
-
-    for container_status in pod.status.container_statuses:
-      match container_status.state:
-        case state if state.waiting:
-          w = state.waiting
-          logging.warning(
-              f"  Container '{container_status.name}' WAITING. "
-              f"Reason: {w.reason}. Message: {w.message}"
+    pod_name = pod.metadata.name
+    pod_phase = pod.status.phase
+    logging.info(f"Pod: {pod_name} | Phase: {pod_phase}")
+    if pod.status.container_statuses:
+      for cs in pod.status.container_statuses:
+        state_str = "Unknown"
+        if cs.state.running:
+          state_str = f"Running (started: {cs.state.running.started_at})"
+        elif cs.state.waiting:
+          state_str = (
+              f"Waiting (reason: {cs.state.waiting.reason},"
+              f" msg: {cs.state.waiting.message})"
           )
-        case state if state.terminated:
-          t = state.terminated
-          logging.error(
-              f"  Container '{container_status.name}' TERMINATED. "
-              f"Reason: {t.reason}. Exit Code: {t.exit_code}"
+        elif cs.state.terminated:
+          state_str = (
+              f"Terminated (exit_code: {cs.state.terminated.exit_code},"
+              f" reason: {cs.state.terminated.reason},"
+              f" msg: {cs.state.terminated.message})"
           )
+        logging.info(
+            f"  Container: {cs.name} | Ready: {cs.ready} | State: {state_str}"
+        )
 
-  logging.info("-" * 80)
 
-
-@task.sensor(poke_interval=60, timeout=600, mode="reschedule")
+@task.sensor(poke_interval=60, timeout=3600, mode="reschedule")
 def wait_for_workload_start(
     workload_id: str,
     project_id: str,
@@ -310,16 +324,25 @@ def wait_for_workload_start(
     cluster_name: str,
     namespace: str = "default",
 ) -> bool:
-  """Check if the workload has started."""
+  """Wait for workload to start running."""
   core_api = _get_core_api_client(project_id, region, cluster_name)
   pods = _list_workload_pods(core_api, workload_id, namespace=namespace)
-
   _log_workload_pod_statuses(workload_id, pods)
-  logging.info(f"Found {len(pods.items)} pods for workload {workload_id}")
-  return len(pods.items) > 0
+
+  if len(pods.items) == 0:
+    logging.info(f"No pods found for workload: {workload_id}")
+    return False
+
+  for pod in pods.items:
+    if pod.status.phase in ["Pending", "Unknown"]:
+      logging.info(f"Pod {pod.metadata.name} is in phase {pod.status.phase}")
+      return False
+
+  logging.info("All pod(s) phase are ready to run.")
+  return True
 
 
-@task.sensor(poke_interval=60, timeout=600, mode="reschedule")
+@task.sensor(poke_interval=60, timeout=18000, mode="reschedule")
 def wait_for_workload_completion(
     workload_id: str,
     project_id: str,
@@ -327,71 +350,67 @@ def wait_for_workload_completion(
     cluster_name: str,
     namespace: str = "default",
 ) -> bool:
-  """Check the workload status."""
+  """Wait for workload to finish successfully."""
   core_api = _get_core_api_client(project_id, region, cluster_name)
   pods = _list_workload_pods(core_api, workload_id, namespace=namespace)
-
   _log_workload_pod_statuses(workload_id, pods)
 
-  if not pods.items:
-    logging.info(f"No pods found for workload selector: {workload_id}.")
-
-    # Pathways jobs delete all pods on failure so we must also check if the job is complete
+  if len(pods.items) == 0:
     batch_api = _get_batch_api_client(project_id, region, cluster_name)
     job = _get_workload_job(batch_api, workload_id, namespace=namespace)
-    if job is None:
-      logging.info(
-          f"No pods or jobs were found for workload selector: {workload_id}"
-      )
+    if job and job.status.conditions:
+      conditions = job.status.conditions
+      if any(condition.type == "Failed" for condition in conditions):
+        url = LOGGING_URL_FORMAT.format(
+            project=project_id,
+            region=region,
+            cluster=cluster_name,
+            namespace=namespace,
+            workload_id=workload_id,
+        )
+        raise AirflowFailException(
+            f"Workload {workload_id} failed. Logs: {url}"
+        )
+    logging.info(f"No pods found for workload: {workload_id}")
+    return False
+
+  for pod in pods.items:
+    if pod.status.phase in ["Pending", "Running", "Unknown"]:
+      logging.info(f"Pod {pod.metadata.name} is in phase {pod.status.phase}")
       return False
-
-    conditions = job.status.conditions or []
-    if any(condition.type == "Failed" for condition in conditions):
-      raise AirflowFailException('Job has condition type: "Failed"')
-
-    if any(condition.type == "Complete" for condition in conditions):
-      logging.info(
-          "No pods found but job is complete for workload selector:"
-          f" {workload_id}"
+    if pod.status.phase == "Failed":
+      url = LOGGING_URL_FORMAT.format(
+          project=project_id,
+          region=region,
+          cluster=cluster_name,
+          namespace=namespace,
+          workload_id=workload_id,
       )
-      return True
+      raise AirflowFailException(
+          f"Workload {workload_id} failed with pod phase: {pod.status.phase}."
+          f" Link to logs: {url}"
+      )
 
-    return False
-
-  if any(pod.status.phase in ["Pending", "Running"] for pod in pods.items):
-    logging.info("At least one pod has yet to complete.")
-    return False
-
-  last_pod = pods.items[-1] if pods.items else None
-  try:
-    for pod in pods.items:
-      if pod.status.phase == "Failed":
-        last_pod = pod
-        raise AirflowFailException(f"Bad pod phase: {pod.status.phase}")
-      elif pod.status.phase in ["Unknown"]:
-        raise RuntimeError(f"Bad pod phase: {pod.status.phase}")
-  finally:
-    if last_pod and len(last_pod.spec.containers) == 1:
+  if len(pods.items) > 0:
+    last_pod = pods.items[-1]
+    if (
+        last_pod.status.container_statuses
+        and last_pod.status.container_statuses[0].state.terminated
+        and last_pod.status.container_statuses[0].state.terminated.exit_code
+        != 0
+    ):
       try:
         logs = core_api.read_namespaced_pod_log(
-            name=last_pod.metadata.name, namespace=last_pod.metadata.namespace
+            name=last_pod.metadata.name,
+            namespace=namespace,
+            container=last_pod.spec.containers[0].name,
         )
-        logging.info(f"Logs for pod {last_pod.metadata.name}:")
         for line in logs.split("\n"):
           logging.info(line)
       except Exception as e:
         logging.warning(
             f"Could not retrieve pod logs for {last_pod.metadata.name}: {e}"
         )
-    url = LOGGING_URL_FORMAT.format(
-        project=project_id,
-        region=region,
-        cluster=cluster_name,
-        namespace=namespace,
-        workload_id=workload_id,
-    )
-    logging.info(f"Link to logs: {url}")
-
   logging.info("All pod(s) phase are succeeded.")
   return True
 
@@ -404,7 +423,7 @@ def clean_up_workload(
     cluster_name: str,
     gcluster_version: str = DEFAULT_GCLUSTER_VERSION,
     namespace: str = "default",
-) -> bool:
+) -> None:
   """Delete/cancel workload using Cluster Toolkit."""
   with tempfile.TemporaryDirectory() as tmpdir:
     gcluster_bin = f"{tmpdir}/bin/gcluster"
@@ -418,8 +437,8 @@ def clean_up_workload(
 
     get_credentials_cmd = (
         f"gcloud container clusters get-credentials {cluster_name}"
-        f" --location={zone} --project={project_id} 2>/dev/null && "
-        f"kubectl config set-context --current --namespace={namespace} 2>/dev/null || true"
+        f" --location={zone} --project={project_id} && "
+        f"kubectl config set-context --current --namespace={namespace} || true"
     )
     cmds = get_gcluster_setup_cmd(tmpdir, gcluster_version)
     cmds.append(get_credentials_cmd)
