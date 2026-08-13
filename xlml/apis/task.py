@@ -586,7 +586,6 @@ class XpkTask(BaseTask):
           xpk_branch=xpk_branch,
           max_restart=max_restart,
           priority=priority,
-          namespace=self.task_test_config.namespace,
       )
 
     return group, xpk_runner
