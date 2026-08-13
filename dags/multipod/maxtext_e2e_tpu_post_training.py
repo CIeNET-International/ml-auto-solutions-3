@@ -187,29 +187,6 @@ with models.DAG(
               "export ENABLE_PATHWAYS_PERSISTENCE='1'",
           ]
 
-<<<<<<< HEAD
-          with TaskGroup(group_id=f"train-{mode}-{model}") as model_group:
-            command = mode_test_config["command"]
-            training_cmd = (
-                " && ".join(
-                    environment_variables + [f"{command} {run_name} true"]
-                ),
-            )
-            training_task = gke_config.get_gke_config(
-                time_out_in_min=60,
-                num_slices=1,
-                cluster=XpkClusters.TPU_V5P_MLPERF_CLUSTER.override(
-                    core_count=128
-                ),
-                test_name=get_workload_name(model, mode),
-                run_model_cmds=training_cmd,
-                docker_image="{{ params.docker_image }}",
-                test_owner=test_owner.SURBHI_J,
-            ).run_model(
-                use_pathways=True,
-                priority="very-high",
-            )
-=======
           command = mode_test_config["command"]
           training_cmd = (
               " && ".join(
@@ -219,7 +196,9 @@ with models.DAG(
           training_task = gke_config.get_gke_config(
               time_out_in_min=60,
               num_slices=1,
-              cluster=XpkClusters.TPU_V5P_128_CLUSTER,
+              cluster=XpkClusters.TPU_V5P_MLPERF_CLUSTER.override(
+                  core_count=128
+              ),
               test_name=f"train-{mode}-{model}",
               run_model_cmds=training_cmd,
               docker_image="{{ params.docker_image }}",
@@ -229,7 +208,6 @@ with models.DAG(
               skip_post_process=True,
               priority="very-high",
           )
->>>>>>> e81129d7 (Refactor `XpkTask`)
 
           to_hf_flags = mode_test_config.get("to_hf_flags", "false true")
 
