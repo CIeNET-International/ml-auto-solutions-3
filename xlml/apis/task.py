@@ -366,6 +366,7 @@ class XpkRunner:
           xpk_branch=self.xpk_branch,
           max_restart=self.max_restart,
           priority=self.priority,
+          namespace=self.task_test_config.namespace,
       )
       wait_for_workload_start = xpk.wait_for_workload_start.override(
           timeout=self.workload_provision_timeout.total_seconds()
@@ -374,6 +375,7 @@ class XpkRunner:
           project_id=self.task_gcp_config.project_name,
           region=gke.zone_to_region(self.task_gcp_config.zone),
           cluster_name=self.task_test_config.cluster_name,
+          namespace=self.task_test_config.namespace,
       )
       chain(run_workload, wait_for_workload_start)
       return group
@@ -386,6 +388,7 @@ class XpkRunner:
         project_id=self.task_gcp_config.project_name,
         region=gke.zone_to_region(self.task_gcp_config.zone),
         cluster_name=self.task_test_config.cluster_name,
+        namespace=self.task_test_config.namespace,
     )
 
   def cleanup_workload(self, tear_down_of: BaseOperator) -> DAGNode:
@@ -395,6 +398,7 @@ class XpkRunner:
         zone=self.task_gcp_config.zone,
         cluster_name=self.task_test_config.cluster_name,
         xpk_branch=self.xpk_branch,
+        namespace=self.task_test_config.namespace,
     ).as_teardown(
         setups=tear_down_of,
         on_failure_fail_dagrun=True,
@@ -414,6 +418,7 @@ class XpkRunner:
           region=gke.zone_to_region(self.task_gcp_config.zone),
           cluster_name=self.task_test_config.cluster_name,
           expect_reach_to_step=str(expect_reach_to_step),
+          namespace=self.task_test_config.namespace,
       )
 
       task_id_wait_file_exist = "wait_for_file_to_exist"
@@ -456,6 +461,7 @@ class XpkRunner:
         workload_id=self.workload_id,
         dry_run=False,
         last_node=is_targeting_on_last_node,
+        namespace=self.task_test_config.namespace,
     )
 
 
