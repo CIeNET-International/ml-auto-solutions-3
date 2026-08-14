@@ -30,6 +30,7 @@ from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from airflow.models.baseoperator import chain
 from airflow.utils.task_group import TaskGroup
+from dags.common.task_group_with_timeout import TaskGroupWithTimeout
 from airflow.utils.trigger_rule import TriggerRule
 
 from dags import composer_env
@@ -54,6 +55,10 @@ from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper, ge
 
 DAG_ID = "tpu_info_format_validation_dag"
 DAGRUN_TIMEOUT = get_dag_timeout(DAG_ID)
+
+PRE_TEST_TIMEOUT = datetime.timedelta(minutes=20)
+POST_TEST_TIMEOUT = datetime.timedelta(minutes=10)
+TEST_TIMEOUT = DAGRUN_TIMEOUT - PRE_TEST_TIMEOUT - POST_TEST_TIMEOUT
 SCHEDULE = SchedulingHelper.arrange_schedule_time(DAG_ID)
 
 
@@ -414,18 +419,17 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       cluster_info_2 = copy.deepcopy(cluster_info)
       cluster_info_2.node_pool_name = f"{cluster_info.node_pool_name}-2"
 
-      # Keyword arguments are generated dynamically at runtime (pylint does not
-      # know this signature).
-      with TaskGroup(  # pylint: disable=unexpected-keyword-arg
-          group_id="create_node_pool"
-      ) as create_node_pool:
+      with TaskGroupWithTimeout(
+          group_id="pre_test",
+          timeout=PRE_TEST_TIMEOUT,
+      ) as pre_test:
         create_first_node_pool = node_pool.create.override(
             task_id="node_pool_1",
             retries=2,
         )(
             node_pool=cluster_info,
             node_pool_selector=selector,
-        )
+        ).as_setup()
 
         create_second_node_pool = node_pool.create.override(
             task_id="node_pool_2",
@@ -433,37 +437,43 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
         )(
             node_pool=cluster_info_2,
             node_pool_selector=selector,
+        ).as_setup()
+
+        startup = jobset.create_jobset_startup_tasks(
+            node_pool=cluster_info,
+            jobset_config=jobset_config,
+            jobset_name=jobset_name,
+            node_pool_selector=selector,
+            workload_type=Workload.JAX_TPU_BENCHMARK,
         )
 
-      startup = jobset.create_jobset_startup_tasks(
-          node_pool=cluster_info,
-          jobset_config=jobset_config,
-          jobset_name=jobset_name,
-          node_pool_selector=selector,
-          workload_type=Workload.JAX_TPU_BENCHMARK,
-      )
+        chain([create_first_node_pool, create_second_node_pool], *startup.tasks)
 
-      validate_format = validate_tpu_info_format.override(
-          task_id="validate_tpu_info_format"
-      )(
-          info=cluster_info,
-          tpu_config=config,
-          pod_names=startup.running_pods,
-      )
+      with TaskGroupWithTimeout(
+          group_id="test",
+          timeout=TEST_TIMEOUT,
+      ) as test:
+        validate_format = validate_tpu_info_format.override(
+            task_id="validate_tpu_info_format"
+        )(
+            info=cluster_info,
+            tpu_config=config,
+            pod_names=startup.running_pods,
+        )
 
-      clean_up_workload = jobset.end_workload.override(
-          task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
-      )(
-          node_pool=cluster_info,
-          jobset_config=jobset_config,
-          jobset_name=jobset_name,
-      )
+      with TaskGroupWithTimeout(
+          group_id="post_test",
+          timeout=POST_TEST_TIMEOUT,
+          as_teardown_of=create_first_node_pool,
+      ) as post_test:
+        clean_up_workload = jobset.end_workload.override(
+            task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
+        )(
+            node_pool=cluster_info,
+            jobset_config=jobset_config,
+            jobset_name=jobset_name,
+        )
 
-      # Keyword arguments are generated dynamically at runtime (pylint does not
-      # know this signature).
-      with TaskGroup(  # pylint: disable=unexpected-keyword-arg
-          group_id="cleanup_node_pool"
-      ) as cleanup_node_pool:
         cleanup_first_node_pool = node_pool.delete.override(
             task_id="cleanup_node_pool_1",
             trigger_rule=TriggerRule.ALL_DONE,
@@ -476,16 +486,12 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             retries=2,
         )(node_pool=cluster_info_2)
 
-      chain(create_first_node_pool, create_second_node_pool)
-
-      chain(cleanup_first_node_pool, cleanup_second_node_pool)
+        chain(clean_up_workload, cleanup_first_node_pool, cleanup_second_node_pool)
 
       chain(
           selector,
           jobset_name,
-          create_node_pool,
-          *startup.tasks,
-          validate_format,
-          clean_up_workload,
-          cleanup_node_pool,
+          pre_test,
+          test,
+          post_test,
       )
