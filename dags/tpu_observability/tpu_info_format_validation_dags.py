@@ -486,7 +486,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             retries=2,
         )(node_pool=cluster_info_2)
 
-        chain(clean_up_workload, cleanup_first_node_pool, cleanup_second_node_pool)
+        chain(
+            clean_up_workload, cleanup_first_node_pool, cleanup_second_node_pool
+        )
 
       chain(
           selector,
