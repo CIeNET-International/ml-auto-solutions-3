@@ -16,6 +16,7 @@
 
 import datetime
 import enum
+from xlml.apis.gcluster_config import GclusterConfig
 from xlml.apis.xpk_cluster_config import XpkClusterConfig
 
 
@@ -335,6 +336,19 @@ class XpkClusters:
       core_count=64,
       project=Project.TPU_PROD_ENV_MULTIPOD.value,
       zone=Zone.US_CENTRAL1_B.value,
+  )
+
+
+class Gclusters:
+  """Common Cluster Toolkit (gcluster) cluster configs."""
+
+  TPU_V5P_MLPERF_CLUSTER = GclusterConfig(
+      name="mlperf-v5p",
+      device_version=TpuVersion.V5P,
+      core_count=4,
+      project=Project.CLOUD_TPU_MULTIPOD_DEV.value,
+      zone=Zone.EUROPE_WEST4_B.value,
+      namespace="automation-testing",
   )
 
 

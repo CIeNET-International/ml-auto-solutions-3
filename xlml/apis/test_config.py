@@ -267,6 +267,7 @@ class CpuGkeTest(TestConfig[Cpu]):
   startup_time_out_in_sec: int = attrs.field(default=300, kw_only=True)
   num_slices: int = attrs.field(default=1, kw_only=True)
   namespace: str = attrs.field(default='default', kw_only=True)
+  mounts: str | Iterable[str] | None = attrs.field(default=None, kw_only=True)
 
   @property
   def benchmark_id(self) -> str:
@@ -303,6 +304,7 @@ class TpuGkeTest(TestConfig[Tpu]):
   startup_time_out_in_sec: int = attrs.field(default=300, kw_only=True)
   num_slices: int = attrs.field(default=1, kw_only=True)
   namespace: str = attrs.field(default='default', kw_only=True)
+  mounts: str | Iterable[str] | None = attrs.field(default=None, kw_only=True)
 
   @property
   def benchmark_id(self) -> str:
@@ -356,6 +358,7 @@ class GpuXpkTest(TestConfig[Gpu]):
   startup_time_out_in_sec: int = attrs.field(default=300, kw_only=True)
   num_slices: int = attrs.field(default=1, kw_only=True)
   namespace: str = attrs.field(default='default', kw_only=True)
+  mounts: str | Iterable[str] | None = attrs.field(default=None, kw_only=True)
 
   @property
   def benchmark_id(self) -> str:
