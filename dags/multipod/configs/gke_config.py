@@ -15,11 +15,12 @@
 """Utilities to construct configs for maxtext DAG on GKE."""
 
 import datetime
-from typing import Any, Iterable
+from typing import Any, Iterable, Union
 
 from dags import gcs_bucket
 from dags.common.vm_resource import Project, XpkClusters
 from xlml.apis import gcp_config, metric_config, task, test_config
+from xlml.apis.gcluster_config import GclusterConfig
 from xlml.apis.xpk_cluster_config import XpkClusterConfig
 
 
@@ -29,7 +30,9 @@ def get_gke_config(
     docker_image: str,
     test_owner: str,
     run_model_cmds: Iterable[str],
-    cluster: XpkClusterConfig = XpkClusters.TPU_V4_8_MAXTEXT_CLUSTER,
+    cluster: Union[XpkClusterConfig, GclusterConfig] = (
+        XpkClusters.TPU_V4_8_MAXTEXT_CLUSTER
+    ),
     num_slices: int = 1,
     dataset_name: metric_config.DatasetOption = (
         metric_config.DatasetOption.XLML_DATASET
@@ -39,7 +42,7 @@ def get_gke_config(
     base_output_directory: str = None,
     metric_aggregation_strategy: metric_config.AggregationStrategy = None,
     user_specified_job_metric_config: metric_config.MetricConfig = None,
-) -> task.XpkTask:
+) -> Union[task.XpkTask, task.GclusterTask]:
   job_gcp_config = gcp_config.GCPConfig(
       project_name=cluster.project,
       zone=cluster.zone,
@@ -77,7 +80,10 @@ def get_gke_config(
         else None
     )
 
-  return task.XpkTask(
+  task_cls = (
+      task.GclusterTask if isinstance(cluster, GclusterConfig) else task.XpkTask
+  )
+  return task_cls(
       task_test_config=job_test_config,
       task_gcp_config=job_gcp_config,
       task_metric_config=job_metric_config,
@@ -91,7 +97,9 @@ def get_gke_config_with_interrupt(
     test_owner: str,
     run_model_cmds: Iterable[str],
     expect_reach_to_step: int,
-    cluster: XpkClusterConfig = XpkClusters.TPU_V4_8_MAXTEXT_CLUSTER,
+    cluster: Union[XpkClusterConfig, GclusterConfig] = (
+        XpkClusters.TPU_V4_8_MAXTEXT_CLUSTER
+    ),
     num_slices: int = 1,
     dataset_name: metric_config.DatasetOption = (
         metric_config.DatasetOption.XLML_DATASET
@@ -103,7 +111,7 @@ def get_gke_config_with_interrupt(
     user_specified_job_metric_config: metric_config.MetricConfig = None,
     last_node: bool = False,
     check_file_exists: bool = False,
-) -> task.XpkNodeInterruptionTask:
+) -> Union[task.XpkNodeInterruptionTask, task.GclusterNodeInterruptionTask]:
   job_gcp_config = gcp_config.GCPConfig(
       project_name=cluster.project,
       zone=cluster.zone,
@@ -141,7 +149,12 @@ def get_gke_config_with_interrupt(
         else None
     )
 
-  return task.XpkNodeInterruptionTask(
+  task_cls = (
+      task.GclusterNodeInterruptionTask
+      if isinstance(cluster, GclusterConfig)
+      else task.XpkNodeInterruptionTask
+  )
+  return task_cls(
       task_test_config=job_test_config,
       task_gcp_config=job_gcp_config,
       task_metric_config=job_metric_config,
@@ -208,7 +221,12 @@ def get_gke_config_with_name_gen_and_quarantine(
         else None
     )
 
-  return task.XpkNameGenAndQuarantineTask(
+  task_cls = (
+      task.GclusterNameGenAndQuarantineTask
+      if isinstance(cluster, GclusterConfig)
+      else task.XpkNameGenAndQuarantineTask
+  )
+  return task_cls(
       task_test_config=job_test_config,
       task_gcp_config=job_gcp_config,
       task_metric_config=job_metric_config,

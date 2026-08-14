@@ -15,6 +15,7 @@
 """Base task file for a test job."""
 
 import abc
+from collections.abc import Iterable
 import contextlib
 import dataclasses
 import datetime
@@ -31,7 +32,7 @@ from airflow.decorators import task
 from airflow.operators.empty import EmptyOperator
 
 from dags.common.quarantined_tests import QuarantineTests
-from xlml.utils import gpu, metric, name_format, ssh, tpu, xpk, axlearn, gke, kpo
+from xlml.utils import axlearn, gcluster, gke, gpu, kpo, metric, name_format, ssh, tpu, xpk
 from xlml.apis import gcp_config, metric_config, test_config, gcs
 
 
@@ -324,8 +325,8 @@ class AXLearnTask(BaseTask):
 
 
 @dataclasses.dataclass
-class XpkRunner:
-  """XpkRunner executes XPK workloads and manages their lifecycle."""
+class Runner(abc.ABC):
+  """Runner executes cluster workloads and manages their lifecycle."""
 
   task_test_config: Union[
       test_config.TpuGkeTest, test_config.GpuXpkTest, test_config.CpuGkeTest
@@ -338,12 +339,47 @@ class XpkRunner:
   use_pathways: bool = False
   ramdisk_directory: str = ""
   mtc_enabled: bool = False
-  xpk_branch: str = xpk.MAIN_BRANCH
   max_restart: int = 0
   priority: str = "high"
 
+  @abc.abstractmethod
   def launch_workload(self) -> DAGNode:
     """Create the workload and wait for it to provision."""
+    pass
+
+  @abc.abstractmethod
+  def wait_workload_complete(self) -> BaseOperator:
+    """Wait for the workload to finish successfully."""
+    pass
+
+  @abc.abstractmethod
+  def cleanup_workload(self, tear_down_of: BaseOperator) -> DAGNode:
+    """Clean up and delete workload resources."""
+    pass
+
+  @abc.abstractmethod
+  def wait_workload_reach_to_step(
+      self,
+      expect_reach_to_step: int,
+      check_file_exists: bool,
+  ) -> DAGNode:
+    """Wait for the workload to reach a specific training step."""
+    pass
+
+  @abc.abstractmethod
+  def interrupt_workload(self, is_targeting_on_last_node: bool) -> DAGNode:
+    """Interrupt the workload on specified node."""
+    pass
+
+
+@dataclasses.dataclass
+class XpkRunner(Runner):
+  """XpkRunner executes XPK workloads and manages their lifecycle."""
+
+  xpk_branch: str = xpk.MAIN_BRANCH
+
+  def launch_workload(self) -> DAGNode:
+    """Create the workload and wait for it to provision using XPK."""
     with TaskGroup(group_id="launch_workload") as group:
       run_workload = xpk.run_workload.override(
           owner=self.task_test_config.task_owner
@@ -439,8 +475,6 @@ class XpkRunner:
           return f"{group.group_id}.{task_id_wait_file_exist}"
         return f"{group.group_id}.{task_id_do_nothing}"
 
-      # Conditional checks: depending on the `check_file_exists` argument
-      # specified by the upper-level caller.
       maybe_check_file_exists = task_path_decider(check_file_exists)
 
       chain(
@@ -466,6 +500,95 @@ class XpkRunner:
 
 
 @dataclasses.dataclass
+class GclusterRunner(Runner):
+  """GclusterRunner executes Cluster Toolkit workloads and manages their lifecycle."""
+
+  gcluster_version: str = gcluster.DEFAULT_GCLUSTER_VERSION
+  mounts: str | Iterable[str] | None = None
+
+  def launch_workload(self) -> DAGNode:
+    """Create the workload and wait for it to provision using Cluster Toolkit."""
+    with TaskGroup(group_id="launch_workload") as group:
+      mounts = self.mounts
+      if mounts is None and hasattr(self.task_test_config, "mounts"):
+        mounts = self.task_test_config.mounts
+
+      run_workload = gcluster.run_workload.override(
+          owner=self.task_test_config.task_owner
+      )(
+          task_id="run_workload",
+          cluster_project=self.task_gcp_config.project_name,
+          zone=self.task_gcp_config.zone,
+          cluster_name=self.task_test_config.cluster_name,
+          benchmark_id=self.task_test_config.benchmark_id,
+          workload_id=self.workload_id,
+          gcs_path=self.gcs_path,
+          docker_image=self.task_test_config.docker_image,
+          accelerator_type=self.task_test_config.accelerator.name,
+          run_cmds=self.task_test_config.test_script,
+          num_slices=self.task_test_config.num_slices,
+          use_vertex_tensorboard=self.use_vertex_tensorboard,
+          use_pathways=self.use_pathways,
+          ramdisk_directory=self.ramdisk_directory,
+          mtc_enabled=self.mtc_enabled,
+          gcluster_version=self.gcluster_version,
+          max_restart=self.max_restart,
+          priority=self.priority,
+          namespace=self.task_test_config.namespace,
+          mounts=mounts,
+      )
+      wait_for_workload_start = gcluster.wait_for_workload_start.override(
+          timeout=self.workload_provision_timeout.total_seconds()
+      )(
+          workload_id=self.workload_id,
+          project_id=self.task_gcp_config.project_name,
+          region=gke.zone_to_region(self.task_gcp_config.zone),
+          cluster_name=self.task_test_config.cluster_name,
+          namespace=self.task_test_config.namespace,
+      )
+      chain(run_workload, wait_for_workload_start)
+      return group
+
+  def wait_workload_complete(self) -> BaseOperator:
+    return gcluster.wait_for_workload_completion.override(
+        timeout=int(self.task_test_config.timeout.total_seconds()),
+    )(
+        workload_id=self.workload_id,
+        project_id=self.task_gcp_config.project_name,
+        region=gke.zone_to_region(self.task_gcp_config.zone),
+        cluster_name=self.task_test_config.cluster_name,
+        namespace=self.task_test_config.namespace,
+    )
+
+  def cleanup_workload(self, tear_down_of: BaseOperator) -> DAGNode:
+    return gcluster.clean_up_workload(
+        workload_id=self.workload_id,
+        project_id=self.task_gcp_config.project_name,
+        zone=self.task_gcp_config.zone,
+        cluster_name=self.task_test_config.cluster_name,
+        gcluster_version=self.gcluster_version,
+        namespace=self.task_test_config.namespace,
+    ).as_teardown(
+        setups=tear_down_of,
+        on_failure_fail_dagrun=True,
+    )
+
+  def wait_workload_reach_to_step(
+      self,
+      expect_reach_to_step: int,
+      check_file_exists: bool,
+  ) -> DAGNode:
+    raise NotImplementedError(
+        "wait_workload_reach_to_step is not implemented for GclusterRunner"
+    )
+
+  def interrupt_workload(self, is_targeting_on_last_node: bool) -> DAGNode:
+    raise NotImplementedError(
+        "interrupt_workload is not implemented for GclusterRunner"
+    )
+
+
+@dataclasses.dataclass
 class XpkTask(BaseTask):
   """This is a class to set up tasks for TPU/GPU provisioned by XPK tool.
 
@@ -482,10 +605,38 @@ class XpkTask(BaseTask):
   task_gcp_config: gcp_config.GCPConfig
   task_metric_config: metric_config.MetricConfig | None = None
   workload_provision_timeout: datetime.timedelta = datetime.timedelta(
-      # Set the provision timeout from 300 to 60 minutes for decreasing the
-      # duration of failed tasks
       minutes=60
   )
+
+  def generate_workload_id(self, benchmark_id: str) -> airflow.XComArg:
+    return xpk.generate_workload_id(benchmark_id)
+
+  def init_runner(
+      self,
+      workload_id: airflow.XComArg,
+      gcs_path: airflow.XComArg,
+      use_vertex_tensorboard: bool = False,
+      use_pathways: bool = False,
+      ramdisk_directory: str = "",
+      mtc_enabled: bool = False,
+      max_restart: int = 0,
+      priority: str = "high",
+      **kwargs: Any,
+  ) -> Runner:
+    return XpkRunner(
+        task_test_config=self.task_test_config,
+        task_gcp_config=self.task_gcp_config,
+        workload_id=workload_id,
+        gcs_path=gcs_path,
+        workload_provision_timeout=self.workload_provision_timeout,
+        use_vertex_tensorboard=use_vertex_tensorboard,
+        use_pathways=use_pathways,
+        ramdisk_directory=ramdisk_directory,
+        mtc_enabled=mtc_enabled,
+        xpk_branch=kwargs.get("xpk_branch", xpk.MAIN_BRANCH),
+        max_restart=max_restart,
+        priority=priority,
+    )
 
   def run(
       self,
@@ -499,6 +650,7 @@ class XpkTask(BaseTask):
       xpk_branch: str = xpk.MAIN_BRANCH,
       max_restart: int = 0,
       priority: str = "high",
+      **kwargs: Any,
   ) -> DAGNode:
     """Run a test job within a docker image.
 
@@ -512,7 +664,7 @@ class XpkTask(BaseTask):
       post_process.
     """
     with TaskGroup(group_id=self.task_test_config.benchmark_id) as group:
-      pre_process, xpk_runner = self._pre_process(
+      pre_process, runner = self._pre_process(
           gcs_location=gcs_location,
           use_vertex_tensorboard=use_vertex_tensorboard,
           use_pathways=use_pathways,
@@ -521,27 +673,28 @@ class XpkTask(BaseTask):
           xpk_branch=xpk_branch,
           max_restart=max_restart,
           priority=priority,
+          **kwargs,
       )
 
-      run_model = self._run_model(xpk_runner)
+      run_model = self._run_model(runner)
 
       nodes = [pre_process, run_model]
       if not skip_post_process:
-        nodes.append(self._post_process(xpk_runner.gcs_path))
+        nodes.append(self._post_process(runner.gcs_path))
 
       chain(*nodes)
 
     return group
 
-  def _run_model(self, xpk_runner: XpkRunner) -> DAGNode:
+  def _run_model(self, runner: Runner) -> DAGNode:
     with TaskGroup(group_id="run_model") as group:
       dummy_op = self._dummy_op_for_teardown()
 
       chain(
           dummy_op,
-          xpk_runner.launch_workload(),
-          xpk_runner.wait_workload_complete(),
-          xpk_runner.cleanup_workload(tear_down_of=dummy_op),
+          runner.launch_workload(),
+          runner.wait_workload_complete(),
+          runner.cleanup_workload(tear_down_of=dummy_op),
       )
       return group
 
@@ -564,31 +717,28 @@ class XpkTask(BaseTask):
       use_pathways: bool = False,
       ramdisk_directory: str = "",
       mtc_enabled: bool = False,
-      xpk_branch: str = xpk.MAIN_BRANCH,
       max_restart: int = 0,
       priority: str = "high",
-  ) -> tuple[DAGNode, XpkRunner]:
+      **kwargs: Any,
+  ) -> tuple[DAGNode, Runner]:
     with TaskGroup(group_id="pre_process") as group:
-      workload_id = xpk.generate_workload_id(self.task_test_config.benchmark_id)
-
+      workload_id = self.generate_workload_id(
+          self.task_test_config.benchmark_id
+      )
       gcs_path = self._maybe_generate_gcs_location(gcs_location)
-
-      xpk_runner = XpkRunner(
-          task_test_config=self.task_test_config,
-          task_gcp_config=self.task_gcp_config,
+      runner = self.init_runner(
           workload_id=workload_id,
           gcs_path=gcs_path,
-          workload_provision_timeout=self.workload_provision_timeout,
           use_vertex_tensorboard=use_vertex_tensorboard,
           use_pathways=use_pathways,
           ramdisk_directory=ramdisk_directory,
           mtc_enabled=mtc_enabled,
-          xpk_branch=xpk_branch,
           max_restart=max_restart,
           priority=priority,
+          **kwargs,
       )
 
-    return group, xpk_runner
+    return group, runner
 
   def _post_process(self, result_location: str | None = None) -> DAGNode:
     """Process metrics and metadata, and insert them into BigQuery tables.
@@ -627,6 +777,72 @@ class XpkTask(BaseTask):
 
 
 @dataclasses.dataclass
+class GclusterTask(XpkTask):
+  """This is a class to set up tasks for TPU/GPU provisioned by Cluster Toolkit (gcluster)."""
+
+  def generate_workload_id(self, benchmark_id: str) -> airflow.XComArg:
+    return gcluster.generate_workload_id(benchmark_id)
+
+  def init_runner(
+      self,
+      workload_id: airflow.XComArg,
+      gcs_path: airflow.XComArg,
+      use_vertex_tensorboard: bool = False,
+      use_pathways: bool = False,
+      ramdisk_directory: str = "",
+      mtc_enabled: bool = False,
+      max_restart: int = 0,
+      priority: str = "high",
+      **kwargs: Any,
+  ) -> GclusterRunner:
+    return GclusterRunner(
+        task_test_config=self.task_test_config,
+        task_gcp_config=self.task_gcp_config,
+        workload_id=workload_id,
+        gcs_path=gcs_path,
+        workload_provision_timeout=self.workload_provision_timeout,
+        use_vertex_tensorboard=use_vertex_tensorboard,
+        use_pathways=use_pathways,
+        ramdisk_directory=ramdisk_directory,
+        mtc_enabled=mtc_enabled,
+        gcluster_version=kwargs.get(
+            "gcluster_version", gcluster.DEFAULT_GCLUSTER_VERSION
+        ),
+        mounts=kwargs.get("mounts", None),
+        max_restart=max_restart,
+        priority=priority,
+    )
+
+  def run(
+      self,
+      *,
+      gcs_location: airflow.XComArg | None = None,
+      use_vertex_tensorboard: bool = False,
+      use_pathways: bool = False,
+      skip_post_process: bool = False,
+      ramdisk_directory: str = "",
+      mtc_enabled: bool = False,
+      gcluster_version: str = gcluster.DEFAULT_GCLUSTER_VERSION,
+      max_restart: int = 0,
+      priority: str = "high",
+      mounts: str | Iterable[str] | None = None,
+  ) -> DAGNode:
+    """Run a test job within a docker image using Cluster Toolkit."""
+    return super().run(
+        gcs_location=gcs_location,
+        use_vertex_tensorboard=use_vertex_tensorboard,
+        use_pathways=use_pathways,
+        skip_post_process=skip_post_process,
+        ramdisk_directory=ramdisk_directory,
+        mtc_enabled=mtc_enabled,
+        gcluster_version=gcluster_version,
+        max_restart=max_restart,
+        priority=priority,
+        mounts=mounts,
+    )
+
+
+@dataclasses.dataclass
 class XpkNodeInterruptionTask(XpkTask):
   """Task for running XPK workloads with node interruption."""
 
@@ -634,23 +850,30 @@ class XpkNodeInterruptionTask(XpkTask):
   last_node: bool = False
   check_file_exists: bool = False
 
-  def _run_model(self, xpk_runner: XpkRunner) -> DAGNode:
+  def _run_model(self, runner: Runner) -> DAGNode:
     with TaskGroup(group_id="run_model") as group:
       dummy_op = self._dummy_op_for_teardown()
 
       chain(
           dummy_op,
-          xpk_runner.launch_workload(),
-          xpk_runner.wait_workload_reach_to_step(
+          runner.launch_workload(),
+          runner.wait_workload_reach_to_step(
               self.expect_reach_to_step,
               self.check_file_exists,
           ),
-          xpk_runner.interrupt_workload(self.last_node),
-          xpk_runner.wait_workload_complete(),
-          xpk_runner.cleanup_workload(tear_down_of=dummy_op),
+          runner.interrupt_workload(self.last_node),
+          runner.wait_workload_complete(),
+          runner.cleanup_workload(tear_down_of=dummy_op),
       )
 
       return group
+
+
+@dataclasses.dataclass
+class GclusterNodeInterruptionTask(GclusterTask, XpkNodeInterruptionTask):
+  """Task for running Cluster Toolkit workloads with node interruption."""
+
+  pass
 
 
 @dataclasses.dataclass
@@ -673,6 +896,7 @@ class XpkNameGenAndQuarantineTask(XpkTask):
       xpk_branch: str = xpk.MAIN_BRANCH,
       max_restart: int = 0,
       priority: str = "high",
+      **kwargs: Any,
   ) -> DAGNode:
     """Generate a unique run name, tensorboard file location,
     and profile file location (if metric config has profile),
@@ -703,6 +927,7 @@ class XpkNameGenAndQuarantineTask(XpkTask):
           xpk_branch=xpk_branch,
           max_restart=max_restart,
           priority=priority,
+          **kwargs,
       )
 
   def _pre_process(
@@ -712,15 +937,17 @@ class XpkNameGenAndQuarantineTask(XpkTask):
       use_pathways: bool = False,
       ramdisk_directory: str = "",
       mtc_enabled: bool = False,
-      xpk_branch: str = xpk.MAIN_BRANCH,
       max_restart: int = 0,
       priority: str = "high",
-  ) -> tuple[DAGNode, XpkRunner]:
+      **kwargs: Any,
+  ) -> tuple[DAGNode, Runner]:
     with TaskGroup(group_id="pre_process") as group:
       run_name = name_format.generate_run_name(
           self.task_test_config.benchmark_id
       )
-      workload_id = xpk.generate_workload_id(self.task_test_config.benchmark_id)
+      workload_id = self.generate_workload_id(
+          self.task_test_config.benchmark_id
+      )
 
       gcs_path = self._maybe_generate_gcs_location(gcs_location)
 
@@ -753,24 +980,55 @@ class XpkNameGenAndQuarantineTask(XpkTask):
       else:
         nodes.append(tb_file_location)
 
-      xpk_runner = XpkRunner(
-          task_test_config=self.task_test_config,
-          task_gcp_config=self.task_gcp_config,
+      runner = self.init_runner(
           workload_id=workload_id,
           gcs_path=gcs_path,
-          workload_provision_timeout=self.workload_provision_timeout,
           use_vertex_tensorboard=use_vertex_tensorboard,
           use_pathways=use_pathways,
           ramdisk_directory=ramdisk_directory,
           mtc_enabled=mtc_enabled,
-          xpk_branch=xpk_branch,
           max_restart=max_restart,
           priority=priority,
+          **kwargs,
       )
 
       chain(*nodes)
 
-    return group, xpk_runner
+    return group, runner
+
+
+@dataclasses.dataclass
+class GclusterNameGenAndQuarantineTask(
+    GclusterTask, XpkNameGenAndQuarantineTask
+):
+  """Task for running Cluster Toolkit workloads with name generation and quarantine."""
+
+  def run(
+      self,
+      *,
+      gcs_location: airflow.XComArg | None = None,
+      use_vertex_tensorboard: bool = False,
+      use_pathways: bool = False,
+      skip_post_process: bool = False,
+      ramdisk_directory: str = "",
+      mtc_enabled: bool = False,
+      gcluster_version: str = gcluster.DEFAULT_GCLUSTER_VERSION,
+      max_restart: int = 0,
+      priority: str = "high",
+      mounts: str | Iterable[str] | None = None,
+  ) -> DAGNode:
+    return super().run(
+        gcs_location=gcs_location,
+        use_vertex_tensorboard=use_vertex_tensorboard,
+        use_pathways=use_pathways,
+        skip_post_process=skip_post_process,
+        ramdisk_directory=ramdisk_directory,
+        mtc_enabled=mtc_enabled,
+        gcluster_version=gcluster_version,
+        max_restart=max_restart,
+        priority=priority,
+        mounts=mounts,
+    )
 
 
 @dataclasses.dataclass
