@@ -27,6 +27,7 @@ from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
 from dags import composer_env
+from dags.common.task_group_with_timeout import TaskGroupWithTimeout
 from dags.common.scheduling_helper.scheduling_helper import (
     SchedulingHelper,
     get_dag_timeout,
@@ -44,6 +45,10 @@ from dags.tpu_observability.utils.jobset_util import Workload
 DAG_ID = "tpu_sdk_monitoring_validation"
 DAGRUN_TIMEOUT = get_dag_timeout(DAG_ID)
 SCHEDULE = SchedulingHelper.arrange_schedule_time(DAG_ID)
+
+PRE_TEST_TIMEOUT = datetime.timedelta(minutes=10)
+POST_TEST_TIMEOUT = datetime.timedelta(minutes=10)
+TEST_TIMEOUT = DAGRUN_TIMEOUT - PRE_TEST_TIMEOUT - POST_TEST_TIMEOUT
 
 
 @task
@@ -167,44 +172,51 @@ with models.DAG(
       selector = jobset.generate_node_pool_selector(DAG_ID)
       jobset_name = jobset.generate_jobset_name(jobset_config.dag_id_prefix)
 
-      create_node_pool = node_pool.create.override(task_id="create_node_pool")(
-          node_pool=cluster_info,
-          node_pool_selector=selector,
-      )
+      with TaskGroupWithTimeout(
+          group_id="pre_test",
+          timeout=PRE_TEST_TIMEOUT,
+      ) as pre_test:
+        create_node_pool = node_pool.create.override(task_id="create_node_pool")(
+            node_pool=cluster_info,
+            node_pool_selector=selector,
+        ).as_setup()
 
-      startup = jobset.create_jobset_startup_tasks(
-          node_pool=cluster_info,
-          jobset_config=jobset_config,
-          jobset_name=jobset_name,
-          node_pool_selector=selector,
-          workload_type=Workload.JAX_TPU_BENCHMARK,
-      )
+        startup = jobset.create_jobset_startup_tasks(
+            node_pool=cluster_info,
+            jobset_config=jobset_config,
+            jobset_name=jobset_name,
+            node_pool_selector=selector,
+            workload_type=Workload.JAX_TPU_BENCHMARK,
+        )
+        chain(create_node_pool, *startup.tasks)
 
-      sdk_validation = validate_monitoring_sdk.override(
-          task_id="sdk_validation"
-      )(
-          info=cluster_info,
-          pod_names=startup.running_pods,
-      )
+      with TaskGroupWithTimeout(
+          group_id="test",
+          timeout=TEST_TIMEOUT,
+      ) as test:
+        sdk_validation = validate_monitoring_sdk.override(
+            task_id="sdk_validation"
+        )(
+            info=cluster_info,
+            pod_names=startup.running_pods,
+        )
 
-      cleanup_workload = jobset.end_workload.override(
-          task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
-      )(
-          node_pool=cluster_info,
-          jobset_config=jobset_config,
-          jobset_name=jobset_name,
-      )
+      with TaskGroupWithTimeout(
+          group_id="post_test",
+          timeout=POST_TEST_TIMEOUT,
+          as_teardown_of=create_node_pool,
+      ) as post_test:
+        cleanup_workload = jobset.end_workload.override(
+            task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
+        )(
+            node_pool=cluster_info,
+            jobset_config=jobset_config,
+            jobset_name=jobset_name,
+        )
 
-      cleanup_node_pool = node_pool.delete.override(
-          task_id="cleanup_node_pool", trigger_rule=TriggerRule.ALL_DONE
-      )(node_pool=cluster_info)
+        cleanup_node_pool = node_pool.delete.override(
+            task_id="cleanup_node_pool", trigger_rule=TriggerRule.ALL_DONE
+        )(node_pool=cluster_info)
+        chain(cleanup_workload, cleanup_node_pool)
 
-      chain(
-          selector,
-          jobset_name,
-          create_node_pool,
-          *startup.tasks,
-          sdk_validation,
-          cleanup_workload,
-          cleanup_node_pool,
-      )
+      chain(pre_test, test, post_test)
