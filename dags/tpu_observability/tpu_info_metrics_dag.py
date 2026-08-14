@@ -413,6 +413,8 @@ with models.DAG(
             trigger_rule=TriggerRule.ALL_DONE,
         )(node_pool=cluster_info_2)
 
-        chain(clean_up_workload, cleanup_first_node_pool, cleanup_second_node_pool)
+        chain(
+            clean_up_workload, cleanup_first_node_pool, cleanup_second_node_pool
+        )
 
       chain(pre_test, test, post_test)

@@ -57,7 +57,9 @@ TEST_TIMEOUT = DAGRUN_TIMEOUT - PRE_TEST_TIMEOUT - POST_TEST_TIMEOUT
 
 
 @task
-def kill_tpu_pod_workloads(info: node_pool.Info, pod_names: list[str]) -> TimeUtil:
+def kill_tpu_pod_workloads(
+    info: node_pool.Info, pod_names: list[str]
+) -> TimeUtil:
   """
   Kills the python process on a list of pods.
 
@@ -172,7 +174,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           group_id="pre_test",
           timeout=PRE_TEST_TIMEOUT,
       ) as pre_test:
-        create_node_pool = node_pool.create.override(task_id="create_node_pool")(
+        create_node_pool = node_pool.create.override(
+            task_id="create_node_pool"
+        )(
             node_pool=cluster_info,
             node_pool_selector=selector,
         ).as_setup()
@@ -212,14 +216,21 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             end_time=wait_for_recovery,
         )
 
-        wait_for_metric_upload = jobset.wait_for_jobset_ttr_to_be_found.override(
-            task_id="wait_for_jobset_ttr_to_be_found",
-        )(
-            node_pool=cluster_info,
-            jobset_name=jobset_name,
-            start_time=kill_tasks,
+        wait_for_metric_upload = (
+            jobset.wait_for_jobset_ttr_to_be_found.override(
+                task_id="wait_for_jobset_ttr_to_be_found",
+            )(
+                node_pool=cluster_info,
+                jobset_name=jobset_name,
+                start_time=kill_tasks,
+            )
         )
-        chain(kill_tasks, wait_for_recovery, verify_duration, wait_for_metric_upload)
+        chain(
+            kill_tasks,
+            wait_for_recovery,
+            verify_duration,
+            wait_for_metric_upload,
+        )
 
       with TaskGroupWithTimeout(
           group_id="post_test",
