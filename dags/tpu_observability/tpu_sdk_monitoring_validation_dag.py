@@ -176,7 +176,9 @@ with models.DAG(
           group_id="pre_test",
           timeout=PRE_TEST_TIMEOUT,
       ) as pre_test:
-        create_node_pool = node_pool.create.override(task_id="create_node_pool")(
+        create_node_pool = node_pool.create.override(
+            task_id="create_node_pool"
+        )(
             node_pool=cluster_info,
             node_pool_selector=selector,
         ).as_setup()
