@@ -16,9 +16,7 @@
 A DAG to run MaxText E2E TPU Post-Training tests.
 """
 import datetime
-import hashlib
 
-from click import command
 from airflow import models
 from airflow.models.param import Param
 from airflow.utils.task_group import TaskGroup
@@ -29,11 +27,6 @@ from dags.multipod.configs import gke_config
 
 # HF token retrieved from Airflow Variables for secure credential management
 HF_TOKEN = safe_get_from_variable("HF_TOKEN", None)
-
-
-def get_workload_name(model, mode, length=6):
-  hex_code = f"{mode}-{hashlib.sha256(model.encode()).hexdigest()}"
-  return hex_code[:length]
 
 
 with models.DAG(
@@ -126,7 +119,38 @@ with models.DAG(
               },
               "rl": {
                   "command": "bash tests/end_to_end/tpu/qwen3/30b/test_qwen3_rl.sh",
-                  "maxtext_ckpt_path": "gs://runner-maxtext-logs/qwen3-30b-a3b-base/rl/{run_name}/checkpoints/actor/4/items",
+                  "maxtext_ckpt_path": "gs://runner-maxtext-logs/qwen3-30b-a3b-base/rl/{run_name}/checkpoints/actor/5/model_params",
+              },
+          },
+      },
+      "qwen3-vl-2b": {
+          "checkpoint_conversion": {
+              "to_maxtext": "bash tests/end_to_end/tpu/qwen3/vl_2b/test_qwen3_to_mt.sh",
+              "to_huggingface": "bash tests/end_to_end/tpu/qwen3/vl_2b/test_qwen3_to_hf.sh",
+          },
+          "post_training": {
+              "multimodal_sft": {
+                  "command": "bash tests/end_to_end/tpu/qwen3/vl_2b/test_qwen3_multimodal_sft.sh",
+                  "maxtext_ckpt_path": "gs://runner-maxtext-logs/qwen3-vl-2b/multimodal/sft/{run_name}/checkpoints/4/items",
+                  "to_hf_flags": "true false",
+              },
+          },
+      },
+      "gpt-oss-20b": {
+          "checkpoint_conversion": {
+              "to_maxtext": "bash tests/end_to_end/tpu/gpt_oss/20b/test_gpt_oss_to_mt.sh",
+              "to_huggingface": "bash tests/end_to_end/tpu/gpt_oss/20b/test_gpt_oss_to_hf.sh",
+          },
+          "post_training": {
+              "sft": {
+                  "command": "bash tests/end_to_end/tpu/gpt_oss/20b/test_gpt_oss_sft.sh",
+                  "maxtext_ckpt_path": "gs://runner-maxtext-logs/gpt-oss-20b/sft/{run_name}/checkpoints/5/model_params",
+                  "to_hf_flags": "true",
+              },
+              "rl": {
+                  "command": "bash tests/end_to_end/tpu/gpt_oss/20b/test_gpt_oss_rl.sh",
+                  "maxtext_ckpt_path": "gs://runner-maxtext-logs/gpt-oss-20b/rl/{run_name}/checkpoints/actor/5/model_params",
+                  "to_hf_flags": "true",
               },
           },
       },
@@ -147,7 +171,7 @@ with models.DAG(
           test_name="convert-to-maxtext",
           run_model_cmds=convert_to_maxtext_cmd,
           docker_image="{{ params.docker_image }}",
-          cluster=XpkClusters.TPU_V5P_8_CLUSTER_V2,
+          cluster=XpkClusters.TPU_V5P_MLPERF_CLUSTER,
           test_owner=test_owner.SURBHI_J,
       ).run(skip_post_process=True, priority="very-high")
 
@@ -163,25 +187,27 @@ with models.DAG(
               "export ENABLE_PATHWAYS_PERSISTENCE='1'",
           ]
 
-          with TaskGroup(group_id=f"train-{mode}-{model}") as model_group:
-            command = mode_test_config["command"]
-            training_cmd = (
-                " && ".join(
-                    environment_variables + [f"{command} {run_name} true"]
-                ),
-            )
-            training_task = gke_config.get_gke_config(
-                time_out_in_min=60,
-                num_slices=1,
-                cluster=XpkClusters.TPU_V5P_128_CLUSTER,
-                test_name=get_workload_name(model, mode),
-                run_model_cmds=training_cmd,
-                docker_image="{{ params.docker_image }}",
-                test_owner=test_owner.SURBHI_J,
-            ).run_model(
-                use_pathways=True,
-                priority="very-high",
-            )
+          command = mode_test_config["command"]
+          training_cmd = (
+              " && ".join(
+                  environment_variables + [f"{command} {run_name} true"]
+              ),
+          )
+          training_task = gke_config.get_gke_config(
+              time_out_in_min=60,
+              num_slices=1,
+              cluster=XpkClusters.TPU_V5P_MLPERF_CLUSTER.override(
+                  core_count=128
+              ),
+              test_name=f"train-{mode}-{model}",
+              run_model_cmds=training_cmd,
+              docker_image="{{ params.docker_image }}",
+              test_owner=test_owner.SURBHI_J,
+          ).run(
+              use_pathways=True,
+              skip_post_process=True,
+              priority="very-high",
+          )
 
           to_hf_flags = mode_test_config.get("to_hf_flags", "false true")
 
@@ -197,11 +223,11 @@ with models.DAG(
               f"{run_name} {model_path} {to_hf_flags}",
           )
           convert_to_huggingface_task = gke_config.get_gke_config(
-              time_out_in_min=60,
+              time_out_in_min=90,
               test_name="convert-to-huggingface",
               run_model_cmds=convert_to_huggingface_cmd,
               docker_image="{{ params.docker_image }}",
-              cluster=XpkClusters.TPU_V5P_8_CLUSTER_V2,
+              cluster=XpkClusters.TPU_V5P_MLPERF_CLUSTER,
               test_owner=test_owner.SURBHI_J,
           ).run(skip_post_process=True, priority="very-high")
 
