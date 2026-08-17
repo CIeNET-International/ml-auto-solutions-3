@@ -474,6 +474,12 @@ class XpkTask(BaseTask):
     task_gcp_config: Runtime TPU/GPU creation parameters.
     task_metric_config: Metric configs to process metrics.
     workload_provision_timeout: Time allowed for provisioning a workload.
+    priority: Priority of the workload in Kueue.
+    max_restart: Maximum number of restarts for the workload.
+    xpk_branch: The xpk git branch to use.
+    ramdisk_directory: Local ramdisk directory for the workload.
+    mtc_enabled: Whether to enable Multi-Tier Checkpointing.
+    use_pathways: Whether to use Pathways.
   """
 
   task_test_config: Union[
@@ -486,26 +492,24 @@ class XpkTask(BaseTask):
       # duration of failed tasks
       minutes=60
   )
+  priority: str = "high"
+  max_restart: int = 0
+  xpk_branch: str = xpk.MAIN_BRANCH
+  ramdisk_directory: str = ""
+  mtc_enabled: bool = False
+  use_pathways: bool = False
 
   def run(
       self,
       *,
       gcs_location: airflow.XComArg | None = None,
-      use_vertex_tensorboard: bool = False,
-      use_pathways: bool = False,
       skip_post_process: bool = False,
-      ramdisk_directory: str = "",
-      mtc_enabled: bool = False,
-      xpk_branch: str = xpk.MAIN_BRANCH,
-      max_restart: int = 0,
-      priority: str = "high",
   ) -> DAGNode:
     """Run a test job within a docker image.
 
     Attributes:
       gcs_location: GCS path for all artifacts of the test.
-      use_vertex_tensorboard: Set to True to view workload data on
-        Vertex AI Tensorboard.
+      skip_post_process: If True, skip the post-processing step.
 
     Returns:
       A task group with the following tasks chained: run_model and
@@ -514,13 +518,6 @@ class XpkTask(BaseTask):
     with TaskGroup(group_id=self.task_test_config.benchmark_id) as group:
       pre_process, xpk_runner = self._pre_process(
           gcs_location=gcs_location,
-          use_vertex_tensorboard=use_vertex_tensorboard,
-          use_pathways=use_pathways,
-          ramdisk_directory=ramdisk_directory,
-          mtc_enabled=mtc_enabled,
-          xpk_branch=xpk_branch,
-          max_restart=max_restart,
-          priority=priority,
       )
 
       run_model = self._run_model(xpk_runner)
@@ -560,18 +557,17 @@ class XpkTask(BaseTask):
   def _pre_process(
       self,
       gcs_location: airflow.XComArg | None = None,
-      use_vertex_tensorboard: bool = False,
-      use_pathways: bool = False,
-      ramdisk_directory: str = "",
-      mtc_enabled: bool = False,
-      xpk_branch: str = xpk.MAIN_BRANCH,
-      max_restart: int = 0,
-      priority: str = "high",
   ) -> tuple[DAGNode, XpkRunner]:
     with TaskGroup(group_id="pre_process") as group:
       workload_id = xpk.generate_workload_id(self.task_test_config.benchmark_id)
 
       gcs_path = self._maybe_generate_gcs_location(gcs_location)
+
+      use_vertex_tensorboard = (
+          self.task_metric_config.use_vertex_tensorboard
+          if self.task_metric_config
+          else False
+      )
 
       xpk_runner = XpkRunner(
           task_test_config=self.task_test_config,
@@ -580,12 +576,12 @@ class XpkTask(BaseTask):
           gcs_path=gcs_path,
           workload_provision_timeout=self.workload_provision_timeout,
           use_vertex_tensorboard=use_vertex_tensorboard,
-          use_pathways=use_pathways,
-          ramdisk_directory=ramdisk_directory,
-          mtc_enabled=mtc_enabled,
-          xpk_branch=xpk_branch,
-          max_restart=max_restart,
-          priority=priority,
+          use_pathways=self.use_pathways,
+          ramdisk_directory=self.ramdisk_directory,
+          mtc_enabled=self.mtc_enabled,
+          xpk_branch=self.xpk_branch,
+          max_restart=self.max_restart,
+          priority=self.priority,
       )
 
     return group, xpk_runner
@@ -665,14 +661,7 @@ class XpkNameGenAndQuarantineTask(XpkTask):
       self,
       *,
       gcs_location: airflow.XComArg | None = None,
-      use_vertex_tensorboard: bool = False,
-      use_pathways: bool = False,
       skip_post_process: bool = False,
-      ramdisk_directory: str = "",
-      mtc_enabled: bool = False,
-      xpk_branch: str = xpk.MAIN_BRANCH,
-      max_restart: int = 0,
-      priority: str = "high",
   ) -> DAGNode:
     """Generate a unique run name, tensorboard file location,
     and profile file location (if metric config has profile),
@@ -695,26 +684,12 @@ class XpkNameGenAndQuarantineTask(XpkTask):
     with cm:
       return super().run(
           gcs_location=gcs_location,
-          use_vertex_tensorboard=use_vertex_tensorboard,
-          use_pathways=use_pathways,
           skip_post_process=skip_post_process,
-          ramdisk_directory=ramdisk_directory,
-          mtc_enabled=mtc_enabled,
-          xpk_branch=xpk_branch,
-          max_restart=max_restart,
-          priority=priority,
       )
 
   def _pre_process(
       self,
       gcs_location: airflow.XComArg | None = None,
-      use_vertex_tensorboard: bool = False,
-      use_pathways: bool = False,
-      ramdisk_directory: str = "",
-      mtc_enabled: bool = False,
-      xpk_branch: str = xpk.MAIN_BRANCH,
-      max_restart: int = 0,
-      priority: str = "high",
   ) -> tuple[DAGNode, XpkRunner]:
     with TaskGroup(group_id="pre_process") as group:
       run_name = name_format.generate_run_name(
@@ -753,6 +728,12 @@ class XpkNameGenAndQuarantineTask(XpkTask):
       else:
         nodes.append(tb_file_location)
 
+      use_vertex_tensorboard = (
+          self.task_metric_config.use_vertex_tensorboard
+          if self.task_metric_config
+          else False
+      )
+
       xpk_runner = XpkRunner(
           task_test_config=self.task_test_config,
           task_gcp_config=self.task_gcp_config,
@@ -760,12 +741,12 @@ class XpkNameGenAndQuarantineTask(XpkTask):
           gcs_path=gcs_path,
           workload_provision_timeout=self.workload_provision_timeout,
           use_vertex_tensorboard=use_vertex_tensorboard,
-          use_pathways=use_pathways,
-          ramdisk_directory=ramdisk_directory,
-          mtc_enabled=mtc_enabled,
-          xpk_branch=xpk_branch,
-          max_restart=max_restart,
-          priority=priority,
+          use_pathways=self.use_pathways,
+          ramdisk_directory=self.ramdisk_directory,
+          mtc_enabled=self.mtc_enabled,
+          xpk_branch=self.xpk_branch,
+          max_restart=self.max_restart,
+          priority=self.priority,
       )
 
       chain(*nodes)

@@ -140,11 +140,11 @@ with models.DAG(
             test_owner=test_owner.SHARON_Y,
             expect_reach_to_step=step_to_interrupt,
             check_file_exists=True,
+            xpk_branch=MAIN_BRANCH,
+            max_restart=15,
         ).run(
             gcs_location=gcs_location,
-            xpk_branch=MAIN_BRANCH,
             skip_post_process=True,
-            max_restart=15,
         )
 
         end_time = validation_util.generate_timestamp.override(

@@ -116,10 +116,8 @@ with models.DAG(
             run_model_cmds=workload_command,
             docker_image=image.value,
             test_owner=test_owner.JACKY_F,
-        ).run(
             xpk_branch=MAIN_BRANCH,
-            skip_post_process=True,
-        )
+        ).run(skip_post_process=True)
 
         steps_to_validate = test_config.generate_step_to_validate(
             is_local=False

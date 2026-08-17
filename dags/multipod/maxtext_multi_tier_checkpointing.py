@@ -72,4 +72,6 @@ with models.DAG(
             run_model_cmds=command,
             docker_image=image.value,
             test_owner=test_owner.ABHINAV_S,
-        ).run(ramdisk_directory="local", mtc_enabled=True)
+            ramdisk_directory="local",
+            mtc_enabled=True,
+        ).run()

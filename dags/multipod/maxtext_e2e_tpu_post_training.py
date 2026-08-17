@@ -232,11 +232,9 @@ with models.DAG(
               run_model_cmds=training_cmd,
               docker_image="{{ params.docker_image }}",
               test_owner=test_owner.SURBHI_J,
-          ).run(
               use_pathways=True,
-              skip_post_process=True,
               priority="very-high",
-          )
+          ).run(skip_post_process=True)
 
           to_hf_flags = mode_test_config.get("to_hf_flags", "false true")
 
@@ -258,7 +256,8 @@ with models.DAG(
               docker_image="{{ params.docker_image }}",
               cluster=XpkClusters.TPU_V5P_MLPERF_CLUSTER,
               test_owner=test_owner.SURBHI_J,
-          ).run(skip_post_process=True, priority="very-high")
+              priority="very-high",
+          ).run(skip_post_process=True)
 
           chain(
               wait_for_conversion,

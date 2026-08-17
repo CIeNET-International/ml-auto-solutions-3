@@ -130,12 +130,10 @@ with models.DAG(
             test_owner=test_owner.DEPP_L,
             expect_reach_to_step=step_to_interrupt,
             last_node=True,
-        ).run(
             ramdisk_directory=test_config_util.DEFAULT_RAM_DISK,
             mtc_enabled=True,
-            skip_post_process=True,
             max_restart=15,
-        )
+        ).run(skip_post_process=True)
 
         end_time = validation_util.generate_timestamp.override(
             task_id="generate_end_time"

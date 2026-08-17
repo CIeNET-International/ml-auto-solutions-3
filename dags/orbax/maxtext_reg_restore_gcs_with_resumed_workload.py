@@ -126,11 +126,9 @@ with models.DAG(
             run_model_cmds=initial_workload_command,
             docker_image=image.value,
             test_owner=test_owner.SHARON_Y,
-        ).run(
             xpk_branch=MAIN_BRANCH,
-            skip_post_process=True,
             max_restart=15,
-        )
+        ).run(skip_post_process=True)
 
         test_config.steps = 100
         resume_workload_command = test_config.generate_workload_command(
@@ -154,11 +152,9 @@ with models.DAG(
             run_model_cmds=resume_workload_command,
             docker_image=image.value,
             test_owner=test_owner.SHARON_Y,
-        ).run(
             xpk_branch=MAIN_BRANCH,
-            skip_post_process=True,
             max_restart=15,
-        )
+        ).run(skip_post_process=True)
 
         end_time = validation_util.generate_timestamp.override(
             task_id="generate_end_time"

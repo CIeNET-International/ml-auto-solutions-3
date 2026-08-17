@@ -102,9 +102,12 @@ class MetricConfig:
     profile: The config for profile input.
     use_runtime_generated_gcs_folder: Indicator to use path based on
       benchmark_id from generate_gcs_folder_location()
+    use_vertex_tensorboard: Set to True to view workload data on Vertex AI
+      Tensorboard.
   """
 
   json_lines: Optional[JSONLinesConfig] = None
   tensorboard_summary: Optional[SummaryConfig] = None
   profile: Optional[ProfileConfig] = None
   use_runtime_generated_gcs_folder: bool = False
+  use_vertex_tensorboard: bool = False

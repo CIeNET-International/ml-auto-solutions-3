@@ -22,6 +22,7 @@ from dags.common import test_owner
 from dags.common.vm_resource import DockerImage, XpkClusters
 from dags.multipod.configs import gke_config
 from dags.multipod.configs.common import SetupMode
+from xlml.apis import metric_config
 
 SCHEDULED_TIME = None
 
@@ -89,4 +90,7 @@ with models.DAG(
             run_model_cmds=profiling_in_vertex_ai_tb_cmds,
             docker_image=image.value,
             test_owner=test_owner.SURBHI_J,
-        ).run(use_vertex_tensorboard=True)
+            user_specified_job_metric_config=metric_config.MetricConfig(
+                use_vertex_tensorboard=True
+            ),
+        ).run()
