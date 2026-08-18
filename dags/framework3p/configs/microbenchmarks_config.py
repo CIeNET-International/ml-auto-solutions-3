@@ -151,8 +151,11 @@ def get_microbenchmark_xpk_config(
       json_lines=metric_config.JSONLinesConfig("metrics_report.jsonl"),
       use_runtime_generated_gcs_folder=True,
   )
-  return task.XpkTask(
+  runner_config = task.XpkRunnerConfig(
       task_test_config=job_test_config,
       task_gcp_config=job_gcp_config,
       task_metric_config=job_metric_config,
+  )
+  return task.XpkTask(
+      runner_config=runner_config,
   )

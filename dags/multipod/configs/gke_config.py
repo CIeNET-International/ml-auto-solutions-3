@@ -84,7 +84,7 @@ def get_gke_config(
         else None
     )
 
-  return task.XpkTask(
+  runner_config = task.XpkRunnerConfig(
       task_test_config=job_test_config,
       task_gcp_config=job_gcp_config,
       task_metric_config=job_metric_config,
@@ -94,6 +94,10 @@ def get_gke_config(
       ramdisk_directory=ramdisk_directory,
       mtc_enabled=mtc_enabled,
       use_pathways=use_pathways,
+  )
+
+  return task.XpkTask(
+      runner_config=runner_config,
   )
 
 
@@ -160,19 +164,23 @@ def get_gke_config_with_interrupt(
         else None
     )
 
-  return task.XpkNodeInterruptionTask(
+  runner_config = task.XpkRunnerConfig(
       task_test_config=job_test_config,
       task_gcp_config=job_gcp_config,
       task_metric_config=job_metric_config,
-      expect_reach_to_step=expect_reach_to_step,
-      last_node=last_node,
-      check_file_exists=check_file_exists,
       priority=priority,
       max_restart=max_restart,
       xpk_branch=xpk_branch,
       ramdisk_directory=ramdisk_directory,
       mtc_enabled=mtc_enabled,
       use_pathways=use_pathways,
+  )
+
+  return task.XpkNodeInterruptionTask(
+      runner_config=runner_config,
+      expect_reach_to_step=expect_reach_to_step,
+      last_node=last_node,
+      check_file_exists=check_file_exists,
   )
 
 
@@ -239,19 +247,23 @@ def get_gke_config_with_name_gen_and_quarantine(
         else None
     )
 
-  return task.XpkNameGenAndQuarantineTask(
+  runner_config = task.XpkRunnerConfig(
       task_test_config=job_test_config,
       task_gcp_config=job_gcp_config,
       task_metric_config=job_metric_config,
-      quarantine_task_group=quarantine_task_group,
-      run_name_env=run_name_env,
-      nested_run_name_in_tb_file_location=nested_run_name_in_tb_file_location,
       priority=priority,
       max_restart=max_restart,
       xpk_branch=xpk_branch,
       ramdisk_directory=ramdisk_directory,
       mtc_enabled=mtc_enabled,
       use_pathways=use_pathways,
+  )
+
+  return task.XpkNameGenAndQuarantineTask(
+      runner_config=runner_config,
+      quarantine_task_group=quarantine_task_group,
+      run_name_env=run_name_env,
+      nested_run_name_in_tb_file_location=nested_run_name_in_tb_file_location,
   )
 
 
@@ -319,9 +331,13 @@ def get_gke_maxtext_nightly_config(
       docker_image=docker_image,
   )
 
-  return task.XpkTask(
+  runner_config = task.XpkRunnerConfig(
       task_test_config=job_test_config,
       task_gcp_config=job_gcp_config,
+  )
+
+  return task.XpkTask(
+      runner_config=runner_config,
   )
 
 
@@ -358,9 +374,13 @@ def get_maxtext_end_to_end_gpu_gke_test_config(
       num_slices=num_slices,
   )
 
-  return task.XpkTask(
+  runner_config = task.XpkRunnerConfig(
       task_test_config=job_test_config,
       task_gcp_config=job_gcp_config,
+  )
+
+  return task.XpkTask(
+      runner_config=runner_config,
   )
 
 
@@ -429,9 +449,13 @@ def get_gke_gpt3_6b_nightly_config(
       docker_image=docker_image,
   )
 
-  return task.XpkTask(
+  runner_config = task.XpkRunnerConfig(
       task_test_config=job_test_config,
       task_gcp_config=job_gcp_config,
+  )
+
+  return task.XpkTask(
+      runner_config=runner_config,
   )
 
 
@@ -487,8 +511,12 @@ def get_maxtext_cpu_end_to_end_gke_config(
       else None
   )
 
-  return task.XpkTask(
+  runner_config = task.XpkRunnerConfig(
       task_test_config=job_test_config,
       task_gcp_config=job_gcp_config,
       task_metric_config=job_metric_config,
+  )
+
+  return task.XpkTask(
+      runner_config=runner_config,
   )
