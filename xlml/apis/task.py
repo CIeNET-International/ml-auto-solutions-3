@@ -522,7 +522,6 @@ class XpkTask(BaseTask):
 
   def run(
       self,
-      *,
       gcs_location: airflow.XComArg | None = None,
       skip_post_process: bool = False,
   ) -> DAGNode:
@@ -672,7 +671,6 @@ class XpkNameGenAndQuarantineTask(XpkTask):
 
   def run(
       self,
-      *,
       gcs_location: airflow.XComArg | None = None,
       skip_post_process: bool = False,
   ) -> DAGNode:
