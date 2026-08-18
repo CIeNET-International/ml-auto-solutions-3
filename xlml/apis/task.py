@@ -498,7 +498,8 @@ class XpkRunner(Runner):
 
   def interrupt_workload(self, is_targeting_on_last_node: bool) -> DAGNode:
     return xpk.delete_node.override(
-        owner=self.configs.task_test_config.task_owner, trigger_rule="none_failed"
+        owner=self.configs.task_test_config.task_owner,
+        trigger_rule="none_failed",
     )(
         project=self.configs.task_gcp_config.project_name,
         zone=self.configs.task_gcp_config.zone,
@@ -756,7 +757,6 @@ class XpkNameGenAndQuarantineTask(XpkTask):
       chain(*nodes)
 
     return group, xpk_runner
-
 
 
 @dataclasses.dataclass
