@@ -16,6 +16,7 @@
 
 import abc
 import contextlib
+import copy
 import dataclasses
 import datetime
 import shlex
@@ -53,11 +54,17 @@ class BaseTask(abc.ABC):
     Returns:
       A DAG node that executes this test.
     """
-    test_config = (
-        self.runner_config.task_test_config
-        if hasattr(self, "runner_config")
-        else self.task_test_config
-    )
+    if hasattr(self, "runner_config"):
+      test_config = self.runner_config.task_test_config
+    elif hasattr(self, "task_test_config"):
+      test_config = self.task_test_config
+    elif hasattr(self, "test_cfg"):
+      test_config = self.test_cfg
+    else:
+      raise AttributeError(
+          f"{self.__class__.__name__} does not have a test configuration"
+          " attribute."
+      )
     test_name = test_config.benchmark_id
     if QuarantineTests.is_quarantined(test_name):
       with quarantine_task_group:
@@ -340,11 +347,6 @@ class RunnerConfig:
   workload_provision_timeout: datetime.timedelta = datetime.timedelta(
       minutes=60
   )
-  priority: str = "high"
-  max_restart: int = 0
-  ramdisk_directory: str = ""
-  mtc_enabled: bool = False
-  use_pathways: bool = False
 
 
 @dataclasses.dataclass
@@ -352,6 +354,11 @@ class XpkRunnerConfig(RunnerConfig):
   """Static configuration specific to XPK workloads on GKE."""
 
   xpk_branch: str = xpk.MAIN_BRANCH
+  priority: str = "high"
+  max_restart: int = 0
+  ramdisk_directory: str = ""
+  mtc_enabled: bool = False
+  use_pathways: bool = False
 
 
 @dataclasses.dataclass
@@ -426,9 +433,12 @@ class XpkRunner(Runner):
       return group
 
   def wait_workload_complete(self) -> BaseOperator:
-    return xpk.wait_for_workload_completion.override(
-        timeout=int(self.configs.task_test_config.timeout.total_seconds()),
-    )(
+    op = xpk.wait_for_workload_completion
+    if self.configs.task_test_config.timeout:
+      op = op.override(
+          timeout=int(self.configs.task_test_config.timeout.total_seconds())
+      )
+    return op(
         workload_id=self.workload_id,
         project_id=self.configs.task_gcp_config.project_name,
         region=gke.zone_to_region(self.configs.task_gcp_config.zone),
@@ -604,29 +614,36 @@ class XpkTask(BaseTask):
     """
     with TaskGroup(group_id="post_process") as group:
       process_id = metric.generate_process_id.override(retries=0)()
-      post_process_metrics = metric.process_metrics.override(retries=0)(
-          process_id,
-          self.runner_config.task_test_config,
-          self.runner_config.task_metric_config,
-          self.runner_config.task_gcp_config,
-          folder_location=result_location,
-      )
+      task_metric_config = self.runner_config.task_metric_config
 
-      if (
-          self.runner_config.task_metric_config
-          and self.runner_config.task_metric_config.profile
-      ):
-        self.runner_config.task_metric_config.profile.metrics = (
-            metric.xplane_to_metrics.override(retries=0)(
-                self.runner_config.task_metric_config.profile.file_location
-            )
+      if task_metric_config and task_metric_config.profile:
+        task_metric_config = copy.copy(task_metric_config)
+        profile = copy.copy(task_metric_config.profile)
+        profile.metrics = metric.xplane_to_metrics.override(retries=0)(
+            profile.file_location
+        )
+        task_metric_config.profile = profile
+
+        post_process_metrics = metric.process_metrics.override(retries=0)(
+            process_id,
+            self.runner_config.task_test_config,
+            task_metric_config,
+            self.runner_config.task_gcp_config,
+            folder_location=result_location,
         )
         chain(
             process_id,
-            self.runner_config.task_metric_config.profile.metrics,
+            profile.metrics,
             post_process_metrics,
         )
       else:
+        post_process_metrics = metric.process_metrics.override(retries=0)(
+            process_id,
+            self.runner_config.task_test_config,
+            task_metric_config,
+            self.runner_config.task_gcp_config,
+            folder_location=result_location,
+        )
         chain(process_id, post_process_metrics)
 
       return group
@@ -715,41 +732,46 @@ class XpkNameGenAndQuarantineTask(XpkTask):
 
       nodes = [run_name]
 
-      tb_file_location = name_format.generate_tb_file_location(
-          run_name,
-          self.runner_config.task_metric_config.tensorboard_summary.file_location,
-          self.nested_run_name_in_tb_file_location,
-      )
+      # Shallow-copy runner_config and task_test_config to prevent mutating shared configs
+      runner_config = copy.copy(self.runner_config)
+      task_test_config = copy.copy(self.runner_config.task_test_config)
+      task_test_config.run_model_cmds = [
+          f"export {self.run_name_env}={run_name}",
+          *self.runner_config.task_test_config.run_model_cmds,
+      ]
+      runner_config.task_test_config = task_test_config
 
-      # Set run_name in run_model_cmds
-      new_run_model_cmds = [f"export {self.run_name_env}={run_name}"]
-      for cmd in self.runner_config.task_test_config.run_model_cmds:
-        new_run_model_cmds.append(cmd)
-      self.runner_config.task_test_config.run_model_cmds = new_run_model_cmds
-
-      # Update tensorboard file location
-      self.runner_config.task_metric_config.tensorboard_summary.file_location = (
-          tb_file_location
-      )
-
-      # Update profile file location
+      # Update tensorboard and profile file locations
       if (
           self.runner_config.task_metric_config
-          and self.runner_config.task_metric_config.profile
+          and self.runner_config.task_metric_config.tensorboard_summary
       ):
-        profile_file_location = name_format.generate_profile_file_location(
+        task_metric_config = copy.copy(self.runner_config.task_metric_config)
+        runner_config.task_metric_config = task_metric_config
+
+        tensorboard_summary = copy.copy(task_metric_config.tensorboard_summary)
+        tb_file_location = name_format.generate_tb_file_location(
             run_name,
-            self.runner_config.task_metric_config.profile.file_location,
+            tensorboard_summary.file_location,
+            self.nested_run_name_in_tb_file_location,
         )
-        self.runner_config.task_metric_config.profile.file_location = (
-            profile_file_location
-        )
-        nodes.append([tb_file_location, profile_file_location])
-      else:
-        nodes.append(tb_file_location)
+        tensorboard_summary.file_location = tb_file_location
+        task_metric_config.tensorboard_summary = tensorboard_summary
+
+        if task_metric_config.profile:
+          profile = copy.copy(task_metric_config.profile)
+          profile_file_location = name_format.generate_profile_file_location(
+              run_name,
+              profile.file_location,
+          )
+          profile.file_location = profile_file_location
+          task_metric_config.profile = profile
+          nodes.append([tb_file_location, profile_file_location])
+        else:
+          nodes.append(tb_file_location)
 
       xpk_runner = XpkRunner(
-          configs=self.runner_config,
+          configs=runner_config,
           workload_id=workload_id,
           gcs_path=gcs_path,
       )
