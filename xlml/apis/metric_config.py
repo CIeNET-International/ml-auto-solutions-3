@@ -16,7 +16,7 @@
 
 import dataclasses
 import enum
-from typing import Iterable, List, Optional
+from typing import Iterable, Optional
 
 
 # TODO(ranran): add project info to let users specify dataset location

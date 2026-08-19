@@ -128,8 +128,9 @@ with models.DAG(
           "{{ params.run_name if params.run_name else 'pre-' ~ ts_nodash }}"
       )
 
+      training_command = test_config["training"]["command"]
       training_cmd = (f"export HF_TOKEN={HF_TOKEN}",) + (
-          f"{test_config['training']['command']} {run_name}",
+          f"{training_command} {run_name}",
       )
       training_core_count = test_config.get("core_count", 8)
       training_task = gke_config.get_gke_config(
@@ -149,6 +150,7 @@ with models.DAG(
       )
       to_hf_flags = test_config.get("to_hf_flags", "")
 
+      to_hf_cmd = test_config["checkpoint_conversion"]["to_huggingface"]
       convert_to_huggingface_cmd = (
           f"export HF_TOKEN={HF_TOKEN}",
           'export HF_HOME="/dev/shm/hf_cache"',

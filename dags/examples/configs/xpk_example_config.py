@@ -18,7 +18,6 @@ import datetime
 from xlml.apis import gcp_config, metric_config, task, test_config
 from xlml.apis.xpk_cluster_config import XpkClusterConfig
 from dags.common import test_owner
-from dags.common.vm_resource import TpuVersion
 
 
 def get_flax_resnet_xpk_config(

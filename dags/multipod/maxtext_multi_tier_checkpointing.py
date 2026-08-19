@@ -19,7 +19,7 @@ import datetime
 from airflow import models
 from dags import composer_env, gcs_bucket
 from dags.common import test_owner
-from dags.common.vm_resource import TpuVersion, Zone, DockerImage, XpkClusters
+from dags.common.vm_resource import DockerImage, XpkClusters
 from dags.multipod.configs import xpk_gke_config as gke_config
 from dags.multipod.configs.common import SetupMode  # Run once a day at 10 am UTC (2 am PST)
 

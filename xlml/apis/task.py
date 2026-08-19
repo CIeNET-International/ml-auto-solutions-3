@@ -49,23 +49,25 @@ class BaseTask(abc.ABC):
     pass
 
   def run_with_quarantine(self, quarantine_task_group):
-    """Run a test job. If the test job is flaky, wrap it in a special task group.
+    """Run a test job.
+
+    If the test job is flaky, wrap it in a special task group.
 
     Returns:
       A DAG node that executes this test.
     """
     if hasattr(self, "runner_config"):
-      test_config = self.runner_config.task_test_config
+      task_test_config = self.runner_config.task_test_config
     elif hasattr(self, "task_test_config"):
-      test_config = self.task_test_config
+      task_test_config = self.task_test_config
     elif hasattr(self, "test_cfg"):
-      test_config = self.test_cfg
+      task_test_config = self.test_cfg
     else:
       raise AttributeError(
           f"{self.__class__.__name__} does not have a test configuration"
           " attribute."
       )
-    test_name = test_config.benchmark_id
+    test_name = task_test_config.benchmark_id
     if QuarantineTests.is_quarantined(test_name):
       with quarantine_task_group:
         return self.run()
@@ -732,7 +734,8 @@ class XpkNameGenAndQuarantineTask(XpkTask):
 
       nodes = [run_name]
 
-      # Shallow-copy runner_config and task_test_config to prevent mutating shared configs
+      # Shallow-copy runner_config and task_test_config to prevent mutating
+      # shared configs.
       runner_config = copy.copy(self.runner_config)
       task_test_config = copy.copy(self.runner_config.task_test_config)
       task_test_config.run_model_cmds = [
