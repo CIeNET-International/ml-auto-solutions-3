@@ -21,7 +21,7 @@ from airflow.utils.task_group import TaskGroup
 from dags import composer_env
 from dags.common import test_owner
 from dags.common.vm_resource import DockerImage, XpkClusters
-from dags.multipod.configs import gke_config
+from dags.multipod.configs import xpk_gke_config as gke_config
 
 # Run once a day at 5 am UTC (9 pm PST / 10 pm PDT)
 SCHEDULED_TIME = "45 4 * * *" if composer_env.is_prod_env() else None

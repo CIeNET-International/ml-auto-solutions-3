@@ -28,7 +28,7 @@ from dags.common.quarantined_tests import (
     safe_get_from_variable,
 )
 from dags.common.vm_resource import DockerImage, XpkClusters
-from dags.multipod.configs import gke_config
+from dags.multipod.configs import xpk_gke_config as gke_config
 from xlml.utils import name_format
 
 # Run once a day at 1 am UTC (5 pm PST)

@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from dags.common.vm_resource import TpuVersion, Zone, DockerImage
-from dags.multipod.configs import gke_config
+from dags.multipod.configs import xpk_gke_config as gke_config
 from xlml.apis.xpk_cluster_config import XpkClusterConfig
 from xlml.apis import task
 from typing import List

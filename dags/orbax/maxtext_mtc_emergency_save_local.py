@@ -18,7 +18,7 @@ from dags import composer_env
 from dags.common import test_owner
 from dags.common.quarantined_tests import QuarantineTests
 from dags.common.vm_resource import XpkClusters
-from dags.multipod.configs import gke_config
+from dags.multipod.configs import xpk_gke_config as gke_config
 from dags.orbax.util import checkpoint_util
 from dags.orbax.util import test_config_util
 from dags.orbax.util import validation_util

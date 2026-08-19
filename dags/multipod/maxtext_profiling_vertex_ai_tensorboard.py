@@ -20,7 +20,7 @@ from airflow import models
 from dags import gcs_bucket
 from dags.common import test_owner
 from dags.common.vm_resource import DockerImage, XpkClusters
-from dags.multipod.configs import gke_config
+from dags.multipod.configs import xpk_gke_config as gke_config
 from dags.multipod.configs.common import SetupMode
 from xlml.apis import metric_config
 
