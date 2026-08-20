@@ -100,4 +100,5 @@ with models.DAG(
           docker_image="{{ params.docker_image }}",
           cluster=XpkClusters.TPU_V5P_MLPERF_CLUSTER.override(core_count=8),
           test_owner=test_owner.JACKY_F,
-      ).run(skip_post_process=True, priority="very-high")
+          priority="very-high",
+      ).run(skip_post_process=True)
