@@ -376,7 +376,7 @@ class Runner(abc.ABC):
     pass
 
   @abc.abstractmethod
-  def wait_workload_complete(self) -> BaseOperator:
+  def wait_workload_complete(self) -> DAGNode:
     pass
 
   @abc.abstractmethod
@@ -434,7 +434,7 @@ class XpkRunner(Runner):
       chain(run_workload, wait_for_workload_start)
       return group
 
-  def wait_workload_complete(self) -> BaseOperator:
+  def wait_workload_complete(self) -> DAGNode:
     op = xpk.wait_for_workload_completion
     if self.configs.task_test_config.timeout:
       op = op.override(
