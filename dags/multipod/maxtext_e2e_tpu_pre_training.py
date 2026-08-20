@@ -128,9 +128,8 @@ with models.DAG(
           "{{ params.run_name if params.run_name else 'pre-' ~ ts_nodash }}"
       )
 
-      training_command = test_config["training"]["command"]
       training_cmd = (f"export HF_TOKEN={HF_TOKEN}",) + (
-          f"{training_command} {run_name}",
+          f"{test_config['training']['command']} {run_name}",
       )
       training_core_count = test_config.get("core_count", 8)
       training_task = gke_config.get_gke_config(
