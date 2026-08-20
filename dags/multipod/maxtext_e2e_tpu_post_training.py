@@ -241,7 +241,6 @@ with models.DAG(
           model_path = mode_test_config["maxtext_ckpt_path"].format(
               run_name=run_name
           )
-          to_hf_cmd = test_config["checkpoint_conversion"]["to_huggingface"]
           convert_to_huggingface_cmd = (
               f"export HF_TOKEN={HF_TOKEN}",
               'export HF_HOME="/dev/shm/hf_cache"',

@@ -150,7 +150,6 @@ with models.DAG(
       )
       to_hf_flags = test_config.get("to_hf_flags", "")
 
-      to_hf_cmd = test_config["checkpoint_conversion"]["to_huggingface"]
       convert_to_huggingface_cmd = (
           f"export HF_TOKEN={HF_TOKEN}",
           'export HF_HOME="/dev/shm/hf_cache"',
