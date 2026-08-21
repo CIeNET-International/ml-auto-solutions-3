@@ -28,11 +28,11 @@ from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from google.cloud import monitoring_v3
 
-from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.tpu_observability.utils.gcp_util import list_time_series
 from dags.tpu_observability.utils.time_util import TimeUtil
 from xlml.apis import gcs
 from xlml.utils import composer
+from xlml.utils import subprocess_utils
 
 NODE_POOL_SELECTOR_KEY = "tpu-observability/workload"
 """The label key for binding JobSet workloads to specific GKE node pools.
@@ -154,7 +154,7 @@ def _node_pool_exists(node_pool: Info) -> bool:
       f"--format='value(name)'"
   )
   try:
-    subprocess.run_exec(check_cmd)
+    subprocess_utils.run_exec(check_cmd)
     return True
   # pylint: disable=broad-exception-caught
   except Exception:
@@ -216,7 +216,7 @@ def create(
     command += "2>&1 || true "
 
   try:
-    subprocess.run_exec(command)
+    subprocess_utils.run_exec(command)
   except Exception as e:
     debug_cmd = (
         "gcloud container operations list "
@@ -225,7 +225,7 @@ def create(
         f"--filter='status=RUNNING AND targetLink:{node_pool.node_pool_name}' "
         f"--format='json(name,status)'"
     )
-    debug_res = subprocess.run_exec(debug_cmd)
+    debug_res = subprocess_utils.run_exec(debug_cmd)
 
     raise AirflowFailException(
         f"Primary task failed. Current operations:\n{debug_res}"
@@ -254,7 +254,7 @@ def delete(node_pool: Info) -> None:
       "--quiet"
   )
 
-  subprocess.run_exec(command)
+  subprocess_utils.run_exec(command)
 
 
 def list_nodes(node_pool: Info) -> list[str]:
@@ -281,7 +281,7 @@ def list_nodes(node_pool: Info) -> list[str]:
       f"--format='json({instance_group_urls_key})'"
   )
 
-  stdout = subprocess.run_exec(command)
+  stdout = subprocess_utils.run_exec(command)
 
   instance_group_urls_val = json.loads(stdout).get(instance_group_urls_key, [])
   if not instance_group_urls_val:
@@ -310,7 +310,7 @@ def list_nodes(node_pool: Info) -> list[str]:
         f"--zone={node_pool.node_locations} "
         "--format='json(instance)'"
     )
-    stdout = subprocess.run_exec(command)
+    stdout = subprocess_utils.run_exec(command)
 
     instances = json.loads(stdout)
 
@@ -488,7 +488,7 @@ def operate_node(
             f"Unsupported operation approach: {operation.approach}"
         )
 
-    subprocess.run_exec(" && ".join(commands), env=env)
+    subprocess_utils.run_exec(" && ".join(commands), env=env)
   return node_name
 
 
@@ -603,7 +603,7 @@ def rollback(node_pool: Info) -> None:
   )
 
   current_time_utc = datetime.datetime.now(datetime.timezone.utc)
-  subprocess.run_exec(command)
+  subprocess_utils.run_exec(command)
 
   return TimeUtil.from_datetime(current_time_utc)
 
@@ -766,7 +766,7 @@ def get_node_pool_disk_size(node_pool: Info) -> int:
       f'--format="value(config.diskSizeGb)"'
   )
 
-  result = subprocess.run_exec(command).strip()
+  result = subprocess_utils.run_exec(command).strip()
 
   return int(result)
 
@@ -790,7 +790,7 @@ def get_node_pool_labels(node_pool: Info) -> dict[str, str]:
   )
 
   result = (
-      json.loads(subprocess.run_exec(command).strip())
+      json.loads(subprocess_utils.run_exec(command).strip())
       .get("config", {})
       .get("resourceLabels", {})
   )
@@ -914,5 +914,5 @@ def update(node_pool: Info, spec: NodePoolUpdateSpec) -> TimeUtil:
       datetime.datetime.now(datetime.timezone.utc)
   )
 
-  subprocess.run_exec(update_cmd)
+  subprocess_utils.run_exec(update_cmd)
   return operation_start_time

@@ -20,7 +20,7 @@ import textwrap
 
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
-from dags.tpu_observability.utils import subprocess_util as subprocess
+from xlml.utils import subprocess_utils
 
 
 class TpuMonitoringScript:
@@ -69,4 +69,4 @@ def execute_sdk_command(
             f"-- python3 -c '{script}'"
         ),
     ])
-    return subprocess.run_exec(cmd, env=env)
+    return subprocess_utils.run_exec(cmd, env=env)

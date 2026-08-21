@@ -46,11 +46,11 @@ from dags.tpu_observability.tpu_info_metric import (
 )
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
-from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.tpu_observability.utils import tpu_info_util as tpu_info
 from dags.tpu_observability.utils.jobset_util import Workload
 from dags.tpu_observability.utils.node_pool_util import Info
 from dags.tpu_observability.utils.time_util import TimeUtil
+from xlml.utils import subprocess_utils
 
 DAG_ID = "tpu_info_metrics_verification"
 DAGRUN_TIMEOUT = get_dag_timeout(DAG_ID)
@@ -140,7 +140,7 @@ def get_tpu_info_metric_from_pod(
         ),
     ])
 
-    return subprocess.run_exec(cmd=cmd, env=env)
+    return subprocess_utils.run_exec(cmd=cmd, env=env)
 
 
 @task
