@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 
 from airflow.exceptions import AirflowFailException
 from airflow.models import BaseOperator
+from airflow.models.abstractoperator import AbstractOperator
 from airflow.models.mappedoperator import MappedOperator
 from airflow.models.taskmixin import DAGNode
 from airflow.operators.python import PythonOperator
@@ -26,7 +27,6 @@ from airflow.sensors.base import BaseSensorOperator
 from airflow.utils.context import Context
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.timeout import timeout as AirflowTimeout
-from airflow.utils.trigger_rule import TriggerRule
 
 
 class TaskGroupWithTimeout(TaskGroup):
@@ -63,47 +63,77 @@ class TaskGroupWithTimeout(TaskGroup):
       self,
       group_id,
       timeout: timedelta,
-      is_teardown: bool = False,
+      as_teardown_of: BaseOperator | None = None,
       **kwargs,
   ):
     super().__init__(group_id=group_id, **kwargs)
     self.group_name = f"{self.__class__.__name__}: '{group_id}'"
     self.timeout = timeout
-    self.trigger_rule = (
-        TriggerRule.ALL_DONE if is_teardown else TriggerRule.ALL_SUCCESS
-    )
+    self.setup_op = as_teardown_of
     self._root_node = None
 
-  def __enter__(self):
-    """Inject `_root_node` when entering the group context.
+  def __exit__(self, *args):
+    """Wire `_root_node` as upstream of in-group root children on context
+    exit."""
+    self.initialize_task_group_session()
+    self.mark_teardown()
+    return super().__exit__(*args)
 
-    Overridden because this group's timeout mechanism needs a single anchor
-    task to record the start time; see class docstring for the full flow.
-    """
-    tg = super().__enter__()
-    self._root_node = PythonOperator(
+  def initialize_task_group_session(self):
+    """Initializes the session root task and wires it to in-group root
+    children."""
+    root_task = PythonOperator(
         task_id=self.ROOT_TASK_ID,
         python_callable=lambda: datetime.now(timezone.utc).isoformat(),
-        trigger_rule=self.trigger_rule,
     )
-    return tg
 
-  def __exit__(self, *args):
-    """Wire `_root_node` as upstream of in-group root children on context exit.
+    if self.setup_op is not None:
+      setups = (
+          self.setup_op
+          if isinstance(self.setup_op, (list, tuple, TaskGroup))
+          else [self.setup_op]
+      )
+      root_task.as_teardown(
+          setups=setups,
+          on_failure_fail_dagrun=False,
+      )
 
-    Overridden to guarantee `_root_node` runs first. Only children with no
-    in-group sibling upstream get a direct edge; others inherit transitively.
-    """
-    children_ids = set(self.children.keys())
-    for child in self.children.values():
+    self._root_node = root_task
+
+    for child in list(self.children.values()):
       if child is self._root_node:
         continue
-      # If a sibling already chains into this child, the dependency on
-      # _root_node is satisfied transitively — no need to add a direct edge.
-      if child.upstream_task_ids & children_ids:
-        continue
-      child.set_upstream(self._root_node)
-    return super().__exit__(*args)
+
+      has_ingroup_upstream = any(
+          up in self.children.values() for up in child.upstream_list
+      )
+      if not has_ingroup_upstream:
+        child.set_upstream(self._root_node)
+
+  def mark_teardown(self):
+    """Marks all operators within this TaskGroup as teardown tasks."""
+    if self.setup_op is None:
+      return
+
+    setups = (
+        self.setup_op
+        if isinstance(self.setup_op, (list, tuple, TaskGroup))
+        else [self.setup_op]
+    )
+
+    for child in self.children.values():
+      match child:
+        case TaskGroup():
+          pass  # A TaskGroup does not have a teardown attribute.
+
+        case AbstractOperator():
+          if child is self._root_node:
+            continue
+
+          child.as_teardown(
+              setups=setups,
+              on_failure_fail_dagrun=True,
+          )
 
   def add(self, node: DAGNode):
     node = super().add(node)
@@ -141,12 +171,22 @@ class TaskGroupWithTimeout(TaskGroup):
 
         group_name = self.group_name
         timeout = self.timeout
-        root_node_id = self._root_node.task_id
+        root_node_id = self.ROOT_TASK_ID
 
         def wrapped_execute(context: Context):
           task_instance = context.get("task_instance")
 
-          start_time_str = task_instance.xcom_pull(task_ids=root_node_id)
+          current_task_id = task_instance.task_id
+          if "." in current_task_id:
+            group_prefix = current_task_id.rsplit(".", 1)[0]
+            full_root_node_id = f"{group_prefix}.{root_node_id}"
+          else:
+            full_root_node_id = root_node_id
+
+          start_time_str = task_instance.xcom_pull(task_ids=full_root_node_id)
+          if not start_time_str:
+            start_time_str = task_instance.xcom_pull(task_ids=root_node_id)
+
           if not start_time_str:
             raise AirflowFailException(
                 "Failed to overwrite timeout for task: "
