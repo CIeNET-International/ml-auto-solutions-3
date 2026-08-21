@@ -14,6 +14,7 @@
 
 """TaskGroupWithTimeout: timeout enforcement for Airflow TaskGroups."""
 
+import os
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -24,8 +25,11 @@ from airflow.models.taskmixin import DAGNode
 from airflow.operators.python import PythonOperator
 from airflow.sensors.base import BaseSensorOperator
 from airflow.utils.context import Context
+from airflow.utils.timeout import TimeoutPosix
+from airflow.utils.timeout import TimeoutWindows
+from airflow.utils.platform import IS_WINDOWS
+from airflow.exceptions import AirflowTaskTimeout
 from airflow.utils.task_group import TaskGroup
-from airflow.utils.timeout import timeout as AirflowTimeout
 from airflow.utils.trigger_rule import TriggerRule
 
 
@@ -172,7 +176,12 @@ class TaskGroupWithTimeout(TaskGroup):
 
           # Group-budget exhaustion is enforced by the `remaining <= 0` check
           # above on the next retry; let AirflowTaskTimeout propagate normally.
-          with AirflowTimeout(seconds=int(effective_timeout_sec)):
+          with TaskTimeout(
+              task_retry_delay=task.retry_delay.total_seconds(),
+              group_deadline=deadline,
+              group_name=group_name,
+              seconds=int(effective_timeout_sec),
+          ):
             return original_execute(task, context)
 
         node.execute = wrapped_execute
@@ -204,3 +213,37 @@ def _determine_task_timeout(task: BaseOperator) -> float:
     return min(timeout_1, timeout_2)
 
   return timeout_1
+
+
+# Signal-based timeout (SIGALRM) isn't available on Windows, so the base
+# class is picked once at class-definition time instead of instantiating
+# both and choosing between the instances.
+_TimeoutBase = TimeoutWindows if IS_WINDOWS else TimeoutPosix
+
+
+class TaskTimeout(_TimeoutBase):
+  """ """
+
+  def __init__(
+      self,
+      task_retry_delay,
+      group_deadline,
+      group_name,
+      seconds=1,
+      error_message="Timeout",
+  ):
+    super().__init__(seconds=seconds, error_message=error_message)
+    self.group_deadline = group_deadline
+    self.task_retry_delay = task_retry_delay
+    self.group_name = group_name
+
+  def handle_timeout(self, *args):
+    """ """
+    group_remaining_now = (
+        self.group_deadline - datetime.now(timezone.utc)
+    ).total_seconds()
+    if group_remaining_now <= self.task_retry_delay:
+      raise AirflowFailException(f"{self.group_name} timeout exceeded")
+
+    self.log.error("Process timed out, PID: %s", str(os.getpid()))
+    raise AirflowTaskTimeout(self.error_message)
