@@ -83,8 +83,8 @@ class TaskGroupWithTimeout(TaskGroup):
     """Initializes the session root task and wires it to in-group root
     children."""
     self._root_node = PythonOperator(
-      task_id=self.ROOT_TASK_ID,
-      python_callable=lambda: datetime.now(timezone.utc).isoformat(),
+        task_id=self.ROOT_TASK_ID,
+        python_callable=lambda: datetime.now(timezone.utc).isoformat(),
     )
 
     for child in list(self.children.values()):
@@ -110,8 +110,8 @@ class TaskGroupWithTimeout(TaskGroup):
         case AbstractOperator():
           is_root = child is self._root_node
           child.as_teardown(
-            setups=self.setup_op,
-            on_failure_fail_dagrun=not is_root,
+              setups=self.setup_op,
+              on_failure_fail_dagrun=not is_root,
           )
 
   def add(self, node: DAGNode):
