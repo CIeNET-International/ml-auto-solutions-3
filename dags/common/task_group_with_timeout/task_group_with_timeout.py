@@ -82,23 +82,10 @@ class TaskGroupWithTimeout(TaskGroup):
   def initialize_task_group_session(self):
     """Initializes the session root task and wires it to in-group root
     children."""
-    root_task = PythonOperator(
-        task_id=self.ROOT_TASK_ID,
-        python_callable=lambda: datetime.now(timezone.utc).isoformat(),
+    self._root_node = PythonOperator(
+      task_id=self.ROOT_TASK_ID,
+      python_callable=lambda: datetime.now(timezone.utc).isoformat(),
     )
-
-    if self.setup_op is not None:
-      setups = (
-          self.setup_op
-          if isinstance(self.setup_op, (list, tuple, TaskGroup))
-          else [self.setup_op]
-      )
-      root_task.as_teardown(
-          setups=setups,
-          on_failure_fail_dagrun=False,
-      )
-
-    self._root_node = root_task
 
     for child in list(self.children.values()):
       if child is self._root_node:
@@ -115,24 +102,16 @@ class TaskGroupWithTimeout(TaskGroup):
     if self.setup_op is None:
       return
 
-    setups = (
-        self.setup_op
-        if isinstance(self.setup_op, (list, tuple, TaskGroup))
-        else [self.setup_op]
-    )
-
     for child in self.children.values():
       match child:
         case TaskGroup():
           pass  # A TaskGroup does not have a teardown attribute.
 
         case AbstractOperator():
-          if child is self._root_node:
-            continue
-
+          is_root = child is self._root_node
           child.as_teardown(
-              setups=setups,
-              on_failure_fail_dagrun=True,
+            setups=self.setup_op,
+            on_failure_fail_dagrun=not is_root,
           )
 
   def add(self, node: DAGNode):
