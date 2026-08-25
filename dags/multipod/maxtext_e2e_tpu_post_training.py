@@ -20,6 +20,7 @@ Executes end-to-end MaxText post-training workflows (SFT, Multimodal SFT, LoRA, 
 - Executes post-training scripts with Pathways runtime persistence on TPU slices.
 - Converts post-trained checkpoints back to Hugging Face format to verify weight fidelity.
 """
+
 import datetime
 
 from airflow import models
@@ -30,8 +31,8 @@ from airflow.utils.session import provide_session
 from airflow.utils.task_group import TaskGroup
 from dags.common import test_owner
 from dags.common.quarantined_tests import safe_get_from_variable
-from dags.common.vm_resource import XpkClusters
-from dags.multipod.configs import xpk_gke_config as gke_config
+from dags.common.vm_resource import GkeClusters
+from dags.multipod.configs import gke_config
 
 # HF token retrieved from Airflow Variables for secure credential management
 HF_TOKEN = safe_get_from_variable("HF_TOKEN", None)
@@ -227,7 +228,7 @@ with models.DAG(
           training_task = gke_config.get_gke_config(
               time_out_in_min=60,
               num_slices=1,
-              cluster=XpkClusters.TPU_V5P_MLPERF_CLUSTER.override(
+              cluster=GkeClusters.TPU_V5P_MLPERF_CLUSTER.override(
                   core_count=training_core_count
               ),
               test_name=mode_short_name,
@@ -236,6 +237,7 @@ with models.DAG(
               test_owner=test_owner.SURBHI_J,
               use_pathways=True,
               priority="very-high",
+              use_gcluster=True,
           ).run(skip_post_process=True)
 
           to_hf_flags = mode_test_config.get("to_hf_flags", "false true")
@@ -256,9 +258,11 @@ with models.DAG(
               test_name="to-hf",
               run_model_cmds=convert_to_huggingface_cmd,
               docker_image="{{ params.docker_image }}",
-              cluster=XpkClusters.TPU_V5P_MLPERF_CLUSTER,
+              cluster=GkeClusters.TPU_V5P_MLPERF_CLUSTER,
               test_owner=test_owner.SURBHI_J,
               priority="very-high",
+              mounts="/dev/shm;/dev/shm;rw",
+              use_gcluster=True,
           ).run(skip_post_process=True)
 
           chain(

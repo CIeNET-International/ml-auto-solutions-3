@@ -27,8 +27,8 @@ from airflow.models.param import Param
 from airflow.utils.task_group import TaskGroup
 from dags.common import test_owner
 from dags.common.quarantined_tests import safe_get_from_variable
-from dags.common.vm_resource import XpkClusters
-from dags.multipod.configs import xpk_gke_config as gke_config
+from dags.common.vm_resource import GkeClusters
+from dags.multipod.configs import gke_config
 
 HF_TOKEN = safe_get_from_variable("HF_TOKEN", None)
 
@@ -98,7 +98,9 @@ with models.DAG(
           test_name="to-mt",
           run_model_cmds=convert_to_maxtext_cmd,
           docker_image="{{ params.docker_image }}",
-          cluster=XpkClusters.TPU_V5P_MLPERF_CLUSTER.override(core_count=8),
+          cluster=GkeClusters.TPU_V5P_MLPERF_CLUSTER,
           test_owner=test_owner.JACKY_F,
           priority="very-high",
+          mounts="/dev/shm;/dev/shm;rw",
+          use_gcluster=True,
       ).run(skip_post_process=True)

@@ -9,8 +9,8 @@ from airflow.utils.trigger_rule import TriggerRule
 
 from dags import composer_env
 from dags.common import test_owner
-from dags.common.vm_resource import XpkClusters
-from dags.multipod.configs import xpk_gke_config as gke_config
+from dags.common.vm_resource import GkeClusters
+from dags.multipod.configs import gke_config
 from dags.orbax.util import checkpoint_util, test_config_util, validation_util
 from xlml.utils.gke import zone_to_region
 
@@ -71,7 +71,7 @@ with models.DAG(
   )
   test_configs = [
       test_config_util.TestConfig(
-          cluster=XpkClusters.TPU_V5P_128_CLUSTER,
+          cluster=GkeClusters.TPU_V5P_128_CLUSTER,
           machine_type="ct5p-hightpu-4t",
           accelerator="v5p-128",
           slices=[2],

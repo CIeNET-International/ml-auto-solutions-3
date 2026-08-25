@@ -16,22 +16,20 @@
 (https://github.com/AI-Hypercomputer/xpk)."""
 
 import os
-import tempfile
-import uuid
-import sys
 import re
+import sys
+import tempfile
 from typing import Tuple
+import uuid
 from absl import logging
 
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from airflow.hooks.subprocess import SubprocessHook
-from kubernetes import client as k8s_client
-from google.cloud import compute_v1
-
-from xlml.apis import metric_config
-from xlml.utils import gke, composer
 from dags.common.vm_resource import GpuVersion
+from google.cloud import compute_v1
+from xlml.apis import metric_config
+from xlml.utils import composer, gke
 
 # NOTE: This version needs to be pinned to ensure compatibility when using
 # xpk.py for workload creation.
@@ -200,109 +198,6 @@ def run_workload(
     ), f"XPK command failed with code {result.exit_code}"
 
 
-def _get_core_api_client(
-    project_id: str, region: str, cluster_name: str
-) -> k8s_client.CoreV1Api:
-  """Create a core API client for the given cluster."""
-  client = gke.get_authenticated_client(project_id, region, cluster_name)
-
-  # Initilize the client
-  core_api = k8s_client.CoreV1Api(client)
-  logging.info("Successful initilize k8s client from cluster response.")
-  return core_api
-
-
-def _list_workload_pods(
-    core_api: k8s_client.CoreV1Api,
-    workload_id: str,
-    namespace: str = "default",
-) -> k8s_client.V1PodList:
-  """List all pods for the given workload."""
-  logging.info(
-      f"Getting pods for workload_id: {workload_id} in namespace: {namespace}"
-  )
-  pods = core_api.list_namespaced_pod(
-      label_selector=f"jobset.sigs.k8s.io/jobset-name={workload_id}",
-      namespace=namespace,
-  )
-  return pods
-
-
-def _get_batch_api_client(
-    project_id: str, region: str, cluster_name: str
-) -> k8s_client.BatchV1Api:
-  """Create a batch API client for the given cluster."""
-  client = gke.get_authenticated_client(project_id, region, cluster_name)
-
-  # Initilize the client
-  batch_api = k8s_client.BatchV1Api(client)
-  logging.info(
-      "Successful initilize k8s batch api client from cluster response."
-  )
-  return batch_api
-
-
-def _get_workload_job(
-    batch_api: k8s_client.BatchV1Api,
-    workload_id: str,
-    namespace: str = "default",
-) -> k8s_client.V1Job:
-  """Get the job for a given workload."""
-  logging.info(
-      f"Getting job for workload_id: {workload_id} in namespace: {namespace}"
-  )
-  jobs = batch_api.list_namespaced_job(
-      label_selector=f"jobset.sigs.k8s.io/jobset-name={workload_id}",
-      namespace=namespace,
-  )
-  if len(jobs.items) == 0:
-    logging.info(f"Getting job for workload_id: {workload_id}")
-    return None
-
-  if len(jobs.items) > 1:
-    logging.info(f"Got more than one job for workload_id: {workload_id}")
-    for i, job in enumerate(jobs.items):
-      logging.info(f"Job {i=}")
-      logging.info(f"{job}")
-
-  return jobs.items[0]
-
-
-def _log_workload_pod_statuses(workload_id: str, pods) -> None:
-  """Logs the status of each retrieved pod
-  and its containers for troubleshooting."""
-  if not pods.items:
-    return
-
-  logging.info(f"{f' Pod Statuses for Workload {workload_id} ':-^80}")
-
-  for pod in pods.items:
-    logging.info(f"Pod: {pod.metadata.name}, Status: {pod.status.phase}")
-
-    if not pod.status.container_statuses:
-      continue
-
-    for container_status in pod.status.container_statuses:
-      match container_status.state:
-        # Waiting status
-        case state if state.waiting:
-          w = state.waiting
-          logging.warning(
-              f"  Container '{container_status.name}' WAITING. "
-              f"Reason: {w.reason}. Message: {w.message}"
-          )
-
-        # Terminated status
-        case state if state.terminated:
-          t = state.terminated
-          logging.error(
-              f"  Container '{container_status.name}' TERMINATED. "
-              f"Reason: {t.reason}. Exit Code: {t.exit_code}"
-          )
-
-  logging.info("-" * 80)
-
-
 @task.sensor(poke_interval=60, timeout=600, mode="reschedule")
 def wait_for_workload_start(
     workload_id: str,
@@ -312,10 +207,10 @@ def wait_for_workload_start(
     namespace: str = "default",
 ) -> bool:
   """Check if the workload has started."""
-  core_api = _get_core_api_client(project_id, region, cluster_name)
-  pods = _list_workload_pods(core_api, workload_id, namespace=namespace)
+  core_api = gke.get_core_api_client(project_id, region, cluster_name)
+  pods = gke.list_workload_pods(core_api, workload_id, namespace=namespace)
 
-  _log_workload_pod_statuses(workload_id, pods)
+  gke.log_workload_pod_statuses(workload_id, pods)
   print(f"Found {len(pods.items)} pods for workload {workload_id}")
   return len(pods.items) > 0
 
@@ -329,18 +224,18 @@ def wait_for_workload_completion(
     namespace: str = "default",
 ) -> bool:
   """Check the workload status."""
-  core_api = _get_core_api_client(project_id, region, cluster_name)
-  pods = _list_workload_pods(core_api, workload_id, namespace=namespace)
+  core_api = gke.get_core_api_client(project_id, region, cluster_name)
+  pods = gke.list_workload_pods(core_api, workload_id, namespace=namespace)
 
-  _log_workload_pod_statuses(workload_id, pods)
+  gke.log_workload_pod_statuses(workload_id, pods)
 
   if not pods.items:
     logging.info(f"No pods found for workload selector: {workload_id}.")
 
     # Pathways jobs delete all pods on failure so we must also check if the job
     # is complete
-    batch_api = _get_batch_api_client(project_id, region, cluster_name)
-    job = _get_workload_job(batch_api, workload_id, namespace=namespace)
+    batch_api = gke.get_batch_api_client(project_id, region, cluster_name)
+    job = gke.get_workload_job(batch_api, workload_id, namespace=namespace)
     if job is None:
       logging.info(
           f"No pods or jobs were found for workload selector: {workload_id}"
@@ -441,8 +336,8 @@ def wait_for_workload_reach_step(
   Watch any given training pod, check the given step is already reach before
   deleting a node
   """
-  core_api = _get_core_api_client(project_id, region, cluster_name)
-  pods = _list_workload_pods(core_api, workload_id, namespace=namespace)
+  core_api = gke.get_core_api_client(project_id, region, cluster_name)
+  pods = gke.list_workload_pods(core_api, workload_id, namespace=namespace)
 
   if not pods.items:
     logging.info("No pods found for workload selector: %s.", workload_id)
@@ -499,8 +394,8 @@ def _find_target_pod_node(
     namespace: str = "default",
 ) -> str:
   """find the node name for the workload."""
-  core_api = _get_core_api_client(project_id, region, cluster_name)
-  pods = _list_workload_pods(core_api, workload_id, namespace=namespace)
+  core_api = gke.get_core_api_client(project_id, region, cluster_name)
+  pods = gke.list_workload_pods(core_api, workload_id, namespace=namespace)
   pod_node_pairs = []
   pattern = re.compile(r".*slice-job-(\d+)-(\d+)-\w+")
 
@@ -638,8 +533,8 @@ def check_last_logs(
   Checks if the last 45 seconds of a running pod's logs
   contain a specific substring.
   """
-  core_api = _get_core_api_client(project_id, region, cluster_name)
-  pods = _list_workload_pods(core_api, workload_id, namespace=namespace)
+  core_api = gke.get_core_api_client(project_id, region, cluster_name)
+  pods = gke.list_workload_pods(core_api, workload_id, namespace=namespace)
 
   if not pods.items:
     logging.info("No pods found for workload selector: %s.", workload_id)
@@ -689,8 +584,8 @@ def check_logs_exist(
   Counts occurrences of a regex pattern in full pod logs and
   verifies it meets the minimum count.
   """
-  core_api = _get_core_api_client(project_id, region, cluster_name)
-  pods = _list_workload_pods(core_api, workload_id, namespace=namespace)
+  core_api = gke.get_core_api_client(project_id, region, cluster_name)
+  pods = gke.list_workload_pods(core_api, workload_id, namespace=namespace)
 
   if not pods.items:
     logging.info("No pods found for workload selector: %s.", workload_id)

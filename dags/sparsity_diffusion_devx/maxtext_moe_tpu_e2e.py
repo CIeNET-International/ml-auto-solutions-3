@@ -27,8 +27,8 @@ from dags.common.quarantined_tests import (
     QuarantineTests,
     safe_get_from_variable,
 )
-from dags.common.vm_resource import DockerImage, XpkClusters
-from dags.multipod.configs import xpk_gke_config as gke_config
+from dags.common.vm_resource import DockerImage, GkeClusters
+from dags.multipod.configs import gke_config
 from xlml.utils import name_format
 
 # Run once a day at 1 am UTC (5 pm PST)
@@ -67,37 +67,37 @@ with models.DAG(
   test_models_tpu = {
       "deepseek4-284b": {
           "script_name": "tpu/deepseek/v4-284b/2_test_deepseek",
-          "cluster": XpkClusters.TPU_V5P_128_CLUSTER,
+          "cluster": GkeClusters.TPU_V5P_128_CLUSTER,
           "time_out_in_min": 180,
           "owner": test_owner.SNEHAL_V,
       },
       "deepseek32-671b": {
           "script_name": "tpu/deepseek/v3.2-671b/2_test_deepseek",
-          "cluster": XpkClusters.TPU_V5P_128_CLUSTER,
+          "cluster": GkeClusters.TPU_V5P_128_CLUSTER,
           "time_out_in_min": 180,
           "owner": test_owner.SHUNING_J,
       },
       "deepseek3-671b": {
           "script_name": "tpu/deepseek/v3-671b/2_test_deepseek",
-          "cluster": XpkClusters.TPU_V5P_128_CLUSTER,
+          "cluster": GkeClusters.TPU_V5P_128_CLUSTER,
           "time_out_in_min": 180,
           "owner": test_owner.SHUNING_J,
       },
       "deepseek3-671b-mtp": {
           "script_name": "tpu/deepseek/v3-671b/2_test_deepseek_mtp",
-          "cluster": XpkClusters.TPU_V5P_128_CLUSTER,
+          "cluster": GkeClusters.TPU_V5P_128_CLUSTER,
           "time_out_in_min": 180,
           "owner": test_owner.SHUNING_J,
       },
       "deepseek2-16b": {
           "script_name": "tpu/deepseek/v2-16b/test_deepseek",
-          "cluster": XpkClusters.TPU_V5P_8_CLUSTER_V2,
+          "cluster": GkeClusters.TPU_V5P_8_CLUSTER_V2,
           "time_out_in_min": 180,
           "owner": test_owner.SHUNING_J,
       },
       "gpt-oss-20b": {
           "script_name": "tpu/gpt_oss/20b/test_gpt_oss",
-          "cluster": XpkClusters.TPU_V5P_8_CLUSTER_V2,
+          "cluster": GkeClusters.TPU_V5P_8_CLUSTER_V2,
           "time_out_in_min": 180,
           "owner": test_owner.SHUNING_J,
       },
@@ -131,26 +131,26 @@ with models.DAG(
       "mixtral-8x7b": [
           {
               "script_name": "tpu/mixtral/8x7b/1_test_mixtral",
-              "cluster": XpkClusters.CPU_M1_MEGAMEM_96_CLUSTER,
+              "cluster": GkeClusters.CPU_M1_MEGAMEM_96_CLUSTER,
               "time_out_in_min": 240,
               "owner": test_owner.SHUNING_J,
           },
           {
               "script_name": "tpu/mixtral/8x7b/2_test_mixtral",
-              "cluster": XpkClusters.TPU_V6E_256_MLPERF_CLUSTER,
+              "cluster": GkeClusters.TPU_V6E_256_MLPERF_CLUSTER,
               "time_out_in_min": 90,
           },
       ],
       "llama4": [
           {
               "script_name": "tpu/llama4/1_test_llama4",
-              "cluster": XpkClusters.CPU_M1_MEGAMEM_96_CLUSTER,
+              "cluster": GkeClusters.CPU_M1_MEGAMEM_96_CLUSTER,
               "time_out_in_min": 240,
               "owner": test_owner.SHUNING_J,
           },
           {
               "script_name": "tpu/llama4/2_test_llama4",
-              "cluster": XpkClusters.TPU_V6E_256_MLPERF_CLUSTER,
+              "cluster": GkeClusters.TPU_V6E_256_MLPERF_CLUSTER,
               "time_out_in_min": 90,
           },
       ],

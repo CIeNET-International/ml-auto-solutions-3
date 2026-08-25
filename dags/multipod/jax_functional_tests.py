@@ -17,7 +17,7 @@
 import datetime
 from airflow import models
 from dags import composer_env
-from dags.common.vm_resource import DockerImage, TpuVersion, Zone, Project, V5_NETWORKS, V5P_SUBNETWORKS_V2, RuntimeVersion, XpkClusters
+from dags.common.vm_resource import DockerImage, TpuVersion, Zone, Project, V5_NETWORKS, V5P_SUBNETWORKS_V2, RuntimeVersion, GkeClusters
 from dags.multipod.configs import jax_tests_gce_config, jax_tests_gke_config
 from dags.multipod.configs.common import SetupMode
 
@@ -66,7 +66,7 @@ with models.DAG(
       if gke_docker_image is not None:
         jax_gke_v4_8 = (
             jax_tests_gke_config.get_jax_distributed_initialize_config(
-                cluster=XpkClusters.TPU_V4_8_MAXTEXT_CLUSTER,
+                cluster=GkeClusters.TPU_V4_8_MAXTEXT_CLUSTER,
                 time_out_in_min=60,
                 num_slices=num_slices,
                 test_name=f"{default_test_name}-gke-{test_mode.value}",
@@ -103,7 +103,7 @@ with models.DAG(
       if gke_docker_image is not None:
         jax_gke_v5p_8 = (
             jax_tests_gke_config.get_jax_distributed_initialize_config(
-                cluster=XpkClusters.TPU_V5P_8_CLUSTER,
+                cluster=GkeClusters.TPU_V5P_8_CLUSTER,
                 time_out_in_min=60,
                 num_slices=num_slices,
                 test_name=f"{default_test_name}-gke-{test_mode.value}",

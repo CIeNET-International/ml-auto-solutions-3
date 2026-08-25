@@ -29,8 +29,8 @@ from airflow.utils.session import provide_session
 from airflow.utils.task_group import TaskGroup
 from dags.common import test_owner
 from dags.common.quarantined_tests import safe_get_from_variable
-from dags.common.vm_resource import XpkClusters
-from dags.multipod.configs import xpk_gke_config as gke_config
+from dags.common.vm_resource import GkeClusters
+from dags.multipod.configs import gke_config
 
 HF_TOKEN = safe_get_from_variable("HF_TOKEN", None)
 
@@ -137,11 +137,12 @@ with models.DAG(
           test_name="pre",
           run_model_cmds=training_cmd,
           docker_image="{{ params.docker_image }}",
-          cluster=XpkClusters.TPU_V5P_MLPERF_CLUSTER.override(
+          cluster=GkeClusters.TPU_V5P_MLPERF_CLUSTER.override(
               core_count=training_core_count
           ),
           test_owner=test_owner.SURBHI_J,
           priority="very-high",
+          use_gcluster=True,
       ).run(skip_post_process=True)
 
       model_path = test_config["training"]["maxtext_ckpt_path"].format(
@@ -162,9 +163,11 @@ with models.DAG(
           test_name="to-hf",
           run_model_cmds=convert_to_huggingface_cmd,
           docker_image="{{ params.docker_image }}",
-          cluster=XpkClusters.TPU_V5P_MLPERF_CLUSTER,
+          cluster=GkeClusters.TPU_V5P_MLPERF_CLUSTER,
           test_owner=test_owner.SURBHI_J,
           priority="very-high",
+          mounts="/dev/shm;/dev/shm;rw",
+          use_gcluster=True,
       ).run(skip_post_process=True)
 
       wait_for_conversion = ExternalTaskSensorWithBypass(

@@ -16,8 +16,7 @@
 
 import datetime
 import enum
-from xlml.apis.xpk_cluster_config import XpkClusterConfig
-
+from xlml.apis.gke_cluster_config import GkeClusterConfig
 
 V5_NETWORKS_PREFIX = "projects/tpu-prod-env-automated"
 V5_NETWORKS = f"{V5_NETWORKS_PREFIX}/global/networks/mas-test"
@@ -94,6 +93,7 @@ class Region(enum.Enum):
   US_CENTRAL1 = "us-central1"
   ASIA_NORTHEAST1 = "asia-northeast1"
   US_EAST5 = "us-east5"
+  EUROPE_WEST4 = "europe-west4"
 
 
 class Zone(enum.Enum):
@@ -220,116 +220,117 @@ class RuntimeVersion(enum.Enum):
   V2_ALPHA_TPUV6 = "v2-alpha-tpuv6e"
 
 
-class XpkClusters:
-  """Common XPK cluster configs."""
+class GkeClusters:
+  """Common GKE cluster configs."""
 
-  TPU_V4_8_MAS_CLUSTER = XpkClusterConfig(
+  TPU_V4_8_MAS_CLUSTER = GkeClusterConfig(
       name="mas-v4-8",
       device_version=TpuVersion.V4,
       core_count=8,
       project=Project.CLOUD_ML_AUTO_SOLUTIONS.value,
       zone=Zone.US_CENTRAL2_B.value,
   )
-  TPU_V4_8_MAXTEXT_CLUSTER = XpkClusterConfig(
+  TPU_V4_8_MAXTEXT_CLUSTER = GkeClusterConfig(
       name="v4-8-maxtext",
       device_version=TpuVersion.V4,
       core_count=8,
       project=Project.TPU_PROD_ENV_MULTIPOD.value,
       zone=Zone.US_CENTRAL2_B.value,
   )
-  TPU_V4_16_CLUSTER = XpkClusterConfig(
+  TPU_V4_16_CLUSTER = GkeClusterConfig(
       name="v4-16-maxtext",
       device_version=TpuVersion.V4,
       core_count=16,
       project=Project.TPU_PROD_ENV_MULTIPOD.value,
       zone=Zone.US_CENTRAL2_B.value,
   )
-  TPU_V4_128_CLUSTER = XpkClusterConfig(
+  TPU_V4_128_CLUSTER = GkeClusterConfig(
       name="v4-128-bodaborg-us-central2-b",
       device_version=TpuVersion.V4,
       core_count=128,
       project=Project.CLOUD_TPU_MULTIPOD_DEV.value,
       zone=Zone.US_CENTRAL2_B.value,
   )
-  TPU_V5P_8_CLUSTER = XpkClusterConfig(
+  TPU_V5P_8_CLUSTER = GkeClusterConfig(
       name="v5p-8-bodaborg-europe-west4-b",
       device_version=TpuVersion.V5P,
       core_count=8,
       project=Project.CLOUD_TPU_MULTIPOD_DEV.value,
       zone=Zone.EUROPE_WEST4_B.value,
   )
-  TPU_V5P_8_CLUSTER_V2 = XpkClusterConfig(
+  TPU_V5P_8_CLUSTER_V2 = GkeClusterConfig(
       name="auto-v5p-8-bodaborg",
       device_version=TpuVersion.V5P,
       core_count=8,
       project=Project.CLOUD_TPU_MULTIPOD_DEV.value,
       zone=Zone.EUROPE_WEST4_B.value,
   )
-  TPU_V5P_128_CLUSTER = XpkClusterConfig(
+  TPU_V5P_128_CLUSTER = GkeClusterConfig(
       name="v5p-128-bodaborg-europe-west4-b",
       device_version=TpuVersion.V5P,
       core_count=128,
       project=Project.CLOUD_TPU_MULTIPOD_DEV.value,
       zone=Zone.EUROPE_WEST4_B.value,
   )
-  TPU_V5P_MLPERF_CLUSTER = XpkClusterConfig(
+  TPU_V5P_MLPERF_CLUSTER = GkeClusterConfig(
       name="mlperf-v5p",
       device_version=TpuVersion.V5P,
       core_count=8,
       project=Project.CLOUD_TPU_MULTIPOD_DEV.value,
-      zone=Zone.EUROPE_WEST4_B.value,
+      zone=Region.EUROPE_WEST4.value,
       namespace="automation-testing",
+      queue="default",
   )
-  TPU_V5E_256_CLUSTER = XpkClusterConfig(
+  TPU_V5E_256_CLUSTER = GkeClusterConfig(
       name="v5e-256-bodaborg-europe-west4",
       device_version=TpuVersion.V5E,
       core_count=256,
       project=Project.TPU_PROD_ENV_MULTIPOD.value,
       zone=Zone.EUROPE_WEST4_B.value,
   )
-  TPU_V6E_8_CLUSTER = XpkClusterConfig(
+  TPU_V6E_8_CLUSTER = GkeClusterConfig(
       name="bodaborg-v6e-8-yucmhab-c",
       device_version=TpuVersion.TRILLIUM,
       core_count=8,
       project=Project.TPU_PROD_ENV_ONE_VM.value,
       zone=Zone.US_EAST5_B.value,
   )
-  TPU_V6E_256_MLPERF_CLUSTER = XpkClusterConfig(
+  TPU_V6E_256_MLPERF_CLUSTER = GkeClusterConfig(
       name="bodaborg-v6e-256-lcscld-c",
       device_version=TpuVersion.TRILLIUM,
       core_count=256,
       project=Project.TPU_PROD_ENV_ONE_VM.value,
       zone=Zone.SOUTHAMERICA_WEST1_A.value,
   )
-  TPU_V6E_16_IN_MEM_CLUSTER = XpkClusterConfig(
+  TPU_V6E_16_IN_MEM_CLUSTER = GkeClusterConfig(
       name="in-mem-airflow-v6e-16",
       device_version=TpuVersion.TRILLIUM,
       core_count=16,
       project=Project.TPU_PROD_ENV_ONE_VM.value,
       zone=Zone.US_EAST5_C.value,
   )
-  GPU_A3_CLUSTER = XpkClusterConfig(
+  GPU_A3_CLUSTER = GkeClusterConfig(
       name="ninacai-maxtext-a3",
       device_version=GpuVersion.XPK_H100,
       core_count=8,
       project=Project.SUPERCOMPUTER_TESTING.value,
       zone=Zone.US_EAST5_A.value,
   )
-  GPU_A3PLUS_CLUSTER = XpkClusterConfig(
+  GPU_A3PLUS_CLUSTER = GkeClusterConfig(
       name="a3plus-benchmark",
       device_version=GpuVersion.XPK_H100_MEGA,
       core_count=8,
       project=Project.SUPERCOMPUTER_TESTING.value,
       zone=Zone.US_EAST5_A.value,
   )
-  CPU_M1_MEGAMEM_96_CLUSTER = XpkClusterConfig(
+  CPU_M1_MEGAMEM_96_CLUSTER = GkeClusterConfig(
       name="m1-megamem-96-shared",
       device_version=CpuVersion.M1_MEGAMEM,
       core_count=96,
       project=Project.TPU_PROD_ENV_MULTIPOD.value,
       zone=Zone.US_CENTRAL1_B.value,
   )
-  CPU_N2_STANDARD_64_CLUSTER = XpkClusterConfig(
+  CPU_N2_STANDARD_64_CLUSTER = GkeClusterConfig(
       name="shared-n2-standard-64",
       device_version=CpuVersion.N2_STANDARD,
       core_count=64,
@@ -393,7 +394,8 @@ class DockerImage(enum.Enum):
       f"{datetime.datetime.today().strftime('%Y-%m-%d')}"
   )
   CLOUD_HYBRIDSIM_NIGHTLY = (
-      "us-docker.pkg.dev/cloud-tpu-v2-images-dev/hybridsim/cloud_hybridsim_gcloud_python:"
+      "us-docker.pkg.dev/cloud-tpu-v2-images-dev/hybridsim/"
+      "cloud_hybridsim_gcloud_python:"
       f"{datetime.datetime.today().strftime('%Y-%m-%d')}"
   )
   MICROBENCH_NIGHTLY = (

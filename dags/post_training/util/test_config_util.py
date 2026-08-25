@@ -5,7 +5,7 @@ from enum import Enum
 
 from dags import gcs_bucket
 from dags.common.vm_resource import (
-    XpkClusters,
+    GkeClusters,
     DockerImage,
     Project,
     Region,
@@ -80,7 +80,7 @@ class RLTestConfig:
         (relative to MaxText root).
   """
 
-  cluster: XpkClusters
+  cluster: GkeClusters
   accelerator: str
   slices: list[int]
   model_name: str
@@ -92,7 +92,7 @@ class RLTestConfig:
 
   def __init__(
       self,
-      cluster: XpkClusters,
+      cluster: GkeClusters,
       accelerator: str,
       slices: list[int],
       model_name: str,
@@ -206,7 +206,7 @@ class SFTTestConfig:
       MaxText root).
   """
 
-  cluster: XpkClusters
+  cluster: GkeClusters
   accelerator: str
   slices: list[int]
   model_name: str
@@ -219,7 +219,7 @@ class SFTTestConfig:
 
   def __init__(
       self,
-      cluster: XpkClusters,
+      cluster: GkeClusters,
       accelerator: str,
       slices: list[int],
       model_name: str,

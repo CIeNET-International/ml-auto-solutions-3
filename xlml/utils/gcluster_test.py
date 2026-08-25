@@ -1,0 +1,719 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Unit tests for gcluster.py and shared GKE sensor helpers."""
+
+import unittest
+from unittest import mock
+
+from airflow.exceptions import AirflowFailException
+from dags.common.vm_resource import GpuVersion
+import kubernetes
+from xlml.utils import gcluster, gke
+
+
+class GclusterTest(unittest.TestCase):
+
+  def test_get_gcluster_setup_cmd(self):
+    """Generates bundle download and environment setup shell commands."""
+    cmds = gcluster.get_gcluster_setup_cmd("/tmp/test_dir", "v1.101.0")
+    self.assertEqual(len(cmds), 2)
+    self.assertEqual(
+        cmds[0], "set -xueo pipefail; export PATH=/tmp/test_dir/bin:$PATH"
+    )
+    self.assertIn("mkdir -p /tmp/test_dir/bin", cmds[1])
+    self.assertIn(
+        "cluster-toolkit/releases/download/v1.101.0/"
+        "gcluster_bundle_linux_amd64.tgz",
+        cmds[1],
+    )
+    self.assertIn("curl -fsSL", cmds[1])
+    self.assertIn("chmod +x /tmp/test_dir/bin/gcluster", cmds[1])
+
+  def test_is_valid_gpu_version(self):
+    """Validates GPU accelerator types against supported models."""
+    self.assertTrue(gcluster.is_valid_gpu_version(GpuVersion.H100.value))
+    self.assertTrue(
+        gcluster.is_valid_gpu_version(GpuVersion.XPK_H100_MEGA.value)
+    )
+    self.assertTrue(gcluster.is_valid_gpu_version(GpuVersion.L4.value))
+    self.assertFalse(gcluster.is_valid_gpu_version("v4-8"))
+    self.assertFalse(gcluster.is_valid_gpu_version("v5e-16"))
+
+  @mock.patch("uuid.uuid4")
+  def test_generate_workload_id_deterministic(self, mock_uuid):
+    """Generates sanitized, lowercase, RFC 1123-compliant workload IDs."""
+    fake_uuid = mock.MagicMock()
+    fake_uuid.hex = "abcdef123456"
+    mock_uuid.return_value = fake_uuid
+
+    res = gcluster.generate_workload_id.function("MaxText-TPU-Pre-Train-1")
+    self.assertEqual(res, "maxtext-tpu-pre-tra-abcde")
+    self.assertLessEqual(len(res), 28)
+
+    res = gcluster.generate_workload_id.function("test@#$_bench!*")
+    self.assertEqual(res, "test-bench-abcde")
+
+    res_empty = gcluster.generate_workload_id.function("")
+    self.assertEqual(res_empty, "job-abcde")
+
+    res_symbols = gcluster.generate_workload_id.function("!@#$%^&*")
+    self.assertEqual(res_symbols, "job-abcde")
+
+  @mock.patch("xlml.utils.composer.log_metadata_for_xlml_dashboard")
+  @mock.patch("xlml.utils.gcluster.SubprocessHook")
+  def test_run_workload_tpu(self, mock_hook_cls, mock_log_meta):
+    """Formats 'gcluster job submit' command with TPU slice parameters."""
+    mock_hook = mock.MagicMock()
+    mock_result = mock.MagicMock()
+    mock_result.exit_code = 0
+    mock_hook.run_command.return_value = mock_result
+    mock_hook_cls.return_value = mock_hook
+
+    gcluster.run_workload.function(
+        task_id="run_workload",
+        cluster_project="test-project",
+        zone="us-central1-a",
+        cluster_name="test-cluster",
+        benchmark_id="test-bench",
+        workload_id="test-workload-12345",
+        gcs_path="gs://test-bucket/output",
+        docker_image="us-docker.pkg.dev/img:latest",
+        accelerator_type="v4-8",
+        run_cmds="bash run.sh",
+        num_slices=1,
+        priority="very-high",
+        namespace="automation-testing",
+        mounts=["/dev/shm;/dev/shm;rw", "/local/path;/container/path;ro"],
+    )
+
+    mock_log_meta.assert_called_once()
+    mock_hook.run_command.assert_called_once()
+    cmd_args = mock_hook.run_command.call_args[0][0]
+    kwargs = mock_hook.run_command.call_args[1]
+    full_cmd = cmd_args[2]
+
+    self.assertIn("job submit", full_cmd)
+    self.assertIn("--cluster=test-cluster", full_cmd)
+    self.assertIn("--location=us-central1-a", full_cmd)
+    self.assertIn("--project=test-project", full_cmd)
+    self.assertIn("--name=test-workload-12345", full_cmd)
+    self.assertIn("--compute-type=v4-8", full_cmd)
+    self.assertIn("--image=us-docker.pkg.dev/img:latest", full_cmd)
+    self.assertIn("--num-slices=1", full_cmd)
+    self.assertNotIn("--num-nodes", full_cmd)
+    self.assertIn("--priority=very-high", full_cmd)
+    self.assertIn("--env GCS_OUTPUT=gs://test-bucket/output", full_cmd)
+    self.assertIn("--download-dependencies", full_cmd)
+    self.assertIn("--queue=default", full_cmd)
+    self.assertIn("--mount='/dev/shm;/dev/shm;rw'", full_cmd)
+    self.assertIn("--mount='/local/path;/container/path;ro'", full_cmd)
+    self.assertIn(
+        "kubectl config set-context --current --namespace=automation-testing",
+        full_cmd,
+    )
+    self.assertIn("KUBECONFIG", kwargs["env"])
+
+  @mock.patch("xlml.utils.composer.log_metadata_for_xlml_dashboard")
+  @mock.patch("xlml.utils.gcluster.SubprocessHook")
+  def test_run_workload_gpu_and_mtc_and_restarts(
+      self, mock_hook_cls, mock_log_meta
+  ):
+    """Formats GPU parameters, MTC ramdisk flags, and restart policy."""
+    mock_hook = mock.MagicMock()
+    mock_result = mock.MagicMock()
+    mock_result.exit_code = 0
+    mock_hook.run_command.return_value = mock_result
+    mock_hook_cls.return_value = mock_hook
+
+    gcluster.run_workload.function(
+        task_id="run_workload",
+        cluster_project="test-project",
+        zone="us-central1-a",
+        cluster_name="test-cluster",
+        benchmark_id="test-bench",
+        workload_id="test-workload-12345",
+        gcs_path="gs://test-bucket/output",
+        docker_image="us-docker.pkg.dev/img:latest",
+        accelerator_type=GpuVersion.XPK_H100_MEGA.value,
+        run_cmds="python3 -c \"print('hello')\"",
+        num_slices=2,
+        ramdisk_directory="/dev/shm/ramdisk",
+        mtc_enabled=True,
+        max_restart=5,
+        mounts="/dev/shm;/dev/shm;rw",
+    )
+
+    mock_log_meta.assert_called_once()
+    full_cmd = mock_hook.run_command.call_args[0][0][2]
+    self.assertIn("--num-nodes=2", full_cmd)
+    self.assertNotIn("--num-slices", full_cmd)
+    self.assertIn("--gke-mtc-ramdisk-dir=/dev/shm/ramdisk", full_cmd)
+    self.assertIn("--gke-mtc-enabled", full_cmd)
+    self.assertIn("--restarts=5", full_cmd)
+    self.assertIn("--gke-scheduler=gke.io/topology-aware-auto", full_cmd)
+    self.assertIn("--mount='/dev/shm;/dev/shm;rw'", full_cmd)
+
+  @mock.patch("xlml.utils.composer.log_metadata_for_xlml_dashboard")
+  @mock.patch("xlml.utils.gcluster.SubprocessHook")
+  def test_run_workload_pathways_and_tensorboard(
+      self, mock_hook_cls, mock_log_meta
+  ):
+    """Formats Pathways and Vertex TensorBoard CLI flags."""
+    mock_hook = mock.MagicMock()
+    mock_result = mock.MagicMock()
+    mock_result.exit_code = 0
+    mock_hook.run_command.return_value = mock_result
+    mock_hook_cls.return_value = mock_hook
+
+    gcluster.run_workload.function(
+        task_id="run_workload",
+        cluster_project="test-project",
+        zone="us-central1-a",
+        cluster_name="test-cluster",
+        benchmark_id="test-bench",
+        workload_id="test-workload-12345",
+        gcs_path="gs://test-bucket/output",
+        docker_image="us-docker.pkg.dev/img:latest",
+        accelerator_type="v4-8",
+        run_cmds="bash run.sh",
+        use_pathways=True,
+        use_vertex_tensorboard=True,
+    )
+
+    mock_log_meta.assert_called_once()
+    full_cmd = mock_hook.run_command.call_args[0][0][2]
+    self.assertIn("--use-pathways", full_cmd)
+    self.assertIn("--use-vertex-tensorboard", full_cmd)
+
+  @mock.patch("xlml.utils.gcluster.SubprocessHook")
+  def test_run_workload_failure_raises_assertion_error(self, mock_hook_cls):
+    """Raises AssertionError when gcluster job submit command exits non-zero."""
+    mock_hook = mock.MagicMock()
+    mock_result = mock.MagicMock()
+    mock_result.exit_code = 1
+    mock_hook.run_command.return_value = mock_result
+    mock_hook_cls.return_value = mock_hook
+
+    with self.assertRaises(AssertionError):
+      gcluster.run_workload.function(
+          task_id="run_workload",
+          cluster_project="test-project",
+          zone="us-central1-a",
+          cluster_name="test-cluster",
+          benchmark_id="test-bench",
+          workload_id="test-workload-12345",
+          gcs_path="gs://test-bucket/output",
+          docker_image="us-docker.pkg.dev/img:latest",
+          accelerator_type="v4-8",
+          run_cmds="bash run.sh",
+      )
+
+  @mock.patch("xlml.utils.gcluster.SubprocessHook")
+  def test_clean_up_workload_success(self, mock_hook_cls):
+    """Issues 'gcluster job cancel' with cluster and namespace flags."""
+    mock_hook = mock.MagicMock()
+    mock_result = mock.MagicMock()
+    mock_result.exit_code = 0
+    mock_hook.run_command.return_value = mock_result
+    mock_hook_cls.return_value = mock_hook
+
+    gcluster.clean_up_workload.function(
+        workload_id="test-workload",
+        project_id="test-project",
+        zone="us-central1-a",
+        cluster_name="test-cluster",
+        gcluster_version="v1.101.0",
+        namespace="automation-testing",
+    )
+
+    cmd_args = mock_hook.run_command.call_args[0][0]
+    full_cmd = cmd_args[2]
+    self.assertIn("job cancel test-workload", full_cmd)
+    self.assertIn("--cluster=test-cluster", full_cmd)
+    self.assertIn("--location=us-central1-a", full_cmd)
+    self.assertIn("--project=test-project", full_cmd)
+    self.assertIn("--gke-namespace=automation-testing", full_cmd)
+    self.assertIn(
+        "kubectl config set-context --current --namespace=automation-testing",
+        full_cmd,
+    )
+
+  @mock.patch("xlml.utils.gcluster.SubprocessHook")
+  def test_clean_up_workload_failure_raises_assertion_error(
+      self, mock_hook_cls
+  ):
+    """Raises AssertionError when gcluster job cancel exits non-zero."""
+    mock_hook = mock.MagicMock()
+    mock_result = mock.MagicMock()
+    mock_result.exit_code = 1
+    mock_hook.run_command.return_value = mock_result
+    mock_hook_cls.return_value = mock_hook
+
+    with self.assertRaises(AssertionError):
+      gcluster.clean_up_workload.function(
+          workload_id="test-workload",
+          project_id="test-project",
+          zone="us-central1-a",
+          cluster_name="test-cluster",
+      )
+
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_wait_for_workload_start_all_running(
+      self, mock_get_client, mock_list_pods
+  ):
+    """Returns True when all workload pods are in Running phase."""
+    mock_pod = mock.MagicMock()
+    mock_pod.metadata.name = "test-workload-0"
+    mock_pod.status.phase = "Running"
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = [mock_pod]
+    mock_list_pods.return_value = mock_pod_list
+
+    started = gcluster.wait_for_workload_start.function(
+        workload_id="test-workload",
+        project_id="test-project",
+        region="us-central1",
+        cluster_name="test-cluster",
+    )
+    mock_get_client.assert_called_once()
+    self.assertTrue(started)
+
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_wait_for_workload_start_mixed_running_and_pending(
+      self, mock_get_client, mock_list_pods
+  ):
+    """Returns False when at least one pod remains in Pending phase."""
+    mock_pod1 = mock.MagicMock()
+    mock_pod1.metadata.name = "test-workload-0"
+    mock_pod1.status.phase = "Running"
+
+    mock_pod2 = mock.MagicMock()
+    mock_pod2.metadata.name = "test-workload-1"
+    mock_pod2.status.phase = "Pending"
+
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = [mock_pod1, mock_pod2]
+    mock_list_pods.return_value = mock_pod_list
+
+    started = gcluster.wait_for_workload_start.function(
+        workload_id="test-workload",
+        project_id="test-project",
+        region="us-central1",
+        cluster_name="test-cluster",
+    )
+    mock_get_client.assert_called_once()
+    self.assertFalse(started)
+
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_wait_for_workload_start_no_pods(
+      self, mock_get_client, mock_list_pods
+  ):
+    """Returns False when no workload pods have been created yet."""
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = []
+    mock_list_pods.return_value = mock_pod_list
+
+    started = gcluster.wait_for_workload_start.function(
+        workload_id="test-workload",
+        project_id="test-project",
+        region="us-central1",
+        cluster_name="test-cluster",
+    )
+    mock_get_client.assert_called_once()
+    self.assertFalse(started)
+
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_wait_for_workload_start_failed_pod(
+      self, mock_get_client, mock_list_pods
+  ):
+    """Fails fast with AirflowFailException when a pod is in Failed phase."""
+    mock_pod = mock.MagicMock()
+    mock_pod.metadata.name = "test-workload-0"
+    mock_pod.status.phase = "Failed"
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = [mock_pod]
+    mock_list_pods.return_value = mock_pod_list
+
+    with self.assertRaises(AirflowFailException):
+      gcluster.wait_for_workload_start.function(
+          workload_id="test-workload",
+          project_id="test-project",
+          region="us-central1",
+          cluster_name="test-cluster",
+      )
+    mock_get_client.assert_called_once()
+
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_wait_for_workload_completion_succeeded(
+      self, mock_get_client, mock_list_pods
+  ):
+    """Returns True when all workload pods reach Succeeded phase."""
+    mock_pod = mock.MagicMock()
+    mock_pod.metadata.name = "test-workload-0"
+    mock_pod.status.phase = "Succeeded"
+    mock_pod.status.container_statuses = []
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = [mock_pod]
+    mock_list_pods.return_value = mock_pod_list
+
+    completed = gcluster.wait_for_workload_completion.function(
+        workload_id="test-workload",
+        project_id="test-project",
+        region="us-central1",
+        cluster_name="test-cluster",
+    )
+    mock_get_client.assert_called_once()
+    self.assertTrue(completed)
+
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_wait_for_workload_completion_failed_container_exit_code(
+      self, mock_get_client, mock_list_pods
+  ):
+    """Raises AirflowFailException when container has non-zero exit code."""
+    mock_pod = mock.MagicMock()
+    mock_pod.metadata.name = "test-workload-0"
+    mock_pod.status.phase = "Succeeded"
+
+    mock_container = mock.MagicMock()
+    mock_container.name = "main"
+    mock_container.state.terminated.exit_code = 1
+    mock_pod.status.container_statuses = [mock_container]
+
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = [mock_pod]
+    mock_list_pods.return_value = mock_pod_list
+
+    mock_core_api = mock.MagicMock()
+    mock_core_api.read_namespaced_pod_log.return_value = "Error traceback"
+    mock_get_client.return_value = mock_core_api
+
+    with self.assertRaises(AirflowFailException):
+      gcluster.wait_for_workload_completion.function(
+          workload_id="test-workload",
+          project_id="test-project",
+          region="us-central1",
+          cluster_name="test-cluster",
+      )
+    mock_get_client.assert_called_once()
+    mock_core_api.read_namespaced_pod_log.assert_called_once()
+
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_wait_for_workload_completion_still_running(
+      self, mock_get_client, mock_list_pods
+  ):
+    """Returns False while workload pods are still active in Running phase."""
+    mock_pod = mock.MagicMock()
+    mock_pod.metadata.name = "test-workload-0"
+    mock_pod.status.phase = "Running"
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = [mock_pod]
+    mock_list_pods.return_value = mock_pod_list
+
+    completed = gcluster.wait_for_workload_completion.function(
+        workload_id="test-workload",
+        project_id="test-project",
+        region="us-central1",
+        cluster_name="test-cluster",
+    )
+    mock_get_client.assert_called_once()
+    self.assertFalse(completed)
+
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_wait_for_workload_completion_failed(
+      self, mock_get_client, mock_list_pods
+  ):
+    """Raises AirflowFailException when a pod enters Failed phase."""
+    mock_pod = mock.MagicMock()
+    mock_pod.metadata.name = "test-workload-0"
+    mock_pod.status.phase = "Failed"
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = [mock_pod]
+    mock_list_pods.return_value = mock_pod_list
+
+    with self.assertRaises(AirflowFailException):
+      gcluster.wait_for_workload_completion.function(
+          workload_id="test-workload",
+          project_id="test-project",
+          region="us-central1",
+          cluster_name="test-cluster",
+      )
+    mock_get_client.assert_called_once()
+
+  @mock.patch("xlml.utils.gke.get_workload_job")
+  @mock.patch("xlml.utils.gke.get_batch_api_client")
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_wait_for_workload_completion_no_pods_job_completed(
+      self, mock_get_client, mock_list_pods, mock_get_batch, mock_get_job
+  ):
+    """Falls back to batch Job status Complete when pods are cleaned up."""
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = []
+    mock_list_pods.return_value = mock_pod_list
+
+    mock_condition = mock.MagicMock()
+    mock_condition.type = "Complete"
+    mock_condition.status = "True"
+    mock_job = mock.MagicMock()
+    mock_job.status.conditions = [mock_condition]
+    mock_get_job.return_value = mock_job
+
+    completed = gcluster.wait_for_workload_completion.function(
+        workload_id="test-workload",
+        project_id="test-project",
+        region="us-central1",
+        cluster_name="test-cluster",
+    )
+    mock_get_client.assert_called_once()
+    mock_get_batch.assert_called_once()
+    self.assertTrue(completed)
+
+  @mock.patch("xlml.utils.gke.get_workload_job")
+  @mock.patch("xlml.utils.gke.get_batch_api_client")
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_wait_for_workload_completion_no_pods_job_failed(
+      self, mock_get_client, mock_list_pods, mock_get_batch, mock_get_job
+  ):
+    """Raises AirflowFailException on batch Job Failed status fallback."""
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = []
+    mock_list_pods.return_value = mock_pod_list
+
+    mock_condition = mock.MagicMock()
+    mock_condition.type = "Failed"
+    mock_condition.status = "True"
+    mock_job = mock.MagicMock()
+    mock_job.status.conditions = [mock_condition]
+    mock_get_job.return_value = mock_job
+
+    with self.assertRaises(AirflowFailException):
+      gcluster.wait_for_workload_completion.function(
+          workload_id="test-workload",
+          project_id="test-project",
+          region="us-central1",
+          cluster_name="test-cluster",
+      )
+    mock_get_client.assert_called_once()
+    mock_get_batch.assert_called_once()
+
+  @mock.patch("xlml.utils.gke.get_custom_objects_api_client")
+  @mock.patch("xlml.utils.gke.get_workload_job")
+  @mock.patch("xlml.utils.gke.get_batch_api_client")
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_wait_for_workload_completion_no_pods_job_condition_false(
+      self,
+      mock_get_client,
+      mock_list_pods,
+      mock_get_batch,
+      mock_get_job,
+      mock_get_custom,
+  ):
+    """Returns False when Job condition Complete has status False."""
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = []
+    mock_list_pods.return_value = mock_pod_list
+
+    mock_condition = mock.MagicMock()
+    mock_condition.type = "Complete"
+    mock_condition.status = "False"
+    mock_job = mock.MagicMock()
+    mock_job.status.conditions = [mock_condition]
+    mock_get_job.return_value = mock_job
+    mock_custom_api = mock.MagicMock()
+    mock_custom_api.get_namespaced_custom_object.return_value = None
+    mock_get_custom.return_value = mock_custom_api
+
+    completed = gcluster.wait_for_workload_completion.function(
+        workload_id="test-workload",
+        project_id="test-project",
+        region="us-central1",
+        cluster_name="test-cluster",
+    )
+    mock_get_client.assert_called_once()
+    mock_get_batch.assert_called_once()
+    self.assertFalse(completed)
+
+  @mock.patch("xlml.utils.gke.get_workload_jobset")
+  @mock.patch("xlml.utils.gke.get_custom_objects_api_client")
+  @mock.patch("xlml.utils.gke.get_workload_job")
+  @mock.patch("xlml.utils.gke.get_batch_api_client")
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_wait_for_workload_completion_no_pods_jobset_completed(
+      self,
+      mock_get_client,
+      mock_list_pods,
+      mock_get_batch,
+      mock_get_job,
+      mock_get_custom,
+      mock_get_jobset,
+  ):
+    """Falls back to JobSet CRD status Completed when pods are cleaned up."""
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = []
+    mock_list_pods.return_value = mock_pod_list
+    mock_get_job.return_value = None
+
+    mock_jobset = {
+        "status": {"conditions": [{"type": "Completed", "status": "True"}]}
+    }
+    mock_get_jobset.return_value = mock_jobset
+
+    completed = gcluster.wait_for_workload_completion.function(
+        workload_id="test-workload",
+        project_id="test-project",
+        region="us-central1",
+        cluster_name="test-cluster",
+    )
+    mock_get_client.assert_called_once()
+    mock_get_batch.assert_called_once()
+    mock_get_custom.assert_called_once()
+    self.assertTrue(completed)
+
+  @mock.patch("xlml.utils.gke.get_workload_jobset")
+  @mock.patch("xlml.utils.gke.get_custom_objects_api_client")
+  @mock.patch("xlml.utils.gke.get_workload_job")
+  @mock.patch("xlml.utils.gke.get_batch_api_client")
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_wait_for_workload_completion_no_pods_jobset_failed(
+      self,
+      mock_get_client,
+      mock_list_pods,
+      mock_get_batch,
+      mock_get_job,
+      mock_get_custom,
+      mock_get_jobset,
+  ):
+    """Raises AirflowFailException on JobSet CRD status Failed fallback."""
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = []
+    mock_list_pods.return_value = mock_pod_list
+    mock_get_job.return_value = None
+
+    mock_jobset = {
+        "status": {"conditions": [{"type": "Failed", "status": "True"}]}
+    }
+    mock_get_jobset.return_value = mock_jobset
+
+    with self.assertRaises(AirflowFailException):
+      gcluster.wait_for_workload_completion.function(
+          workload_id="test-workload",
+          project_id="test-project",
+          region="us-central1",
+          cluster_name="test-cluster",
+      )
+    mock_get_client.assert_called_once()
+    mock_get_batch.assert_called_once()
+    mock_get_custom.assert_called_once()
+
+  @mock.patch("xlml.utils.gke.get_authenticated_client")
+  @mock.patch("kubernetes.client.CustomObjectsApi")
+  @mock.patch("kubernetes.client.BatchV1Api")
+  @mock.patch("kubernetes.client.CoreV1Api")
+  def test_gke_get_api_clients(
+      self,
+      mock_core_cls,
+      mock_batch_cls,
+      mock_custom_cls,
+      mock_get_auth_client,
+  ):
+    """Initializes and verifies authenticated Kubernetes API clients."""
+    mock_auth_client = mock.MagicMock()
+    mock_get_auth_client.return_value = mock_auth_client
+
+    core_api = gke.get_core_api_client("test-proj", "us-central1", "cluster-1")
+    mock_get_auth_client.assert_called_with(
+        "test-proj", "us-central1", "cluster-1"
+    )
+    mock_core_cls.assert_called_once_with(mock_auth_client)
+    self.assertEqual(core_api, mock_core_cls.return_value)
+
+    batch_api = gke.get_batch_api_client(
+        "test-proj", "us-central1", "cluster-1"
+    )
+    mock_batch_cls.assert_called_once_with(mock_auth_client)
+    self.assertEqual(batch_api, mock_batch_cls.return_value)
+
+    custom_api = gke.get_custom_objects_api_client(
+        "test-proj", "us-central1", "cluster-1"
+    )
+    mock_custom_cls.assert_called_once_with(mock_auth_client)
+    self.assertEqual(custom_api, mock_custom_cls.return_value)
+
+    self.assertEqual(mock_get_auth_client.call_count, 3)
+
+  def test_gke_list_workload_pods_fallback(self):
+    """Lists pods by job-name and falls back to jobset-name selector."""
+    mock_core_api = mock.MagicMock()
+    empty_pods = mock.MagicMock()
+    empty_pods.items = []
+
+    matched_pods = mock.MagicMock()
+    matched_pods.items = [mock.MagicMock()]
+
+    # First call with job-name returns empty, second call returns matched
+    mock_core_api.list_namespaced_pod.side_effect = [empty_pods, matched_pods]
+
+    result = gke.list_workload_pods(
+        mock_core_api, "test-workload", namespace="test-ns"
+    )
+    self.assertEqual(result, matched_pods)
+    self.assertEqual(mock_core_api.list_namespaced_pod.call_count, 2)
+    mock_core_api.list_namespaced_pod.assert_any_call(
+        namespace="test-ns", label_selector="job-name=test-workload"
+    )
+    mock_core_api.list_namespaced_pod.assert_any_call(
+        namespace="test-ns",
+        label_selector="jobset.sigs.k8s.io/jobset-name=test-workload",
+    )
+
+  def test_gke_get_workload_job_fallback(self):
+    """Reads Job by name and falls back to label selector on ApiException."""
+    mock_batch_api = mock.MagicMock()
+    mock_batch_api.read_namespaced_job.side_effect = (
+        kubernetes.client.exceptions.ApiException(status=404)
+    )
+
+    mock_job = mock.MagicMock()
+    mock_job_list = mock.MagicMock()
+    mock_job_list.items = [mock_job]
+    mock_batch_api.list_namespaced_job.return_value = mock_job_list
+
+    result = gke.get_workload_job(
+        mock_batch_api, "test-workload", namespace="test-ns"
+    )
+    self.assertEqual(result, mock_job)
+    mock_batch_api.read_namespaced_job.assert_called_once_with(
+        name="test-workload", namespace="test-ns"
+    )
+    mock_batch_api.list_namespaced_job.assert_called_once_with(
+        label_selector="jobset.sigs.k8s.io/jobset-name=test-workload",
+        namespace="test-ns",
+    )
+
+
+if __name__ == "__main__":
+  unittest.main()

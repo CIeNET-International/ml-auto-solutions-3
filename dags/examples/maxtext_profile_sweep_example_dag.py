@@ -23,7 +23,7 @@ import datetime
 from airflow import models
 from airflow.utils.task_group import TaskGroup
 from dags.common import test_owner
-from dags.common.vm_resource import XpkClusters, Project
+from dags.common.vm_resource import GkeClusters, Project
 from dags.multipod.configs import maxtext_sweep_gke_config as sweep_config
 from xlml.apis import metric_config
 
@@ -46,7 +46,7 @@ docker_image = {
 test_models_tpu = {
     "mixtral_8x7b_dropped": {
         "time_out_in_min": 60,
-        "cluster": XpkClusters.TPU_V6E_256_MLPERF_CLUSTER,
+        "cluster": GkeClusters.TPU_V6E_256_MLPERF_CLUSTER,
         "train_command": [
             f"export BASE_OUTPUT_PATH={BASE_OUTPUT_PATH} && "
             "python3 -m maxtext.trainers.pre_train.train "
@@ -86,7 +86,7 @@ test_models_tpu = {
     },
     "mixtral_8x7b_dropless": {
         "time_out_in_min": 60,
-        "cluster": XpkClusters.TPU_V6E_256_MLPERF_CLUSTER,
+        "cluster": GkeClusters.TPU_V6E_256_MLPERF_CLUSTER,
         "base_output_directory": "gs://runner-maxtext-logs",
         "train_command": [
             f"export BASE_OUTPUT_PATH={BASE_OUTPUT_PATH} && "

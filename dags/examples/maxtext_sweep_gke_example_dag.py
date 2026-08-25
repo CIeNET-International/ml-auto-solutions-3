@@ -21,7 +21,7 @@ on 1xv4-128.
 import datetime
 from airflow import models
 from dags.common import test_owner
-from dags.common.vm_resource import XpkClusters, DockerImage
+from dags.common.vm_resource import GkeClusters, DockerImage
 from dags.multipod.configs import maxtext_sweep_gke_config
 
 # Set concurrency to number of workers otherwise tasks may time out
@@ -50,7 +50,7 @@ with models.DAG(
   maxtext_sweep_gke_test = (
       maxtext_sweep_gke_config.get_maxtext_sweep_gke_config(
           test_owner=test_owner.AIRFLOW,
-          cluster=XpkClusters.TPU_V4_128_CLUSTER,
+          cluster=GkeClusters.TPU_V4_128_CLUSTER,
           time_out_in_min=60,
           base_output_directory=base_output_directory,
           num_slices=[1],

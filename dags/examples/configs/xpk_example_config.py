@@ -16,13 +16,13 @@
 
 import datetime
 from xlml.apis import gcp_config, metric_config, task, test_config
-from xlml.apis.xpk_cluster_config import XpkClusterConfig
+from xlml.apis.gke_cluster_config import GkeClusterConfig
 from dags.common import test_owner
 
 
 def get_flax_resnet_xpk_config(
     test_name: str,
-    cluster: XpkClusterConfig,
+    cluster: GkeClusterConfig,
     docker_image: str,
     time_out_in_min: int,
     num_slices: int = 1,

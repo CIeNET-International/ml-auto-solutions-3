@@ -20,8 +20,8 @@ from airflow import models
 from airflow.utils.task_group import TaskGroup
 from dags import composer_env
 from dags.common import test_owner
-from dags.common.vm_resource import DockerImage, XpkClusters
-from dags.multipod.configs import xpk_gke_config as gke_config
+from dags.common.vm_resource import DockerImage, GkeClusters
+from dags.multipod.configs import gke_config
 
 # Run once a day at 5 am UTC (9 pm PST / 10 pm PDT)
 SCHEDULED_TIME = "45 4 * * *" if composer_env.is_prod_env() else None
@@ -57,7 +57,7 @@ with models.DAG(
       test_name="maxtext-aot-a3-stable",
       run_model_cmds=(cmd,),
       num_slices=1,
-      cluster=XpkClusters.GPU_A3PLUS_CLUSTER,
+      cluster=GkeClusters.GPU_A3PLUS_CLUSTER,
       docker_image=DockerImage.MAXTEXT_GPU_JAX_STABLE.value,
       test_owner=test_owner.NUOJIN_C,
   ).run_with_quarantine(quarantine_task_group)
