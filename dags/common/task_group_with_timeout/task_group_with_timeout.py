@@ -87,15 +87,13 @@ class TaskGroupWithTimeout(TaskGroup):
         python_callable=lambda: datetime.now(timezone.utc).isoformat(),
     )
 
-    for child in list(self.children.values()):
+    children_ids = set(self.children.keys())
+    for child in self.children.values():
       if child is self._root_node:
         continue
-
-      has_ingroup_upstream = any(
-          up in self.children.values() for up in child.upstream_list
-      )
-      if not has_ingroup_upstream:
-        child.set_upstream(self._root_node)
+      if child.upstream_task_ids & children_ids:
+        continue
+      child.set_upstream(self._root_node)
 
   def mark_teardown(self):
     """Marks all operators within this TaskGroup as teardown tasks."""
