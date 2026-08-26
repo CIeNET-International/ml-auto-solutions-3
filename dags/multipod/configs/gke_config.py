@@ -19,7 +19,7 @@ import datetime
 from typing import Any
 
 from dags import gcs_bucket
-from dags.common.vm_resource import GkeClusters, Project, GkeClusters
+from dags.common.vm_resource import GkeClusters, Project
 from xlml.apis import gcp_config, metric_config, task, test_config
 from xlml.apis.gke_cluster_config import GkeClusterConfig
 from xlml.utils import gcluster, xpk
