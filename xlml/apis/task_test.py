@@ -61,31 +61,79 @@ class GclusterTaskTest(unittest.TestCase):
     )
 
   def test_gcluster_config_override(self):
-    """Overrides GkeClusterConfig attributes while preserving defaults."""
+    """Overrides GkeClusterConfig and verifies propagation in GKE factory."""
     cfg = GkeClusters.TPU_V5P_MLPERF_CLUSTER
     self.assertEqual(cfg.core_count, 8)
     self.assertEqual(cfg.namespace, "automation-testing")
 
-    overridden = cfg.override(core_count=64, namespace="custom-ns")
+    overridden = cfg.override(
+        core_count=64, namespace="custom-ns", queue="custom-queue"
+    )
     self.assertEqual(overridden.core_count, 64)
     self.assertEqual(overridden.namespace, "custom-ns")
+    self.assertEqual(overridden.queue, "custom-queue")
     self.assertEqual(overridden.name, cfg.name)
 
-  def test_get_gke_config_gcluster(self):
-    """Constructs a GclusterTask when use_gcluster=True is enabled."""
     gcluster_task_obj = gke_config.get_gke_config(
         time_out_in_min=30,
+        test_name="test-override",
+        run_model_cmds=("echo 'override'",),
+        docker_image="gcr.io/test/image:latest",
+        cluster=overridden,
+        test_owner=test_owner.SURBHI_J,
+        use_gcluster=True,
+    )
+    test_cfg = gcluster_task_obj.runner_config.task_test_config
+    self.assertEqual(test_cfg.accelerator.cores, 64)
+    self.assertEqual(test_cfg.namespace, "custom-ns")
+    self.assertEqual(gcluster_task_obj.runner_config.queue, "custom-queue")
+
+  def test_get_gke_config_gcluster(self):
+    """Constructs a GclusterTask forwarding all configuration parameters."""
+    gcluster_task_obj = gke_config.get_gke_config(
+        time_out_in_min=45,
         test_name="test-gcluster",
         run_model_cmds=("echo 'gcluster'",),
         docker_image="gcr.io/test/image:latest",
         cluster=GkeClusters.TPU_V5P_MLPERF_CLUSTER,
         test_owner=test_owner.SURBHI_J,
+        num_slices=2,
+        priority="very-high",
+        max_restart=3,
+        ramdisk_directory="/ramdisk",
+        mtc_enabled=True,
+        use_pathways=True,
+        pathways_gcs_location="gs://custom-bucket/scratch",
+        gcluster_version="v1.102.0",
+        mounts=["/dev/shm;/dev/shm;rw"],
         use_gcluster=True,
     )
     self.assertIsInstance(gcluster_task_obj, task.GclusterTask)
     self.assertIsInstance(gcluster_task_obj, task.BaseRunnerTask)
-    self.assertIsInstance(
-        gcluster_task_obj.runner_config, task.GclusterRunnerConfig
+    runner_cfg = gcluster_task_obj.runner_config
+    self.assertIsInstance(runner_cfg, task.GclusterRunnerConfig)
+    self.assertEqual(runner_cfg.task_test_config.num_slices, 2)
+    self.assertEqual(runner_cfg.priority, "very-high")
+    self.assertEqual(runner_cfg.max_restart, 3)
+    self.assertEqual(runner_cfg.ramdisk_directory, "/ramdisk")
+    self.assertTrue(runner_cfg.mtc_enabled)
+    self.assertTrue(runner_cfg.use_pathways)
+    self.assertEqual(
+        runner_cfg.pathways_gcs_location, "gs://custom-bucket/scratch"
+    )
+    self.assertEqual(runner_cfg.gcluster_version, "v1.102.0")
+    self.assertEqual(runner_cfg.mounts, ["/dev/shm;/dev/shm;rw"])
+    self.assertEqual(
+        runner_cfg.task_gcp_config.project_name,
+        GkeClusters.TPU_V5P_MLPERF_CLUSTER.project,
+    )
+    self.assertEqual(
+        runner_cfg.task_gcp_config.zone,
+        GkeClusters.TPU_V5P_MLPERF_CLUSTER.zone,
+    )
+    self.assertEqual(
+        runner_cfg.task_test_config.timeout,
+        datetime.timedelta(minutes=45),
     )
 
   def test_get_gke_config_with_name_gen_and_quarantine_gcluster(self):
@@ -136,7 +184,7 @@ class GclusterTaskTest(unittest.TestCase):
     self.assertIsInstance(xpk_task_obj.runner_config, task.XpkRunnerConfig)
 
   def test_gcluster_task_run_structure(self):
-    """Generates TaskGroup containing run, monitor, and cleanup tasks."""
+    """Builds gcluster lifecycle tasks and verifies operator dependencies."""
     runner_cfg = task.GclusterRunnerConfig(
         task_test_config=self.test_cfg,
         task_gcp_config=self.gcp_cfg,
@@ -153,37 +201,50 @@ class GclusterTaskTest(unittest.TestCase):
     self.assertEqual(tg.group_id, self.test_cfg.benchmark_id)
 
     b_id = self.test_cfg.benchmark_id
-    expected_task_ids = {
-        f"{b_id}.pre_process.generate_workload_id",
-        f"{b_id}.run_model.dummy_op_for_teardown",
-        f"{b_id}.run_model.launch_workload.run_workload",
-        f"{b_id}.run_model.launch_workload.wait_for_workload_start",
-        f"{b_id}.run_model.wait_for_workload_completion",
-        f"{b_id}.run_model.clean_up_workload",
-    }
-    actual_task_ids = {t.task_id for t in self.test_dag.tasks}
-    self.assertTrue(
-        expected_task_ids.issubset(actual_task_ids),
-        f"Missing expected tasks: {expected_task_ids - actual_task_ids}",
+    prep_op = self.test_dag.get_task(f"{b_id}.pre_process.generate_workload_id")
+    dummy_op = self.test_dag.get_task(f"{b_id}.run_model.dummy_op_for_teardown")
+    run_op = self.test_dag.get_task(
+        f"{b_id}.run_model.launch_workload.run_workload"
     )
+    wait_start_op = self.test_dag.get_task(
+        f"{b_id}.run_model.launch_workload.wait_for_workload_start"
+    )
+    wait_comp_op = self.test_dag.get_task(
+        f"{b_id}.run_model.wait_for_workload_completion"
+    )
+    clean_op = self.test_dag.get_task(f"{b_id}.run_model.clean_up_workload")
 
-    cleanup_task = self.test_dag.get_task(f"{b_id}.run_model.clean_up_workload")
-    self.assertEqual(cleanup_task.trigger_rule, "all_done_setup_success")
+    self.assertIn(dummy_op, prep_op.downstream_list)
+    self.assertIn(run_op, dummy_op.downstream_list)
+    self.assertIn(wait_start_op, run_op.downstream_list)
+    self.assertIn(wait_comp_op, wait_start_op.downstream_list)
+    self.assertIn(clean_op, wait_comp_op.downstream_list)
+    self.assertTrue(clean_op.is_teardown)
+    self.assertEqual(clean_op.trigger_rule, "all_done_setup_success")
 
-  def test_gcluster_task_with_mounts(self):
-    """Passes volume mounts to GclusterRunnerConfig and task execution."""
+  @mock.patch("xlml.utils.gcluster.run_workload")
+  def test_gcluster_task_with_mounts(self, mock_run_workload):
+    """Passes volume mounts with precedence over test config mounts."""
+    mock_op = mock.MagicMock()
+    mock_run_workload.override.return_value = mock_op
+
     runner_cfg = task.GclusterRunnerConfig(
         task_test_config=self.test_cfg,
         task_gcp_config=self.gcp_cfg,
         mounts=["/dev/shm;/dev/shm;rw"],
     )
-    gcluster_task = task.GclusterTask(runner_config=runner_cfg)
+    runner = task.GclusterRunner(
+        configs=runner_cfg,
+        workload_id="test-wl-1",
+        gcs_path="gs://test-bucket/out",
+    )
     with self.test_dag:
-      tg = gcluster_task.run(
-          skip_post_process=True,
-      )
-    self.assertIsNotNone(tg)
+      runner.launch_workload()
     self.assertEqual(runner_cfg.mounts, ["/dev/shm;/dev/shm;rw"])
+    self.assertEqual(
+        mock_op.call_args.kwargs.get("mounts"),
+        ["/dev/shm;/dev/shm;rw"],
+    )
 
   def test_gcluster_name_gen_and_quarantine_task(self):
     """Injects dynamic run name generator without mutating input configs."""
@@ -201,20 +262,22 @@ class GclusterTaskTest(unittest.TestCase):
         priority="very-high",
         mounts="/dev/shm;/dev/shm;rw",
     )
-    original_cmds = self.test_cfg.run_model_cmds
+    original_cmds = list(self.test_cfg.run_model_cmds)
     namegen_task = task.GclusterNameGenAndQuarantineTask(
         runner_config=runner_cfg,
     )
     with self.test_dag:
       tg = namegen_task.run(
-          skip_post_process=True,
+          skip_post_process=False,
       )
 
     self.assertIsNotNone(tg)
     task_ids = [t.task_id for t in self.test_dag.tasks]
     self.assertTrue(any("generate_run_name" in tid for tid in task_ids))
+    self.assertTrue(any("generate_tb_file_location" in tid for tid in task_ids))
+    self.assertTrue(any("post_process" in tid for tid in task_ids))
     # Assert configs remain unmutated
-    self.assertEqual(self.test_cfg.run_model_cmds, original_cmds)
+    self.assertEqual(self.test_cfg.run_model_cmds, tuple(original_cmds))
     self.assertEqual(runner_cfg.priority, "very-high")
 
   @mock.patch.object(QuarantineTests, "is_quarantined", return_value=True)

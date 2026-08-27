@@ -71,6 +71,17 @@ class GclusterTest(unittest.TestCase):
     res_symbols = gcluster.generate_workload_id.function("!@#$%^&*")
     self.assertEqual(res_symbols, "job-abcde")
 
+  @mock.patch("uuid.uuid4")
+  def test_generate_workload_id_trailing_hyphen_truncation(self, mock_uuid):
+    """Removes trailing hyphens produced at the 19-char truncation boundary."""
+    fake_uuid = mock.MagicMock()
+    fake_uuid.hex = "1234567890ab"
+    mock_uuid.return_value = fake_uuid
+
+    res = gcluster.generate_workload_id.function("my-long-test-names-extra")
+    self.assertEqual(res, "my-long-test-names-12345")
+    self.assertFalse(res.startswith("my-long-test-names--"))
+
   @mock.patch("xlml.utils.composer.log_metadata_for_xlml_dashboard")
   @mock.patch("xlml.utils.gcluster.SubprocessHook")
   def test_run_workload_tpu(self, mock_hook_cls, mock_log_meta):
@@ -194,8 +205,78 @@ class GclusterTest(unittest.TestCase):
 
     mock_log_meta.assert_called_once()
     full_cmd = mock_hook.run_command.call_args[0][0][2]
-    self.assertIn("--use-pathways", full_cmd)
+    self.assertIn("--pathways", full_cmd)
+    self.assertIn(
+        "--pathways-gcs-location=gs://test-bucket/output/pathways", full_cmd
+    )
+    self.assertNotIn("--use-pathways", full_cmd)
     self.assertIn("--use-vertex-tensorboard", full_cmd)
+
+  @mock.patch("xlml.utils.composer.log_metadata_for_xlml_dashboard")
+  @mock.patch("xlml.utils.gcluster.SubprocessHook")
+  def test_run_workload_custom_pathways_gcs_location(
+      self, mock_hook_cls, mock_log_meta
+  ):
+    """Passes user-specified custom pathways GCS location."""
+    mock_hook = mock.MagicMock()
+    mock_result = mock.MagicMock()
+    mock_result.exit_code = 0
+    mock_hook.run_command.return_value = mock_result
+    mock_hook_cls.return_value = mock_hook
+
+    gcluster.run_workload.function(
+        task_id="run_workload",
+        cluster_project="test-project",
+        zone="us-central1-a",
+        cluster_name="test-cluster",
+        benchmark_id="test-bench",
+        workload_id="test-workload-12345",
+        gcs_path="gs://test-bucket/output",
+        docker_image="us-docker.pkg.dev/img:latest",
+        accelerator_type="v4-8",
+        run_cmds="bash run.sh",
+        use_pathways=True,
+        pathways_gcs_location="gs://custom-bucket/scratch",
+    )
+
+    mock_log_meta.assert_called_once()
+    full_cmd = mock_hook.run_command.call_args[0][0][2]
+    self.assertIn("--pathways", full_cmd)
+    self.assertIn(
+        "--pathways-gcs-location=gs://custom-bucket/scratch", full_cmd
+    )
+
+  @mock.patch("xlml.utils.composer.log_metadata_for_xlml_dashboard")
+  @mock.patch("xlml.utils.gcluster.SubprocessHook")
+  def test_run_workload_omits_optional_arguments(
+      self, mock_hook_cls, mock_log_meta
+  ):
+    """Omits --queue and --mount when not specified."""
+    mock_hook = mock.MagicMock()
+    mock_result = mock.MagicMock()
+    mock_result.exit_code = 0
+    mock_hook.run_command.return_value = mock_result
+    mock_hook_cls.return_value = mock_hook
+
+    gcluster.run_workload.function(
+        task_id="run_workload",
+        cluster_project="test-project",
+        zone="us-central1-a",
+        cluster_name="test-cluster",
+        benchmark_id="test-bench",
+        workload_id="test-workload-12345",
+        gcs_path="gs://test-bucket/output",
+        docker_image="us-docker.pkg.dev/img:latest",
+        accelerator_type="v4-8",
+        run_cmds="bash run.sh",
+        queue="",
+        namespace="default",
+        mounts=None,
+    )
+    mock_log_meta.assert_called_once()
+    full_cmd = mock_hook.run_command.call_args[0][0][2]
+    self.assertNotIn("--queue", full_cmd)
+    self.assertNotIn("--mount", full_cmd)
 
   @mock.patch("xlml.utils.gcluster.SubprocessHook")
   def test_run_workload_failure_raises_assertion_error(self, mock_hook_cls):
@@ -244,7 +325,7 @@ class GclusterTest(unittest.TestCase):
     self.assertIn("--cluster=test-cluster", full_cmd)
     self.assertIn("--location=us-central1-a", full_cmd)
     self.assertIn("--project=test-project", full_cmd)
-    self.assertIn("--gke-namespace=automation-testing", full_cmd)
+    self.assertNotIn("--gke-namespace", full_cmd)
     self.assertIn(
         "kubectl config set-context --current --namespace=automation-testing",
         full_cmd,
@@ -628,6 +709,48 @@ class GclusterTest(unittest.TestCase):
     mock_get_client.assert_called_once()
     mock_get_batch.assert_called_once()
     mock_get_custom.assert_called_once()
+
+  @mock.patch("xlml.utils.gke.get_workload_jobset")
+  @mock.patch("xlml.utils.gke.get_custom_objects_api_client")
+  @mock.patch("xlml.utils.gke.get_workload_job")
+  @mock.patch("xlml.utils.gke.get_batch_api_client")
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_wait_for_workload_completion_no_pods_jobset_status_false(
+      self,
+      mock_get_client,
+      mock_list_pods,
+      mock_get_batch,
+      mock_get_job,
+      mock_get_custom,
+      mock_get_jobset,
+  ):
+    """Returns False when JobSet conditions have status False."""
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = []
+    mock_list_pods.return_value = mock_pod_list
+    mock_get_job.return_value = None
+
+    mock_jobset = {
+        "status": {
+            "conditions": [
+                {"type": "Completed", "status": "False"},
+                {"type": "Failed", "status": "False"},
+            ]
+        }
+    }
+    mock_get_jobset.return_value = mock_jobset
+
+    completed = gcluster.wait_for_workload_completion.function(
+        workload_id="test-workload",
+        project_id="test-project",
+        region="us-central1",
+        cluster_name="test-cluster",
+    )
+    mock_get_client.assert_called_once()
+    mock_get_batch.assert_called_once()
+    mock_get_custom.assert_called_once()
+    self.assertFalse(completed)
 
   @mock.patch("xlml.utils.gke.get_authenticated_client")
   @mock.patch("kubernetes.client.CustomObjectsApi")

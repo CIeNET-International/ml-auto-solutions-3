@@ -94,6 +94,7 @@ def run_workload(
     num_slices: int = 1,
     use_vertex_tensorboard: bool = False,
     use_pathways: bool = False,
+    pathways_gcs_location: str = "",
     ramdisk_directory: str = "",
     mtc_enabled: bool = False,
     gcluster_version: str = DEFAULT_GCLUSTER_VERSION,
@@ -140,12 +141,12 @@ def run_workload(
         "--download-dependencies",
     ]
 
-    if namespace and namespace != "default":
-      args.append(f"--gke-namespace={namespace}")
     if queue:
       args.append(f"--queue={queue}")
     if use_pathways:
-      args.append("--use-pathways")
+      args.append("--pathways")
+      location = pathways_gcs_location or f"{gcs_path}/pathways"
+      args.append(f"--pathways-gcs-location={location}")
     if use_vertex_tensorboard:
       args.append("--use-vertex-tensorboard")
     if ramdisk_directory:
@@ -371,8 +372,6 @@ def clean_up_workload(
         f" --project={project_id}"
         " --download-dependencies"
     )
-    if namespace and namespace != "default":
-      workload_delete_cmd += f" --gke-namespace={namespace}"
 
     get_credentials_cmd = (
         f"gcloud container clusters get-credentials {cluster_name}"

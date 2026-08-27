@@ -355,6 +355,7 @@ class RunnerConfig:
   ramdisk_directory: str = ""
   mtc_enabled: bool = False
   use_pathways: bool = False
+  pathways_gcs_location: str = ""
 
 
 @dataclasses.dataclass
@@ -568,6 +569,7 @@ class GclusterRunner(Runner):
           num_slices=self.configs.task_test_config.num_slices,
           use_vertex_tensorboard=use_vertex_tensorboard,
           use_pathways=self.configs.use_pathways,
+          pathways_gcs_location=self.configs.pathways_gcs_location,
           ramdisk_directory=self.configs.ramdisk_directory,
           mtc_enabled=self.configs.mtc_enabled,
           gcluster_version=self.configs.gcluster_version,

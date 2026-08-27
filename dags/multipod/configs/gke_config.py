@@ -46,6 +46,7 @@ def get_gke_config(
     ramdisk_directory: str = "",
     mtc_enabled: bool = False,
     use_pathways: bool = False,
+    pathways_gcs_location: str = "",
     gcluster_version: str = gcluster.DEFAULT_GCLUSTER_VERSION,
     mounts: str | Iterable[str] | None = None,
     xpk_branch: str = xpk.MAIN_BRANCH,
@@ -101,6 +102,7 @@ def get_gke_config(
         ramdisk_directory=ramdisk_directory,
         mtc_enabled=mtc_enabled,
         use_pathways=use_pathways,
+        pathways_gcs_location=pathways_gcs_location,
         mounts=mounts,
         queue=cluster.queue,
     )
@@ -118,6 +120,7 @@ def get_gke_config(
       ramdisk_directory=ramdisk_directory,
       mtc_enabled=mtc_enabled,
       use_pathways=use_pathways,
+      pathways_gcs_location=pathways_gcs_location,
   )
   return task.XpkTask(
       runner_config=runner_config,
@@ -149,6 +152,7 @@ def get_gke_config_with_interrupt(
     ramdisk_directory: str = "",
     mtc_enabled: bool = False,
     use_pathways: bool = False,
+    pathways_gcs_location: str = "",
 ) -> task.XpkNodeInterruptionTask:
   job_gcp_config = gcp_config.GCPConfig(
       project_name=cluster.project,
@@ -197,6 +201,7 @@ def get_gke_config_with_interrupt(
       ramdisk_directory=ramdisk_directory,
       mtc_enabled=mtc_enabled,
       use_pathways=use_pathways,
+      pathways_gcs_location=pathways_gcs_location,
   )
 
   return task.XpkNodeInterruptionTask(
@@ -231,6 +236,7 @@ def get_gke_config_with_name_gen_and_quarantine(
     ramdisk_directory: str = "",
     mtc_enabled: bool = False,
     use_pathways: bool = False,
+    pathways_gcs_location: str = "",
     gcluster_version: str = gcluster.DEFAULT_GCLUSTER_VERSION,
     mounts: str | Iterable[str] | None = None,
     xpk_branch: str = xpk.MAIN_BRANCH,
@@ -286,6 +292,7 @@ def get_gke_config_with_name_gen_and_quarantine(
         ramdisk_directory=ramdisk_directory,
         mtc_enabled=mtc_enabled,
         use_pathways=use_pathways,
+        pathways_gcs_location=pathways_gcs_location,
         mounts=mounts,
         queue=cluster.queue,
     )
@@ -306,6 +313,7 @@ def get_gke_config_with_name_gen_and_quarantine(
       ramdisk_directory=ramdisk_directory,
       mtc_enabled=mtc_enabled,
       use_pathways=use_pathways,
+      pathways_gcs_location=pathways_gcs_location,
   )
   return task.XpkNameGenAndQuarantineTask(
       runner_config=runner_config,
