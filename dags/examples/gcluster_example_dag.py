@@ -37,7 +37,8 @@ with models.DAG(
       test_name="gcluster-example",
       run_model_cmds=test_cmds,
       docker_image=(
-          "gcr.io/tpu-prod-env-multipod/maxtext_post_training_nightly:latest"
+          "gcr.io/tpu-prod-env-multipod/maxtext_post_training_nightly:"
+          "2026-08-24"
       ),
       cluster=GkeClusters.TPU_V5P_MLPERF_CLUSTER,
       test_owner=test_owner.JACKY_F,
