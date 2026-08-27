@@ -21,6 +21,7 @@ from datetime import datetime, timedelta, timezone
 from airflow.exceptions import AirflowFailException
 from airflow.models import BaseOperator
 from airflow.models.mappedoperator import MappedOperator
+from airflow.models.taskinstance import TaskInstance
 from airflow.models.taskmixin import DAGNode
 from airflow.operators.python import PythonOperator
 from airflow.sensors.base import BaseSensorOperator
@@ -174,13 +175,15 @@ class TaskGroupWithTimeout(TaskGroup):
               f"effective timeout: {effective_timeout_sec}s"
           )
 
+          task_retry_delay_sec = _effective_retry_delay_sec(task_instance)
+
           # Group-budget exhaustion is enforced by the `remaining <= 0` check
           # above on the next retry; let AirflowTaskTimeout propagate normally.
           with TaskTimeout(
-              task_retry_delay=task.retry_delay.total_seconds(),
+              task_retry_delay=task_retry_delay_sec,
               group_deadline=deadline,
               group_name=group_name,
-              seconds=int(effective_timeout_sec),
+              seconds=float(effective_timeout_sec),
           ):
             return original_execute(task, context)
 
@@ -213,6 +216,27 @@ def _determine_task_timeout(task: BaseOperator) -> float:
     return min(timeout_1, timeout_2)
 
   return timeout_1
+
+
+def _effective_retry_delay_sec(task_instance: TaskInstance) -> float:
+  """Computes how long Airflow will wait before this task's next retry.
+
+  `task_instance.task.retry_delay` is only the base value; with
+  `retry_exponential_backoff` on, the real wait grows every retry, and
+  nothing on `task`/`task_instance` gives us that number directly. So this
+  borrows `next_retry_datetime()` (`= end_date + delay`) instead: fakes
+  `end_date` as "now", lets Airflow compute the delay, then subtracts that
+  same fake value back out. Nothing gets saved anywhere, so restoring
+  `end_date` to whatever it held before is all that's needed afterward.
+  """
+  original_end_date = task_instance.end_date
+  task_instance.end_date = datetime.now(timezone.utc)
+  try:
+    return (
+        task_instance.next_retry_datetime() - task_instance.end_date
+    ).total_seconds()
+  finally:
+    task_instance.end_date = original_end_date
 
 
 # Signal-based timeout (SIGALRM) isn't available on Windows, so the base
