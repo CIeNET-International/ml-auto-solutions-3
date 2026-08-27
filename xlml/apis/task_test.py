@@ -189,7 +189,7 @@ class GclusterTaskTest(unittest.TestCase):
         task_test_config=self.test_cfg,
         task_gcp_config=self.gcp_cfg,
         priority="high",
-        gcluster_version="v1.101.0",
+        gcluster_version="v1.102.0",
     )
     gcluster_task = task.GclusterTask(runner_config=runner_cfg)
     with self.test_dag:

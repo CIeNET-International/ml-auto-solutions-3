@@ -27,14 +27,14 @@ class GclusterTest(unittest.TestCase):
 
   def test_get_gcluster_setup_cmd(self):
     """Generates bundle download and environment setup shell commands."""
-    cmds = gcluster.get_gcluster_setup_cmd("/tmp/test_dir", "v1.101.0")
+    cmds = gcluster.get_gcluster_setup_cmd("/tmp/test_dir", "v1.102.0")
     self.assertEqual(len(cmds), 2)
     self.assertEqual(
         cmds[0], "set -xueo pipefail; export PATH=/tmp/test_dir/bin:$PATH"
     )
     self.assertIn("mkdir -p /tmp/test_dir/bin", cmds[1])
     self.assertIn(
-        "cluster-toolkit/releases/download/v1.101.0/"
+        "cluster-toolkit/releases/download/v1.102.0/"
         "gcluster_bundle_linux_amd64.tgz",
         cmds[1],
     )
@@ -128,6 +128,7 @@ class GclusterTest(unittest.TestCase):
     self.assertIn("--env GCS_OUTPUT=gs://test-bucket/output", full_cmd)
     self.assertIn("--download-dependencies", full_cmd)
     self.assertIn("--queue=default", full_cmd)
+    self.assertIn("--gke-namespace=automation-testing", full_cmd)
     self.assertIn("--mount='/dev/shm;/dev/shm;rw'", full_cmd)
     self.assertIn("--mount='/local/path;/container/path;ro'", full_cmd)
     self.assertIn(
@@ -276,6 +277,7 @@ class GclusterTest(unittest.TestCase):
     mock_log_meta.assert_called_once()
     full_cmd = mock_hook.run_command.call_args[0][0][2]
     self.assertNotIn("--queue", full_cmd)
+    self.assertNotIn("--gke-namespace", full_cmd)
     self.assertNotIn("--mount", full_cmd)
 
   @mock.patch("xlml.utils.gcluster.SubprocessHook")
@@ -315,7 +317,7 @@ class GclusterTest(unittest.TestCase):
         project_id="test-project",
         zone="us-central1-a",
         cluster_name="test-cluster",
-        gcluster_version="v1.101.0",
+        gcluster_version="v1.102.0",
         namespace="automation-testing",
     )
 
@@ -325,7 +327,7 @@ class GclusterTest(unittest.TestCase):
     self.assertIn("--cluster=test-cluster", full_cmd)
     self.assertIn("--location=us-central1-a", full_cmd)
     self.assertIn("--project=test-project", full_cmd)
-    self.assertNotIn("--gke-namespace", full_cmd)
+    self.assertIn("--gke-namespace=automation-testing", full_cmd)
     self.assertIn(
         "kubectl config set-context --current --namespace=automation-testing",
         full_cmd,

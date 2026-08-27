@@ -29,7 +29,7 @@ from dags.common.vm_resource import GpuVersion
 from kubernetes import client as k8s_client
 from xlml.utils import composer, gke
 
-DEFAULT_GCLUSTER_VERSION = "v1.101.0"
+DEFAULT_GCLUSTER_VERSION = "v1.102.0"
 
 LOGGING_URL_FORMAT = (
     "https://console.cloud.google.com/logs/viewer"
@@ -143,6 +143,8 @@ def run_workload(
 
     if queue:
       args.append(f"--queue={queue}")
+    if namespace and namespace != "default":
+      args.append(f"--gke-namespace={namespace}")
     if use_pathways:
       args.append("--pathways")
       location = pathways_gcs_location or f"{gcs_path}/pathways"
@@ -372,6 +374,8 @@ def clean_up_workload(
         f" --project={project_id}"
         " --download-dependencies"
     )
+    if namespace and namespace != "default":
+      workload_delete_cmd += f" --gke-namespace={namespace}"
 
     get_credentials_cmd = (
         f"gcloud container clusters get-credentials {cluster_name}"
