@@ -28,6 +28,8 @@ from airflow.operators.python import PythonOperator, get_current_context
 from airflow.sensors.base import BaseSensorOperator
 from airflow.utils.context import Context
 from airflow.utils.state import TaskInstanceState
+from airflow.utils.timeout import timeout as AirflowTimeout
+from airflow.exceptions import AirflowTaskTimeout
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
@@ -288,13 +290,7 @@ def _effective_retry_delay_sec(task_instance: TaskInstance) -> float:
     task_instance.end_date = original_end_date
 
 
-# Signal-based timeout (SIGALRM) isn't available on Windows, so the base
-# class is picked once at class-definition time instead of instantiating
-# both and choosing between the instances.
-_TimeoutBase = TimeoutWindows if IS_WINDOWS else TimeoutPosix
-
-
-class TaskTimeout(_TimeoutBase):
+class TaskTimeout(AirflowTimeout):
   """ """
 
   def __init__(
