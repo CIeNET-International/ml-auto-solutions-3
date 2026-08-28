@@ -138,7 +138,7 @@ def run_workload(
         f"{slice_keyword}={num_slices}",
         f"--priority={priority}",
         f"--env GCS_OUTPUT={gcs_path}",
-        "--download-dependencies",
+        "--skip-prereqs",
     ]
 
     if queue:
@@ -372,7 +372,7 @@ def clean_up_workload(
         f" --cluster={cluster_name}"
         f" --location={zone}"
         f" --project={project_id}"
-        " --download-dependencies"
+        " --skip-prereqs"
     )
     if namespace and namespace != "default":
       workload_delete_cmd += f" --gke-namespace={namespace}"

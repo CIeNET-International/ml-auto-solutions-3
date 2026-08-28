@@ -126,7 +126,7 @@ class GclusterTest(unittest.TestCase):
     self.assertNotIn("--num-nodes", full_cmd)
     self.assertIn("--priority=very-high", full_cmd)
     self.assertIn("--env GCS_OUTPUT=gs://test-bucket/output", full_cmd)
-    self.assertIn("--download-dependencies", full_cmd)
+    self.assertIn("--skip-prereqs", full_cmd)
     self.assertIn("--queue=default", full_cmd)
     self.assertIn("--gke-namespace=automation-testing", full_cmd)
     self.assertIn("--mount='/dev/shm;/dev/shm;rw'", full_cmd)
@@ -327,6 +327,7 @@ class GclusterTest(unittest.TestCase):
     self.assertIn("--cluster=test-cluster", full_cmd)
     self.assertIn("--location=us-central1-a", full_cmd)
     self.assertIn("--project=test-project", full_cmd)
+    self.assertIn("--skip-prereqs", full_cmd)
     self.assertIn("--gke-namespace=automation-testing", full_cmd)
     self.assertIn(
         "kubectl config set-context --current --namespace=automation-testing",
