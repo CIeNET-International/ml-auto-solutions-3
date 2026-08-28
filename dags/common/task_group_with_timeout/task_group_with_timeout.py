@@ -175,8 +175,6 @@ class TaskGroupWithTimeout(TaskGroup):
 
           task_retry_delay_sec = _effective_retry_delay_sec(task_instance)
 
-          # Group-budget exhaustion is enforced by the `remaining <= 0` check
-          # above on the next retry; let AirflowTaskTimeout propagate normally.
           with TaskTimeout(
               task_retry_delay=task_retry_delay_sec,
               group_deadline=deadline,
