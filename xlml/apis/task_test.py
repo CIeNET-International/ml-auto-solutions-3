@@ -14,6 +14,7 @@
 
 """Tests for task.py, gke_cluster_config.py, and GKE config builders."""
 
+import copy
 import datetime
 import unittest
 from unittest import mock
@@ -137,22 +138,52 @@ class GclusterTaskTest(unittest.TestCase):
     )
 
   def test_get_gke_config_with_name_gen_and_quarantine_gcluster(self):
-    """Constructs GclusterNameGenAndQuarantineTask for Gcluster workloads."""
+    """Constructs GclusterNameGenAndQuarantineTask forwarding all parameters."""
     gcluster_task_obj = gke_config.get_gke_config_with_name_gen_and_quarantine(
-        time_out_in_min=30,
+        time_out_in_min=35,
         test_name="test-gcluster-namegen",
         run_model_cmds=("echo 'gcluster'",),
         docker_image="gcr.io/test/image:latest",
         cluster=GkeClusters.TPU_V5P_MLPERF_CLUSTER,
         test_owner=test_owner.SURBHI_J,
+        num_slices=2,
+        priority="very-high",
+        max_restart=2,
+        ramdisk_directory="/ramdisk",
+        mtc_enabled=True,
+        use_pathways=True,
+        pathways_gcs_location="gs://custom-bucket/scratch",
+        gcluster_version="v1.102.0",
+        mounts=["/dev/shm;/dev/shm;rw"],
         use_gcluster=True,
     )
     self.assertIsInstance(
         gcluster_task_obj, task.GclusterNameGenAndQuarantineTask
     )
     self.assertIsInstance(gcluster_task_obj, task.BaseRunnerTask)
-    self.assertIsInstance(
-        gcluster_task_obj.runner_config, task.GclusterRunnerConfig
+    runner_cfg = gcluster_task_obj.runner_config
+    self.assertIsInstance(runner_cfg, task.GclusterRunnerConfig)
+    self.assertEqual(
+        runner_cfg.task_test_config.test_name, "test-gcluster-namegen"
+    )
+    self.assertEqual(runner_cfg.task_test_config.num_slices, 2)
+    self.assertEqual(runner_cfg.priority, "very-high")
+    self.assertEqual(runner_cfg.max_restart, 2)
+    self.assertEqual(runner_cfg.ramdisk_directory, "/ramdisk")
+    self.assertTrue(runner_cfg.mtc_enabled)
+    self.assertTrue(runner_cfg.use_pathways)
+    self.assertEqual(
+        runner_cfg.pathways_gcs_location, "gs://custom-bucket/scratch"
+    )
+    self.assertEqual(runner_cfg.gcluster_version, "v1.102.0")
+    self.assertEqual(runner_cfg.mounts, ["/dev/shm;/dev/shm;rw"])
+    self.assertEqual(
+        runner_cfg.task_gcp_config.project_name,
+        GkeClusters.TPU_V5P_MLPERF_CLUSTER.project,
+    )
+    self.assertEqual(
+        runner_cfg.task_test_config.timeout,
+        datetime.timedelta(minutes=35),
     )
 
   def test_get_gke_config_xpk(self):
@@ -223,13 +254,15 @@ class GclusterTaskTest(unittest.TestCase):
     self.assertEqual(clean_op.trigger_rule, "all_done_setup_success")
 
   @mock.patch("xlml.utils.gcluster.run_workload")
-  def test_gcluster_task_with_mounts(self, mock_run_workload):
-    """Passes volume mounts with precedence over test config mounts."""
+  def test_gcluster_task_with_mounts_precedence(self, mock_run_workload):
+    """Passes runner_config mounts with precedence over test config mounts."""
     mock_op = mock.MagicMock()
     mock_run_workload.override.return_value = mock_op
 
+    test_cfg_with_mounts = copy.copy(self.test_cfg)
+    test_cfg_with_mounts.mounts = ["/fallback/path;/fallback/path;ro"]
     runner_cfg = task.GclusterRunnerConfig(
-        task_test_config=self.test_cfg,
+        task_test_config=test_cfg_with_mounts,
         task_gcp_config=self.gcp_cfg,
         mounts=["/dev/shm;/dev/shm;rw"],
     )
@@ -244,6 +277,32 @@ class GclusterTaskTest(unittest.TestCase):
     self.assertEqual(
         mock_op.call_args.kwargs.get("mounts"),
         ["/dev/shm;/dev/shm;rw"],
+    )
+
+  @mock.patch("xlml.utils.gcluster.run_workload")
+  def test_gcluster_task_with_mounts_fallback(self, mock_run_workload):
+    """Falls back to test config mounts when runner_config mounts is None."""
+    mock_op = mock.MagicMock()
+    mock_run_workload.override.return_value = mock_op
+
+    test_cfg_with_mounts = copy.copy(self.test_cfg)
+    test_cfg_with_mounts.mounts = ["/fallback/path;/fallback/path;ro"]
+    runner_cfg = task.GclusterRunnerConfig(
+        task_test_config=test_cfg_with_mounts,
+        task_gcp_config=self.gcp_cfg,
+        mounts=None,
+    )
+    runner = task.GclusterRunner(
+        configs=runner_cfg,
+        workload_id="test-wl-1",
+        gcs_path="gs://test-bucket/out",
+    )
+    with self.test_dag:
+      runner.launch_workload()
+    self.assertIsNone(runner_cfg.mounts)
+    self.assertEqual(
+        mock_op.call_args.kwargs.get("mounts"),
+        ["/fallback/path;/fallback/path;ro"],
     )
 
   def test_gcluster_name_gen_and_quarantine_task(self):
@@ -276,8 +335,33 @@ class GclusterTaskTest(unittest.TestCase):
     self.assertTrue(any("generate_run_name" in tid for tid in task_ids))
     self.assertTrue(any("generate_tb_file_location" in tid for tid in task_ids))
     self.assertTrue(any("post_process" in tid for tid in task_ids))
-    # Assert configs remain unmutated
+
+    # Validate configuration propagation in _pre_process
+    with self.test_dag:
+      _, runner = namegen_task._pre_process()
+    self.assertIsInstance(runner, task.GclusterRunner)
+    self.assertTrue(
+        str(runner.configs.task_test_config.run_model_cmds[0]).startswith(
+            "export M_RUN_NAME="
+        )
+    )
+    self.assertEqual(
+        tuple(runner.configs.task_test_config.run_model_cmds[1:]),
+        self.test_cfg.run_model_cmds,
+    )
+    self.assertIsNotNone(
+        runner.configs.task_metric_config.tensorboard_summary.file_location
+    )
+    self.assertNotEqual(
+        runner.configs.task_metric_config.tensorboard_summary.file_location,
+        "gs://test-bucket/tb",
+    )
+
+    # Assert original configs remain unmutated
     self.assertEqual(self.test_cfg.run_model_cmds, tuple(original_cmds))
+    self.assertEqual(
+        metric_cfg.tensorboard_summary.file_location, "gs://test-bucket/tb"
+    )
     self.assertEqual(runner_cfg.priority, "very-high")
 
   @mock.patch.object(QuarantineTests, "is_quarantined", return_value=True)

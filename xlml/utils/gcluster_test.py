@@ -158,10 +158,12 @@ class GclusterTest(unittest.TestCase):
     self.assertEqual(res, "my-long-test-names-12345")
     self.assertFalse(res.startswith("my-long-test-names--"))
 
+  @mock.patch("tempfile.TemporaryDirectory")
   @mock.patch("xlml.utils.composer.log_metadata_for_xlml_dashboard")
   @mock.patch("xlml.utils.gcluster.SubprocessHook")
-  def test_run_workload_tpu(self, mock_hook_cls, mock_log_meta):
+  def test_run_workload_tpu(self, mock_hook_cls, mock_log_meta, mock_tempdir):
     """Executes 'gcluster job submit' command with TPU slice parameters."""
+    mock_tempdir.return_value.__enter__.return_value = "/tmp/mock_gcluster_dir"
     mock_hook = mock.MagicMock()
     mock_result = mock.MagicMock()
     mock_result.exit_code = 0
@@ -208,7 +210,10 @@ class GclusterTest(unittest.TestCase):
     self.assertIn("--gke-namespace=automation-testing", submit_cmd)
     self.assertIn("--mount=/dev/shm;/dev/shm;rw", submit_cmd)
     self.assertIn("--mount=/local/path;/container/path;ro", submit_cmd)
-    self.assertIn("KUBECONFIG", kwargs["env"])
+    self.assertEqual(
+        kwargs["env"]["KUBECONFIG"],
+        "/tmp/mock_gcluster_dir/gcluster_kube.conf",
+    )
 
   @mock.patch("xlml.utils.composer.log_metadata_for_xlml_dashboard")
   @mock.patch("xlml.utils.gcluster.SubprocessHook")
@@ -429,11 +434,14 @@ class GclusterTest(unittest.TestCase):
       self, mock_get_client, mock_list_pods
   ):
     """Returns True when all workload pods are in Running phase."""
-    mock_pod = mock.MagicMock()
-    mock_pod.metadata.name = "test-workload-0"
-    mock_pod.status.phase = "Running"
+    mock_pod1 = mock.MagicMock()
+    mock_pod1.metadata.name = "test-workload-0"
+    mock_pod1.status.phase = "Running"
+    mock_pod2 = mock.MagicMock()
+    mock_pod2.metadata.name = "test-workload-1"
+    mock_pod2.status.phase = "Running"
     mock_pod_list = mock.MagicMock()
-    mock_pod_list.items = [mock_pod]
+    mock_pod_list.items = [mock_pod1, mock_pod2]
     mock_list_pods.return_value = mock_pod_list
 
     started = gke.wait_for_workload_start.function(
@@ -519,12 +527,16 @@ class GclusterTest(unittest.TestCase):
       self, mock_get_client, mock_list_pods
   ):
     """Returns True when all workload pods reach Succeeded phase."""
-    mock_pod = mock.MagicMock()
-    mock_pod.metadata.name = "test-workload-0"
-    mock_pod.status.phase = "Succeeded"
-    mock_pod.status.container_statuses = []
+    mock_pod1 = mock.MagicMock()
+    mock_pod1.metadata.name = "test-workload-0"
+    mock_pod1.status.phase = "Succeeded"
+    mock_pod1.status.container_statuses = []
+    mock_pod2 = mock.MagicMock()
+    mock_pod2.metadata.name = "test-workload-1"
+    mock_pod2.status.phase = "Succeeded"
+    mock_pod2.status.container_statuses = []
     mock_pod_list = mock.MagicMock()
-    mock_pod_list.items = [mock_pod]
+    mock_pod_list.items = [mock_pod1, mock_pod2]
     mock_list_pods.return_value = mock_pod_list
 
     completed = gke.wait_for_workload_completion.function(
@@ -620,7 +632,7 @@ class GclusterTest(unittest.TestCase):
   def test_wait_for_workload_completion_no_pods_job_completed(
       self, mock_get_client, mock_list_pods, mock_get_batch, mock_get_job
   ):
-    """Falls back to batch Job status Complete when pods are cleaned up."""
+    """Falls back to batch Job status Complete when pod list is empty."""
     mock_pod_list = mock.MagicMock()
     mock_pod_list.items = []
     mock_list_pods.return_value = mock_pod_list
@@ -724,7 +736,7 @@ class GclusterTest(unittest.TestCase):
       mock_get_custom,
       mock_get_jobset,
   ):
-    """Falls back to JobSet CRD status Completed when pods are cleaned up."""
+    """Falls back to JobSet CRD status Completed when pod list is empty."""
     mock_pod_list = mock.MagicMock()
     mock_pod_list.items = []
     mock_list_pods.return_value = mock_pod_list
