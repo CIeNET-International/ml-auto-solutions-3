@@ -198,10 +198,6 @@ def run_workload(
     ), f"XPK command failed with code {result.exit_code}"
 
 
-wait_for_workload_start = gke.wait_for_workload_start
-wait_for_workload_completion = gke.wait_for_workload_completion
-
-
 @task(trigger_rule="all_done")
 def clean_up_workload(
     workload_id: str,

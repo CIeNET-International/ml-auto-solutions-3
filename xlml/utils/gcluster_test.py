@@ -366,7 +366,7 @@ class GclusterTest(unittest.TestCase):
     mock_pod_list.items = [mock_pod]
     mock_list_pods.return_value = mock_pod_list
 
-    started = gcluster.wait_for_workload_start.function(
+    started = gke.wait_for_workload_start.function(
         workload_id="test-workload",
         project_id="test-project",
         region="us-central1",
@@ -393,7 +393,7 @@ class GclusterTest(unittest.TestCase):
     mock_pod_list.items = [mock_pod1, mock_pod2]
     mock_list_pods.return_value = mock_pod_list
 
-    started = gcluster.wait_for_workload_start.function(
+    started = gke.wait_for_workload_start.function(
         workload_id="test-workload",
         project_id="test-project",
         region="us-central1",
@@ -412,7 +412,7 @@ class GclusterTest(unittest.TestCase):
     mock_pod_list.items = []
     mock_list_pods.return_value = mock_pod_list
 
-    started = gcluster.wait_for_workload_start.function(
+    started = gke.wait_for_workload_start.function(
         workload_id="test-workload",
         project_id="test-project",
         region="us-central1",
@@ -435,7 +435,7 @@ class GclusterTest(unittest.TestCase):
     mock_list_pods.return_value = mock_pod_list
 
     with self.assertRaises(AirflowFailException):
-      gcluster.wait_for_workload_start.function(
+      gke.wait_for_workload_start.function(
           workload_id="test-workload",
           project_id="test-project",
           region="us-central1",
@@ -457,7 +457,7 @@ class GclusterTest(unittest.TestCase):
     mock_pod_list.items = [mock_pod]
     mock_list_pods.return_value = mock_pod_list
 
-    completed = gcluster.wait_for_workload_completion.function(
+    completed = gke.wait_for_workload_completion.function(
         workload_id="test-workload",
         project_id="test-project",
         region="us-central1",
@@ -490,7 +490,7 @@ class GclusterTest(unittest.TestCase):
     mock_get_client.return_value = mock_core_api
 
     with self.assertRaises(AirflowFailException):
-      gcluster.wait_for_workload_completion.function(
+      gke.wait_for_workload_completion.function(
           workload_id="test-workload",
           project_id="test-project",
           region="us-central1",
@@ -512,7 +512,7 @@ class GclusterTest(unittest.TestCase):
     mock_pod_list.items = [mock_pod]
     mock_list_pods.return_value = mock_pod_list
 
-    completed = gcluster.wait_for_workload_completion.function(
+    completed = gke.wait_for_workload_completion.function(
         workload_id="test-workload",
         project_id="test-project",
         region="us-central1",
@@ -535,7 +535,7 @@ class GclusterTest(unittest.TestCase):
     mock_list_pods.return_value = mock_pod_list
 
     with self.assertRaises(AirflowFailException):
-      gcluster.wait_for_workload_completion.function(
+      gke.wait_for_workload_completion.function(
           workload_id="test-workload",
           project_id="test-project",
           region="us-central1",
@@ -562,7 +562,7 @@ class GclusterTest(unittest.TestCase):
     mock_job.status.conditions = [mock_condition]
     mock_get_job.return_value = mock_job
 
-    completed = gcluster.wait_for_workload_completion.function(
+    completed = gke.wait_for_workload_completion.function(
         workload_id="test-workload",
         project_id="test-project",
         region="us-central1",
@@ -592,7 +592,7 @@ class GclusterTest(unittest.TestCase):
     mock_get_job.return_value = mock_job
 
     with self.assertRaises(AirflowFailException):
-      gcluster.wait_for_workload_completion.function(
+      gke.wait_for_workload_completion.function(
           workload_id="test-workload",
           project_id="test-project",
           region="us-central1",
@@ -629,7 +629,7 @@ class GclusterTest(unittest.TestCase):
     mock_custom_api.get_namespaced_custom_object.return_value = None
     mock_get_custom.return_value = mock_custom_api
 
-    completed = gcluster.wait_for_workload_completion.function(
+    completed = gke.wait_for_workload_completion.function(
         workload_id="test-workload",
         project_id="test-project",
         region="us-central1",
@@ -665,7 +665,7 @@ class GclusterTest(unittest.TestCase):
     }
     mock_get_jobset.return_value = mock_jobset
 
-    completed = gcluster.wait_for_workload_completion.function(
+    completed = gke.wait_for_workload_completion.function(
         workload_id="test-workload",
         project_id="test-project",
         region="us-central1",
@@ -703,7 +703,7 @@ class GclusterTest(unittest.TestCase):
     mock_get_jobset.return_value = mock_jobset
 
     with self.assertRaises(AirflowFailException):
-      gcluster.wait_for_workload_completion.function(
+      gke.wait_for_workload_completion.function(
           workload_id="test-workload",
           project_id="test-project",
           region="us-central1",
@@ -744,7 +744,7 @@ class GclusterTest(unittest.TestCase):
     }
     mock_get_jobset.return_value = mock_jobset
 
-    completed = gcluster.wait_for_workload_completion.function(
+    completed = gke.wait_for_workload_completion.function(
         workload_id="test-workload",
         project_id="test-project",
         region="us-central1",

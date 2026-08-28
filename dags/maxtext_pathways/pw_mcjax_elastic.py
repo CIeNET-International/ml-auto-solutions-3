@@ -35,7 +35,7 @@ from dags.maxtext_pathways.configs.utils import (
     generate_derived_parameters,
     COLOCATED_PYTHON_IMAGE,
 )
-from xlml.utils import kpo, xpk
+from xlml.utils import gke, kpo, xpk
 
 
 ELASTIC_TYPE = ["Pause-resume", "Replica-resize"]
@@ -371,7 +371,7 @@ with models.DAG(
       end_log_pattern="Sufficient slices active: 1 >= 1",
   )
 
-  wait_for_workload_complete = xpk.wait_for_workload_completion.override(
+  wait_for_workload_complete = gke.wait_for_workload_completion.override(
       task_id="wait_for_workload_complete",
       timeout=3600,
   )(
@@ -506,7 +506,7 @@ with models.DAG(
       end_log_pattern="Sufficient slices active: 2 >= 1",
   )
 
-  wait_for_workload_complete = xpk.wait_for_workload_completion.override(
+  wait_for_workload_complete = gke.wait_for_workload_completion.override(
       task_id="wait_for_workload_complete",
       timeout=3600,
   )(

@@ -48,11 +48,9 @@ def get_gke_config(
     mtc_enabled: bool = False,
     use_pathways: bool = False,
     *,
-    use_gcluster: Literal[True],
-    gcluster_version: str = gcluster.DEFAULT_GCLUSTER_VERSION,
-    mounts: str | Iterable[str] | None = None,
-    pathways_gcs_location: str = "",
-) -> task.GclusterTask:
+    use_gcluster: Literal[False] = False,
+    xpk_branch: str = xpk.MAIN_BRANCH,
+) -> task.XpkTask:
   pass
 
 
@@ -79,9 +77,11 @@ def get_gke_config(
     mtc_enabled: bool = False,
     use_pathways: bool = False,
     *,
-    use_gcluster: Literal[False] = False,
-    xpk_branch: str = xpk.MAIN_BRANCH,
-) -> task.XpkTask:
+    use_gcluster: Literal[True],
+    gcluster_version: str = gcluster.DEFAULT_GCLUSTER_VERSION,
+    mounts: str | Iterable[str] | None = None,
+    pathways_gcs_location: str = "",
+) -> task.GclusterTask:
   pass
 
 
@@ -295,11 +295,9 @@ def get_gke_config_with_name_gen_and_quarantine(
     mtc_enabled: bool = False,
     use_pathways: bool = False,
     *,
-    use_gcluster: Literal[True],
-    gcluster_version: str = gcluster.DEFAULT_GCLUSTER_VERSION,
-    mounts: str | Iterable[str] | None = None,
-    pathways_gcs_location: str = "",
-) -> task.GclusterNameGenAndQuarantineTask:
+    use_gcluster: Literal[False] = False,
+    xpk_branch: str = xpk.MAIN_BRANCH,
+) -> task.XpkNameGenAndQuarantineTask:
   pass
 
 
@@ -329,9 +327,11 @@ def get_gke_config_with_name_gen_and_quarantine(
     mtc_enabled: bool = False,
     use_pathways: bool = False,
     *,
-    use_gcluster: Literal[False] = False,
-    xpk_branch: str = xpk.MAIN_BRANCH,
-) -> task.XpkNameGenAndQuarantineTask:
+    use_gcluster: Literal[True],
+    gcluster_version: str = gcluster.DEFAULT_GCLUSTER_VERSION,
+    mounts: str | Iterable[str] | None = None,
+    pathways_gcs_location: str = "",
+) -> task.GclusterNameGenAndQuarantineTask:
   pass
 
 
