@@ -20,10 +20,11 @@ functionality
 import datetime
 
 from airflow import models
+from airflow.models.baseoperator import chain
 
 from dags import composer_env
 from dags.common import test_owner
-from dags.common.vm_resource import XpkClusters
+from dags.common.vm_resource import GkeClusters
 from dags.orbax.util import test_config_util, validation_util
 from xlml.utils.gke import zone_to_region
 from xlml.utils import axlearn
@@ -91,7 +92,7 @@ with models.DAG(
   )
   axlearn_configs = [
       test_config_util.TestConfigAXLearn(
-          cluster=XpkClusters.TPU_V5P_128_CLUSTER,
+          cluster=GkeClusters.TPU_V5P_128_CLUSTER,
           slices=[2],
           short_id=f"axlearn-{checkpointing.name}-sav",
           module="text.gpt.c4_trainer",
@@ -143,4 +144,4 @@ with models.DAG(
             )
         )
 
-        _ = workload_id >> start_time >> run >> end_time >> validate_steps
+        chain(workload_id, start_time, run, end_time, validate_steps)

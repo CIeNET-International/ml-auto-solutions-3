@@ -15,12 +15,12 @@
 """Utilities to construct configs for JAX tests for GCE."""
 
 from dags.common import test_owner
-from dags.multipod.configs import xpk_gke_config as gke_config
-from dags.common.vm_resource import XpkClusterConfig
+from dags.multipod.configs import gke_config
+from xlml.apis.gke_cluster_config import GkeClusterConfig
 
 
 def get_jax_distributed_initialize_config(
-    cluster: XpkClusterConfig,
+    cluster: GkeClusterConfig,
     time_out_in_min: int,
     test_name: str,
     docker_image: str,

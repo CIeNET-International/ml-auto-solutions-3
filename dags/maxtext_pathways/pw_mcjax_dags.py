@@ -127,7 +127,7 @@ with models.DAG(
       image_full_url=fetched_params["runner"],
   )
 
-  wait_for_workload_complete = xpk.wait_for_workload_completion.override(
+  wait_for_workload_complete = gke.wait_for_workload_completion.override(
       task_id="wait_for_workload_complete",
   )(
       workload_id=calculated_params["workload_id"],

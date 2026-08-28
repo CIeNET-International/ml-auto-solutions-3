@@ -16,7 +16,7 @@
 
 import datetime
 from xlml.apis import gcp_config, metric_config, task, test_config
-from dags.common.vm_resource import XpkClusterConfig
+from xlml.apis.gke_cluster_config import GkeClusterConfig
 import itertools
 from typing import List, Iterable, Dict, Any
 
@@ -41,7 +41,7 @@ def update_run_name_from_quantization_config(run_name, configs):
 
 def get_maxtext_sweep_gke_config(
     test_owner: str,
-    cluster: XpkClusterConfig,
+    cluster: GkeClusterConfig,
     num_slices: List[int],
     sweep_params: Dict[str, List[Any]],
     time_out_in_min: int,

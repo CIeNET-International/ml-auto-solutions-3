@@ -19,6 +19,7 @@ from absl import logging
 
 from airflow.decorators import task
 from airflow.hooks.subprocess import SubprocessHook
+from airflow.models.baseoperator import chain
 from airflow.models.taskmixin import DAGNode
 from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator
 from airflow.utils.task_group import TaskGroup
@@ -132,6 +133,6 @@ def run_command_in_kpo(
         retries=0,
     )
 
-    _ = reset_kube_config_task >> kpo
+    chain(reset_kube_config_task, kpo)
 
   return group

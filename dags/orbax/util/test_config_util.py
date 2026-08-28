@@ -11,7 +11,7 @@ import re
 from airflow.exceptions import AirflowFailException
 
 from dags import gcs_bucket
-from dags.common.vm_resource import XpkClusters, DockerImage, Project
+from dags.common.vm_resource import GkeClusters, DockerImage, Project
 from dags.orbax.util import checkpoint_util
 from dags.multipod.configs.common import SetupMode
 from xlml.apis import gcp_config, metric_config, task, test_config
@@ -81,7 +81,7 @@ class Checkpointing:
 class TestConfigAbstract(ABC):
   """Abstract Base Class for all test configuration utilities."""
 
-  cluster: XpkClusters
+  cluster: GkeClusters
   slices: list[int]
   model_name: str
   short_id: str
@@ -108,7 +108,7 @@ class TestConfig(TestConfigAbstract):
 
   def __init__(
       self,
-      cluster: XpkClusters,
+      cluster: GkeClusters,
       machine_type: str,
       accelerator: str,
       slices: list[int],
@@ -293,7 +293,7 @@ class TestConfigAXLearn(TestConfigAbstract):
 
   def __init__(
       self,
-      cluster: XpkClusters,
+      cluster: GkeClusters,
       slices: list[int],
       module: str,
       short_id: str,

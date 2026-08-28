@@ -267,6 +267,7 @@ class CpuGkeTest(TestConfig[Cpu]):
   startup_time_out_in_sec: int = attrs.field(default=300, kw_only=True)
   num_slices: int = attrs.field(default=1, kw_only=True)
   namespace: str = attrs.field(default='default', kw_only=True)
+  mounts: str | Iterable[str] | None = attrs.field(default=None, kw_only=True)
 
   @property
   def benchmark_id(self) -> str:
@@ -303,6 +304,7 @@ class TpuGkeTest(TestConfig[Tpu]):
   startup_time_out_in_sec: int = attrs.field(default=300, kw_only=True)
   num_slices: int = attrs.field(default=1, kw_only=True)
   namespace: str = attrs.field(default='default', kw_only=True)
+  mounts: str | Iterable[str] | None = attrs.field(default=None, kw_only=True)
 
   @property
   def benchmark_id(self) -> str:
@@ -327,7 +329,7 @@ def _load_compiled_jsonnet(test_name: str) -> Any:
       'XLMLTEST_CONFIGS', '/home/airflow/gcs/dags/dags/jsonnet'
   )
   test_path = os.path.join(config_dir, test_name)
-  with open(test_path, 'r') as f:
+  with open(test_path, 'r', encoding='utf-8') as f:
     test = json.load(f)
 
   return test
@@ -356,6 +358,7 @@ class GpuXpkTest(TestConfig[Gpu]):
   startup_time_out_in_sec: int = attrs.field(default=300, kw_only=True)
   num_slices: int = attrs.field(default=1, kw_only=True)
   namespace: str = attrs.field(default='default', kw_only=True)
+  mounts: str | Iterable[str] | None = attrs.field(default=None, kw_only=True)
 
   @property
   def benchmark_id(self) -> str:
@@ -515,7 +518,7 @@ class GpuGkeTest(TestConfig[Gpu]):
 
     return GpuGkeTest(
         test_name=test_name,
-        docker_image=f'{test["image"]}:{test["imageTag"]}',
+        docker_image=f"{test['image']}:{test['imageTag']}",
         accelerator=Gpu(
             machine_type='n/a',
             image_family='n/a',
