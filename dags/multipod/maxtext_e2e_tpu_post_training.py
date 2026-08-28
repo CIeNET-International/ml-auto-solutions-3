@@ -43,7 +43,12 @@ class ExternalTaskSensorWithBypass(ExternalTaskSensor):
 
   @provide_session
   def poke(self, context, session=None):
-    if not context.get("params", {}).get("wait_for_conversion", True):
+    params = context.get("params") or {}
+    dag_run = context.get("dag_run")
+    conf = (dag_run.conf if dag_run else {}) or {}
+    if not params.get("wait_for_conversion", True) or not conf.get(
+        "wait_for_conversion", True
+    ):
       self.log.info("Bypassing conversion sensor: wait_for_conversion is False")
       return True
     return super().poke(context, session=session)
