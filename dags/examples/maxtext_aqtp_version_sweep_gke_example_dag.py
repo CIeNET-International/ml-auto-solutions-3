@@ -21,7 +21,7 @@ Used upon library upgrades.
 import datetime
 from airflow import models
 from dags.common import test_owner
-from dags.common.vm_resource import XpkClusters, DockerImage
+from dags.common.vm_resource import GkeClusters, DockerImage
 from dags.multipod.configs import maxtext_sweep_gke_config
 
 # Set concurrency to number of workers otherwise tasks may time out
@@ -42,7 +42,7 @@ with models.DAG(
 
   shared_task_config = {
       "test_owner": test_owner.AIRFLOW,
-      "cluster": XpkClusters.TPU_V5E_256_CLUSTER,
+      "cluster": GkeClusters.TPU_V5E_256_CLUSTER,
       "time_out_in_min": 60,
       "base_output_directory": base_output_directory,
       "num_slices": [1, 2],

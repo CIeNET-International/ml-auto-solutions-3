@@ -18,6 +18,7 @@ for MaxText model configs on TPU v4, v5e.
 """
 import datetime
 from airflow import models
+from airflow.models.baseoperator import chain
 from airflow.utils.task_group import TaskGroup
 
 from xlml.utils import name_format
@@ -26,8 +27,8 @@ from xlml.apis import metric_config
 from dags import composer_env
 from dags.common.quarantined_tests import QuarantineTests
 from dags.common import test_owner
-from dags.common.vm_resource import TpuVersion, DockerImage, XpkClusters
-from dags.multipod.configs import xpk_gke_config as gke_config
+from dags.common.vm_resource import TpuVersion, DockerImage, GkeClusters
+from dags.multipod.configs import gke_config
 
 
 # Run once a day at 1 pm UTC (5 am PST / 6 am PDT)
@@ -99,7 +100,7 @@ def hybridsim_compile_and_run(group_id):
         user_specified_job_metric_config=job_metric_config,
     ).run(gcs_location=shared_gcs_location)
 
-    _ = shared_gcs_location >> maxtext_aot >> maxtext_hybridsim
+    chain(shared_gcs_location, maxtext_aot, maxtext_hybridsim)
 
 
 with models.DAG(
@@ -131,8 +132,8 @@ with models.DAG(
   }
   num_slices = [1, 2, 4, 8]
   clusters = {
-      TpuVersion.V4: XpkClusters.TPU_V4_8_MAXTEXT_CLUSTER,
-      TpuVersion.V5E: XpkClusters.TPU_V5E_256_CLUSTER,
+      TpuVersion.V4: GkeClusters.TPU_V4_8_MAXTEXT_CLUSTER,
+      TpuVersion.V5E: GkeClusters.TPU_V5E_256_CLUSTER,
   }
   v5e_alt = "5e"
 

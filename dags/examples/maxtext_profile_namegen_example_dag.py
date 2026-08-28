@@ -22,8 +22,8 @@ Profile extraction can be easily integrated with gke_config
 import datetime
 from airflow import models
 from dags.common import test_owner
-from dags.common.vm_resource import XpkClusters
-from dags.multipod.configs import xpk_gke_config as gke_config
+from dags.common.vm_resource import GkeClusters
+from dags.multipod.configs import gke_config
 from xlml.apis import metric_config
 
 SCHEDULED_TIME = None
@@ -53,7 +53,7 @@ test_models_tpu = {
     # add profiler config: ensure steps >
     # skip_first_n_steps_for_profiler + profiler_steps
     "mixtral-8x7b_pretraining-megablox_config-true_upload-one": {
-        "cluster": XpkClusters.TPU_V4_128_CLUSTER,
+        "cluster": GkeClusters.TPU_V4_128_CLUSTER,
         "time_out_in_min": 60,
         "train_command": [
             base_command + " steps=10 profiler=xplane "
@@ -64,7 +64,7 @@ test_models_tpu = {
     # add profiler config: ensure steps >
     # skip_first_n_steps_for_profiler + profiler_steps
     "mixtral-8x7b_pretraining-megablox_config-true_upload-all": {
-        "cluster": XpkClusters.TPU_V4_128_CLUSTER,
+        "cluster": GkeClusters.TPU_V4_128_CLUSTER,
         "time_out_in_min": 60,
         "train_command": [
             base_command + " steps=10 profiler=xplane "
@@ -75,7 +75,7 @@ test_models_tpu = {
     # testing: handle edge case, attempt to extract, find no match,
     # proceed to post_process without error
     "testing_config-true_upload-none": {
-        "cluster": XpkClusters.TPU_V4_128_CLUSTER,
+        "cluster": GkeClusters.TPU_V4_128_CLUSTER,
         "time_out_in_min": 60,
         "train_command": [
             base_command + " steps=10",
@@ -84,7 +84,7 @@ test_models_tpu = {
     # testing: not generate profile location, not extract profile in
     # post_process
     "testing_config-false_upload-one": {
-        "cluster": XpkClusters.TPU_V4_128_CLUSTER,
+        "cluster": GkeClusters.TPU_V4_128_CLUSTER,
         "time_out_in_min": 60,
         "train_command": [
             base_command + " steps=10 profiler=xplane "

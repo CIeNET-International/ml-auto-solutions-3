@@ -112,7 +112,7 @@ def get_microbenchmark_xpk_config(
     test_name: str,
     docker_image: str,
     test_owner: str,
-    cluster: resource.XpkClusterConfig,
+    cluster: resource.GkeClusterConfig,
     num_slices: int = 1,
     dataset_name: metric_config.DatasetOption = (
         metric_config.DatasetOption.XLML_DATASET
