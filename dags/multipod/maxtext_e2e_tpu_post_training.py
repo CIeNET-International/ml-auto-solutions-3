@@ -12,13 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-MaxText E2E TPU Post-Training Tests DAG (Stage 2).
+"""MaxText E2E TPU Post-Training Tests DAG (Stage 2).
 
-Executes end-to-end MaxText post-training workflows (SFT, Multimodal SFT, LoRA, RL) on Cloud TPU:
-- Waits for model conversion in maxtext_e2e_tpu_checkpoint_conversion via ExternalTaskSensor.
-- Executes post-training scripts with Pathways runtime persistence on TPU slices.
-- Converts post-trained checkpoints back to Hugging Face format to verify weight fidelity.
+Executes end-to-end MaxText post-training workflows (SFT, LoRA, RL) on TPU:
+- Waits for model conversion in maxtext_e2e_tpu_checkpoint_conversion via
+  ExternalTaskSensor.
+- Executes post-training scripts with Pathways persistence on TPU slices.
+- Converts post-trained checkpoints back to Hugging Face format.
 """
 
 import datetime
@@ -39,7 +39,7 @@ HF_TOKEN = safe_get_from_variable("HF_TOKEN", None)
 
 
 class ExternalTaskSensorWithBypass(ExternalTaskSensor):
-  """ExternalTaskSensor that passes immediately if wait_for_conversion param is False."""
+  """Sensor that passes immediately if wait_for_conversion param is False."""
 
   @provide_session
   def poke(self, context, session=None):
@@ -67,7 +67,7 @@ with models.DAG(
         "run_name": Param(
             default="",
             type="string",
-            description="Shared run name for checkpoints (defaults to post-{{ ts_nodash }})",
+            description="Shared run name for checkpoints (e.g. post-ts_nodash)",
         ),
         "wait_for_conversion": Param(
             default=True,
@@ -241,17 +241,15 @@ with models.DAG(
           ).run(skip_post_process=True)
 
           to_hf_flags = mode_test_config.get("to_hf_flags", "false true")
-
           model_path = mode_test_config["maxtext_ckpt_path"].format(
               run_name=run_name
           )
+          to_hf_script = test_config["to_huggingface"]
           convert_to_huggingface_cmd = (
               f"export HF_TOKEN={HF_TOKEN}",
               'export HF_HOME="/dev/shm/hf_cache"',
               'export LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=20480"',
-          ) + (
-              f"{test_config['to_huggingface']} "
-              f"{run_name} {model_path} {to_hf_flags}",
+              f"{to_hf_script} {run_name} {model_path} {to_hf_flags}",
           )
           convert_to_huggingface_task = gke_config.get_gke_config(
               time_out_in_min=90,
@@ -261,7 +259,6 @@ with models.DAG(
               cluster=GkeClusters.TPU_V5P_MLPERF_CLUSTER,
               test_owner=test_owner.SURBHI_J,
               priority="very-high",
-              mounts="/dev/shm;/dev/shm;rw",
               use_gcluster=True,
           ).run(skip_post_process=True)
 

@@ -12,14 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-MaxText E2E TPU Checkpoint Conversion DAG (Stage 1).
+"""MaxText E2E TPU Checkpoint Conversion DAG (Stage 1).
 
 Serves as the shared prerequisite pipeline for MaxText E2E testing:
 - Converts Hugging Face checkpoints to MaxText format on TPU v5p-8 slices.
-- Saves checkpoints to GCS (gs://runner-maxtext-logs/<model>/to_maxtext/{run_name}/...).
-- Downstream training DAGs (maxtext_e2e_tpu_pre_training and maxtext_e2e_tpu_post_training)
-  listen to this DAG via ExternalTaskSensor and begin training as each model completes.
+- Saves checkpoints to GCS (gs://runner-maxtext-logs/<model>/to_maxtext/...).
+- Downstream training DAGs (pre_training and post_training) listen to this
+  DAG via ExternalTaskSensor and begin training as each model completes.
 """
 import datetime
 from airflow import models
@@ -87,11 +86,13 @@ with models.DAG(
           "{{ params.run_name if params.run_name else 'conv-' ~ ts_nodash }}"
       )
 
+      to_maxtext_cmd = config["to_maxtext"]
       convert_to_maxtext_cmd = (
           f"export HF_TOKEN={HF_TOKEN}",
           'export HF_HOME="/dev/shm/hf_cache"',
           'export LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=20480"',
-      ) + (f"{config['to_maxtext']} {run_name}",)
+          f"{to_maxtext_cmd} {run_name}",
+      )
 
       convert_to_maxtext_task = gke_config.get_gke_config(
           time_out_in_min=120,
@@ -101,6 +102,5 @@ with models.DAG(
           cluster=GkeClusters.TPU_V5P_MLPERF_CLUSTER,
           test_owner=test_owner.JACKY_F,
           priority="very-high",
-          mounts="/dev/shm;/dev/shm;rw",
           use_gcluster=True,
       ).run(skip_post_process=True)
