@@ -47,11 +47,11 @@ def get_gke_config(
     ramdisk_directory: str = "",
     mtc_enabled: bool = False,
     use_pathways: bool = False,
-    pathways_gcs_location: str = "",
-    gcluster_version: str = gcluster.DEFAULT_GCLUSTER_VERSION,
-    mounts: str | Iterable[str] | None = None,
     *,
     use_gcluster: Literal[True],
+    gcluster_version: str = gcluster.DEFAULT_GCLUSTER_VERSION,
+    mounts: str | Iterable[str] | None = None,
+    pathways_gcs_location: str = "",
 ) -> task.GclusterTask:
   pass
 
@@ -78,14 +78,13 @@ def get_gke_config(
     ramdisk_directory: str = "",
     mtc_enabled: bool = False,
     use_pathways: bool = False,
-    pathways_gcs_location: str = "",
-    xpk_branch: str = xpk.MAIN_BRANCH,
+    *,
     use_gcluster: Literal[False] = False,
+    xpk_branch: str = xpk.MAIN_BRANCH,
 ) -> task.XpkTask:
   pass
 
 
-@overload
 def get_gke_config(
     time_out_in_min: int,
     test_name: str,
@@ -107,43 +106,34 @@ def get_gke_config(
     ramdisk_directory: str = "",
     mtc_enabled: bool = False,
     use_pathways: bool = False,
-    pathways_gcs_location: str = "",
     gcluster_version: str = gcluster.DEFAULT_GCLUSTER_VERSION,
     mounts: str | Iterable[str] | None = None,
-    xpk_branch: str = xpk.MAIN_BRANCH,
-    use_gcluster: bool = False,
-) -> task.GclusterTask | task.XpkTask:
-  pass
-
-
-def get_gke_config(
-    time_out_in_min: int,
-    test_name: str,
-    docker_image: str,
-    test_owner: str,
-    run_model_cmds: Iterable[str],
-    cluster: GkeClusterConfig = GkeClusters.TPU_V4_8_MAXTEXT_CLUSTER,
-    num_slices: int = 1,
-    dataset_name: metric_config.DatasetOption = (
-        metric_config.DatasetOption.XLML_DATASET
-    ),
-    dataset_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
-    composer_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
-    base_output_directory: str = None,
-    metric_aggregation_strategy: metric_config.AggregationStrategy = None,
-    user_specified_job_metric_config: metric_config.MetricConfig = None,
-    priority: str = "high",
-    max_restart: int = 0,
-    ramdisk_directory: str = "",
-    mtc_enabled: bool = False,
-    use_pathways: bool = False,
     pathways_gcs_location: str = "",
-    gcluster_version: str = gcluster.DEFAULT_GCLUSTER_VERSION,
-    mounts: str | Iterable[str] | None = None,
     xpk_branch: str = xpk.MAIN_BRANCH,
     use_gcluster: bool = False,
 ) -> task.GclusterTask | task.XpkTask:
   """Constructs a GKE task for either Cluster Toolkit (gcluster) or XPK."""
+  if use_gcluster:
+    if xpk_branch != xpk.MAIN_BRANCH:
+      raise ValueError(
+          "xpk_branch cannot be specified when use_gcluster=True (got"
+          f" {xpk_branch!r})."
+      )
+  else:
+    if mounts is not None:
+      raise ValueError(
+          "mounts parameter is only supported when use_gcluster=True."
+      )
+    if pathways_gcs_location:
+      raise ValueError(
+          "pathways_gcs_location parameter is only supported when"
+          " use_gcluster=True."
+      )
+    if gcluster_version != gcluster.DEFAULT_GCLUSTER_VERSION:
+      raise ValueError(
+          "gcluster_version cannot be specified when use_gcluster=False."
+      )
+
   job_gcp_config = gcp_config.GCPConfig(
       project_name=cluster.project,
       zone=cluster.zone,
@@ -211,7 +201,6 @@ def get_gke_config(
       ramdisk_directory=ramdisk_directory,
       mtc_enabled=mtc_enabled,
       use_pathways=use_pathways,
-      pathways_gcs_location=pathways_gcs_location,
   )
   return task.XpkTask(
       runner_config=runner_config,
@@ -243,7 +232,6 @@ def get_gke_config_with_interrupt(
     ramdisk_directory: str = "",
     mtc_enabled: bool = False,
     use_pathways: bool = False,
-    pathways_gcs_location: str = "",
 ) -> task.XpkNodeInterruptionTask:
   job_gcp_config = gcp_config.GCPConfig(
       project_name=cluster.project,
@@ -292,7 +280,6 @@ def get_gke_config_with_interrupt(
       ramdisk_directory=ramdisk_directory,
       mtc_enabled=mtc_enabled,
       use_pathways=use_pathways,
-      pathways_gcs_location=pathways_gcs_location,
   )
 
   return task.XpkNodeInterruptionTask(
@@ -328,11 +315,11 @@ def get_gke_config_with_name_gen_and_quarantine(
     ramdisk_directory: str = "",
     mtc_enabled: bool = False,
     use_pathways: bool = False,
-    pathways_gcs_location: str = "",
-    gcluster_version: str = gcluster.DEFAULT_GCLUSTER_VERSION,
-    mounts: str | Iterable[str] | None = None,
     *,
     use_gcluster: Literal[True],
+    gcluster_version: str = gcluster.DEFAULT_GCLUSTER_VERSION,
+    mounts: str | Iterable[str] | None = None,
+    pathways_gcs_location: str = "",
 ) -> task.GclusterNameGenAndQuarantineTask:
   pass
 
@@ -362,14 +349,13 @@ def get_gke_config_with_name_gen_and_quarantine(
     ramdisk_directory: str = "",
     mtc_enabled: bool = False,
     use_pathways: bool = False,
-    pathways_gcs_location: str = "",
-    xpk_branch: str = xpk.MAIN_BRANCH,
+    *,
     use_gcluster: Literal[False] = False,
+    xpk_branch: str = xpk.MAIN_BRANCH,
 ) -> task.XpkNameGenAndQuarantineTask:
   pass
 
 
-@overload
 def get_gke_config_with_name_gen_and_quarantine(
     time_out_in_min: int,
     test_name: str,
@@ -394,46 +380,34 @@ def get_gke_config_with_name_gen_and_quarantine(
     ramdisk_directory: str = "",
     mtc_enabled: bool = False,
     use_pathways: bool = False,
-    pathways_gcs_location: str = "",
     gcluster_version: str = gcluster.DEFAULT_GCLUSTER_VERSION,
     mounts: str | Iterable[str] | None = None,
-    xpk_branch: str = xpk.MAIN_BRANCH,
-    use_gcluster: bool = False,
-) -> task.GclusterNameGenAndQuarantineTask | task.XpkNameGenAndQuarantineTask:
-  pass
-
-
-def get_gke_config_with_name_gen_and_quarantine(
-    time_out_in_min: int,
-    test_name: str,
-    docker_image: str,
-    test_owner: str,
-    run_model_cmds: Iterable[str],
-    cluster: GkeClusterConfig = GkeClusters.TPU_V4_8_MAXTEXT_CLUSTER,
-    num_slices: int = 1,
-    dataset_name: metric_config.DatasetOption = (
-        metric_config.DatasetOption.XLML_DATASET
-    ),
-    dataset_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
-    composer_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
-    base_output_directory: str = None,
-    metric_aggregation_strategy: metric_config.AggregationStrategy = None,
-    user_specified_job_metric_config: metric_config.MetricConfig = None,
-    quarantine_task_group: Any = None,
-    run_name_env: str = "M_RUN_NAME",
-    nested_run_name_in_tb_file_location: bool = True,
-    priority: str = "high",
-    max_restart: int = 0,
-    ramdisk_directory: str = "",
-    mtc_enabled: bool = False,
-    use_pathways: bool = False,
     pathways_gcs_location: str = "",
-    gcluster_version: str = gcluster.DEFAULT_GCLUSTER_VERSION,
-    mounts: str | Iterable[str] | None = None,
     xpk_branch: str = xpk.MAIN_BRANCH,
     use_gcluster: bool = False,
 ) -> task.GclusterNameGenAndQuarantineTask | task.XpkNameGenAndQuarantineTask:
   """Constructs a GKE name-gen/quarantine task for Cluster Toolkit or XPK."""
+  if use_gcluster:
+    if xpk_branch != xpk.MAIN_BRANCH:
+      raise ValueError(
+          "xpk_branch cannot be specified when use_gcluster=True (got"
+          f" {xpk_branch!r})."
+      )
+  else:
+    if mounts is not None:
+      raise ValueError(
+          "mounts parameter is only supported when use_gcluster=True."
+      )
+    if pathways_gcs_location:
+      raise ValueError(
+          "pathways_gcs_location parameter is only supported when"
+          " use_gcluster=True."
+      )
+    if gcluster_version != gcluster.DEFAULT_GCLUSTER_VERSION:
+      raise ValueError(
+          "gcluster_version cannot be specified when use_gcluster=False."
+      )
+
   job_gcp_config = gcp_config.GCPConfig(
       project_name=cluster.project,
       zone=cluster.zone,
@@ -504,7 +478,6 @@ def get_gke_config_with_name_gen_and_quarantine(
       ramdisk_directory=ramdisk_directory,
       mtc_enabled=mtc_enabled,
       use_pathways=use_pathways,
-      pathways_gcs_location=pathways_gcs_location,
   )
   return task.XpkNameGenAndQuarantineTask(
       runner_config=runner_config,

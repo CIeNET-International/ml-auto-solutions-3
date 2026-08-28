@@ -183,6 +183,48 @@ class GclusterTaskTest(unittest.TestCase):
     self.assertIsInstance(xpk_task_obj, task.BaseRunnerTask)
     self.assertIsInstance(xpk_task_obj.runner_config, task.XpkRunnerConfig)
 
+  def test_get_gke_config_invalid_combinations(self):
+    """Verifies that invalid parameter combinations raise ValueError."""
+    with self.assertRaisesRegex(ValueError, "xpk_branch cannot be specified"):
+      gke_config.get_gke_config(
+          time_out_in_min=30,
+          test_name="test-invalid",
+          run_model_cmds=("echo 'test'",),
+          docker_image="gcr.io/test/image:latest",
+          cluster=GkeClusters.TPU_V5P_MLPERF_CLUSTER,
+          test_owner=test_owner.SURBHI_J,
+          use_gcluster=True,
+          xpk_branch="custom-branch",
+      )
+
+    with self.assertRaisesRegex(
+        ValueError, "mounts parameter is only supported"
+    ):
+      gke_config.get_gke_config(
+          time_out_in_min=30,
+          test_name="test-invalid",
+          run_model_cmds=("echo 'test'",),
+          docker_image="gcr.io/test/image:latest",
+          cluster=GkeClusters.TPU_V4_8_MAXTEXT_CLUSTER,
+          test_owner=test_owner.SURBHI_J,
+          use_gcluster=False,
+          mounts=["/data;/data;ro"],
+      )
+
+    with self.assertRaisesRegex(
+        ValueError, "pathways_gcs_location parameter is only supported"
+    ):
+      gke_config.get_gke_config(
+          time_out_in_min=30,
+          test_name="test-invalid",
+          run_model_cmds=("echo 'test'",),
+          docker_image="gcr.io/test/image:latest",
+          cluster=GkeClusters.TPU_V4_8_MAXTEXT_CLUSTER,
+          test_owner=test_owner.SURBHI_J,
+          use_gcluster=False,
+          pathways_gcs_location="gs://bucket/path",
+      )
+
   def test_gcluster_task_run_structure(self):
     """Builds gcluster lifecycle tasks and verifies operator dependencies."""
     runner_cfg = task.GclusterRunnerConfig(

@@ -366,7 +366,6 @@ class RunnerConfig:
   ramdisk_directory: str = ""
   mtc_enabled: bool = False
   use_pathways: bool = False
-  pathways_gcs_location: str = ""
 
 
 @dataclasses.dataclass
@@ -383,6 +382,7 @@ class GclusterRunnerConfig(RunnerConfig):
   gcluster_version: str = gcluster.DEFAULT_GCLUSTER_VERSION
   mounts: str | Iterable[str] | None = None
   queue: str = "default"
+  pathways_gcs_location: str = ""
 
 
 @dataclasses.dataclass
