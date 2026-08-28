@@ -133,6 +133,26 @@ class GclusterTaskTest(unittest.TestCase):
         GkeClusters.TPU_V5P_MLPERF_CLUSTER.zone,
     )
     self.assertEqual(
+        runner_cfg.task_test_config.accelerator.version,
+        GkeClusters.TPU_V5P_MLPERF_CLUSTER.device_version,
+    )
+    self.assertEqual(
+        runner_cfg.task_test_config.accelerator.cores,
+        GkeClusters.TPU_V5P_MLPERF_CLUSTER.core_count,
+    )
+    self.assertEqual(
+        runner_cfg.task_test_config.cluster_name,
+        GkeClusters.TPU_V5P_MLPERF_CLUSTER.name,
+    )
+    self.assertEqual(
+        runner_cfg.task_test_config.namespace,
+        GkeClusters.TPU_V5P_MLPERF_CLUSTER.namespace,
+    )
+    self.assertEqual(
+        runner_cfg.queue,
+        GkeClusters.TPU_V5P_MLPERF_CLUSTER.queue,
+    )
+    self.assertEqual(
         runner_cfg.task_test_config.timeout,
         datetime.timedelta(minutes=45),
     )
@@ -180,6 +200,30 @@ class GclusterTaskTest(unittest.TestCase):
     self.assertEqual(
         runner_cfg.task_gcp_config.project_name,
         GkeClusters.TPU_V5P_MLPERF_CLUSTER.project,
+    )
+    self.assertEqual(
+        runner_cfg.task_gcp_config.zone,
+        GkeClusters.TPU_V5P_MLPERF_CLUSTER.zone,
+    )
+    self.assertEqual(
+        runner_cfg.task_test_config.accelerator.version,
+        GkeClusters.TPU_V5P_MLPERF_CLUSTER.device_version,
+    )
+    self.assertEqual(
+        runner_cfg.task_test_config.accelerator.cores,
+        GkeClusters.TPU_V5P_MLPERF_CLUSTER.core_count,
+    )
+    self.assertEqual(
+        runner_cfg.task_test_config.cluster_name,
+        GkeClusters.TPU_V5P_MLPERF_CLUSTER.name,
+    )
+    self.assertEqual(
+        runner_cfg.task_test_config.namespace,
+        GkeClusters.TPU_V5P_MLPERF_CLUSTER.namespace,
+    )
+    self.assertEqual(
+        runner_cfg.queue,
+        GkeClusters.TPU_V5P_MLPERF_CLUSTER.queue,
     )
     self.assertEqual(
         runner_cfg.task_test_config.timeout,
