@@ -299,7 +299,7 @@ class AXLearnTask(BaseTask):
           image_full_url=self.image_full_url,
       )
 
-      wait_for_workload_start = xpk.wait_for_workload_start.override(
+      wait_for_workload_start = gke.wait_for_workload_start.override(
           timeout=self.workload_provision_timeout.total_seconds(),
           owner=self.test_cfg.task_owner,
       )(
@@ -309,7 +309,7 @@ class AXLearnTask(BaseTask):
           cluster_name=self.test_cfg.cluster_name,
       )
 
-      wait_for_workload_completion = xpk.wait_for_workload_completion.override(
+      wait_for_workload_completion = gke.wait_for_workload_completion.override(
           timeout=int(self.workload_run_timeout.total_seconds()),
           owner=self.test_cfg.task_owner,
       )(
@@ -444,7 +444,7 @@ class XpkRunner(Runner):
           priority=self.configs.priority,
           namespace=self.configs.task_test_config.namespace,
       )
-      wait_for_workload_start = xpk.wait_for_workload_start.override(
+      wait_for_workload_start = gke.wait_for_workload_start.override(
           timeout=self.configs.workload_provision_timeout.total_seconds()
       )(
           workload_id=self.workload_id,
@@ -457,7 +457,7 @@ class XpkRunner(Runner):
       return group
 
   def wait_workload_complete(self) -> DAGNode:
-    op = xpk.wait_for_workload_completion
+    op = gke.wait_for_workload_completion
     if self.configs.task_test_config.timeout:
       op = op.override(
           timeout=int(self.configs.task_test_config.timeout.total_seconds())
@@ -590,7 +590,7 @@ class GclusterRunner(Runner):
           mounts=mounts,
           queue=self.configs.queue,
       )
-      wait_for_workload_start = gcluster.wait_for_workload_start.override(
+      wait_for_workload_start = gke.wait_for_workload_start.override(
           timeout=self.configs.workload_provision_timeout.total_seconds()
       )(
           workload_id=self.workload_id,
@@ -603,7 +603,7 @@ class GclusterRunner(Runner):
       return group
 
   def wait_workload_complete(self) -> DAGNode:
-    op = gcluster.wait_for_workload_completion
+    op = gke.wait_for_workload_completion
     if self.configs.task_test_config.timeout:
       op = op.override(
           timeout=int(self.configs.task_test_config.timeout.total_seconds())

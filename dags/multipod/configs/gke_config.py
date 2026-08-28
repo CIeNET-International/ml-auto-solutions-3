@@ -16,13 +16,104 @@
 
 from collections.abc import Iterable
 import datetime
-from typing import Any
+from typing import Any, Literal, overload
 
 from dags import gcs_bucket
 from dags.common.vm_resource import GkeClusters, Project
 from xlml.apis import gcp_config, metric_config, task, test_config
 from xlml.apis.gke_cluster_config import GkeClusterConfig
 from xlml.utils import gcluster, xpk
+
+
+@overload
+def get_gke_config(
+    time_out_in_min: int,
+    test_name: str,
+    docker_image: str,
+    test_owner: str,
+    run_model_cmds: Iterable[str],
+    cluster: GkeClusterConfig = GkeClusters.TPU_V4_8_MAXTEXT_CLUSTER,
+    num_slices: int = 1,
+    dataset_name: metric_config.DatasetOption = (
+        metric_config.DatasetOption.XLML_DATASET
+    ),
+    dataset_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
+    composer_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
+    base_output_directory: str = None,
+    metric_aggregation_strategy: metric_config.AggregationStrategy = None,
+    user_specified_job_metric_config: metric_config.MetricConfig = None,
+    priority: str = "high",
+    max_restart: int = 0,
+    ramdisk_directory: str = "",
+    mtc_enabled: bool = False,
+    use_pathways: bool = False,
+    pathways_gcs_location: str = "",
+    gcluster_version: str = gcluster.DEFAULT_GCLUSTER_VERSION,
+    mounts: str | Iterable[str] | None = None,
+    *,
+    use_gcluster: Literal[True],
+) -> task.GclusterTask:
+  pass
+
+
+@overload
+def get_gke_config(
+    time_out_in_min: int,
+    test_name: str,
+    docker_image: str,
+    test_owner: str,
+    run_model_cmds: Iterable[str],
+    cluster: GkeClusterConfig = GkeClusters.TPU_V4_8_MAXTEXT_CLUSTER,
+    num_slices: int = 1,
+    dataset_name: metric_config.DatasetOption = (
+        metric_config.DatasetOption.XLML_DATASET
+    ),
+    dataset_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
+    composer_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
+    base_output_directory: str = None,
+    metric_aggregation_strategy: metric_config.AggregationStrategy = None,
+    user_specified_job_metric_config: metric_config.MetricConfig = None,
+    priority: str = "high",
+    max_restart: int = 0,
+    ramdisk_directory: str = "",
+    mtc_enabled: bool = False,
+    use_pathways: bool = False,
+    pathways_gcs_location: str = "",
+    xpk_branch: str = xpk.MAIN_BRANCH,
+    use_gcluster: Literal[False] = False,
+) -> task.XpkTask:
+  pass
+
+
+@overload
+def get_gke_config(
+    time_out_in_min: int,
+    test_name: str,
+    docker_image: str,
+    test_owner: str,
+    run_model_cmds: Iterable[str],
+    cluster: GkeClusterConfig = GkeClusters.TPU_V4_8_MAXTEXT_CLUSTER,
+    num_slices: int = 1,
+    dataset_name: metric_config.DatasetOption = (
+        metric_config.DatasetOption.XLML_DATASET
+    ),
+    dataset_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
+    composer_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
+    base_output_directory: str = None,
+    metric_aggregation_strategy: metric_config.AggregationStrategy = None,
+    user_specified_job_metric_config: metric_config.MetricConfig = None,
+    priority: str = "high",
+    max_restart: int = 0,
+    ramdisk_directory: str = "",
+    mtc_enabled: bool = False,
+    use_pathways: bool = False,
+    pathways_gcs_location: str = "",
+    gcluster_version: str = gcluster.DEFAULT_GCLUSTER_VERSION,
+    mounts: str | Iterable[str] | None = None,
+    xpk_branch: str = xpk.MAIN_BRANCH,
+    use_gcluster: bool = False,
+) -> task.GclusterTask | task.XpkTask:
+  pass
 
 
 def get_gke_config(
@@ -210,6 +301,106 @@ def get_gke_config_with_interrupt(
       last_node=last_node,
       check_file_exists=check_file_exists,
   )
+
+
+@overload
+def get_gke_config_with_name_gen_and_quarantine(
+    time_out_in_min: int,
+    test_name: str,
+    docker_image: str,
+    test_owner: str,
+    run_model_cmds: Iterable[str],
+    cluster: GkeClusterConfig = GkeClusters.TPU_V4_8_MAXTEXT_CLUSTER,
+    num_slices: int = 1,
+    dataset_name: metric_config.DatasetOption = (
+        metric_config.DatasetOption.XLML_DATASET
+    ),
+    dataset_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
+    composer_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
+    base_output_directory: str = None,
+    metric_aggregation_strategy: metric_config.AggregationStrategy = None,
+    user_specified_job_metric_config: metric_config.MetricConfig = None,
+    quarantine_task_group: Any = None,
+    run_name_env: str = "M_RUN_NAME",
+    nested_run_name_in_tb_file_location: bool = True,
+    priority: str = "high",
+    max_restart: int = 0,
+    ramdisk_directory: str = "",
+    mtc_enabled: bool = False,
+    use_pathways: bool = False,
+    pathways_gcs_location: str = "",
+    gcluster_version: str = gcluster.DEFAULT_GCLUSTER_VERSION,
+    mounts: str | Iterable[str] | None = None,
+    *,
+    use_gcluster: Literal[True],
+) -> task.GclusterNameGenAndQuarantineTask:
+  pass
+
+
+@overload
+def get_gke_config_with_name_gen_and_quarantine(
+    time_out_in_min: int,
+    test_name: str,
+    docker_image: str,
+    test_owner: str,
+    run_model_cmds: Iterable[str],
+    cluster: GkeClusterConfig = GkeClusters.TPU_V4_8_MAXTEXT_CLUSTER,
+    num_slices: int = 1,
+    dataset_name: metric_config.DatasetOption = (
+        metric_config.DatasetOption.XLML_DATASET
+    ),
+    dataset_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
+    composer_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
+    base_output_directory: str = None,
+    metric_aggregation_strategy: metric_config.AggregationStrategy = None,
+    user_specified_job_metric_config: metric_config.MetricConfig = None,
+    quarantine_task_group: Any = None,
+    run_name_env: str = "M_RUN_NAME",
+    nested_run_name_in_tb_file_location: bool = True,
+    priority: str = "high",
+    max_restart: int = 0,
+    ramdisk_directory: str = "",
+    mtc_enabled: bool = False,
+    use_pathways: bool = False,
+    pathways_gcs_location: str = "",
+    xpk_branch: str = xpk.MAIN_BRANCH,
+    use_gcluster: Literal[False] = False,
+) -> task.XpkNameGenAndQuarantineTask:
+  pass
+
+
+@overload
+def get_gke_config_with_name_gen_and_quarantine(
+    time_out_in_min: int,
+    test_name: str,
+    docker_image: str,
+    test_owner: str,
+    run_model_cmds: Iterable[str],
+    cluster: GkeClusterConfig = GkeClusters.TPU_V4_8_MAXTEXT_CLUSTER,
+    num_slices: int = 1,
+    dataset_name: metric_config.DatasetOption = (
+        metric_config.DatasetOption.XLML_DATASET
+    ),
+    dataset_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
+    composer_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
+    base_output_directory: str = None,
+    metric_aggregation_strategy: metric_config.AggregationStrategy = None,
+    user_specified_job_metric_config: metric_config.MetricConfig = None,
+    quarantine_task_group: Any = None,
+    run_name_env: str = "M_RUN_NAME",
+    nested_run_name_in_tb_file_location: bool = True,
+    priority: str = "high",
+    max_restart: int = 0,
+    ramdisk_directory: str = "",
+    mtc_enabled: bool = False,
+    use_pathways: bool = False,
+    pathways_gcs_location: str = "",
+    gcluster_version: str = gcluster.DEFAULT_GCLUSTER_VERSION,
+    mounts: str | Iterable[str] | None = None,
+    xpk_branch: str = xpk.MAIN_BRANCH,
+    use_gcluster: bool = False,
+) -> task.GclusterNameGenAndQuarantineTask | task.XpkNameGenAndQuarantineTask:
+  pass
 
 
 def get_gke_config_with_name_gen_and_quarantine(

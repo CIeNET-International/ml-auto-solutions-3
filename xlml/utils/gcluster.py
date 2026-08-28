@@ -15,7 +15,6 @@
 """Utility functions for Cluster Toolkit (gcluster) orchestration."""
 
 from collections.abc import Iterable
-import logging
 import os
 import re
 import shlex
@@ -23,21 +22,13 @@ import tempfile
 import uuid
 
 from airflow.decorators import task
-from airflow.exceptions import AirflowFailException
 from airflow.hooks.subprocess import SubprocessHook
 from dags.common.vm_resource import GpuVersion
-from kubernetes import client as k8s_client
 from xlml.utils import composer, gke
 
 DEFAULT_GCLUSTER_VERSION = "v1.102.0"
 
-LOGGING_URL_FORMAT = (
-    "https://console.cloud.google.com/logs/viewer"
-    "?project={project}&resource=k8s_container"
-    "&minLogLevel=0&expandAll=false"
-    "&customFacets=&limitCustomFacetWidth=true"
-    "&filters=text:job-name%3D{workload_id}"
-)
+LOGGING_URL_FORMAT = gke.LOGGING_URL_FORMAT
 
 
 def get_gcluster_setup_cmd(
@@ -190,169 +181,8 @@ def run_workload(
     ), f"Cluster Toolkit submit failed with code {result.exit_code}"
 
 
-@task.sensor(poke_interval=60, timeout=7200, mode="reschedule")
-def wait_for_workload_start(
-    workload_id: str,
-    project_id: str,
-    region: str,
-    cluster_name: str,
-    namespace: str = "default",
-) -> bool:
-  """Wait for workload to start running."""
-  core_api = gke.get_core_api_client(project_id, region, cluster_name)
-  pods = gke.list_workload_pods(core_api, workload_id, namespace=namespace)
-  gke.log_workload_pod_statuses(workload_id, pods)
-
-  if not pods.items:
-    logging.info(f"Waiting for pods of workload: {workload_id} to be created.")
-    return False
-
-  for pod in pods.items:
-    if pod.status.phase in ["Pending", "Unknown"]:
-      logging.info(f"Pod {pod.metadata.name} is in phase {pod.status.phase}")
-      return False
-    if pod.status.phase == "Failed":
-      url = LOGGING_URL_FORMAT.format(
-          project=project_id,
-          region=region,
-          cluster=cluster_name,
-          namespace=namespace,
-          workload_id=workload_id,
-      )
-      raise AirflowFailException(
-          f"Workload {workload_id} failed during startup with pod phase:"
-          f" {pod.status.phase}. Link to logs: {url}"
-      )
-
-  logging.info("All pod(s) phase are ready to run.")
-  return True
-
-
-@task.sensor(poke_interval=60, timeout=18000, mode="reschedule")
-def wait_for_workload_completion(
-    workload_id: str,
-    project_id: str,
-    region: str,
-    cluster_name: str,
-    namespace: str = "default",
-) -> bool:
-  """Wait for workload to finish successfully."""
-  core_api = gke.get_core_api_client(project_id, region, cluster_name)
-  pods = gke.list_workload_pods(core_api, workload_id, namespace=namespace)
-  gke.log_workload_pod_statuses(workload_id, pods)
-
-  if not pods.items:
-    batch_api = gke.get_batch_api_client(project_id, region, cluster_name)
-    job = gke.get_workload_job(batch_api, workload_id, namespace=namespace)
-    if job and job.status and job.status.conditions:
-      conditions = job.status.conditions
-      if any(
-          c.type == "Failed" and getattr(c, "status", "True") != "False"
-          for c in conditions
-      ):
-        url = LOGGING_URL_FORMAT.format(
-            project=project_id,
-            region=region,
-            cluster=cluster_name,
-            namespace=namespace,
-            workload_id=workload_id,
-        )
-        raise AirflowFailException(
-            f"Workload {workload_id} failed. Logs: {url}"
-        )
-      if any(
-          c.type == "Complete" and getattr(c, "status", "True") != "False"
-          for c in conditions
-      ):
-        logging.info(f"Workload {workload_id} Job completed successfully.")
-        return True
-
-    custom_api = gke.get_custom_objects_api_client(
-        project_id, region, cluster_name
-    )
-    jobset = gke.get_workload_jobset(
-        custom_api, workload_id, namespace=namespace
-    )
-    if jobset and "status" in jobset and "conditions" in jobset["status"]:
-      conditions = jobset["status"]["conditions"]
-      if any(
-          c.get("type") == "Failed" and c.get("status", "True") != "False"
-          for c in conditions
-      ):
-        url = LOGGING_URL_FORMAT.format(
-            project=project_id,
-            region=region,
-            cluster=cluster_name,
-            namespace=namespace,
-            workload_id=workload_id,
-        )
-        raise AirflowFailException(
-            f"Workload {workload_id} JobSet failed. Logs: {url}"
-        )
-      if any(
-          c.get("type") == "Completed" and c.get("status", "True") != "False"
-          for c in conditions
-      ):
-        logging.info(f"Workload {workload_id} JobSet completed successfully.")
-        return True
-
-    logging.info(f"No pods found for workload: {workload_id}")
-    return False
-
-  for pod in pods.items:
-    if pod.status.phase in ["Pending", "Running", "Unknown"]:
-      logging.info(f"Pod {pod.metadata.name} is in phase {pod.status.phase}")
-      return False
-    if pod.status.phase == "Failed":
-      url = LOGGING_URL_FORMAT.format(
-          project=project_id,
-          region=region,
-          cluster=cluster_name,
-          namespace=namespace,
-          workload_id=workload_id,
-      )
-      raise AirflowFailException(
-          f"Workload {workload_id} failed with pod phase: {pod.status.phase}."
-          f" Link to logs: {url}"
-      )
-
-  for pod in pods.items:
-    if pod.status.container_statuses:
-      for container_status in pod.status.container_statuses:
-        if (
-            container_status.state
-            and container_status.state.terminated
-            and container_status.state.terminated.exit_code != 0
-        ):
-          try:
-            container_name = (
-                container_status.name or pod.spec.containers[0].name
-            )
-            logs = core_api.read_namespaced_pod_log(
-                name=pod.metadata.name,
-                namespace=namespace,
-                container=container_name,
-            )
-            for line in logs.split("\n"):
-              logging.info(line)
-          except k8s_client.exceptions.ApiException as e:
-            logging.warning(
-                f"Could not retrieve pod logs for {pod.metadata.name}: {e}"
-            )
-          url = LOGGING_URL_FORMAT.format(
-              project=project_id,
-              region=region,
-              cluster=cluster_name,
-              namespace=namespace,
-              workload_id=workload_id,
-          )
-          raise AirflowFailException(
-              f"Workload {workload_id} failed with container exit code "
-              f"{container_status.state.terminated.exit_code}. Logs: {url}"
-          )
-
-  logging.info("All pod(s) phase are succeeded.")
-  return True
+wait_for_workload_start = gke.wait_for_workload_start
+wait_for_workload_completion = gke.wait_for_workload_completion
 
 
 @task(trigger_rule="all_done")
