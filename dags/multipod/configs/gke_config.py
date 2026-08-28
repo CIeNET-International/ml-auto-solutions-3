@@ -113,27 +113,6 @@ def get_gke_config(
     use_gcluster: bool = False,
 ) -> task.GclusterTask | task.XpkTask:
   """Constructs a GKE task for either Cluster Toolkit (gcluster) or XPK."""
-  if use_gcluster:
-    if xpk_branch != xpk.MAIN_BRANCH:
-      raise ValueError(
-          "xpk_branch cannot be specified when use_gcluster=True (got"
-          f" {xpk_branch!r})."
-      )
-  else:
-    if mounts is not None:
-      raise ValueError(
-          "mounts parameter is only supported when use_gcluster=True."
-      )
-    if pathways_gcs_location:
-      raise ValueError(
-          "pathways_gcs_location parameter is only supported when"
-          " use_gcluster=True."
-      )
-    if gcluster_version != gcluster.DEFAULT_GCLUSTER_VERSION:
-      raise ValueError(
-          "gcluster_version cannot be specified when use_gcluster=False."
-      )
-
   job_gcp_config = gcp_config.GCPConfig(
       project_name=cluster.project,
       zone=cluster.zone,
@@ -387,27 +366,6 @@ def get_gke_config_with_name_gen_and_quarantine(
     use_gcluster: bool = False,
 ) -> task.GclusterNameGenAndQuarantineTask | task.XpkNameGenAndQuarantineTask:
   """Constructs a GKE name-gen/quarantine task for Cluster Toolkit or XPK."""
-  if use_gcluster:
-    if xpk_branch != xpk.MAIN_BRANCH:
-      raise ValueError(
-          "xpk_branch cannot be specified when use_gcluster=True (got"
-          f" {xpk_branch!r})."
-      )
-  else:
-    if mounts is not None:
-      raise ValueError(
-          "mounts parameter is only supported when use_gcluster=True."
-      )
-    if pathways_gcs_location:
-      raise ValueError(
-          "pathways_gcs_location parameter is only supported when"
-          " use_gcluster=True."
-      )
-    if gcluster_version != gcluster.DEFAULT_GCLUSTER_VERSION:
-      raise ValueError(
-          "gcluster_version cannot be specified when use_gcluster=False."
-      )
-
   job_gcp_config = gcp_config.GCPConfig(
       project_name=cluster.project,
       zone=cluster.zone,
