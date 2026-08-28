@@ -32,6 +32,7 @@ def get_gke_config(
     docker_image: str,
     test_owner: str,
     run_model_cmds: Iterable[str],
+    use_gcluster: Literal[False] = False,
     cluster: GkeClusterConfig = GkeClusters.TPU_V4_8_MAXTEXT_CLUSTER,
     num_slices: int = 1,
     dataset_name: metric_config.DatasetOption = (
@@ -47,8 +48,6 @@ def get_gke_config(
     ramdisk_directory: str = "",
     mtc_enabled: bool = False,
     use_pathways: bool = False,
-    *,
-    use_gcluster: Literal[False] = False,
     xpk_branch: str = xpk.MAIN_BRANCH,
 ) -> task.XpkTask:
   pass
@@ -61,6 +60,7 @@ def get_gke_config(
     docker_image: str,
     test_owner: str,
     run_model_cmds: Iterable[str],
+    use_gcluster: Literal[True],
     cluster: GkeClusterConfig = GkeClusters.TPU_V4_8_MAXTEXT_CLUSTER,
     num_slices: int = 1,
     dataset_name: metric_config.DatasetOption = (
@@ -76,8 +76,6 @@ def get_gke_config(
     ramdisk_directory: str = "",
     mtc_enabled: bool = False,
     use_pathways: bool = False,
-    *,
-    use_gcluster: Literal[True],
     gcluster_version: str = gcluster.DEFAULT_GCLUSTER_VERSION,
     mounts: str | Iterable[str] | None = None,
     pathways_gcs_location: str = "",
@@ -91,6 +89,7 @@ def get_gke_config(
     docker_image: str,
     test_owner: str,
     run_model_cmds: Iterable[str],
+    use_gcluster: bool = False,
     cluster: GkeClusterConfig = GkeClusters.TPU_V4_8_MAXTEXT_CLUSTER,
     num_slices: int = 1,
     dataset_name: metric_config.DatasetOption = (
@@ -110,7 +109,6 @@ def get_gke_config(
     mounts: str | Iterable[str] | None = None,
     pathways_gcs_location: str = "",
     xpk_branch: str = xpk.MAIN_BRANCH,
-    use_gcluster: bool = False,
 ) -> task.GclusterTask | task.XpkTask:
   """Constructs a GKE task for either Cluster Toolkit (gcluster) or XPK."""
   job_gcp_config = gcp_config.GCPConfig(
@@ -276,6 +274,7 @@ def get_gke_config_with_name_gen_and_quarantine(
     docker_image: str,
     test_owner: str,
     run_model_cmds: Iterable[str],
+    use_gcluster: Literal[False] = False,
     cluster: GkeClusterConfig = GkeClusters.TPU_V4_8_MAXTEXT_CLUSTER,
     num_slices: int = 1,
     dataset_name: metric_config.DatasetOption = (
@@ -294,8 +293,6 @@ def get_gke_config_with_name_gen_and_quarantine(
     ramdisk_directory: str = "",
     mtc_enabled: bool = False,
     use_pathways: bool = False,
-    *,
-    use_gcluster: Literal[False] = False,
     xpk_branch: str = xpk.MAIN_BRANCH,
 ) -> task.XpkNameGenAndQuarantineTask:
   pass
@@ -308,6 +305,7 @@ def get_gke_config_with_name_gen_and_quarantine(
     docker_image: str,
     test_owner: str,
     run_model_cmds: Iterable[str],
+    use_gcluster: Literal[True],
     cluster: GkeClusterConfig = GkeClusters.TPU_V4_8_MAXTEXT_CLUSTER,
     num_slices: int = 1,
     dataset_name: metric_config.DatasetOption = (
@@ -326,8 +324,6 @@ def get_gke_config_with_name_gen_and_quarantine(
     ramdisk_directory: str = "",
     mtc_enabled: bool = False,
     use_pathways: bool = False,
-    *,
-    use_gcluster: Literal[True],
     gcluster_version: str = gcluster.DEFAULT_GCLUSTER_VERSION,
     mounts: str | Iterable[str] | None = None,
     pathways_gcs_location: str = "",
@@ -341,6 +337,7 @@ def get_gke_config_with_name_gen_and_quarantine(
     docker_image: str,
     test_owner: str,
     run_model_cmds: Iterable[str],
+    use_gcluster: bool = False,
     cluster: GkeClusterConfig = GkeClusters.TPU_V4_8_MAXTEXT_CLUSTER,
     num_slices: int = 1,
     dataset_name: metric_config.DatasetOption = (
@@ -363,7 +360,6 @@ def get_gke_config_with_name_gen_and_quarantine(
     mounts: str | Iterable[str] | None = None,
     pathways_gcs_location: str = "",
     xpk_branch: str = xpk.MAIN_BRANCH,
-    use_gcluster: bool = False,
 ) -> task.GclusterNameGenAndQuarantineTask | task.XpkNameGenAndQuarantineTask:
   """Constructs a GKE name-gen/quarantine task for Cluster Toolkit or XPK."""
   job_gcp_config = gcp_config.GCPConfig(
