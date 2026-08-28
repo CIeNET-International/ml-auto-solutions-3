@@ -19,14 +19,15 @@ from datetime import datetime, timedelta, timezone
 
 from airflow.exceptions import AirflowFailException
 from airflow.models import BaseOperator
-from airflow.models.abstractoperator import AbstractOperator
 from airflow.models.mappedoperator import MappedOperator
 from airflow.models.taskmixin import DAGNode
 from airflow.operators.python import PythonOperator
 from airflow.sensors.base import BaseSensorOperator
 from airflow.utils.context import Context
+from airflow.utils.state import TaskInstanceState
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.timeout import timeout as AirflowTimeout
+from airflow.utils.trigger_rule import TriggerRule
 
 
 class TaskGroupWithTimeout(TaskGroup):
@@ -58,33 +59,39 @@ class TaskGroupWithTimeout(TaskGroup):
   """
 
   ROOT_TASK_ID = "provision_taskgroup_session"
+  LEAF_TASK_ID = "aggregate_taskgroup_status"
 
   def __init__(
       self,
       group_id,
       timeout: timedelta,
-      as_teardown_of: BaseOperator | None = None,
+      is_teardown: bool = False,
       **kwargs,
   ):
     super().__init__(group_id=group_id, **kwargs)
     self.group_name = f"{self.__class__.__name__}: '{group_id}'"
     self.timeout = timeout
-    self.setup_op = as_teardown_of
+    self.is_teardown = is_teardown
     self._root_node = None
+    self._leaf_node = None
 
   def __exit__(self, *args):
     """Wire `_root_node` as upstream of in-group root children on context
     exit."""
     self.initialize_task_group_session()
-    self.mark_teardown()
+    self.initialize_status_aggregator()
     return super().__exit__(*args)
 
   def initialize_task_group_session(self):
     """Initializes the session root task and wires it to in-group root
     children."""
+    root_trigger_rule = (
+        TriggerRule.ALL_DONE if self.is_teardown else TriggerRule.ALL_SUCCESS
+    )
     self._root_node = PythonOperator(
         task_id=self.ROOT_TASK_ID,
         python_callable=lambda: datetime.now(timezone.utc).isoformat(),
+        trigger_rule=root_trigger_rule,
     )
 
     children_ids = set(self.children.keys())
@@ -95,22 +102,38 @@ class TaskGroupWithTimeout(TaskGroup):
         continue
       child.set_upstream(self._root_node)
 
-  def mark_teardown(self):
-    """Marks all operators within this TaskGroup as teardown tasks."""
-    if self.setup_op is None:
-      return
+  def initialize_status_aggregator(self):
+    """Initializes the leaf aggregator task and wires it downstream of
+    in-group leaf children."""
 
+    def _aggregate_status(**context):
+      dag_run = context["dag_run"]
+      current_task_id = context["task_instance"].task_id
+
+      failed_tasks = [
+          ti.task_id
+          for ti in dag_run.get_task_instances()
+          if ti.state == TaskInstanceState.FAILED
+          and ti.task_id != current_task_id
+      ]
+
+      if failed_tasks:
+        raise AirflowFailException(
+            f"Failing DAG run due to failed task(s): {failed_tasks}"
+        )
+
+    self._leaf_node = PythonOperator(
+        task_id=self.LEAF_TASK_ID,
+        python_callable=_aggregate_status,
+        trigger_rule=TriggerRule.ALL_DONE,
+    )
+
+    children_ids = set(self.children.keys())
     for child in self.children.values():
-      match child:
-        case TaskGroup():
-          pass  # A TaskGroup does not have a teardown attribute.
-
-        case AbstractOperator():
-          is_root = child is self._root_node
-          child.as_teardown(
-              setups=self.setup_op,
-              on_failure_fail_dagrun=not is_root,
-          )
+      if child is self._leaf_node or child is self._root_node:
+        continue
+      if child.downstream_task_ids.isdisjoint(children_ids):
+        child.set_downstream(self._leaf_node)
 
   def add(self, node: DAGNode):
     node = super().add(node)
@@ -134,7 +157,10 @@ class TaskGroupWithTimeout(TaskGroup):
             f"{self.__class__.__name__} does not support Dynamic Task Mapping"
         )
 
-      case BaseOperator() if node.task_id.endswith(f".{self.ROOT_TASK_ID}"):
+      case BaseOperator() if (
+          node.task_id.endswith(f".{self.ROOT_TASK_ID}")
+          or node.task_id.endswith(f".{self.LEAF_TASK_ID}")
+      ):
         # Skip the root node, which only initiates the session of this task
         # group and requires no interception.
         return node
