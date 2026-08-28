@@ -15,10 +15,14 @@
 """
 MaxText E2E TPU Post-Training Tests DAG (Stage 2).
 
-Executes end-to-end MaxText post-training workflows (SFT, Multimodal SFT, LoRA, RL) on Cloud TPU:
-- Waits for model conversion in maxtext_e2e_tpu_checkpoint_conversion via ExternalTaskSensor.
-- Executes post-training scripts with Pathways runtime persistence on TPU slices.
-- Converts post-trained checkpoints back to Hugging Face format to verify weight fidelity.
+Executes end-to-end MaxText post-training workflows
+(SFT, Multimodal SFT, LoRA, RL) on Cloud TPU:
+- Waits for model conversion in maxtext_e2e_tpu_checkpoint_conversion
+  via ExternalTaskSensor.
+- Executes post-training scripts with Pathways runtime persistence
+  on TPU slices.
+- Converts post-trained checkpoints back to Hugging Face format
+  to verify weight fidelity.
 """
 import datetime
 
@@ -32,13 +36,15 @@ from dags.common import test_owner
 from dags.common.quarantined_tests import safe_get_from_variable
 from dags.common.vm_resource import XpkClusters
 from dags.multipod.configs import xpk_gke_config as gke_config
+from dags.multipod.inference_validation_util import validate_semantic_inference_output
 
 # HF token retrieved from Airflow Variables for secure credential management
 HF_TOKEN = safe_get_from_variable("HF_TOKEN", None)
 
 
 class ExternalTaskSensorWithBypass(ExternalTaskSensor):
-  """ExternalTaskSensor that passes immediately if wait_for_conversion param is False."""
+  """ExternalTaskSensor that passes immediately if
+  wait_for_conversion param is False."""
 
   @provide_session
   def poke(self, context, session=None):
@@ -66,7 +72,10 @@ with models.DAG(
         "run_name": Param(
             default="",
             type="string",
-            description="Shared run name for checkpoints (defaults to post-{{ ts_nodash }})",
+            description=(
+                "Shared run name for checkpoints "
+                "(defaults to post-{{ ts_nodash }})"
+            ),
         ),
         "wait_for_conversion": Param(
             default=True,
@@ -205,10 +214,11 @@ with models.DAG(
           model_path = mode_test_config["maxtext_ckpt_path"].format(
               run_name=run_name
           )
-          base_output_dir = model_path.split("/checkpoints/")[0]
+          base_output_dir = model_path.split("/checkpoints/", maxsplit=1)[0]
           cleanup_cmd = (
               f"if gsutil ls {base_output_dir} >/dev/null 2>&1; then "
-              f"echo 'Retry detected (directory exists). Cleaning up previous checkpoints...'; "
+              f"echo 'Retry detected. "
+              f"Cleaning up previous checkpoints...'; "
               f"gsutil -m rm -rf {base_output_dir} || true; "
               f"fi"
           )
@@ -271,8 +281,16 @@ with models.DAG(
               priority="very-high",
           ).run(skip_post_process=True)
 
+          verification_task = validate_semantic_inference_output(
+              project_id=XpkClusters.TPU_V5P_MLPERF_CLUSTER.project,
+              location=XpkClusters.TPU_V5P_MLPERF_CLUSTER.zone,
+              cluster_name=XpkClusters.TPU_V5P_MLPERF_CLUSTER.name,
+              start_time="{{ ts }}",
+          )
+
           chain(
               wait_for_conversion,
               training_task,
+              verification_task,
               convert_to_huggingface_task,
           )
