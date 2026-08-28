@@ -182,6 +182,7 @@ class TaskGroupWithTimeout(TaskGroup):
               group_deadline=deadline,
               group_name=group_name,
               seconds=float(effective_timeout_sec),
+              error_message=f"{group_name}; task: '{task_instance.task_id}'",
           ):
             return original_execute(task, context)
 
@@ -245,8 +246,8 @@ class TaskTimeout(AirflowTimeout):
       task_retry_delay,
       group_deadline,
       group_name,
-      seconds=1,
-      error_message="Timeout",
+      seconds,
+      error_message,
   ):
     super().__init__(seconds=seconds, error_message=error_message)
     self.group_deadline = group_deadline
@@ -259,7 +260,10 @@ class TaskTimeout(AirflowTimeout):
         self.group_deadline - datetime.now(timezone.utc)
     ).total_seconds()
     if group_remaining_now <= self.task_retry_delay:
-      raise AirflowFailException(f"{self.group_name} timeout exceeded")
+      raise AirflowFailException(
+          f"{self.error_message}; retry delay exceeds remaining group budget, "
+          f"failing without retry."
+      )
 
     self.log.error("Process timed out, PID: %s", str(os.getpid()))
-    raise AirflowTaskTimeout(self.error_message)
+    raise AirflowTaskTimeout(f"{self.error_message}; task will retry.")
