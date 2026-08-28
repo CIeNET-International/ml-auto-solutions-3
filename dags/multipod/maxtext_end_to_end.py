@@ -22,8 +22,8 @@ from airflow.utils.task_group import TaskGroup
 from dags import composer_env
 from dags.common.quarantined_tests import QuarantineTests, safe_get_from_variable
 from dags.common import test_owner
-from dags.common.vm_resource import XpkClusters, DockerImage
-from dags.multipod.configs import xpk_gke_config as gke_config
+from dags.common.vm_resource import GkeClusters, DockerImage
+from dags.multipod.configs import gke_config
 from xlml.utils import name_format
 
 # Run once a day at 4 am UTC (8 pm PST)
@@ -96,7 +96,7 @@ with models.DAG(
         test_name=f"{test_name_prefix}-stable-{model}",
         run_model_cmds=model_cmds,
         docker_image=DockerImage.MAXTEXT_TPU_JAX_STABLE.value,
-        cluster=XpkClusters.TPU_V5P_8_CLUSTER_V2,
+        cluster=GkeClusters.TPU_V5P_8_CLUSTER_V2,
         test_owner=test_config["owner"],
     ).run_with_quarantine(quarantine_task_group)
     nightly_tpu = gke_config.get_gke_config(
@@ -104,7 +104,7 @@ with models.DAG(
         test_name=f"{test_name_prefix}-nightly-{model}",
         run_model_cmds=model_cmds,
         docker_image=DockerImage.MAXTEXT_TPU_JAX_NIGHTLY.value,
-        cluster=XpkClusters.TPU_V5P_8_CLUSTER,
+        cluster=GkeClusters.TPU_V5P_8_CLUSTER,
         test_owner=test_config["owner"],
     ).run_with_quarantine(quarantine_task_group)
     chain(stable_tpu, nightly_tpu)
@@ -113,24 +113,24 @@ with models.DAG(
       "llama2-70b": [
           {
               "script_name": "tpu/llama2/70b/1_test_llama2_70b",
-              "cluster": XpkClusters.CPU_M1_MEGAMEM_96_CLUSTER,
+              "cluster": GkeClusters.CPU_M1_MEGAMEM_96_CLUSTER,
               "time_out_in_min": 360,
           },
           {
               "script_name": "tpu/llama2/70b/2_test_llama2_70b",
-              "cluster": XpkClusters.TPU_V5P_128_CLUSTER,
+              "cluster": GkeClusters.TPU_V5P_128_CLUSTER,
               "time_out_in_min": 60,
           },
       ],
       "gemma-7b": [
           {
               "script_name": "tpu/gemma/7b/1_test_gemma",
-              "cluster": XpkClusters.CPU_N2_STANDARD_64_CLUSTER,
+              "cluster": GkeClusters.CPU_N2_STANDARD_64_CLUSTER,
               "time_out_in_min": 60,
           },
           {
               "script_name": "tpu/gemma/7b/2_test_gemma",
-              "cluster": XpkClusters.TPU_V5P_8_CLUSTER,
+              "cluster": GkeClusters.TPU_V5P_8_CLUSTER,
               "time_out_in_min": 60,
           },
       ],

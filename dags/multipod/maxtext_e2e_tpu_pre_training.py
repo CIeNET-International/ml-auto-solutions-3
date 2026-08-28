@@ -12,8 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-MaxText E2E TPU Pre-Training Tests DAG (Stage 2).
+"""MaxText E2E TPU Pre-Training Tests DAG (Stage 2).
 
 Executes end-to-end MaxText pre-training test workloads on Cloud TPU:
 - Waits for model conversion in maxtext_e2e_tpu_checkpoint_conversion
@@ -32,19 +31,23 @@ from airflow.utils.session import provide_session
 from airflow.utils.task_group import TaskGroup
 from dags.common import test_owner
 from dags.common.quarantined_tests import safe_get_from_variable
-from dags.common.vm_resource import XpkClusters
-from dags.multipod.configs import xpk_gke_config as gke_config
+from dags.common.vm_resource import GkeClusters
+from dags.multipod.configs import gke_config
 
 HF_TOKEN = safe_get_from_variable("HF_TOKEN", None)
 
 
 class ExternalTaskSensorWithBypass(ExternalTaskSensor):
-  """ExternalTaskSensor that passes immediately if
-  wait_for_conversion param is False."""
+  """Sensor that passes immediately if wait_for_conversion param is False."""
 
   @provide_session
   def poke(self, context, session=None):
-    if not context.get("params", {}).get("wait_for_conversion", True):
+    params = context.get("params") or {}
+    dag_run = context.get("dag_run")
+    conf = (dag_run.conf if dag_run else {}) or {}
+    if not params.get("wait_for_conversion", True) or not conf.get(
+        "wait_for_conversion", True
+    ):
       self.log.info("Bypassing conversion sensor: wait_for_conversion is False")
       return True
     return super().poke(context, session=session)
@@ -69,7 +72,7 @@ with models.DAG(
             default="",
             type="string",
             description=(
-                "Shared run name for checkpoints " "(e.g. conv-20260813T123008)"
+                "Shared run name for checkpoints (e.g. conv-20260813T123008)"
             ),
         ),
         "wait_for_conversion": Param(
@@ -145,10 +148,11 @@ with models.DAG(
           f"fi"
       )
 
+      training_script = test_config["training"]["command"]
       training_cmd = (
           f"export HF_TOKEN={HF_TOKEN}",
           cleanup_cmd,
-          f"{test_config['training']['command']} {run_name}",
+          f"{training_script} {run_name}",
       )
       training_core_count = test_config.get("core_count", 8)
       training_task = gke_config.get_gke_config(
@@ -156,32 +160,33 @@ with models.DAG(
           test_name="pre",
           run_model_cmds=training_cmd,
           docker_image="{{ params.docker_image }}",
-          cluster=XpkClusters.TPU_V5P_MLPERF_CLUSTER.override(
+          cluster=GkeClusters.TPU_V5P_MLPERF_CLUSTER.override(
               core_count=training_core_count
           ),
           test_owner=test_owner.SURBHI_J,
           priority="very-high",
           max_restart=3,
+          use_gcluster=True,
       ).run(skip_post_process=True)
 
       to_hf_flags = test_config.get("to_hf_flags", "")
+      to_hf_script = test_config["to_huggingface"]
 
       convert_to_huggingface_cmd = (
           f"export HF_TOKEN={HF_TOKEN}",
           'export HF_HOME="/dev/shm/hf_cache"',
           'export LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=20480"',
-      ) + (
-          f"{test_config['to_huggingface']} "
-          f"{run_name} {model_path} {to_hf_flags}",
+          f"{to_hf_script} {run_name} {model_path} {to_hf_flags}",
       )
       convert_to_huggingface_task = gke_config.get_gke_config(
           time_out_in_min=90,
           test_name="to-hf",
           run_model_cmds=convert_to_huggingface_cmd,
           docker_image="{{ params.docker_image }}",
-          cluster=XpkClusters.TPU_V5P_MLPERF_CLUSTER,
+          cluster=GkeClusters.TPU_V5P_MLPERF_CLUSTER,
           test_owner=test_owner.SURBHI_J,
           priority="very-high",
+          use_gcluster=True,
       ).run(skip_post_process=True)
 
       wait_for_conversion = ExternalTaskSensorWithBypass(

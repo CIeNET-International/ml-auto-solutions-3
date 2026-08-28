@@ -21,8 +21,8 @@ from airflow.models.baseoperator import chain
 from airflow.utils.task_group import TaskGroup
 from dags import composer_env
 from dags.common import test_owner
-from dags.common.vm_resource import DockerImage, XpkClusters
-from dags.multipod.configs import xpk_gke_config as gke_config
+from dags.common.vm_resource import DockerImage, GkeClusters
+from dags.multipod.configs import gke_config
 
 # Run once a day at 5 pm UTC (1 am PST)
 SCHEDULED_TIME = "0 17 * * *" if composer_env.is_prod_env() else None
@@ -52,7 +52,7 @@ with models.DAG(
 
   # v5p tests
   maxtext_nightly_1slice_v5p_8 = gke_config.get_gke_maxtext_nightly_config(
-      cluster=XpkClusters.TPU_V5P_8_CLUSTER_V2,
+      cluster=GkeClusters.TPU_V5P_8_CLUSTER_V2,
       time_out_in_min=60,
       test_name=default_test_name,
       docker_image=jax_nightly_image.value,
@@ -61,7 +61,7 @@ with models.DAG(
 
   maxtext_nightly_2slice_v5p_8 = gke_config.get_gke_maxtext_nightly_config(
       num_slices=2,
-      cluster=XpkClusters.TPU_V5P_8_CLUSTER_V2,
+      cluster=GkeClusters.TPU_V5P_8_CLUSTER_V2,
       time_out_in_min=60,
       test_name=default_test_name,
       docker_image=jax_nightly_image.value,
@@ -70,7 +70,7 @@ with models.DAG(
 
   maxtext_nightly_4slice_v5p_8 = gke_config.get_gke_maxtext_nightly_config(
       num_slices=4,
-      cluster=XpkClusters.TPU_V5P_8_CLUSTER_V2,
+      cluster=GkeClusters.TPU_V5P_8_CLUSTER_V2,
       time_out_in_min=60,
       test_name=default_test_name,
       docker_image=jax_nightly_image.value,
@@ -79,7 +79,7 @@ with models.DAG(
 
   maxtext_nightly_8slice_v5p_8 = gke_config.get_gke_maxtext_nightly_config(
       num_slices=8,
-      cluster=XpkClusters.TPU_V5P_8_CLUSTER_V2,
+      cluster=GkeClusters.TPU_V5P_8_CLUSTER_V2,
       time_out_in_min=60,
       test_name=default_test_name,
       docker_image=jax_nightly_image.value,
@@ -88,7 +88,7 @@ with models.DAG(
 
   # v6e tests
   maxtext_nightly_1slice_v6e_8 = gke_config.get_gke_maxtext_nightly_config(
-      cluster=XpkClusters.TPU_V6E_8_CLUSTER,
+      cluster=GkeClusters.TPU_V6E_8_CLUSTER,
       time_out_in_min=60,
       test_name=default_test_name,
       docker_image=jax_nightly_image.value,
@@ -97,7 +97,7 @@ with models.DAG(
 
   maxtext_nightly_2slice_v6e_8 = gke_config.get_gke_maxtext_nightly_config(
       num_slices=2,
-      cluster=XpkClusters.TPU_V6E_8_CLUSTER,
+      cluster=GkeClusters.TPU_V6E_8_CLUSTER,
       time_out_in_min=60,
       test_name=default_test_name,
       docker_image=jax_nightly_image.value,
@@ -106,7 +106,7 @@ with models.DAG(
 
   maxtext_nightly_4slice_v6e_8 = gke_config.get_gke_maxtext_nightly_config(
       num_slices=4,
-      cluster=XpkClusters.TPU_V6E_8_CLUSTER,
+      cluster=GkeClusters.TPU_V6E_8_CLUSTER,
       time_out_in_min=60,
       test_name=default_test_name,
       docker_image=jax_nightly_image.value,
@@ -115,7 +115,7 @@ with models.DAG(
 
   maxtext_nightly_8slice_v6e_8 = gke_config.get_gke_maxtext_nightly_config(
       num_slices=8,
-      cluster=XpkClusters.TPU_V6E_8_CLUSTER,
+      cluster=GkeClusters.TPU_V6E_8_CLUSTER,
       time_out_in_min=60,
       test_name=default_test_name,
       docker_image=jax_nightly_image.value,

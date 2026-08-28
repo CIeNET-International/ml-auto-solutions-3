@@ -12,8 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-MaxText E2E TPU Post-Training Tests DAG (Stage 2).
+"""MaxText E2E TPU Post-Training Tests DAG (Stage 2).
 
 Executes end-to-end MaxText post-training workflows
 (SFT, Multimodal SFT, LoRA, RL) on Cloud TPU:
@@ -24,6 +23,7 @@ Executes end-to-end MaxText post-training workflows
 - Converts post-trained checkpoints back to Hugging Face format
   to verify weight fidelity.
 """
+
 import datetime
 
 from airflow import models
@@ -34,20 +34,24 @@ from airflow.utils.session import provide_session
 from airflow.utils.task_group import TaskGroup
 from dags.common import test_owner
 from dags.common.quarantined_tests import safe_get_from_variable
-from dags.common.vm_resource import XpkClusters
-from dags.multipod.configs import xpk_gke_config as gke_config
+from dags.common.vm_resource import GkeClusters
+from dags.multipod.configs import gke_config
 
 # HF token retrieved from Airflow Variables for secure credential management
 HF_TOKEN = safe_get_from_variable("HF_TOKEN", None)
 
 
 class ExternalTaskSensorWithBypass(ExternalTaskSensor):
-  """ExternalTaskSensor that passes immediately if
-  wait_for_conversion param is False."""
+  """Sensor that passes immediately if wait_for_conversion param is False."""
 
   @provide_session
   def poke(self, context, session=None):
-    if not context.get("params", {}).get("wait_for_conversion", True):
+    params = context.get("params") or {}
+    dag_run = context.get("dag_run")
+    conf = (dag_run.conf if dag_run else {}) or {}
+    if not params.get("wait_for_conversion", True) or not conf.get(
+        "wait_for_conversion", True
+    ):
       self.log.info("Bypassing conversion sensor: wait_for_conversion is False")
       return True
     return super().poke(context, session=session)
@@ -247,7 +251,7 @@ with models.DAG(
           training_task = gke_config.get_gke_config(
               time_out_in_min=60,
               num_slices=1,
-              cluster=XpkClusters.TPU_V5P_MLPERF_CLUSTER.override(
+              cluster=GkeClusters.TPU_V5P_MLPERF_CLUSTER.override(
                   core_count=training_core_count
               ),
               test_name=mode_short_name,
@@ -257,26 +261,26 @@ with models.DAG(
               use_pathways=True,
               priority="very-high",
               max_restart=3,
+              use_gcluster=True,
           ).run(skip_post_process=True)
 
           to_hf_flags = mode_test_config.get("to_hf_flags", "false true")
-
+          to_hf_script = test_config["to_huggingface"]
           convert_to_huggingface_cmd = (
               f"export HF_TOKEN={HF_TOKEN}",
               'export HF_HOME="/dev/shm/hf_cache"',
               'export LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=20480"',
-          ) + (
-              f"{test_config['to_huggingface']} "
-              f"{run_name} {model_path} {to_hf_flags}",
+              f"{to_hf_script} {run_name} {model_path} {to_hf_flags}",
           )
           convert_to_huggingface_task = gke_config.get_gke_config(
               time_out_in_min=90,
               test_name="to-hf",
               run_model_cmds=convert_to_huggingface_cmd,
               docker_image="{{ params.docker_image }}",
-              cluster=XpkClusters.TPU_V5P_MLPERF_CLUSTER,
+              cluster=GkeClusters.TPU_V5P_MLPERF_CLUSTER,
               test_owner=test_owner.SURBHI_J,
               priority="very-high",
+              use_gcluster=True,
           ).run(skip_post_process=True)
 
           chain(

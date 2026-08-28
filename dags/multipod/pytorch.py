@@ -19,7 +19,7 @@ import datetime
 from airflow import models
 from dags import composer_env
 from dags.common import test_owner
-from dags.common.vm_resource import TpuVersion, Zone, DockerImage, XpkClusters
+from dags.common.vm_resource import TpuVersion, Zone, DockerImage, GkeClusters
 from dags.multipod.configs import pytorch_config
 from xlml.apis import metric_config
 
@@ -34,8 +34,8 @@ with models.DAG(
     catchup=False,
     concurrency=2,
 ) as dag:
-  v4_8 = XpkClusters.TPU_V4_8_MAXTEXT_CLUSTER
-  v4_16 = XpkClusters.TPU_V4_16_CLUSTER
+  v4_8 = GkeClusters.TPU_V4_8_MAXTEXT_CLUSTER
+  v4_16 = GkeClusters.TPU_V4_16_CLUSTER
 
   for num_slices, cluster in [(1, v4_8), (2, v4_8), (1, v4_16)]:
     ici_chips = 4 if cluster == v4_8 else 8

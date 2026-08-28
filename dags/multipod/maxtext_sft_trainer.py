@@ -16,11 +16,12 @@
 
 import datetime
 from airflow import models
+from airflow.models.baseoperator import chain
 from dags import composer_env, gcs_bucket
 from dags.common import test_owner
 from dags.common.quarantined_tests import safe_get_from_variable
-from dags.common.vm_resource import DockerImage, XpkClusters
-from dags.multipod.configs import xpk_gke_config as gke_config
+from dags.common.vm_resource import DockerImage, GkeClusters
+from dags.multipod.configs import gke_config
 from dags.multipod.configs.common import SetupMode
 
 # Run once a day at 10 am UTC (2 am PST)
@@ -63,7 +64,7 @@ with models.DAG(
         'bash tests/end_to_end/tpu/test_sft_trainer.sh',
     )
     maxtext_v4_configs_test = gke_config.get_gke_config(
-        cluster=XpkClusters.TPU_V5P_8_CLUSTER,
+        cluster=GkeClusters.TPU_V5P_8_CLUSTER,
         time_out_in_min=60,
         test_name=f'sft-trainer-{mode.value}',
         run_model_cmds=command,
@@ -71,5 +72,4 @@ with models.DAG(
         test_owner=test_owner.SURBHI_J,
     ).run()
     test.append(maxtext_v4_configs_test)
-  for i in range(len(test) - 1):
-    _ = test[i] >> test[i + 1]
+  chain(*test)
