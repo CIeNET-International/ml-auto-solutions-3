@@ -14,10 +14,9 @@
 
 """Utility functions for Cluster Toolkit (gcluster) orchestration."""
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 import os
 import re
-import shlex
 import tempfile
 import uuid
 
@@ -31,23 +30,72 @@ DEFAULT_GCLUSTER_VERSION = "v1.102.0"
 LOGGING_URL_FORMAT = gke.LOGGING_URL_FORMAT
 
 
-def get_gcluster_setup_cmd(
-    tmpdir: str, version: str = DEFAULT_GCLUSTER_VERSION
-) -> list[str]:
-  """Construct shell commands to download and unpack gcluster binary."""
-  bin_dir = f"{tmpdir}/bin"
+def _run_command(
+    command: Sequence[str],
+    env: dict[str, str],
+) -> None:
+  """Run a subprocess command and raise an error on non-zero exit code."""
+  result = SubprocessHook().run_command(list(command), env=env)
+  if result.exit_code != 0:
+    raise RuntimeError(
+        f"Command {' '.join(command)} failed with exit code {result.exit_code}"
+    )
+
+
+def _setup_gcluster(
+    tmpdir: str,
+    version: str,
+    env: dict[str, str],
+) -> str:
+  """Download, unpack, and prepare the gcluster binary."""
+  bin_dir = os.path.join(tmpdir, "bin")
+  bundle_path = os.path.join(tmpdir, "gcluster_bundle.tgz")
+  gcluster_bin = os.path.join(bin_dir, "gcluster")
   bundle_url = (
       "https://github.com/GoogleCloudPlatform/cluster-toolkit/releases/"
       f"download/{version}/gcluster_bundle_linux_amd64.tgz"
   )
 
+  os.makedirs(bin_dir, exist_ok=True)
+  _run_command(
+      ["curl", "-fsSL", bundle_url, "-o", bundle_path],
+      env,
+  )
+  _run_command(
+      ["tar", "-xzf", bundle_path, "-C", bin_dir],
+      env,
+  )
+  if os.path.exists(gcluster_bin):
+    os.chmod(gcluster_bin, 0o755)
+
+  return gcluster_bin
+
+
+def _get_credentials_command(
+    cluster_name: str,
+    location: str,
+    project_id: str,
+) -> list[str]:
+  """Construct gcloud command to get GKE cluster credentials."""
   return [
-      f"set -xueo pipefail; export PATH={bin_dir}:$PATH",
-      (
-          f"mkdir -p {bin_dir} && "
-          f"curl -fsSL {bundle_url} | tar -xz -C {bin_dir} && "
-          f"chmod +x {bin_dir}/gcluster"
-      ),
+      "gcloud",
+      "container",
+      "clusters",
+      "get-credentials",
+      cluster_name,
+      f"--location={location}",
+      f"--project={project_id}",
+  ]
+
+
+def _set_namespace_command(namespace: str) -> list[str]:
+  """Construct kubectl command to set current context namespace."""
+  return [
+      "kubectl",
+      "config",
+      "set-context",
+      "--current",
+      f"--namespace={namespace}",
   ]
 
 
@@ -110,75 +158,69 @@ def run_workload(
   })
 
   with tempfile.TemporaryDirectory() as tmpdir:
-    gcluster_bin = f"{tmpdir}/bin/gcluster"
+    env = {
+        **os.environ,
+        "KUBECONFIG": os.path.join(tmpdir, "gcluster_kube.conf"),
+    }
+
+    gcluster_bin = _setup_gcluster(tmpdir, gcluster_version, env)
     slice_keyword = (
         "--num-nodes"
         if is_valid_gpu_version(accelerator_type)
         else "--num-slices"
     )
 
-    args = [
-        f"{gcluster_bin} job submit",
+    submit_cmd = [
+        gcluster_bin,
+        "job",
+        "submit",
         f"--cluster={cluster_name}",
         f"--location={zone}",
         f"--project={cluster_project}",
         f"--name={workload_id}",
-        f"--command={shlex.quote(run_cmds)}",
+        f"--command={run_cmds}",
         f"--compute-type={accelerator_type}",
         f"--image={docker_image}",
         f"{slice_keyword}={num_slices}",
         f"--priority={priority}",
-        f"--env GCS_OUTPUT={gcs_path}",
+        f"--env=GCS_OUTPUT={gcs_path}",
         "--skip-prereqs",
     ]
 
     if queue:
-      args.append(f"--queue={queue}")
+      submit_cmd.append(f"--queue={queue}")
     if namespace and namespace != "default":
-      args.append(f"--gke-namespace={namespace}")
+      submit_cmd.append(f"--gke-namespace={namespace}")
     if use_pathways:
-      args.append("--pathways")
+      submit_cmd.append("--pathways")
       location = pathways_gcs_location or f"{gcs_path}/pathways"
-      args.append(f"--pathways-gcs-location={location}")
+      submit_cmd.append(f"--pathways-gcs-location={location}")
     if use_vertex_tensorboard:
-      args.append("--use-vertex-tensorboard")
+      submit_cmd.append("--use-vertex-tensorboard")
     if ramdisk_directory:
-      args.append(f"--gke-mtc-ramdisk-dir={ramdisk_directory}")
+      submit_cmd.append(f"--gke-mtc-ramdisk-dir={ramdisk_directory}")
     if mtc_enabled:
-      args.append("--gke-mtc-enabled")
+      submit_cmd.append("--gke-mtc-enabled")
     if max_restart > 0:
-      args.append(f"--restarts={max_restart}")
+      submit_cmd.append(f"--restarts={max_restart}")
     if is_valid_gpu_version(accelerator_type):
-      args.append("--gke-scheduler=gke.io/topology-aware-auto")
+      submit_cmd.append("--gke-scheduler=gke.io/topology-aware-auto")
 
     if mounts:
       mount_list = [mounts] if isinstance(mounts, str) else list(mounts)
       for m in mount_list:
-        args.append(f"--mount={shlex.quote(m)}")
+        submit_cmd.append(f"--mount={m}")
 
-    get_credentials_cmd = (
-        f"gcloud container clusters get-credentials {cluster_name}"
-        f" --location={zone} --project={cluster_project} && "
-        f"kubectl config set-context --current --namespace={namespace}"
+    _run_command(
+        _get_credentials_command(
+            cluster_name=cluster_name,
+            location=zone,
+            project_id=cluster_project,
+        ),
+        env,
     )
-
-    cmds = [
-        *get_gcluster_setup_cmd(tmpdir, gcluster_version),
-        get_credentials_cmd,
-        " ".join(args),
-    ]
-
-    hook = SubprocessHook()
-    result = hook.run_command(
-        ["bash", "-c", ";".join(cmds)],
-        env={
-            **os.environ,
-            "KUBECONFIG": os.path.join(tmpdir, "gcluster_kube.conf"),
-        },
-    )
-    assert (
-        result.exit_code == 0
-    ), f"Cluster Toolkit submit failed with code {result.exit_code}"
+    _run_command(_set_namespace_command(namespace), env)
+    _run_command(submit_cmd, env)
 
 
 @task(trigger_rule="all_done")
@@ -192,33 +234,34 @@ def clean_up_workload(
 ) -> None:
   """Delete/cancel workload using Cluster Toolkit."""
   with tempfile.TemporaryDirectory() as tmpdir:
-    gcluster_bin = f"{tmpdir}/bin/gcluster"
-    workload_delete_cmd = (
-        f"{gcluster_bin} job cancel {workload_id}"
-        f" --cluster={cluster_name}"
-        f" --location={zone}"
-        f" --project={project_id}"
-        " --skip-prereqs"
-    )
-    if namespace and namespace != "default":
-      workload_delete_cmd += f" --gke-namespace={namespace}"
+    env = {
+        **os.environ,
+        "KUBECONFIG": os.path.join(tmpdir, "gcluster_kube.conf"),
+    }
 
-    get_credentials_cmd = (
-        f"gcloud container clusters get-credentials {cluster_name}"
-        f" --location={zone} --project={project_id} && "
-        f"kubectl config set-context --current --namespace={namespace} || true"
+    gcluster_bin = _setup_gcluster(tmpdir, gcluster_version, env)
+
+    _run_command(
+        _get_credentials_command(
+            cluster_name=cluster_name,
+            location=zone,
+            project_id=project_id,
+        ),
+        env,
     )
-    cmds = get_gcluster_setup_cmd(tmpdir, gcluster_version)
-    cmds.append(get_credentials_cmd)
-    cmds.append(workload_delete_cmd)
-    hook = SubprocessHook()
-    result = hook.run_command(
-        ["bash", "-c", ";".join(cmds)],
-        env={
-            **os.environ,
-            "KUBECONFIG": os.path.join(tmpdir, "gcluster_kube.conf"),
-        },
-    )
-    assert (
-        result.exit_code == 0
-    ), f"Cluster Toolkit clean-up failed with code {result.exit_code}"
+    _run_command(_set_namespace_command(namespace), env)
+
+    cancel_cmd = [
+        gcluster_bin,
+        "job",
+        "cancel",
+        workload_id,
+        f"--cluster={cluster_name}",
+        f"--location={zone}",
+        f"--project={project_id}",
+        "--skip-prereqs",
+    ]
+    if namespace and namespace != "default":
+      cancel_cmd.append(f"--gke-namespace={namespace}")
+
+    _run_command(cancel_cmd, env)

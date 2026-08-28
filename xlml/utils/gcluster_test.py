@@ -25,21 +25,97 @@ from xlml.utils import gcluster, gke
 
 class GclusterTest(unittest.TestCase):
 
-  def test_get_gcluster_setup_cmd(self):
-    """Generates bundle download and environment setup shell commands."""
-    cmds = gcluster.get_gcluster_setup_cmd("/tmp/test_dir", "v1.102.0")
-    self.assertEqual(len(cmds), 2)
-    self.assertEqual(
-        cmds[0], "set -xueo pipefail; export PATH=/tmp/test_dir/bin:$PATH"
+  @mock.patch("xlml.utils.gcluster.SubprocessHook")
+  def test_run_command_success(self, mock_hook_cls):
+    """Executes command successfully when exit code is 0."""
+    mock_hook = mock.MagicMock()
+    mock_result = mock.MagicMock()
+    mock_result.exit_code = 0
+    mock_hook.run_command.return_value = mock_result
+    mock_hook_cls.return_value = mock_hook
+
+    gcluster._run_command(["echo", "hello"], {"VAR": "value"})
+    mock_hook.run_command.assert_called_once_with(
+        ["echo", "hello"], env={"VAR": "value"}
     )
-    self.assertIn("mkdir -p /tmp/test_dir/bin", cmds[1])
+
+  @mock.patch("xlml.utils.gcluster.SubprocessHook")
+  def test_run_command_failure_raises_runtime_error(self, mock_hook_cls):
+    """Raises RuntimeError when subprocess command exits non-zero."""
+    mock_hook = mock.MagicMock()
+    mock_result = mock.MagicMock()
+    mock_result.exit_code = 1
+    mock_hook.run_command.return_value = mock_result
+    mock_hook_cls.return_value = mock_hook
+
+    with self.assertRaises(RuntimeError):
+      gcluster._run_command(["false"], {})
+
+  @mock.patch("os.path.exists", return_value=True)
+  @mock.patch("os.chmod")
+  @mock.patch("os.makedirs")
+  @mock.patch("xlml.utils.gcluster._run_command")
+  def test_setup_gcluster(
+      self, mock_run_cmd, mock_makedirs, mock_chmod, mock_exists
+  ):
+    """Downloads and unpacks gcluster bundle binary into tmpdir."""
+    bin_path = gcluster._setup_gcluster("/tmp/test_dir", "v1.102.0", {})
+    self.assertEqual(bin_path, "/tmp/test_dir/bin/gcluster")
+    mock_makedirs.assert_called_once_with("/tmp/test_dir/bin", exist_ok=True)
+    self.assertEqual(mock_run_cmd.call_count, 2)
+    curl_call = mock_run_cmd.call_args_list[0][0][0]
+    self.assertIn("curl", curl_call)
     self.assertIn(
-        "cluster-toolkit/releases/download/v1.102.0/"
-        "gcluster_bundle_linux_amd64.tgz",
-        cmds[1],
+        "https://github.com/GoogleCloudPlatform/cluster-toolkit/releases/"
+        "download/v1.102.0/gcluster_bundle_linux_amd64.tgz",
+        curl_call,
     )
-    self.assertIn("curl -fsSL", cmds[1])
-    self.assertIn("chmod +x /tmp/test_dir/bin/gcluster", cmds[1])
+    tar_call = mock_run_cmd.call_args_list[1][0][0]
+    self.assertEqual(
+        tar_call,
+        [
+            "tar",
+            "-xzf",
+            "/tmp/test_dir/gcluster_bundle.tgz",
+            "-C",
+            "/tmp/test_dir/bin",
+        ],
+    )
+    mock_chmod.assert_called_once_with("/tmp/test_dir/bin/gcluster", 0o755)
+
+  def test_get_credentials_command(self):
+    """Constructs gcloud get-credentials command."""
+    cmd = gcluster._get_credentials_command(
+        cluster_name="test-cluster",
+        location="us-central1-a",
+        project_id="test-project",
+    )
+    self.assertEqual(
+        cmd,
+        [
+            "gcloud",
+            "container",
+            "clusters",
+            "get-credentials",
+            "test-cluster",
+            "--location=us-central1-a",
+            "--project=test-project",
+        ],
+    )
+
+  def test_set_namespace_command(self):
+    """Constructs kubectl set-context command with namespace."""
+    cmd = gcluster._set_namespace_command("automation-testing")
+    self.assertEqual(
+        cmd,
+        [
+            "kubectl",
+            "config",
+            "set-context",
+            "--current",
+            "--namespace=automation-testing",
+        ],
+    )
 
   def test_is_valid_gpu_version(self):
     """Validates GPU accelerator types against supported models."""
@@ -85,7 +161,7 @@ class GclusterTest(unittest.TestCase):
   @mock.patch("xlml.utils.composer.log_metadata_for_xlml_dashboard")
   @mock.patch("xlml.utils.gcluster.SubprocessHook")
   def test_run_workload_tpu(self, mock_hook_cls, mock_log_meta):
-    """Formats 'gcluster job submit' command with TPU slice parameters."""
+    """Executes 'gcluster job submit' command with TPU slice parameters."""
     mock_hook = mock.MagicMock()
     mock_result = mock.MagicMock()
     mock_result.exit_code = 0
@@ -110,31 +186,28 @@ class GclusterTest(unittest.TestCase):
     )
 
     mock_log_meta.assert_called_once()
-    mock_hook.run_command.assert_called_once()
-    cmd_args = mock_hook.run_command.call_args[0][0]
-    kwargs = mock_hook.run_command.call_args[1]
-    full_cmd = cmd_args[2]
+    self.assertEqual(mock_hook.run_command.call_count, 5)
+    submit_cmd = mock_hook.run_command.call_args_list[4][0][0]
+    kwargs = mock_hook.run_command.call_args_list[4][1]
 
-    self.assertIn("job submit", full_cmd)
-    self.assertIn("--cluster=test-cluster", full_cmd)
-    self.assertIn("--location=us-central1-a", full_cmd)
-    self.assertIn("--project=test-project", full_cmd)
-    self.assertIn("--name=test-workload-12345", full_cmd)
-    self.assertIn("--compute-type=v4-8", full_cmd)
-    self.assertIn("--image=us-docker.pkg.dev/img:latest", full_cmd)
-    self.assertIn("--num-slices=1", full_cmd)
-    self.assertNotIn("--num-nodes", full_cmd)
-    self.assertIn("--priority=very-high", full_cmd)
-    self.assertIn("--env GCS_OUTPUT=gs://test-bucket/output", full_cmd)
-    self.assertIn("--skip-prereqs", full_cmd)
-    self.assertIn("--queue=default", full_cmd)
-    self.assertIn("--gke-namespace=automation-testing", full_cmd)
-    self.assertIn("--mount='/dev/shm;/dev/shm;rw'", full_cmd)
-    self.assertIn("--mount='/local/path;/container/path;ro'", full_cmd)
-    self.assertIn(
-        "kubectl config set-context --current --namespace=automation-testing",
-        full_cmd,
-    )
+    self.assertIn("job", submit_cmd)
+    self.assertIn("submit", submit_cmd)
+    self.assertIn("--cluster=test-cluster", submit_cmd)
+    self.assertIn("--location=us-central1-a", submit_cmd)
+    self.assertIn("--project=test-project", submit_cmd)
+    self.assertIn("--name=test-workload-12345", submit_cmd)
+    self.assertIn("--command=bash run.sh", submit_cmd)
+    self.assertIn("--compute-type=v4-8", submit_cmd)
+    self.assertIn("--image=us-docker.pkg.dev/img:latest", submit_cmd)
+    self.assertIn("--num-slices=1", submit_cmd)
+    self.assertNotIn("--num-nodes=1", submit_cmd)
+    self.assertIn("--priority=very-high", submit_cmd)
+    self.assertIn("--env=GCS_OUTPUT=gs://test-bucket/output", submit_cmd)
+    self.assertIn("--skip-prereqs", submit_cmd)
+    self.assertIn("--queue=default", submit_cmd)
+    self.assertIn("--gke-namespace=automation-testing", submit_cmd)
+    self.assertIn("--mount=/dev/shm;/dev/shm;rw", submit_cmd)
+    self.assertIn("--mount=/local/path;/container/path;ro", submit_cmd)
     self.assertIn("KUBECONFIG", kwargs["env"])
 
   @mock.patch("xlml.utils.composer.log_metadata_for_xlml_dashboard")
@@ -168,14 +241,14 @@ class GclusterTest(unittest.TestCase):
     )
 
     mock_log_meta.assert_called_once()
-    full_cmd = mock_hook.run_command.call_args[0][0][2]
-    self.assertIn("--num-nodes=2", full_cmd)
-    self.assertNotIn("--num-slices", full_cmd)
-    self.assertIn("--gke-mtc-ramdisk-dir=/dev/shm/ramdisk", full_cmd)
-    self.assertIn("--gke-mtc-enabled", full_cmd)
-    self.assertIn("--restarts=5", full_cmd)
-    self.assertIn("--gke-scheduler=gke.io/topology-aware-auto", full_cmd)
-    self.assertIn("--mount='/dev/shm;/dev/shm;rw'", full_cmd)
+    submit_cmd = mock_hook.run_command.call_args_list[4][0][0]
+    self.assertIn("--num-nodes=2", submit_cmd)
+    self.assertNotIn("--num-slices=2", submit_cmd)
+    self.assertIn("--gke-mtc-ramdisk-dir=/dev/shm/ramdisk", submit_cmd)
+    self.assertIn("--gke-mtc-enabled", submit_cmd)
+    self.assertIn("--restarts=5", submit_cmd)
+    self.assertIn("--gke-scheduler=gke.io/topology-aware-auto", submit_cmd)
+    self.assertIn("--mount=/dev/shm;/dev/shm;rw", submit_cmd)
 
   @mock.patch("xlml.utils.composer.log_metadata_for_xlml_dashboard")
   @mock.patch("xlml.utils.gcluster.SubprocessHook")
@@ -205,13 +278,13 @@ class GclusterTest(unittest.TestCase):
     )
 
     mock_log_meta.assert_called_once()
-    full_cmd = mock_hook.run_command.call_args[0][0][2]
-    self.assertIn("--pathways", full_cmd)
+    submit_cmd = mock_hook.run_command.call_args_list[4][0][0]
+    self.assertIn("--pathways", submit_cmd)
     self.assertIn(
-        "--pathways-gcs-location=gs://test-bucket/output/pathways", full_cmd
+        "--pathways-gcs-location=gs://test-bucket/output/pathways", submit_cmd
     )
-    self.assertNotIn("--use-pathways", full_cmd)
-    self.assertIn("--use-vertex-tensorboard", full_cmd)
+    self.assertNotIn("--use-pathways", submit_cmd)
+    self.assertIn("--use-vertex-tensorboard", submit_cmd)
 
   @mock.patch("xlml.utils.composer.log_metadata_for_xlml_dashboard")
   @mock.patch("xlml.utils.gcluster.SubprocessHook")
@@ -241,10 +314,10 @@ class GclusterTest(unittest.TestCase):
     )
 
     mock_log_meta.assert_called_once()
-    full_cmd = mock_hook.run_command.call_args[0][0][2]
-    self.assertIn("--pathways", full_cmd)
+    submit_cmd = mock_hook.run_command.call_args_list[4][0][0]
+    self.assertIn("--pathways", submit_cmd)
     self.assertIn(
-        "--pathways-gcs-location=gs://custom-bucket/scratch", full_cmd
+        "--pathways-gcs-location=gs://custom-bucket/scratch", submit_cmd
     )
 
   @mock.patch("xlml.utils.composer.log_metadata_for_xlml_dashboard")
@@ -275,21 +348,22 @@ class GclusterTest(unittest.TestCase):
         mounts=None,
     )
     mock_log_meta.assert_called_once()
-    full_cmd = mock_hook.run_command.call_args[0][0][2]
-    self.assertNotIn("--queue", full_cmd)
-    self.assertNotIn("--gke-namespace", full_cmd)
-    self.assertNotIn("--mount", full_cmd)
+    submit_cmd = mock_hook.run_command.call_args_list[4][0][0]
+    self.assertNotIn("--queue", submit_cmd)
+    self.assertNotIn("--gke-namespace", submit_cmd)
+    for arg in submit_cmd:
+      self.assertFalse(arg.startswith("--mount"))
 
   @mock.patch("xlml.utils.gcluster.SubprocessHook")
-  def test_run_workload_failure_raises_assertion_error(self, mock_hook_cls):
-    """Raises AssertionError when gcluster job submit command exits non-zero."""
+  def test_run_workload_failure_raises_runtime_error(self, mock_hook_cls):
+    """Raises RuntimeError when gcluster job submit command exits non-zero."""
     mock_hook = mock.MagicMock()
     mock_result = mock.MagicMock()
     mock_result.exit_code = 1
     mock_hook.run_command.return_value = mock_result
     mock_hook_cls.return_value = mock_hook
 
-    with self.assertRaises(AssertionError):
+    with self.assertRaises(RuntimeError):
       gcluster.run_workload.function(
           task_id="run_workload",
           cluster_project="test-project",
@@ -321,31 +395,27 @@ class GclusterTest(unittest.TestCase):
         namespace="automation-testing",
     )
 
-    cmd_args = mock_hook.run_command.call_args[0][0]
-    full_cmd = cmd_args[2]
-    self.assertIn("job cancel test-workload", full_cmd)
-    self.assertIn("--cluster=test-cluster", full_cmd)
-    self.assertIn("--location=us-central1-a", full_cmd)
-    self.assertIn("--project=test-project", full_cmd)
-    self.assertIn("--skip-prereqs", full_cmd)
-    self.assertIn("--gke-namespace=automation-testing", full_cmd)
-    self.assertIn(
-        "kubectl config set-context --current --namespace=automation-testing",
-        full_cmd,
-    )
+    self.assertEqual(mock_hook.run_command.call_count, 5)
+    cancel_cmd = mock_hook.run_command.call_args_list[4][0][0]
+    self.assertIn("job", cancel_cmd)
+    self.assertIn("cancel", cancel_cmd)
+    self.assertIn("test-workload", cancel_cmd)
+    self.assertIn("--cluster=test-cluster", cancel_cmd)
+    self.assertIn("--location=us-central1-a", cancel_cmd)
+    self.assertIn("--project=test-project", cancel_cmd)
+    self.assertIn("--skip-prereqs", cancel_cmd)
+    self.assertIn("--gke-namespace=automation-testing", cancel_cmd)
 
   @mock.patch("xlml.utils.gcluster.SubprocessHook")
-  def test_clean_up_workload_failure_raises_assertion_error(
-      self, mock_hook_cls
-  ):
-    """Raises AssertionError when gcluster job cancel exits non-zero."""
+  def test_clean_up_workload_failure_raises_runtime_error(self, mock_hook_cls):
+    """Raises RuntimeError when gcluster job cancel exits non-zero."""
     mock_hook = mock.MagicMock()
     mock_result = mock.MagicMock()
     mock_result.exit_code = 1
     mock_hook.run_command.return_value = mock_result
     mock_hook_cls.return_value = mock_hook
 
-    with self.assertRaises(AssertionError):
+    with self.assertRaises(RuntimeError):
       gcluster.clean_up_workload.function(
           workload_id="test-workload",
           project_id="test-project",
