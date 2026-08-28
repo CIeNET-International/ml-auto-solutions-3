@@ -112,7 +112,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
         create_node_pool = node_pool.create.override(
             task_id="create_node_pool",
             owner=test_owner.QUINN_M,
-        )(node_pool=node_pool_info).as_setup()
+        )(node_pool=node_pool_info)
 
         wait_node_pool_available = node_pool.wait_for_availability.override(
             task_id="wait_node_pool_available"
@@ -148,7 +148,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       with TaskGroupWithTimeout(
           group_id="post_test",
           timeout=POST_TEST_TIMEOUT,
-          as_teardown_of=create_node_pool,
+          is_teardown=True,
       ) as post_test:
         cleanup_node_pool = node_pool.delete.override(
             task_id="cleanup_node_pool",

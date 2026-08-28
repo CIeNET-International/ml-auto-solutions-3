@@ -20,7 +20,6 @@ from datetime import datetime, timedelta, timezone
 from airflow.decorators import task as task_decorators
 from airflow.exceptions import AirflowFailException
 from airflow.models import BaseOperator
-from airflow.models.abstractoperator import AbstractOperator
 from airflow.models.mappedoperator import MappedOperator
 from airflow.models.taskmixin import DAGNode
 from airflow.operators.python import PythonOperator, get_current_context
@@ -29,6 +28,7 @@ from airflow.utils.context import Context
 from airflow.utils.state import TaskInstanceState
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.timeout import timeout as AirflowTimeout
+from airflow.utils.trigger_rule import TriggerRule
 
 
 class TaskGroupWithTimeout(TaskGroup):
@@ -72,7 +72,7 @@ class TaskGroupWithTimeout(TaskGroup):
       self,
       group_id,
       timeout: timedelta,
-      as_teardown_of: BaseOperator | None = None,
+      is_teardown: bool = False,
       **kwargs,
   ):
     super().__init__(group_id=group_id, **kwargs)
