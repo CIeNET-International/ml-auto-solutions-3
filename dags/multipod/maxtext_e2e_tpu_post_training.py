@@ -14,7 +14,6 @@
 
 """MaxText E2E TPU Post-Training Tests DAG (Stage 2).
 
-<<<<<<< HEAD
 Executes end-to-end MaxText post-training workflows
 (SFT, Multimodal SFT, LoRA, RL) on Cloud TPU:
 - Waits for model conversion in maxtext_e2e_tpu_checkpoint_conversion
@@ -23,13 +22,6 @@ Executes end-to-end MaxText post-training workflows
   on TPU slices.
 - Converts post-trained checkpoints back to Hugging Face format
   to verify weight fidelity.
-=======
-Executes end-to-end MaxText post-training workflows (SFT, LoRA, RL) on TPU:
-- Waits for model conversion in maxtext_e2e_tpu_checkpoint_conversion via
-  ExternalTaskSensor.
-- Executes post-training scripts with Pathways persistence on TPU slices.
-- Converts post-trained checkpoints back to Hugging Face format.
->>>>>>> e4355d16 (feat(xlml): Implement Cluster Toolkit (gcluster) orchestration and migrate MaxText E2E TPU DAGs)
 """
 
 import datetime
@@ -50,12 +42,7 @@ HF_TOKEN = safe_get_from_variable("HF_TOKEN", None)
 
 
 class ExternalTaskSensorWithBypass(ExternalTaskSensor):
-<<<<<<< HEAD
-  """ExternalTaskSensor that passes immediately if
-  wait_for_conversion param is False."""
-=======
   """Sensor that passes immediately if wait_for_conversion param is False."""
->>>>>>> e4355d16 (feat(xlml): Implement Cluster Toolkit (gcluster) orchestration and migrate MaxText E2E TPU DAGs)
 
   @provide_session
   def poke(self, context, session=None):
@@ -88,14 +75,10 @@ with models.DAG(
         "run_name": Param(
             default="",
             type="string",
-<<<<<<< HEAD
             description=(
                 "Shared run name for checkpoints "
                 "(defaults to post-{{ ts_nodash }})"
             ),
-=======
-            description="Shared run name for checkpoints (e.g. post-ts_nodash)",
->>>>>>> e4355d16 (feat(xlml): Implement Cluster Toolkit (gcluster) orchestration and migrate MaxText E2E TPU DAGs)
         ),
         "wait_for_conversion": Param(
             default=True,
@@ -277,22 +260,12 @@ with models.DAG(
               test_owner=test_owner.SURBHI_J,
               use_pathways=True,
               priority="very-high",
-<<<<<<< HEAD
               max_restart=3,
-          ).run(skip_post_process=True)
-
-          to_hf_flags = mode_test_config.get("to_hf_flags", "false true")
-
-=======
               use_gcluster=True,
           ).run(skip_post_process=True)
 
           to_hf_flags = mode_test_config.get("to_hf_flags", "false true")
-          model_path = mode_test_config["maxtext_ckpt_path"].format(
-              run_name=run_name
-          )
           to_hf_script = test_config["to_huggingface"]
->>>>>>> e4355d16 (feat(xlml): Implement Cluster Toolkit (gcluster) orchestration and migrate MaxText E2E TPU DAGs)
           convert_to_huggingface_cmd = (
               f"export HF_TOKEN={HF_TOKEN}",
               'export HF_HOME="/dev/shm/hf_cache"',

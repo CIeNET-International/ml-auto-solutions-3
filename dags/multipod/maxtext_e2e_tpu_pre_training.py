@@ -15,19 +15,12 @@
 """MaxText E2E TPU Pre-Training Tests DAG (Stage 2).
 
 Executes end-to-end MaxText pre-training test workloads on Cloud TPU:
-<<<<<<< HEAD
 - Waits for model conversion in maxtext_e2e_tpu_checkpoint_conversion
   via ExternalTaskSensor.
 - Runs pre-training on dedicated TPU v5p topologies configured per
   model architecture.
 - Converts trained checkpoints back to Hugging Face format
   to verify weight fidelity.
-=======
-- Waits for model conversion in maxtext_e2e_tpu_checkpoint_conversion via
-  ExternalTaskSensor.
-- Runs pre-training on dedicated TPU v5p topologies configured per model.
-- Converts trained checkpoints back to Hugging Face format.
->>>>>>> e4355d16 (feat(xlml): Implement Cluster Toolkit (gcluster) orchestration and migrate MaxText E2E TPU DAGs)
 """
 import datetime
 from airflow import models
@@ -45,12 +38,7 @@ HF_TOKEN = safe_get_from_variable("HF_TOKEN", None)
 
 
 class ExternalTaskSensorWithBypass(ExternalTaskSensor):
-<<<<<<< HEAD
-  """ExternalTaskSensor that passes immediately if
-  wait_for_conversion param is False."""
-=======
   """Sensor that passes immediately if wait_for_conversion param is False."""
->>>>>>> e4355d16 (feat(xlml): Implement Cluster Toolkit (gcluster) orchestration and migrate MaxText E2E TPU DAGs)
 
   @provide_session
   def poke(self, context, session=None):
@@ -83,13 +71,9 @@ with models.DAG(
         "run_name": Param(
             default="",
             type="string",
-<<<<<<< HEAD
             description=(
-                "Shared run name for checkpoints " "(e.g. conv-20260813T123008)"
+                "Shared run name for checkpoints (e.g. conv-20260813T123008)"
             ),
-=======
-            description="Shared run name for checkpoints (e.g. conv-ts_nodash)",
->>>>>>> e4355d16 (feat(xlml): Implement Cluster Toolkit (gcluster) orchestration and migrate MaxText E2E TPU DAGs)
         ),
         "wait_for_conversion": Param(
             default=True,
@@ -153,7 +137,6 @@ with models.DAG(
           "{{ params.run_name if params.run_name else 'pre-' ~ ts_nodash }}"
       )
 
-<<<<<<< HEAD
       model_path = test_config["training"]["maxtext_ckpt_path"].format(
           run_name=run_name
       )
@@ -165,16 +148,11 @@ with models.DAG(
           f"fi"
       )
 
-      training_cmd = (
-          f"export HF_TOKEN={HF_TOKEN}",
-          cleanup_cmd,
-          f"{test_config['training']['command']} {run_name}",
-=======
       training_script = test_config["training"]["command"]
       training_cmd = (
           f"export HF_TOKEN={HF_TOKEN}",
+          cleanup_cmd,
           f"{training_script} {run_name}",
->>>>>>> e4355d16 (feat(xlml): Implement Cluster Toolkit (gcluster) orchestration and migrate MaxText E2E TPU DAGs)
       )
       training_core_count = test_config.get("core_count", 8)
       training_task = gke_config.get_gke_config(
@@ -187,11 +165,8 @@ with models.DAG(
           ),
           test_owner=test_owner.SURBHI_J,
           priority="very-high",
-<<<<<<< HEAD
           max_restart=3,
-=======
           use_gcluster=True,
->>>>>>> e4355d16 (feat(xlml): Implement Cluster Toolkit (gcluster) orchestration and migrate MaxText E2E TPU DAGs)
       ).run(skip_post_process=True)
 
       to_hf_flags = test_config.get("to_hf_flags", "")
