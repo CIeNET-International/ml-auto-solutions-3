@@ -14,11 +14,14 @@
 
 """MaxText E2E TPU Post-Training Tests DAG (Stage 2).
 
-Executes end-to-end MaxText post-training workflows (SFT, LoRA, RL) on TPU:
-- Waits for model conversion in maxtext_e2e_tpu_checkpoint_conversion via
-  ExternalTaskSensor.
-- Executes post-training scripts with Pathways persistence on TPU slices.
-- Converts post-trained checkpoints back to Hugging Face format.
+Executes end-to-end MaxText post-training workflows
+(SFT, Multimodal SFT, LoRA, RL) on Cloud TPU:
+- Waits for model conversion in maxtext_e2e_tpu_checkpoint_conversion
+  via ExternalTaskSensor.
+- Executes post-training scripts with Pathways runtime persistence
+  on TPU slices.
+- Converts post-trained checkpoints back to Hugging Face format
+  to verify weight fidelity.
 """
 
 import datetime
@@ -72,7 +75,10 @@ with models.DAG(
         "run_name": Param(
             default="",
             type="string",
-            description="Shared run name for checkpoints (e.g. post-ts_nodash)",
+            description=(
+                "Shared run name for checkpoints "
+                "(defaults to post-{{ ts_nodash }})"
+            ),
         ),
         "wait_for_conversion": Param(
             default=True,
@@ -208,6 +214,17 @@ with models.DAG(
 
       for mode, mode_test_config in test_config["post_training"].items():
         with TaskGroup(group_id=f"{mode}-{model}") as mode_group:
+          model_path = mode_test_config["maxtext_ckpt_path"].format(
+              run_name=run_name
+          )
+          base_output_dir = model_path.split("/checkpoints/", maxsplit=1)[0]
+          cleanup_cmd = (
+              f"if gsutil ls {base_output_dir} >/dev/null 2>&1; then "
+              f'echo "Retry detected (directory exists). Cleaning up..."; '
+              f"gsutil -m rm -rf {base_output_dir} || true; "
+              f"fi"
+          )
+
           environment_variables = [
               f"export HF_TOKEN={HF_TOKEN}",
               "export TPU_MIN_LOG_LEVEL=0",
@@ -218,6 +235,7 @@ with models.DAG(
               "export JAX_PLATFORMS=proxy,cpu",
               "export JAX_BACKEND_TARGET=grpc://127.0.0.1:29000",
               "export ENABLE_PATHWAYS_PERSISTENCE='1'",
+              cleanup_cmd,
           ]
 
           command = mode_test_config["command"]
@@ -242,13 +260,11 @@ with models.DAG(
               test_owner=test_owner.SURBHI_J,
               use_pathways=True,
               priority="very-high",
+              max_restart=3,
               use_gcluster=True,
           ).run(skip_post_process=True)
 
           to_hf_flags = mode_test_config.get("to_hf_flags", "false true")
-          model_path = mode_test_config["maxtext_ckpt_path"].format(
-              run_name=run_name
-          )
           to_hf_script = test_config["to_huggingface"]
           convert_to_huggingface_cmd = (
               f"export HF_TOKEN={HF_TOKEN}",
