@@ -19,7 +19,7 @@ import enum
 from typing import TypeAlias
 
 from dags.common.vm_resource import TpuVersion, Zone
-from xlml.apis.xpk_cluster_config import XpkClusterConfig
+from xlml.apis.gke_cluster_config import GkeClusterConfig
 
 
 class DayOfWeek(enum.Enum):
@@ -29,7 +29,7 @@ class DayOfWeek(enum.Enum):
 
 
 # Mock cluster to group TPU Observability DAGs
-TPU_OBS_MOCK_CLUSTER = XpkClusterConfig(
+TPU_OBS_MOCK_CLUSTER = GkeClusterConfig(
     name="tpu-observability-automation-prod",
     device_version=TpuVersion.TRILLIUM,
     core_count=16,
@@ -38,7 +38,7 @@ TPU_OBS_MOCK_CLUSTER = XpkClusterConfig(
 )
 
 # Mock cluster to group TPU Interruption Validation DAGs
-TPU_INTERRUPTION_MOCK_CLUSTER = XpkClusterConfig(
+TPU_INTERRUPTION_MOCK_CLUSTER = GkeClusterConfig(
     name="tpu-interruption-validation-prod",
     device_version=TpuVersion.TRILLIUM,
     core_count=16,
@@ -47,7 +47,7 @@ TPU_INTERRUPTION_MOCK_CLUSTER = XpkClusterConfig(
 )
 
 # Pathways cluster for MaxText Pathways/Elastic DAGs
-PW_MCJAX_CLUSTER = XpkClusterConfig(
+PW_MCJAX_CLUSTER = GkeClusterConfig(
     name="pw-spot-v6e-16d",
     device_version=TpuVersion.TRILLIUM,
     core_count=16,

@@ -12,15 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Config file for XPK cluster."""
+"""Config file for GKE cluster."""
 
 import dataclasses
-from typing import Optional, Union
 
 
 @dataclasses.dataclass
-class XpkClusterConfig:
-  """Defines common XPK cluster attributes.
+class GkeClusterConfig:
+  """Defines common GKE cluster attributes.
 
   Attributes:
     name: Name of the cluster
@@ -29,25 +28,30 @@ class XpkClusterConfig:
     project: Project of the cluster
     zone: Zone of the cluster
     namespace: Kubernetes namespace of the cluster
+    queue: Kueue LocalQueue name for Cluster Toolkit
   """
 
   name: str
-  device_version: Union['GpuVersion', 'CpuVersion', 'TpuVersion']
+  device_version: "GpuVersion | CpuVersion | TpuVersion"
   core_count: int
   project: str
   zone: str
-  namespace: str = 'default'
+  namespace: str = "default"
+  queue: str | None = None
 
   def override(
       self,
       *,
-      core_count: Optional[int] = None,
-      namespace: Optional[str] = None,
-  ) -> 'XpkClusterConfig':
-    """Returns a copy of this cluster config with specified fields overridden."""
+      core_count: int | None = None,
+      namespace: str | None = None,
+      queue: str | None = None,
+  ) -> "GkeClusterConfig":
+    """Returns a copy of this cluster config with overridden fields."""
     changes = {}
     if core_count is not None:
-      changes['core_count'] = core_count
+      changes["core_count"] = core_count
     if namespace is not None:
-      changes['namespace'] = namespace
+      changes["namespace"] = namespace
+    if queue is not None:
+      changes["queue"] = queue
     return dataclasses.replace(self, **changes)

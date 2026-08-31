@@ -17,20 +17,20 @@
 import datetime
 from typing import Iterable, Optional
 
-from dags.common.vm_resource import Project, XpkClusters
+from dags.common.vm_resource import Project, GkeClusters
 from xlml.apis import gcp_config, metric_config, task, test_config
-from xlml.apis.xpk_cluster_config import XpkClusterConfig
+from xlml.apis.gke_cluster_config import GkeClusterConfig
 
 clusters = {
     # accelerator: cluster names
-    "v4-8": XpkClusters.TPU_V4_8_MAXTEXT_CLUSTER,
-    "v4-16": XpkClusters.TPU_V4_16_CLUSTER,
-    "v5-8": XpkClusters.TPU_V5P_8_CLUSTER,
-    "v5-8v2": XpkClusters.TPU_V5P_8_CLUSTER_V2,
-    "v6e-256": XpkClusters.TPU_V6E_256_MLPERF_CLUSTER,
-    "a3": XpkClusters.GPU_A3_CLUSTER,
-    "a3plus": XpkClusters.GPU_A3PLUS_CLUSTER,
-    "v5p-128": XpkClusters.TPU_V5P_128_CLUSTER,
+    "v4-8": GkeClusters.TPU_V4_8_MAXTEXT_CLUSTER,
+    "v4-16": GkeClusters.TPU_V4_16_CLUSTER,
+    "v5-8": GkeClusters.TPU_V5P_8_CLUSTER,
+    "v5-8v2": GkeClusters.TPU_V5P_8_CLUSTER_V2,
+    "v6e-256": GkeClusters.TPU_V6E_256_MLPERF_CLUSTER,
+    "a3": GkeClusters.GPU_A3_CLUSTER,
+    "a3plus": GkeClusters.GPU_A3PLUS_CLUSTER,
+    "v5p-128": GkeClusters.TPU_V5P_128_CLUSTER,
 }
 
 
@@ -46,7 +46,7 @@ def get_gke_config(
     docker_image: str,
     run_model_cmds: Iterable[str],
     test_owner: str,
-    cluster: XpkClusterConfig = XpkClusters.TPU_V4_8_MAXTEXT_CLUSTER,
+    cluster: GkeClusterConfig = GkeClusters.TPU_V4_8_MAXTEXT_CLUSTER,
     num_slices: int = 1,
     dataset_name: metric_config.DatasetOption = (
         metric_config.DatasetOption.XLML_DATASET

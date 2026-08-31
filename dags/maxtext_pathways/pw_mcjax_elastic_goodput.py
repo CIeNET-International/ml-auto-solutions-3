@@ -39,7 +39,7 @@ from dags.maxtext_pathways.configs.utils import (
     check_gcp_logs_exist,
     COLOCATED_PYTHON_IMAGE,
 )
-from xlml.utils import kpo, xpk
+from xlml.utils import gke, kpo, xpk
 
 ELASTIC_TYPE = ["Pause-resume", "Replica-resize"]
 
@@ -418,7 +418,7 @@ def create_elastic_goodput_dag(
         workload_id=calculated_params["workload_id"],
     )
 
-    wait_for_workload_complete = xpk.wait_for_workload_completion.override(
+    wait_for_workload_complete = gke.wait_for_workload_completion.override(
         task_id="wait_for_workload_complete",
         timeout=3600,
     )(

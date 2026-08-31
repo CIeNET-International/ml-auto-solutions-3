@@ -19,8 +19,8 @@ import datetime
 from airflow import models
 from dags import gcs_bucket
 from dags.common import test_owner
-from dags.common.vm_resource import DockerImage, XpkClusters
-from dags.multipod.configs import xpk_gke_config as gke_config
+from dags.common.vm_resource import DockerImage, GkeClusters
+from dags.multipod.configs import gke_config
 from dags.multipod.configs.common import SetupMode
 from xlml.apis import metric_config
 
@@ -52,9 +52,9 @@ with models.DAG(
       # TODO(b/465618653): Switch back to v4-8 once the issue is resolved.
       # Temporary use the cluster for v4-16 since the original does not have
       # the "vertex-tensorboard" compatibility.
-      # "v4-8": XpkClusters.TPU_V4_8_MAXTEXT_CLUSTER
-      "v4-8": XpkClusters.TPU_V4_16_CLUSTER,
-      "v4-16": XpkClusters.TPU_V4_16_CLUSTER,
+      # "v4-8": GkeClusters.TPU_V4_8_MAXTEXT_CLUSTER
+      "v4-8": GkeClusters.TPU_V4_16_CLUSTER,
+      "v4-16": GkeClusters.TPU_V4_16_CLUSTER,
   }
 
   for mode, image in docker_images:

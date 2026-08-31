@@ -19,8 +19,8 @@ import datetime
 from airflow import models
 from dags import composer_env, gcs_bucket
 from dags.common import test_owner
-from dags.common.vm_resource import XpkClusters, DockerImage
-from dags.multipod.configs import xpk_gke_config as gke_config
+from dags.common.vm_resource import GkeClusters, DockerImage
+from dags.multipod.configs import gke_config
 from xlml.apis import metric_config
 
 # Run once a day at 6 am UTC (10 pm PST)
@@ -89,7 +89,7 @@ with models.DAG(
     timeout_in_min = 360 if test_name == "maxtext-convergence-grain" else 300
 
     test_task = gke_config.get_gke_config_with_name_gen_and_quarantine(
-        cluster=XpkClusters.TPU_V6E_256_MLPERF_CLUSTER,
+        cluster=GkeClusters.TPU_V6E_256_MLPERF_CLUSTER,
         time_out_in_min=timeout_in_min,
         test_name=test_name,
         run_model_cmds=run_command,

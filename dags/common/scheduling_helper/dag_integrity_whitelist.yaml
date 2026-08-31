@@ -36,6 +36,7 @@ whitelisted_dags:
 - axlearn_reg_save
 - clean_up
 - framework_microbenchmark
+- gcluster_example_dag
 - gke_example_dag
 - jax_ai_image_candidate_tpu_e2e
 - jax_ai_image_tpu_e2e
@@ -179,4 +180,3 @@ whitelisted_dags:
 - trt_llm_mlperf_v41
 - trtllm_bench_inference
 - xlml_to_buganizer
-

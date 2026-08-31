@@ -19,8 +19,8 @@ import datetime
 from airflow import models
 from dags import composer_env, gcs_bucket
 from dags.common import test_owner
-from dags.common.vm_resource import DockerImage, XpkClusters
-from dags.multipod.configs import xpk_gke_config as gke_config
+from dags.common.vm_resource import DockerImage, GkeClusters
+from dags.multipod.configs import gke_config
 from dags.multipod.configs.common import SetupMode
 
 # Run once a day at 10 am UTC (2 am PST)
@@ -62,7 +62,7 @@ with models.DAG(
       )
       maxtext_v4_configs_test = gke_config.get_gke_config(
           num_slices=1,
-          cluster=XpkClusters.TPU_V5P_8_CLUSTER,
+          cluster=GkeClusters.TPU_V5P_8_CLUSTER,
           time_out_in_min=60,
           test_name=f"maxtext-checkpointing-{mode.value}-{chkpt_mode}",
           run_model_cmds=command,
@@ -77,7 +77,7 @@ with models.DAG(
     # successfully loaded across different sharding strategies.
     gke_config.get_gke_config(
         num_slices=2,
-        cluster=XpkClusters.TPU_V5P_8_CLUSTER,
+        cluster=GkeClusters.TPU_V5P_8_CLUSTER,
         time_out_in_min=60,
         test_name=f"maxtext-checkpoint-resharding-{mode.value}",
         run_model_cmds=(
