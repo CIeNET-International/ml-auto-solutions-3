@@ -21,7 +21,6 @@ from datetime import datetime, timedelta, timezone
 from airflow.exceptions import AirflowFailException
 from airflow.models import BaseOperator
 from airflow.models.mappedoperator import MappedOperator
-from airflow.models.taskinstance import TaskInstance
 from airflow.models.taskmixin import DAGNode
 from airflow.operators.python import PythonOperator
 from airflow.sensors.base import BaseSensorOperator
@@ -173,12 +172,15 @@ class TaskGroupWithTimeout(TaskGroup):
               f"effective timeout: {effective_timeout_sec}s"
           )
 
-          task_retry_delay_sec = _effective_retry_delay_sec(task_instance)
+          # only determine minimum possible task retry delay time.
+          # We don't use task_instance.next_retry_datetime() to get precise
+          # retry delay time since minimum possible delay time can correctly
+          # interrupt the most retry cases when backoff is disabled.
+          min_task_retry_delay_sec = _min_task_retry_delay(task_instance.task)
 
           with TaskTimeout(
-              task_retry_delay=task_retry_delay_sec,
+              task_retry_delay=min_task_retry_delay_sec,
               group_deadline=deadline,
-              group_name=group_name,
               seconds=float(effective_timeout_sec),
               error_message=f"{group_name}; task: '{task_instance.task_id}'",
           ):
@@ -215,45 +217,46 @@ def _determine_task_timeout(task: BaseOperator) -> float:
   return timeout_1
 
 
-def _effective_retry_delay_sec(task_instance: TaskInstance) -> float:
-  """Computes how long Airflow will wait before this task's next retry.
-
-  `task_instance.task.retry_delay` is only the base value; with
-  `retry_exponential_backoff` on, the real wait grows every retry, and
-  nothing on `task`/`task_instance` gives us that number directly. So this
-  borrows `next_retry_datetime()` (`= end_date + delay`) instead: fakes
-  `end_date` as "now", lets Airflow compute the delay, then subtracts that
-  same fake value back out. Nothing gets saved anywhere, so restoring
-  `end_date` to whatever it held before is all that's needed afterward.
-  """
-  original_end_date = task_instance.end_date
-  task_instance.end_date = datetime.now(timezone.utc)
-  try:
-    return (
-        task_instance.next_retry_datetime() - task_instance.end_date
-    ).total_seconds()
-  finally:
-    task_instance.end_date = original_end_date
+def _min_task_retry_delay(task: BaseOperator) -> float:
+  """Return the minimum possible retry delay for a task"""
+  min_delay = task.retry_delay.total_seconds()
+  if task.max_retry_delay:
+    max_delay = task.max_retry_delay.total_seconds()
+    min_delay = min(min_delay, max_delay)
+  return min_delay
 
 
 class TaskTimeout(AirflowTimeout):
-  """ """
+  """An AirflowTimeout that skips the retry when the group budget is used up.
+
+  On timeout, retry only if there is still time left before `group_deadline`;
+  otherwise fail the task immediately.
+
+  Args:
+    task_retry_delay: Seconds Airflow waits before the task's next retry.
+    group_deadline: Absolute time by which the whole group must finish.
+    seconds: Timeout duration for this task, in seconds.
+    error_message: Message prefix used when the timeout fires.
+  """
 
   def __init__(
       self,
-      task_retry_delay,
-      group_deadline,
-      group_name,
-      seconds,
-      error_message,
+      task_retry_delay: float,
+      group_deadline: datetime,
+      seconds: float,
+      error_message: str,
   ):
     super().__init__(seconds=seconds, error_message=error_message)
     self.group_deadline = group_deadline
     self.task_retry_delay = task_retry_delay
-    self.group_name = group_name
 
   def handle_timeout(self, *args):
-    """ """
+    """Handle different timeout scenarios for task group with group timeout.
+
+    1. When the task's retry delay exceeds the group timeout, raise
+    AirflowFailException, which fails the task without retrying.
+    2. Otherwise, raise AirflowTaskTimeout to allow the task to retry.
+    """
     group_remaining_now = (
         self.group_deadline - datetime.now(timezone.utc)
     ).total_seconds()
@@ -264,4 +267,6 @@ class TaskTimeout(AirflowTimeout):
       )
 
     self.log.error("Process timed out, PID: %s", str(os.getpid()))
-    raise AirflowTaskTimeout(f"{self.error_message}; task will retry.")
+    raise AirflowTaskTimeout(
+        f"{self.error_message}; task will retry if retry is allowed."
+    )
