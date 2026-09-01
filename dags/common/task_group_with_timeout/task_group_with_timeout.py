@@ -21,7 +21,7 @@ from airflow.exceptions import AirflowFailException
 from airflow.models import BaseOperator
 from airflow.models.mappedoperator import MappedOperator
 from airflow.models.taskmixin import DAGNode
-from airflow.operators.python import PythonOperator
+from airflow.operators.python import PythonOperator, get_current_context
 from airflow.sensors.base import BaseSensorOperator
 from airflow.utils.context import Context
 from airflow.utils.state import TaskInstanceState
@@ -40,6 +40,10 @@ class TaskGroupWithTimeout(TaskGroup):
   This customized object is implemented by intercepting `TaskGroup`'s `.add()`
   at parsing phase, and wrapping `Task`'s `.execute()` to allow setting up a
   dynamic timeout value so that it can affect `.execute()` at runtime phase.
+
+  On context exit, it automatically provisions a root session node to mark
+  the start time and a leaf aggregator node to enforce proper status
+  propagation.
 
   Limitations:
     1. Dynamic Task Mapping: Tasks generated via `.expand()` return a
@@ -75,8 +79,11 @@ class TaskGroupWithTimeout(TaskGroup):
     self._root_node = None
     self._leaf_node = None
 
+  def __enter__(self):
+    return super().__enter__()
+
   def __exit__(self, *args):
-    """Wire `_root_node` as upstream of in-group root children on context
+    """Wires `_root_node` and `_leaf_node` around in-group children on context
     exit."""
     self.initialize_task_group_session()
     self.initialize_status_aggregator()
@@ -106,7 +113,8 @@ class TaskGroupWithTimeout(TaskGroup):
     """Initializes the leaf aggregator task and wires it downstream of
     in-group leaf children."""
 
-    def _aggregate_status(**context):
+    def _aggregate_status():
+      context = get_current_context()
       dag_run = context["dag_run"]
       current_task_id = context["task_instance"].task_id
 
@@ -157,12 +165,12 @@ class TaskGroupWithTimeout(TaskGroup):
             f"{self.__class__.__name__} does not support Dynamic Task Mapping"
         )
 
-      case BaseOperator() if (
-          node.task_id.endswith(f".{self.ROOT_TASK_ID}")
-          or node.task_id.endswith(f".{self.LEAF_TASK_ID}")
-      ):
-        # Skip the root node, which only initiates the session of this task
-        # group and requires no interception.
+      case BaseOperator() if node.task_id in {
+          self.child_id(self.ROOT_TASK_ID),
+          self.child_id(self.LEAF_TASK_ID),
+      }:
+        # Skip the root node and leaf node, which only manage the session/status
+        # and require no interception.
         return node
 
       case BaseOperator():
@@ -174,22 +182,12 @@ class TaskGroupWithTimeout(TaskGroup):
 
         group_name = self.group_name
         timeout = self.timeout
-        root_node_id = self.ROOT_TASK_ID
+        root_node_id = self.child_id(self.ROOT_TASK_ID)
 
         def wrapped_execute(context: Context):
           task_instance = context.get("task_instance")
 
-          current_task_id = task_instance.task_id
-          if "." in current_task_id:
-            group_prefix = current_task_id.rsplit(".", 1)[0]
-            full_root_node_id = f"{group_prefix}.{root_node_id}"
-          else:
-            full_root_node_id = root_node_id
-
-          start_time_str = task_instance.xcom_pull(task_ids=full_root_node_id)
-          if not start_time_str:
-            start_time_str = task_instance.xcom_pull(task_ids=root_node_id)
-
+          start_time_str = task_instance.xcom_pull(task_ids=root_node_id)
           if not start_time_str:
             raise AirflowFailException(
                 "Failed to overwrite timeout for task: "
