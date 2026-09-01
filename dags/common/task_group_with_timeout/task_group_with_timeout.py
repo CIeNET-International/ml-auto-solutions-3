@@ -82,6 +82,9 @@ class TaskGroupWithTimeout(TaskGroup):
     self._root_node = None
     self._leaf_node = None
 
+  def __enter__(self):
+    return super().__enter__()
+
   def __exit__(self, *args):
     """Wires `_root_node` and `_leaf_node` around in-group children on context
     exit."""
@@ -199,17 +202,7 @@ class TaskGroupWithTimeout(TaskGroup):
         def wrapped_execute(context: Context):
           task_instance = context.get("task_instance")
 
-          current_task_id = task_instance.task_id
-          if "." in current_task_id:
-            group_prefix = current_task_id.rsplit(".", 1)[0]
-            full_root_node_id = f"{group_prefix}.{root_node_id}"
-          else:
-            full_root_node_id = root_node_id
-
-          start_time_str = task_instance.xcom_pull(task_ids=full_root_node_id)
-          if not start_time_str:
-            start_time_str = task_instance.xcom_pull(task_ids=root_node_id)
-
+          start_time_str = task_instance.xcom_pull(task_ids=root_node_id)
           if not start_time_str:
             raise AirflowFailException(
                 "Failed to overwrite timeout for task: "
