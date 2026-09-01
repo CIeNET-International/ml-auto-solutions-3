@@ -78,7 +78,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
         dataset_path = "dummy-dataset"
         output_path = "dummy-output-dir"
 
-        cmd = (
+        base_cmd = (
             f"bash src/maxtext/configs/tpu/{tpu}/{model_size}.sh "
             "EXECUTABLE=train_compile "
             f"M_COMPILE_TOPOLOGY={tpu}-{num_cores} "
@@ -86,6 +86,13 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             f"DATASET_PATH={dataset_path} "
             f"OUTPUT_PATH={output_path}"
         )
+        if tpu in ("v5e", "v5p"):
+          cmd = (
+              f'sed -i "s/xla_tpu_enable_async_collective_fusion=true/xla_tpu_enable_async_collective_fusion=false/g" src/maxtext/configs/tpu/{tpu}/{model_size}.sh && '
+              + base_cmd
+          )
+        else:
+          cmd = base_cmd
         run_model_cmds.append(cmd)
     run_model_cmds_dict[tpu] = run_model_cmds
 
