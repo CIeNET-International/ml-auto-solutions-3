@@ -116,7 +116,7 @@ class TaskGroupWithTimeout(TaskGroup):
         task_id=self.LEAF_TASK_ID,
         trigger_rule=TriggerRule.ALL_DONE,
     )
-    def aggregate_status():
+    def aggregate_status() -> None:
       context = get_current_context()
       dag_run = context["dag_run"]
       current_task_id = context["task_instance"].task_id
