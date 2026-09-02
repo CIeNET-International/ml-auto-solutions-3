@@ -17,6 +17,7 @@
 import logging
 from datetime import datetime, timedelta, timezone
 
+from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from airflow.models import BaseOperator
 from airflow.models.mappedoperator import MappedOperator
@@ -79,9 +80,6 @@ class TaskGroupWithTimeout(TaskGroup):
     self._root_node = None
     self._leaf_node = None
 
-  def __enter__(self):
-    return super().__enter__()
-
   def __exit__(self, *args):
     """Wires `_root_node` and `_leaf_node` around in-group children on context
     exit."""
@@ -101,9 +99,10 @@ class TaskGroupWithTimeout(TaskGroup):
         trigger_rule=root_trigger_rule,
     )
 
+    root_task_id = self.child_id(self.ROOT_TASK_ID)
     children_ids = set(self.children.keys())
     for child in self.children.values():
-      if child is self._root_node:
+      if child.task_id == root_task_id:
         continue
       if child.upstream_task_ids & children_ids:
         continue
@@ -113,7 +112,11 @@ class TaskGroupWithTimeout(TaskGroup):
     """Initializes the leaf aggregator task and wires it downstream of
     in-group leaf children."""
 
-    def _aggregate_status():
+    @task(
+        task_id=self.LEAF_TASK_ID,
+        trigger_rule=TriggerRule.ALL_DONE,
+    )
+    def aggregate_status():
       context = get_current_context()
       dag_run = context["dag_run"]
       current_task_id = context["task_instance"].task_id
@@ -130,15 +133,14 @@ class TaskGroupWithTimeout(TaskGroup):
             f"Failing DAG run due to failed task(s): {failed_tasks}"
         )
 
-    self._leaf_node = PythonOperator(
-        task_id=self.LEAF_TASK_ID,
-        python_callable=_aggregate_status,
-        trigger_rule=TriggerRule.ALL_DONE,
-    )
+    self._leaf_node = aggregate_status()
 
+    leaf_task_id = self.child_id(self.LEAF_TASK_ID)
+    root_task_id = self.child_id(self.ROOT_TASK_ID)
     children_ids = set(self.children.keys())
+
     for child in self.children.values():
-      if child is self._leaf_node or child is self._root_node:
+      if child.task_id in {leaf_task_id, root_task_id}:
         continue
       if child.downstream_task_ids.isdisjoint(children_ids):
         child.set_downstream(self._leaf_node)
@@ -200,11 +202,13 @@ class TaskGroupWithTimeout(TaskGroup):
           if remaining <= 0:
             raise AirflowFailException(f"{group_name} timeout exceeded")
 
-          task = task_instance.task
+          current_task = task_instance.task
 
           # Take the minimum value as the effective timeout to ensure all tasks
           # are strictly bounded under this task group's shared deadline.
-          effective_timeout_sec = min(remaining, _determine_task_timeout(task))
+          effective_timeout_sec = min(
+              remaining, _determine_task_timeout(current_task)
+          )
           logging.info(
               f"{group_name}; "
               f"task: '{task_instance.task_id}'; "
@@ -214,13 +218,13 @@ class TaskGroupWithTimeout(TaskGroup):
           # Group-budget exhaustion is enforced by the `remaining <= 0` check
           # above on the next retry; let AirflowTaskTimeout propagate normally.
           with AirflowTimeout(seconds=int(effective_timeout_sec)):
-            return original_execute(task, context)
+            return original_execute(current_task, context)
 
         node.execute = wrapped_execute
         return node
 
 
-def _determine_task_timeout(task: BaseOperator) -> float:
+def _determine_task_timeout(operator: BaseOperator) -> float:
   """
   Determines the effective timeout for a task by identifying which limit
   triggers first.
@@ -234,14 +238,14 @@ def _determine_task_timeout(task: BaseOperator) -> float:
   """
   # Since Airflow treats an unset `execution_timeout` as unlimited,
   # we take "inf" as its value to align with this behavior
-  is_set = task.execution_timeout is not None
+  is_set = operator.execution_timeout is not None
   inf = float("inf")
-  timeout_1 = task.execution_timeout.total_seconds() if is_set else inf
+  timeout_1 = operator.execution_timeout.total_seconds() if is_set else inf
 
-  if isinstance(task, BaseSensorOperator):
+  if isinstance(operator, BaseSensorOperator):
     # This attribute has a default value stored in the configuration file;
     # therefore, `timeout` will always be set.
-    timeout_2 = task.timeout
+    timeout_2 = operator.timeout
     return min(timeout_1, timeout_2)
 
   return timeout_1
