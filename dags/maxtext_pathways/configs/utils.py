@@ -29,6 +29,7 @@ from airflow.models.taskmixin import DAGNode
 from airflow.utils.task_group import TaskGroup
 from airflow.models.baseoperator import chain
 from google.cloud import logging as gcp_logging
+from dags.maxtext_pathways.configs.goodput_util import phase1_validate, phase2_validate, phase3_validate
 from xlml.utils import xpk, gke, subprocess_utils
 
 
@@ -145,7 +146,7 @@ def _list_workload_pods_kubectl(
 @task
 def interrupt_worker_pod(
     workload_id: str, cluster_name: str, region: str, project_id: str
-) -> bool:
+) -> str:
   """
   Authenticates with the GKE cluster and sends SIGILL to worker pod 0-1.
   """
@@ -186,6 +187,8 @@ def interrupt_worker_pod(
       subprocess_utils.run_exec(cmd, env=env)
     except subprocess_utils.ProcessKilledException:
       logging.info("Process was terminated with SIGKILL")
+
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 @task.sensor(poke_interval=10, timeout=3600, mode="reschedule")
@@ -459,6 +462,99 @@ def worker_pod_interruption(
           trigger_interrupt,
           wait_for_elastic_attempt,
           wait_for_slices_active,
+      )
+
+      last_timestamp = wait_for_slices_active
+
+    return group
+
+
+def worker_pod_interruption_se(
+    project_id: str = "",
+    region: str = "",
+    cluster_name: str = "",
+    workload_id: str = "",
+    times: int = 3,
+    entry_log_pattern: str = "completed step:",
+    elastic_log_pattern: str = "Elastic attempt",
+    end_log_pattern: str = "Sufficient slices active:",
+) -> DAGNode:
+  """Run a test job with worker pod interruption."""
+  with TaskGroup(group_id="worker_pod_interruption") as group:
+    last_timestamp = None
+    for i in range(1, times + 1):
+      wait_for_step = check_logs_stream.override(
+          task_id=f"wait_for_step_starts_{i}",
+          retries=5,
+      )(
+          project_id=project_id,
+          region=region,
+          cluster_name=cluster_name,
+          workload_id=workload_id,
+          expect_log_contains=entry_log_pattern,
+          since_time=last_timestamp,
+      )
+      phase1_metrics = phase1_validate(
+          project_id=project_id,
+          workload_id=workload_id,
+          start_time=wait_for_step,
+          times=i,
+      )
+
+      trigger_interrupt = interrupt_worker_pod.override(
+          task_id=f"interrupt_worker_{i}"
+      )(
+          project_id=project_id,
+          region=region,
+          cluster_name=cluster_name,
+          workload_id=workload_id,
+      )
+
+      wait_for_elastic_attempt = check_logs_stream.override(
+          task_id=f"wait_for_elastic_attempt_{i}"
+      )(
+          project_id=project_id,
+          region=region,
+          cluster_name=cluster_name,
+          workload_id=workload_id,
+          expect_log_contains=elastic_log_pattern,
+          since_time=wait_for_step,
+      )
+
+      phase2_metrics = phase2_validate(
+          project_id=project_id,
+          workload_id=workload_id,
+          slices_phase1=phase1_metrics,
+          start_time=wait_for_elastic_attempt,
+          times=i,
+      )
+
+      wait_for_slices_active = check_logs_stream.override(
+          task_id=f"wait_for_slices_active_{i}"
+      )(
+          project_id=project_id,
+          region=region,
+          cluster_name=cluster_name,
+          workload_id=workload_id,
+          expect_log_contains=end_log_pattern,
+          since_time=wait_for_elastic_attempt,
+      )
+
+      phase3_metrics = phase3_validate(
+          project_id=project_id,
+          workload_id=workload_id,
+          start_time=wait_for_slices_active,
+          times=i,
+      )
+
+      chain(
+          wait_for_step,
+          phase1_metrics,
+          trigger_interrupt,
+          wait_for_elastic_attempt,
+          phase2_metrics,
+          wait_for_slices_active,
+          phase3_metrics,
       )
 
       last_timestamp = wait_for_slices_active
