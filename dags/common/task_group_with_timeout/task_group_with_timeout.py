@@ -85,6 +85,15 @@ class TaskGroupWithTimeout(TaskGroup):
   def __exit__(self, *args):
     """Wires `_root_node` and `_leaf_node` around in-group children on context
     exit."""
+    # When `is_teardown=True`, enforce `ALL_DONE` across all in-group tasks.
+    # Operators inside the context are fully initialized by context exit,
+    # ensuring our trigger_rule assignments are not overwritten by Airflow
+    # defaults.
+    if self.is_teardown:
+      for child in self.children.values():
+        if isinstance(child, BaseOperator):
+          child.trigger_rule = TriggerRule.ALL_DONE
+
     self.initialize_task_group_session()
     self.initialize_status_aggregator()
     return super().__exit__(*args)
@@ -178,11 +187,6 @@ class TaskGroupWithTimeout(TaskGroup):
         return node
 
       case BaseOperator():
-        # Enforce ALL_DONE group-wide so that teardown/cleanup steps
-        # execute even if an earlier in-group task fails.
-        if self.is_teardown:
-          node.trigger_rule = TriggerRule.ALL_DONE
-
         # Use the unbound method so `self` binds at execution time, after
         # Airflow resolves XComArg placeholders. Binding via `node.execute` at
         # the parsing phase leaks unresolved placeholders into XCom and breaks
