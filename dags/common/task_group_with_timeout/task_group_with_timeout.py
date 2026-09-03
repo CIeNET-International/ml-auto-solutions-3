@@ -186,6 +186,9 @@ class TaskGroupWithTimeout(TaskGroup):
         return node
 
       case BaseOperator():
+        if self.is_teardown:
+          node.trigger_rule = TriggerRule.ALL_DONE
+
         # Use the unbound method so `self` binds at execution time, after
         # Airflow resolves XComArg placeholders. Binding via `node.execute` at
         # the parsing phase leaks unresolved placeholders into XCom and breaks
@@ -212,13 +215,11 @@ class TaskGroupWithTimeout(TaskGroup):
           if remaining <= 0:
             raise AirflowFailException(f"{group_name} timeout exceeded")
 
-          current_task = task_instance.task
+          task = task_instance.task
 
           # Take the minimum value as the effective timeout to ensure all tasks
           # are strictly bounded under this task group's shared deadline.
-          effective_timeout_sec = min(
-              remaining, _determine_task_timeout(current_task)
-          )
+          effective_timeout_sec = min(remaining, _determine_task_timeout(task))
           logging.info(
               f"{group_name}; "
               f"task: '{task_instance.task_id}'; "
@@ -228,13 +229,13 @@ class TaskGroupWithTimeout(TaskGroup):
           # Group-budget exhaustion is enforced by the `remaining <= 0` check
           # above on the next retry; let AirflowTaskTimeout propagate normally.
           with AirflowTimeout(seconds=int(effective_timeout_sec)):
-            return original_execute(current_task, context)
+            return original_execute(task, context)
 
         node.execute = wrapped_execute
         return node
 
 
-def _determine_task_timeout(operator: BaseOperator) -> float:
+def _determine_task_timeout(task: BaseOperator) -> float:
   """
   Determines the effective timeout for a task by identifying which limit
   triggers first.
@@ -248,14 +249,14 @@ def _determine_task_timeout(operator: BaseOperator) -> float:
   """
   # Since Airflow treats an unset `execution_timeout` as unlimited,
   # we take "inf" as its value to align with this behavior
-  is_set = operator.execution_timeout is not None
+  is_set = task.execution_timeout is not None
   inf = float("inf")
-  timeout_1 = operator.execution_timeout.total_seconds() if is_set else inf
+  timeout_1 = task.execution_timeout.total_seconds() if is_set else inf
 
-  if isinstance(operator, BaseSensorOperator):
+  if isinstance(task, BaseSensorOperator):
     # This attribute has a default value stored in the configuration file;
     # therefore, `timeout` will always be set.
-    timeout_2 = operator.timeout
+    timeout_2 = task.timeout
     return min(timeout_1, timeout_2)
 
   return timeout_1
