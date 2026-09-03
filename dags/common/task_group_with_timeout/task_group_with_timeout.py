@@ -122,6 +122,9 @@ class TaskGroupWithTimeout(TaskGroup):
   def initialize_status_aggregator(self):
     """Initializes the leaf aggregator task and wires it downstream of
     in-group leaf children."""
+    leaf_task_id = self.child_id(self.LEAF_TASK_ID)
+    root_task_id = self.child_id(self.ROOT_TASK_ID)
+    children_ids = set(self.children.keys())
 
     @task_decorators(
         task_id=self.LEAF_TASK_ID,
@@ -130,25 +133,21 @@ class TaskGroupWithTimeout(TaskGroup):
     def aggregate_status() -> None:
       context = get_current_context()
       dag_run = context["dag_run"]
-      current_task_id = context["task_instance"].task_id
 
       failed_tasks = [
           ti.task_id
           for ti in dag_run.get_task_instances()
           if ti.state == TaskInstanceState.FAILED
-          and ti.task_id != current_task_id
+          and ti.task_id in children_ids
+          and ti.task_id not in {leaf_task_id, root_task_id}
       ]
 
       if failed_tasks:
         raise AirflowFailException(
-            f"Failing DAG run due to failed task(s): {failed_tasks}"
+            f"Failing TaskGroup due to failed in-group task(s): {failed_tasks}"
         )
 
     self._leaf_node = aggregate_status()
-
-    leaf_task_id = self.child_id(self.LEAF_TASK_ID)
-    root_task_id = self.child_id(self.ROOT_TASK_ID)
-    children_ids = set(self.children.keys())
 
     for child in self.children.values():
       if child.task_id in {leaf_task_id, root_task_id}:
