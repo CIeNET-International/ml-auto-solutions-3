@@ -452,7 +452,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             node_pool=cluster_info_2,
             node_pool_selector=selector,
         )
-
         chain([create_first_node_pool, create_second_node_pool])
 
       image_task_groups = []
@@ -460,7 +459,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
         # Keyword arguments are generated dynamically at runtime (pylint does not
         # know this signature).
         with TaskGroupWithTimeout(  # pylint: disable=unexpected-keyword-arg
-            group_id=f"v{config.tpu_version.value}_{type_name}",
+            group_id=f"test_v{config.tpu_version.value}_{type_name}",
             timeout=TEST_TIMEOUT,
         ) as image_tg:
           image_task_groups.append(image_tg)
