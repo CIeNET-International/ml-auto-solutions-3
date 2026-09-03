@@ -134,7 +134,7 @@ with models.DAG(
           },
       },
       "llama3_1-70b": {
-          "core_count": 128,
+          "core_count": 64,
           "to_huggingface": "bash tests/end_to_end/tpu/llama3.1/70b/test_llama3.1_70b_to_hf.sh",
           "post_training": {
               "sft": {
