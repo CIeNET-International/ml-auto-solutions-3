@@ -82,3 +82,23 @@ def run_exec(
     logging.info("[subprocess] stdout: %s", res.stdout)
 
   return res.stdout
+
+
+def run_streaming(
+    cmd: str, log_command: bool = True, env: dict[str, str] | None = None
+) -> subprocess.Popen:
+  """Executes a shell command and streams its output in real-time."""
+
+  if log_command:
+    logging.info("[subprocess] executing command:\n %s\n", cmd)
+
+  # Use subprocess.Popen to stream output
+  return subprocess.Popen(
+      cmd,
+      stdout=subprocess.PIPE,
+      stderr=subprocess.STDOUT,
+      bufsize=1,
+      shell=True,
+      text=True,
+      env=env,
+  )
