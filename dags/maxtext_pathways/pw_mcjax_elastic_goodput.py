@@ -14,7 +14,6 @@
 
 """DAG definition for running MaxText Pathways Elastic benchmarks on GKE."""
 
-import os
 import datetime
 from absl import logging
 
@@ -24,19 +23,28 @@ from airflow.models.baseoperator import chain
 from airflow.models.taskmixin import DAGNode
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
-from google.cloud import logging as gcp_logging
-from ml_goodput_measurement import goodput
 
 from dags import composer_env
 from dags.common import test_owner
 from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper
 from dags.maxtext_pathways.configs import parameters as ui_params
 from dags.maxtext_pathways.configs import recipe_config as recipe_cfg
+from dags.maxtext_pathways.configs.goodput_utils import (
+    GOODPUT_LOG_LIST,
+    check_goodput_logname,
+    check_workload_goodput,
+    phase1_validate,
+    phase2_validate,
+    phase3_validate,
+)
 from dags.maxtext_pathways.configs.utils import (
     get_dag_parameters,
     generate_install_dependencies_commands,
     generate_derived_parameters,
+    interrupt_worker_pod,
     check_gcp_logs_exist,
+    check_logs_stream,
+    worker_pod_interruption,
     COLOCATED_PYTHON_IMAGE,
 )
 from xlml.utils import gke, kpo, xpk
@@ -78,95 +86,6 @@ replica_params.update({
         description="Number of slices",
     ),
 })
-
-GOODPUT_LOG_LIST = [
-    "Cumulative goodput monitoring process started for job: {workload_id}",
-    "Started Goodput upload to Tensorboard & GCM in the background!",
-    "Sent Goodput metrics to GCM Monitoring.",
-    "Performing final goodput query and upload for job: {workload_id}",
-    "Flushed final metrics and safe exited from Goodput monitoring.",
-]
-
-
-@task.sensor(poke_interval=10, timeout=3600, mode="reschedule")
-def check_goodput_logname(
-    project_id: str,
-    workload_id: str,
-) -> bool:
-  """
-  Counts occurrences of a string pattern in GCP
-  Cloud Logging for a specific workload.
-  """
-  # Initialize the GCP Logging Client
-  client = gcp_logging.Client(project=project_id)
-
-  log_filter = f'logName="projects/{project_id}/logs/goodput_{workload_id}" '
-
-  logging.info(f"Querying GCP Logging with filter: {log_filter}")
-
-  # Fetch the entries. (Adjust page_size based on log volume to optimize speed)
-  entries = client.list_entries(filter_=log_filter, page_size=500)
-
-  # Consolidate all log payloads into a single text body
-  log_lines = []
-  for entry in entries:
-    payload = entry.payload
-
-    if payload:
-      if isinstance(payload, str):
-        log_lines.append(payload)
-      elif isinstance(payload, dict):
-        message = payload.get("message") or payload.get("textPayload")
-        if message:
-          log_lines.append(str(message))
-        else:
-          log_lines.append(str(payload))
-
-  full_logs_text = "\n".join(log_lines)
-
-  if not full_logs_text:
-    logging.info("No logs found yet in Cloud Logging for filter.")
-    return False
-  logging.info(f"Full Logs Text:\n{full_logs_text}")
-
-  return True
-
-
-@task
-def check_workload_goodput(
-    workload_id: str,
-    project_id: str,
-) -> bool:
-  """
-  Query and log Goodput/Badput metrics for the MaxText XPK workload.
-  """
-  goodput_logger_name = f"goodput_{workload_id}"
-  os.environ["GOOGLE_CLOUD_PROJECT"] = project_id
-  goodput_calculator = goodput.GoodputCalculator(
-      job_name=workload_id,
-      logger_name=goodput_logger_name,
-      using_pathways=True,
-  )
-  (
-      current_goodput,
-      badput_breakdown,
-      last_step,
-  ) = goodput_calculator.get_job_goodput(include_badput_breakdown=True)
-
-  logging.info(f"Last step recorded: {last_step}")
-  logging.info(f"Goodput (%): {current_goodput:.2f}%")
-  logging.info("\n--- Badput Breakdown ---")
-
-  for badput_type, percentage in badput_breakdown.items():
-    if badput_type == goodput.BadputType.CUSTOM_BADPUT_EVENTS:
-      logging.info(f"Badput due to {badput_type}:")
-      custom_events = percentage
-      if isinstance(custom_events, dict):
-        for event_name, event_percentage in custom_events.items():
-          logging.info(f"  - {event_name}: {event_percentage:.2f}%")
-    else:
-      # Access the name attribute of the enum member
-      logging.info(f"Badput due to {badput_type.name}: {percentage:.2f}%")
 
 
 @task
@@ -269,27 +188,41 @@ def generate_commands(
   return commands
 
 
-def worker_pod_interruption(
+def worker_pod_interruption_with_se(
     project_id: str = "",
     region: str = "",
     cluster_name: str = "",
     workload_id: str = "",
+    times: int = 3,
+    entry_log_pattern: str = "completed step:",
+    elastic_log_pattern: str = "Elastic attempt",
+    end_log_pattern: str = "Sufficient slices active:",
 ) -> DAGNode:
   """Run a test job with worker pod interruption."""
   with TaskGroup(group_id="worker_pod_interruption") as group:
-    previous_cycle_tail = None
-    for i in range(1, 2):
-      wait_for_step = xpk.check_last_logs.override(
-          task_id=f"wait_for_step_starts_{i}"
+    last_timestamp = None
+    for i in range(1, times + 1):
+      wait_for_step = check_logs_stream.override(
+          task_id=f"wait_for_step_starts_{i}",
+          retries=5,
       )(
           project_id=project_id,
           region=region,
           cluster_name=cluster_name,
           workload_id=workload_id,
-          expect_log_contains="completed step:",
+          expect_log_contains=entry_log_pattern,
+          since_time=last_timestamp,
+      )
+      phase1_metrics = phase1_validate(
+          project_id=project_id,
+          workload_id=workload_id,
+          start_time=wait_for_step,
+          times=i,
       )
 
-      trigger_interrupt = xpk.interrupt_worker_pod.override(
+      wait_for_step >> phase1_metrics
+
+      trigger_interrupt = interrupt_worker_pod.override(
           task_id=f"interrupt_worker_{i}"
       )(
           project_id=project_id,
@@ -298,33 +231,46 @@ def worker_pod_interruption(
           workload_id=workload_id,
       )
 
-      # TODO(cienet): refine validation
-      #   1. more precise log content and order
-      #   2. use kubectl instead of CoreV1Api
-      #   (since it doesn't support "since_time")
-      #   3. cache a timestamp, to skip the old logs
-
-      wait_for_elastic_attempt = xpk.check_logs_exist.override(
+      wait_for_elastic_attempt = check_logs_stream.override(
           task_id=f"wait_for_elastic_attempt_{i}"
       )(
           project_id=project_id,
           region=region,
           cluster_name=cluster_name,
           workload_id=workload_id,
-          expect_log_contains=f"Elastic attempt {i+1}",
+          expect_log_contains=elastic_log_pattern,
+          since_time=wait_for_step,
       )
 
-      wait_for_slices_active = xpk.check_logs_exist.override(
+      phase2_metrics = phase2_validate(
+          project_id=project_id,
+          workload_id=workload_id,
+          slices_phase1=phase1_metrics,
+          start_time=wait_for_elastic_attempt,
+          times=i,
+      )
+
+      wait_for_elastic_attempt >> phase2_metrics
+
+      wait_for_slices_active = check_logs_stream.override(
           task_id=f"wait_for_slices_active_{i}"
       )(
           project_id=project_id,
           region=region,
           cluster_name=cluster_name,
           workload_id=workload_id,
-          expect_log_contains="Sufficient slices active:",
-          expected_count=i + 1,
+          expect_log_contains=end_log_pattern,
+          since_time=wait_for_elastic_attempt,
       )
 
+      phase3_metrics = phase3_validate(
+          project_id=project_id,
+          workload_id=workload_id,
+          start_time=wait_for_slices_active,
+          times=i,
+      )
+
+      wait_for_slices_active >> phase3_metrics
       chain(
           wait_for_step,
           trigger_interrupt,
@@ -332,9 +278,8 @@ def worker_pod_interruption(
           wait_for_slices_active,
       )
 
-      if previous_cycle_tail:
-        chain(previous_cycle_tail, wait_for_step)
-      previous_cycle_tail = wait_for_slices_active
+      last_timestamp = wait_for_slices_active
+
     return group
 
 
@@ -343,7 +288,7 @@ RECIPE_NAME = RECIPE_INSTANCE.value.lower()
 
 
 def create_elastic_goodput_dag(
-    dag_id: str, description: str, params: dict
+    dag_id: str, description: str, params: dict, slice_efficiency: bool = False
 ) -> models.DAG:
   schedule = SchedulingHelper.arrange_schedule_time(dag_id)
   with models.DAG(
@@ -411,16 +356,26 @@ def create_elastic_goodput_dag(
         image_full_url=fetched_params["runner"],
     )
 
-    interruption_task = worker_pod_interruption(
-        project_id=fetched_params["project"],
-        region=calculated_params["region"],
-        cluster_name=fetched_params["cluster_name"],
-        workload_id=calculated_params["workload_id"],
-    )
+    if slice_efficiency:
+      interruption_task = worker_pod_interruption_with_se(
+          project_id=fetched_params["project"],
+          region=calculated_params["region"],
+          cluster_name=fetched_params["cluster_name"],
+          workload_id=calculated_params["workload_id"],
+          times=2,
+      )
+    else:
+      interruption_task = worker_pod_interruption(
+          project_id=fetched_params["project"],
+          region=calculated_params["region"],
+          cluster_name=fetched_params["cluster_name"],
+          workload_id=calculated_params["workload_id"],
+      )
 
     wait_for_workload_complete = gke.wait_for_workload_completion.override(
         task_id="wait_for_workload_complete",
         timeout=3600,
+        trigger_rule=TriggerRule.ALL_DONE,
     )(
         workload_id=calculated_params["workload_id"],
         project_id=fetched_params["project"],
@@ -431,7 +386,6 @@ def create_elastic_goodput_dag(
     check_goodput_logs = check_gcp_logs_exist.override(
         task_id="check_goodput_logs",
         timeout=180,
-        trigger_rule=TriggerRule.ALL_DONE,
     )(
         project_id=fetched_params["project"],
         location=calculated_params["region"],
@@ -496,4 +450,26 @@ dag_replica = create_elastic_goodput_dag(
         "setting and replica resize on GKE."
     ),
     params=replica_params,
+)
+
+
+# Instantiate the Goodput DAG
+dag_elastic = create_elastic_goodput_dag(
+    dag_id="pw_elastic_goodput_se",
+    description=(
+        f"A DAG to run a MaxText {RECIPE_NAME} with elastic training on GKE."
+    ),
+    params=elastic_params,
+    slice_efficiency=True,
+)
+
+# Instantiate the Replica Resize Goodput DAG
+dag_replica = create_elastic_goodput_dag(
+    dag_id="pw_elastic_goodput_replica_se",
+    description=(
+        f"A DAG to run a MaxText {RECIPE_NAME} with goodput "
+        "setting and replica resize on GKE."
+    ),
+    params=replica_params,
+    slice_efficiency=True,
 )
