@@ -278,7 +278,7 @@ class GkeClusters:
       device_version=TpuVersion.V5P,
       core_count=8,
       project=Project.CLOUD_TPU_SHARED_CAPACITY.value,
-      zone=Zone.EUROPE_WEST4_B.value,
+      zone=Region.EUROPE_WEST4.value,
       namespace="default",
       queue="default",
   )
