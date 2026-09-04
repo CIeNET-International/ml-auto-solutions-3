@@ -14,6 +14,8 @@
 
 """Common funcitons and tasks for MaxText Pathways DAGs"""
 
+# TODO(cienet): import grouping
+
 from itertools import chain
 import os
 import re
@@ -220,6 +222,7 @@ def check_gcp_logs_exist(
   return False
 
 
+# TODO(cienet): remove pod detection logic (caller must specify it)
 @task
 def interrupt_worker_pod(
     workload_id: str, cluster_name: str, region: str, project_id: str
@@ -268,6 +271,7 @@ def interrupt_worker_pod(
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# TODO(cienet): timeout might have conflict with steam
 def _stream_pod_logs(
     pod_name: str,
     namespace: str,

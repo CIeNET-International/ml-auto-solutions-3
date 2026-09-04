@@ -14,6 +14,10 @@
 
 """Common funcitons and tasks for Pathways Elastic Goodput measurement DAGs."""
 
+# TODO(cienet): circle back for the whole file
+
+# TODO(cienet): import grouping
+
 import os
 import ast
 from absl import logging
@@ -26,6 +30,7 @@ from airflow.utils.task_group import TaskGroup
 from airflow.models.baseoperator import chain
 from google.cloud import logging as gcp_logging
 from google.cloud.monitoring_v3 import types
+# TODO(cienet): promote them as shared utility
 from dags.tpu_observability.utils.time_util import TimeUtil
 from dags.tpu_observability.utils.gcp_util import list_time_series
 from google.cloud import logging as gcp_logging
@@ -47,6 +52,7 @@ def check_goodput_logname(
   Counts occurrences of a string pattern in GCP
   Cloud Logging for a specific workload.
   """
+  # TODO(cienet): reuse utility in `from dags.tpu_observability.utils.gcp_util`
   # Initialize the GCP Logging Client
   client = gcp_logging.Client(project=project_id)
 
