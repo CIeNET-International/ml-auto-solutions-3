@@ -38,6 +38,7 @@ COLOCATED_PYTHON_IMAGE = (
     "gcr.io/tpu-prod-env-multipod/lidanny_maxtext-colocated-python:latest"
 )
 
+
 def _get_kubeconfig_env(
     project_id: str, region: str, cluster_name: str, kubeconfig_path: str
 ) -> dict[str, str]:
@@ -60,6 +61,7 @@ def _list_workload_pods_kubectl(
   pod_list_json = json.loads(result)
   # Returns the 'items' list from the Kubernetes List object
   return pod_list_json.get("items", [])
+
 
 def generate_recipe_workload_id(dag_id: str) -> tuple[str, str]:
   """Generate a workload_id following the standard naming convention."""

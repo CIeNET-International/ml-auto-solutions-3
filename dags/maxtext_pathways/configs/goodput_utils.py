@@ -43,6 +43,7 @@ GOODPUT_LOG_LIST = [
     "Flushed final metrics and safe exited from Goodput monitoring.",
 ]
 
+
 @task.sensor(poke_interval=10, timeout=3600, mode="reschedule")
 def check_goodput_logname(
     project_id: str,
