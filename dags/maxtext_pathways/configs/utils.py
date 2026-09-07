@@ -80,17 +80,14 @@ def generate_install_dependencies_commands() -> str:
       # Update apt package list
       "sudo apt-get update",
 
-      # Install kubectl
-      "sudo apt-get install -y kubectl",
-
-      # Install GKE auth plugin for cluster authentication
-      "sudo apt-get install google-cloud-cli-gke-gcloud-auth-plugin -y",
+      # Install kubectl and GKE auth plugin
+      "sudo apt-get install -y kubectl google-cloud-cli-gke-gcloud-auth-plugin",
 
       # Install xpk
-      *xpk.get_xpk_setup_cmd("/root", xpk.MAIN_BRANCH),
+      *xpk.get_xpk_setup_cmd("/root", host=False, branch=xpk.MAIN_BRANCH),
 
       # Install dependencies for maxtext
-      "pip install omegaconf",
+      "uv pip install omegaconf",
 
       # Prepare environment for further pip installs
       "cd /deps",
@@ -270,7 +267,7 @@ def interrupt_worker_pod(
     except subprocess_utils.ProcessKilledException:
       logging.info("Process was terminated with SIGKILL")
 
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 # TODO(cienet): timeout might have conflict with steam
@@ -379,7 +376,7 @@ def check_logs_stream(
       logging.info("Using upstream XCom since_time: %s", effective_since_time)
     else:
       effective_since_time = ti.start_date.astimezone(timezone.utc).strftime(
-          "%Y-%m-%dT%H:%M:%SZ"
+          "%Y-%m-%dT%H:%M:%S.%fZ"
       )
       logging.info(
           "No upstream or internal since_time. Using task start time: %s",
@@ -408,19 +405,25 @@ def worker_pod_interruption(
     region: str = "",
     cluster_name: str = "",
     workload_id: str = "",
+    times: int = 3,
+    entry_log_pattern: str = "completed step:",
+    elastic_log_pattern: str = "Elastic attempt",
+    end_log_pattern: str = "Sufficient slices active:",
 ) -> DAGNode:
   """Run a test job with worker pod interruption."""
   with TaskGroup(group_id="worker_pod_interruption") as group:
-    previous_cycle_tail = None
-    for i in range(1, 2):
+    last_timestamp = None
+    for i in range(1, times + 1):
       wait_for_step = check_logs_stream.override(
-          task_id=f"wait_for_step_starts_{i}"
+          task_id=f"wait_for_step_starts_{i}",
+          retries=5,
       )(
           project_id=project_id,
           region=region,
           cluster_name=cluster_name,
           workload_id=workload_id,
-          expect_log_contains="completed step:",
+          expect_log_contains=entry_log_pattern,
+          since_time=last_timestamp,
       )
 
       trigger_interrupt = interrupt_worker_pod.override(
@@ -432,11 +435,7 @@ def worker_pod_interruption(
           workload_id=workload_id,
       )
 
-      # TODO(cienet): refine validation
-      #   1. more precise log content and order
-      #   2. use kubectl instead of CoreV1Api
-      #   (since it doesn't support "since_time")
-      #   3. cache a timestamp, to skip the old logs
+      wait_for_step >> trigger_interrupt
 
       wait_for_elastic_attempt = check_logs_stream.override(
           task_id=f"wait_for_elastic_attempt_{i}"
@@ -445,7 +444,8 @@ def worker_pod_interruption(
           region=region,
           cluster_name=cluster_name,
           workload_id=workload_id,
-          expect_log_contains=f"Elastic attempt {i+1}",
+          expect_log_contains=elastic_log_pattern,
+          since_time=trigger_interrupt,
       )
 
       wait_for_slices_active = check_logs_stream.override(
@@ -455,7 +455,8 @@ def worker_pod_interruption(
           region=region,
           cluster_name=cluster_name,
           workload_id=workload_id,
-          expect_log_contains="Sufficient slices active:",
+          expect_log_contains=end_log_pattern,
+          since_time=wait_for_elastic_attempt,
       )
 
       chain(
@@ -465,7 +466,6 @@ def worker_pod_interruption(
           wait_for_slices_active,
       )
 
-      if previous_cycle_tail:
-        chain(previous_cycle_tail, wait_for_step)
-      previous_cycle_tail = wait_for_slices_active
+      last_timestamp = wait_for_slices_active
+
     return group

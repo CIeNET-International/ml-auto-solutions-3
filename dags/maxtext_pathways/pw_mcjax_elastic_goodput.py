@@ -239,14 +239,14 @@ def worker_pod_interruption_with_se(
           cluster_name=cluster_name,
           workload_id=workload_id,
           expect_log_contains=elastic_log_pattern,
-          since_time=wait_for_step,
+          since_time=trigger_interrupt,
       )
 
       phase2_metrics = phase2_validate(
           project_id=project_id,
           workload_id=workload_id,
           slices_phase1=phase1_metrics,
-          start_time=wait_for_elastic_attempt,
+          start_time=trigger_interrupt,
           times=i,
       )
 
@@ -288,7 +288,12 @@ RECIPE_NAME = RECIPE_INSTANCE.value.lower()
 
 
 def create_elastic_goodput_dag(
-    dag_id: str, description: str, params: dict, slice_efficiency: bool = False
+    dag_id: str,
+    description: str,
+    params: dict,
+    slice_efficiency: bool = False,
+    entry_log_pattern: str = "completed step:",
+    end_log_pattern: str = "Sufficient slices active: 1 >= 1",
 ) -> models.DAG:
   schedule = SchedulingHelper.arrange_schedule_time(dag_id)
   with models.DAG(
@@ -362,7 +367,8 @@ def create_elastic_goodput_dag(
           region=calculated_params["region"],
           cluster_name=fetched_params["cluster_name"],
           workload_id=calculated_params["workload_id"],
-          times=2,
+          entry_log_pattern=entry_log_pattern,
+          end_log_pattern=end_log_pattern,
       )
     else:
       interruption_task = worker_pod_interruption(
@@ -370,6 +376,8 @@ def create_elastic_goodput_dag(
           region=calculated_params["region"],
           cluster_name=fetched_params["cluster_name"],
           workload_id=calculated_params["workload_id"],
+          entry_log_pattern=entry_log_pattern,
+          end_log_pattern=end_log_pattern,
       )
 
     wait_for_workload_complete = gke.wait_for_workload_completion.override(
@@ -424,9 +432,9 @@ def create_elastic_goodput_dag(
         start_recipe,
         interruption_task,
         wait_for_workload_complete,
+        workload_goodput,
         goodput_logname,
         check_goodput_logs,
-        workload_goodput,
         clean_up_recipe,
     )
 
@@ -450,6 +458,7 @@ dag_replica = create_elastic_goodput_dag(
         "setting and replica resize on GKE."
     ),
     params=replica_params,
+    end_log_pattern="Sufficient slices active: 2 >= 1",
 )
 
 
@@ -472,4 +481,5 @@ dag_replica = create_elastic_goodput_dag(
     ),
     params=replica_params,
     slice_efficiency=True,
+    end_log_pattern="Sufficient slices active: 2 >= 1",
 )

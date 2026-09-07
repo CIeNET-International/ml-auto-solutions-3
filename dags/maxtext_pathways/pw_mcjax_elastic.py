@@ -20,8 +20,6 @@ from absl import logging
 from airflow import models
 from airflow.decorators import task
 from airflow.models.baseoperator import chain
-from airflow.models.taskmixin import DAGNode
-from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
 from dags import composer_env
@@ -294,6 +292,7 @@ with models.DAG(
       region=calculated_params["region"],
       cluster_name=fetched_params["cluster_name"],
       workload_id=calculated_params["workload_id"],
+      end_log_pattern="Sufficient slices active: 1 >= 1",
   )
 
   wait_for_workload_complete = gke.wait_for_workload_completion.override(
@@ -426,6 +425,8 @@ with models.DAG(
       region=calculated_params["region"],
       cluster_name=fetched_params["cluster_name"],
       workload_id=calculated_params["workload_id"],
+      entry_log_pattern="live slice count: 2",
+      end_log_pattern="Sufficient slices active: 2 >= 1",
   )
 
   wait_for_workload_complete = gke.wait_for_workload_completion.override(
