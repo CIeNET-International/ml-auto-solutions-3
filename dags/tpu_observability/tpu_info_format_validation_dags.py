@@ -464,7 +464,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       with TaskGroupWithTimeout(
           group_id="post_test",
           timeout=POST_TEST_TIMEOUT,
-          as_teardown_of=create_first_node_pool,
+          is_teardown=True,
       ) as post_test:
         clean_up_workload = jobset.end_workload.override(
             task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
