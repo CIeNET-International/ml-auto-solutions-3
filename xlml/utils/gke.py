@@ -176,7 +176,9 @@ def print_pod_logs(
             container.name,
         )
         for line in response:
-          logging.info(line.decode("utf-8", "replace").rstrip("\n"))
+          if isinstance(line, bytes):
+            line = line.decode("utf-8", "replace")
+          logging.info(line.rstrip("\n"))
       except Exception as e:
         logging.info(
             "Failed to fetch logs for %s:%s: %s",
@@ -370,7 +372,9 @@ def wait_for_workload_completion(
                 _preload_content=False,
             )
             for line in response:
-              logging.info(line.decode("utf-8", "replace").rstrip("\n"))
+              if isinstance(line, bytes):
+                line = line.decode("utf-8", "replace")
+              logging.info(line.rstrip("\n"))
           except kubernetes.client.exceptions.ApiException as e:
             logging.warning(
                 "Could not retrieve pod logs for %s: %s", pod.metadata.name, e
