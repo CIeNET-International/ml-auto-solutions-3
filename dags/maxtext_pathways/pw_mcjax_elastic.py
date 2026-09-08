@@ -33,6 +33,7 @@ from dags.maxtext_pathways.configs.utils import (
     get_dag_parameters,
     generate_install_dependencies_commands,
     generate_derived_parameters,
+    worker_pod_interruption,
     COLOCATED_PYTHON_IMAGE,
 )
 from xlml.utils import gke, kpo, xpk
@@ -212,79 +213,6 @@ def generate_commands_replica(
   return commands
 
 
-def worker_pod_interruption(
-    project_id: str = "",
-    region: str = "",
-    cluster_name: str = "",
-    workload_id: str = "",
-    entry_log_pattern: str = "completed step:",
-    elastic_log_pattern: str = "Elastic attempt",
-    end_log_pattern: str = "Sufficient slices active:",
-) -> DAGNode:
-  """Run a test job with worker pod interruption."""
-  with TaskGroup(group_id="worker_pod_interruption") as group:
-    previous_cycle_tail = None
-    for i in range(1, 4):
-      wait_for_step = xpk.check_last_logs.override(
-          task_id=f"wait_for_step_starts_{i}"
-      )(
-          project_id=project_id,
-          region=region,
-          cluster_name=cluster_name,
-          workload_id=workload_id,
-          expect_log_contains=entry_log_pattern,
-      )
-
-      trigger_interrupt = xpk.interrupt_worker_pod.override(
-          task_id=f"interrupt_worker_{i}"
-      )(
-          project_id=project_id,
-          region=region,
-          cluster_name=cluster_name,
-          workload_id=workload_id,
-      )
-
-      # TODO(cienet): refine validation
-      #   1. more precise log content and order
-      #   2. use kubectl instead of CoreV1Api
-      #   (since it doesn't support "since_time")
-      #   3. cache a timestamp, to skip the old logs
-
-      wait_for_elastic_attempt = xpk.check_logs_exist.override(
-          task_id=f"wait_for_elastic_attempt_{i}"
-      )(
-          project_id=project_id,
-          region=region,
-          cluster_name=cluster_name,
-          workload_id=workload_id,
-          expect_log_contains=elastic_log_pattern,
-      )
-
-      wait_for_slices_active = xpk.check_logs_exist.override(
-          task_id=f"wait_for_slices_active_{i}"
-      )(
-          project_id=project_id,
-          region=region,
-          cluster_name=cluster_name,
-          workload_id=workload_id,
-          expect_log_contains=end_log_pattern,
-          expected_count=i + 1,
-      )
-
-      # TODO(cienet): Refine the mechanism to chain tasks
-      chain(
-          wait_for_step,
-          trigger_interrupt,
-          wait_for_elastic_attempt,
-          wait_for_slices_active,
-      )
-
-      if previous_cycle_tail:
-        chain(previous_cycle_tail, wait_for_step)
-      previous_cycle_tail = wait_for_slices_active
-    return group
-
-
 RECIPE_INSTANCE = recipe_cfg.Recipe.PW_MCJAX_BENCHMARK_RECIPE
 RECIPE_NAME = RECIPE_INSTANCE.value.lower()
 DAG_ID = "pw_elastic_pause_resume"
@@ -366,9 +294,6 @@ with models.DAG(
       region=calculated_params["region"],
       cluster_name=fetched_params["cluster_name"],
       workload_id=calculated_params["workload_id"],
-      entry_log_pattern="completed step:",
-      elastic_log_pattern="Elastic attempt",
-      end_log_pattern="Sufficient slices active: 1 >= 1",
   )
 
   wait_for_workload_complete = gke.wait_for_workload_completion.override(
@@ -501,9 +426,6 @@ with models.DAG(
       region=calculated_params["region"],
       cluster_name=fetched_params["cluster_name"],
       workload_id=calculated_params["workload_id"],
-      entry_log_pattern="live slice count: 2",
-      elastic_log_pattern="Elastic attempt",
-      end_log_pattern="Sufficient slices active: 2 >= 1",
   )
 
   wait_for_workload_complete = gke.wait_for_workload_completion.override(
