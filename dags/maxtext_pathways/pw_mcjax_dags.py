@@ -15,7 +15,6 @@
 """DAG definition for running MaxText Pathways MCJax benchmarks on GKE."""
 
 import datetime
-import time
 from absl import logging
 
 from airflow import models

@@ -50,7 +50,12 @@ LOGGING_URL_FORMAT = (
 )
 
 
-def get_xpk_setup_cmd(tmpdir, branch: str = MAIN_BRANCH):
+def get_xpk_setup_cmd(
+    tmpdir,
+    branch: str = MAIN_BRANCH,
+    *,
+    host: bool = True,
+):
   clone_branch = (
       f"git clone --branch {branch} https://github.com/AI-Hypercomputer/xpk"
       f" {tmpdir}/xpk"
@@ -59,12 +64,21 @@ def get_xpk_setup_cmd(tmpdir, branch: str = MAIN_BRANCH):
   bash_setup = "set -xue"
 
   # Create venv, install uv in it, then use uv to install xpk
-  setup_xpk = (
-      f"python3 -m venv {tmpdir}/xpk_venv && "
-      f"source {tmpdir}/xpk_venv/bin/activate && "
-      f"pip install uv && "
-      f"uv pip install -e {tmpdir}/xpk"
-  )
+  if host:
+    setup_xpk = (
+        f"python3 -m venv {tmpdir}/xpk_venv && "
+        f"source {tmpdir}/xpk_venv/bin/activate && "
+        f"pip install uv && "
+        f"uv pip install -e {tmpdir}/xpk"
+    )
+  # Running xpk setup commands in container
+  else:
+    # uv handles venv creation and package fetching independently of Debian's stripped Python pip
+    setup_xpk = (
+        f"uv venv {tmpdir}/xpk_venv && "
+        f"source {tmpdir}/xpk_venv/bin/activate && "
+        f"uv pip install -e {tmpdir}/xpk"
+    )
 
   cmds = [
       bash_setup,
