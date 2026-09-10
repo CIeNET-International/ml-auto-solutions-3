@@ -14,6 +14,7 @@
 
 """TaskGroupWithTimeout: timeout enforcement for Airflow TaskGroups."""
 
+import os
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -24,8 +25,9 @@ from airflow.models.taskmixin import DAGNode
 from airflow.operators.python import PythonOperator
 from airflow.sensors.base import BaseSensorOperator
 from airflow.utils.context import Context
-from airflow.utils.task_group import TaskGroup
 from airflow.utils.timeout import timeout as AirflowTimeout
+from airflow.exceptions import AirflowTaskTimeout
+from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
 
@@ -170,9 +172,18 @@ class TaskGroupWithTimeout(TaskGroup):
               f"effective timeout: {effective_timeout_sec}s"
           )
 
-          # Group-budget exhaustion is enforced by the `remaining <= 0` check
-          # above on the next retry; let AirflowTaskTimeout propagate normally.
-          with AirflowTimeout(seconds=int(effective_timeout_sec)):
+          # only determine minimum possible task retry delay time.
+          # We don't use task_instance.next_retry_datetime() to get precise
+          # retry delay time since minimum possible delay time can correctly
+          # interrupt the most retry cases when backoff is disabled.
+          min_task_retry_delay_sec = _min_task_retry_delay(task_instance.task)
+
+          with TaskTimeout(
+              task_retry_delay=min_task_retry_delay_sec,
+              group_deadline=deadline,
+              seconds=float(effective_timeout_sec),
+              error_message=f"{group_name}; task: '{task_instance.task_id}'",
+          ):
             return original_execute(task, context)
 
         node.execute = wrapped_execute
@@ -204,3 +215,58 @@ def _determine_task_timeout(task: BaseOperator) -> float:
     return min(timeout_1, timeout_2)
 
   return timeout_1
+
+
+def _min_task_retry_delay(task: BaseOperator) -> float:
+  """Return the minimum possible retry delay for a task"""
+  min_delay = task.retry_delay.total_seconds()
+  if task.max_retry_delay:
+    max_delay = task.max_retry_delay.total_seconds()
+    min_delay = min(min_delay, max_delay)
+  return min_delay
+
+
+class TaskTimeout(AirflowTimeout):
+  """An AirflowTimeout that skips the retry when the group budget is used up.
+
+  On timeout, retry only if there is still time left before `group_deadline`;
+  otherwise fail the task immediately.
+
+  Args:
+    task_retry_delay: Seconds Airflow waits before the task's next retry.
+    group_deadline: Absolute time by which the whole group must finish.
+    seconds: Timeout duration for this task, in seconds.
+    error_message: Message prefix used when the timeout fires.
+  """
+
+  def __init__(
+      self,
+      task_retry_delay: float,
+      group_deadline: datetime,
+      seconds: float,
+      error_message: str,
+  ):
+    super().__init__(seconds=seconds, error_message=error_message)
+    self.group_deadline = group_deadline
+    self.task_retry_delay = task_retry_delay
+
+  def handle_timeout(self, *args):
+    """Handle different timeout scenarios for task group with group timeout.
+
+    1. When the task's retry delay exceeds the group timeout, raise
+    AirflowFailException, which fails the task without retrying.
+    2. Otherwise, raise AirflowTaskTimeout to allow the task to retry.
+    """
+    group_remaining_now = (
+        self.group_deadline - datetime.now(timezone.utc)
+    ).total_seconds()
+    if group_remaining_now <= self.task_retry_delay:
+      raise AirflowFailException(
+          f"{self.error_message}; retry delay exceeds remaining group budget, "
+          f"failing without retry."
+      )
+
+    self.log.error("Process timed out, PID: %s", str(os.getpid()))
+    raise AirflowTaskTimeout(
+        f"{self.error_message}; task will retry if retry is allowed."
+    )
