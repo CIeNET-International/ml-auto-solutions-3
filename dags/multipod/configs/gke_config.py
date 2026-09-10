@@ -49,6 +49,7 @@ def get_gke_config(
     mtc_enabled: bool = False,
     use_pathways: bool = False,
     xpk_branch: str = xpk.MAIN_BRANCH,
+    restart_on_exit_codes: Iterable[int] | None = None,
 ) -> task.XpkTask:
   pass
 
@@ -79,6 +80,7 @@ def get_gke_config(
     gcluster_version: str = gcluster.DEFAULT_GCLUSTER_VERSION,
     mounts: str | Iterable[str] | None = None,
     pathways_gcs_location: str = "",
+    restart_on_exit_codes: Iterable[int] | None = None,
 ) -> task.GclusterTask:
   pass
 
@@ -109,6 +111,7 @@ def get_gke_config(
     mounts: str | Iterable[str] | None = None,
     pathways_gcs_location: str = "",
     xpk_branch: str = xpk.MAIN_BRANCH,
+    restart_on_exit_codes: Iterable[int] | None = None,
 ) -> task.GclusterTask | task.XpkTask:
   """Constructs a GKE task for either Cluster Toolkit (gcluster) or XPK."""
   job_gcp_config = gcp_config.GCPConfig(
@@ -156,6 +159,7 @@ def get_gke_config(
         task_metric_config=job_metric_config,
         priority=priority,
         max_restart=max_restart,
+        restart_on_exit_codes=restart_on_exit_codes,
         gcluster_version=gcluster_version,
         ramdisk_directory=ramdisk_directory,
         mtc_enabled=mtc_enabled,
@@ -174,6 +178,7 @@ def get_gke_config(
       task_metric_config=job_metric_config,
       priority=priority,
       max_restart=max_restart,
+      restart_on_exit_codes=restart_on_exit_codes,
       xpk_branch=xpk_branch,
       ramdisk_directory=ramdisk_directory,
       mtc_enabled=mtc_enabled,
@@ -209,6 +214,7 @@ def get_gke_config_with_interrupt(
     ramdisk_directory: str = "",
     mtc_enabled: bool = False,
     use_pathways: bool = False,
+    restart_on_exit_codes: Iterable[int] | None = None,
 ) -> task.XpkNodeInterruptionTask:
   job_gcp_config = gcp_config.GCPConfig(
       project_name=cluster.project,
@@ -253,6 +259,7 @@ def get_gke_config_with_interrupt(
       task_metric_config=job_metric_config,
       priority=priority,
       max_restart=max_restart,
+      restart_on_exit_codes=restart_on_exit_codes,
       xpk_branch=xpk_branch,
       ramdisk_directory=ramdisk_directory,
       mtc_enabled=mtc_enabled,
@@ -294,6 +301,7 @@ def get_gke_config_with_name_gen_and_quarantine(
     mtc_enabled: bool = False,
     use_pathways: bool = False,
     xpk_branch: str = xpk.MAIN_BRANCH,
+    restart_on_exit_codes: Iterable[int] | None = None,
 ) -> task.XpkNameGenAndQuarantineTask:
   pass
 
@@ -327,6 +335,7 @@ def get_gke_config_with_name_gen_and_quarantine(
     gcluster_version: str = gcluster.DEFAULT_GCLUSTER_VERSION,
     mounts: str | Iterable[str] | None = None,
     pathways_gcs_location: str = "",
+    restart_on_exit_codes: Iterable[int] | None = None,
 ) -> task.GclusterNameGenAndQuarantineTask:
   pass
 
@@ -360,6 +369,7 @@ def get_gke_config_with_name_gen_and_quarantine(
     mounts: str | Iterable[str] | None = None,
     pathways_gcs_location: str = "",
     xpk_branch: str = xpk.MAIN_BRANCH,
+    restart_on_exit_codes: Iterable[int] | None = None,
 ) -> task.GclusterNameGenAndQuarantineTask | task.XpkNameGenAndQuarantineTask:
   """Constructs a GKE name-gen/quarantine task for Cluster Toolkit or XPK."""
   job_gcp_config = gcp_config.GCPConfig(
@@ -407,6 +417,7 @@ def get_gke_config_with_name_gen_and_quarantine(
         task_metric_config=job_metric_config,
         priority=priority,
         max_restart=max_restart,
+        restart_on_exit_codes=restart_on_exit_codes,
         gcluster_version=gcluster_version,
         ramdisk_directory=ramdisk_directory,
         mtc_enabled=mtc_enabled,
@@ -428,6 +439,7 @@ def get_gke_config_with_name_gen_and_quarantine(
       task_metric_config=job_metric_config,
       priority=priority,
       max_restart=max_restart,
+      restart_on_exit_codes=restart_on_exit_codes,
       xpk_branch=xpk_branch,
       ramdisk_directory=ramdisk_directory,
       mtc_enabled=mtc_enabled,
@@ -453,6 +465,7 @@ def get_gke_maxtext_nightly_config(
     ),
     dataset_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
     composer_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
+    restart_on_exit_codes: Iterable[int] | None = None,
 ) -> task.XpkTask:
   job_gcp_config = gcp_config.GCPConfig(
       project_name=cluster.project,
@@ -523,6 +536,7 @@ def get_maxtext_end_to_end_gpu_gke_test_config(
     test_owner: str,
     docker_image: str,
     num_slices: int = 1,
+    restart_on_exit_codes: Iterable[int] | None = None,
 ) -> task.XpkTask:
   job_gcp_config = gcp_config.GCPConfig(
       project_name=cluster.project,
@@ -570,6 +584,7 @@ def get_gke_gpt3_6b_nightly_config(
     ),
     dataset_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
     composer_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
+    restart_on_exit_codes: Iterable[int] | None = None,
 ) -> task.XpkTask:
   job_gcp_config = gcp_config.GCPConfig(
       project_name=cluster.project,
@@ -649,6 +664,7 @@ def get_maxtext_cpu_end_to_end_gke_config(
     composer_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
     base_output_directory: str = None,
     metric_aggregation_strategy: metric_config.AggregationStrategy = None,
+    restart_on_exit_codes: Iterable[int] | None = None,
 ) -> task.XpkTask:
   job_gcp_config = gcp_config.GCPConfig(
       project_name=cluster.project,
