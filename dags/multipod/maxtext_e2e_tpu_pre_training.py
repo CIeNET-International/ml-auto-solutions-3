@@ -104,7 +104,7 @@ with models.DAG(
           "to_huggingface": "bash tests/end_to_end/tpu/gemma4/26b/test_gemma4_to_hf.sh",
       },
       "llama3_1-70b": {
-          "core_count": 128,
+          "core_count": 64,
           "training": {
               "command": "bash tests/end_to_end/tpu/llama3.1/70b/test_llama3.1_70b.sh",
               "maxtext_ckpt_path": "gs://runner-maxtext-logs/llama3.1-70b/train/{run_name}/checkpoints/1/items",
@@ -166,6 +166,7 @@ with models.DAG(
           test_owner=test_owner.SURBHI_J,
           priority="medium",
           max_restart=3,
+          restart_on_exit_codes=[137, 143],
           use_gcluster=True,
       ).run(skip_post_process=True)
 
