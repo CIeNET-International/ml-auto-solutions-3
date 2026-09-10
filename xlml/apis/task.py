@@ -366,6 +366,7 @@ class RunnerConfig:
   ramdisk_directory: str = ""
   mtc_enabled: bool = False
   use_pathways: bool = False
+  restart_on_exit_codes: Iterable[int] | None = None
 
 
 @dataclasses.dataclass
@@ -585,6 +586,7 @@ class GclusterRunner(Runner):
           mtc_enabled=self.configs.mtc_enabled,
           gcluster_version=self.configs.gcluster_version,
           max_restart=self.configs.max_restart,
+          restart_on_exit_codes=self.configs.restart_on_exit_codes,
           priority=self.configs.priority,
           namespace=self.configs.task_test_config.namespace,
           mounts=mounts,

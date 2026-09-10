@@ -138,6 +138,7 @@ def run_workload(
     mtc_enabled: bool = False,
     gcluster_version: str = DEFAULT_GCLUSTER_VERSION,
     max_restart: int = 0,
+    restart_on_exit_codes: Iterable[int] | None = None,
     priority: str = "high",
     namespace: str = "default",
     mounts: str | Iterable[str] | None = None,
@@ -205,6 +206,9 @@ def run_workload(
       submit_cmd.append("--gke-mtc-enabled")
     if max_restart > 0:
       submit_cmd.append(f"--restarts={max_restart}")
+    codes = [] if restart_on_exit_codes is None else list(restart_on_exit_codes)
+    if codes:
+      submit_cmd.append(f"--restart-on-exit-codes={','.join(map(str, codes))}")
     if is_valid_gpu_version(accelerator_type):
       submit_cmd.append("--gke-scheduler=gke.io/topology-aware-auto")
 
