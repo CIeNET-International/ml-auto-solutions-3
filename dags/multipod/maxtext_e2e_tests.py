@@ -84,6 +84,7 @@ with models.DAG(
   trigger_checkpoint_conversion = TriggerDagRunOperator(
       task_id="trigger_checkpoint_conversion",
       trigger_dag_id="maxtext_e2e_tpu_checkpoint_conversion",
+      trigger_run_id="{{ run_id }}__checkpoint_conversion",
       execution_date="{{ logical_date }}",
       conf={
           "docker_image": (
@@ -98,6 +99,7 @@ with models.DAG(
   trigger_pre_training = TriggerDagRunOperator(
       task_id="trigger_tpu_pre_training",
       trigger_dag_id="maxtext_e2e_tpu_pre_training",
+      trigger_run_id="{{ run_id }}__pre_training",
       execution_date="{{ logical_date }}",
       conf={
           "docker_image": (
@@ -113,6 +115,7 @@ with models.DAG(
   trigger_post_training = TriggerDagRunOperator(
       task_id="trigger_tpu_post_training",
       trigger_dag_id="maxtext_e2e_tpu_post_training",
+      trigger_run_id="{{ run_id }}__post_training",
       execution_date="{{ logical_date }}",
       conf={
           "docker_image": (
