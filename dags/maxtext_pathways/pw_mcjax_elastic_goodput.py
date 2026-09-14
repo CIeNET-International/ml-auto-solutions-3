@@ -360,7 +360,19 @@ def create_elastic_goodput_dag(
         workload_run_timeout=datetime.timedelta(minutes=15),
         image_full_url=fetched_params["runner"],
     )
-
+    check_pod = gke.wait_for_workload_start.override(
+        task_id="wait_for_workload_start",
+    )(
+        project_id=fetched_params["project"],
+        region=calculated_params["region"],
+        cluster_name=fetched_params["cluster_name"],
+        workload_id=calculated_params["workload_id"],
+    )
+    entry_log_pattern = (
+        "live slice count: 2"
+        if params == replica_params
+        else "live slice count: 1"
+    )
     if slice_efficiency:
       interruption_task = worker_pod_interruption_with_se(
           project_id=fetched_params["project"],
@@ -430,6 +442,7 @@ def create_elastic_goodput_dag(
         calculated_params,
         generated_cmds,
         start_recipe,
+        check_pod,
         interruption_task,
         wait_for_workload_complete,
         workload_goodput,
