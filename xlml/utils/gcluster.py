@@ -27,6 +27,15 @@ from xlml.utils import composer, gke
 
 DEFAULT_GCLUSTER_VERSION = "v1.102.0"
 
+# Pinned Pathways runtime images. See the TODO in `run_workload` below.
+PATHWAYS_SERVER_IMAGE = (
+    "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:20260911-jax_0.11.0"
+)
+PATHWAYS_PROXY_SERVER_IMAGE = (
+    "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/"
+    "proxy_server:20260911-jax_0.11.0"
+)
+
 LOGGING_URL_FORMAT = gke.LOGGING_URL_FORMAT
 
 
@@ -198,6 +207,17 @@ def run_workload(
       submit_cmd.append("--pathways")
       location = pathways_gcs_location or f"{gcs_path}/pathways"
       submit_cmd.append(f"--pathways-gcs-location={location}")
+      # TODO(b/561200502): Plumb these images through `get_gke_config`, so that each
+      # DAG can pin its own Pathways version instead of sharing one hardcoded
+      # pin. Hardcoded for now because the `:latest` images break every
+      # Pathways workload, so a single pin here fixes all of them.
+      submit_cmd.append(f"--pathways-server-image={PATHWAYS_SERVER_IMAGE}")
+      submit_cmd.append(
+          f"--pathways-proxy-server-image={PATHWAYS_PROXY_SERVER_IMAGE}"
+      )
+      # xpk's `--server-image` pins both the resource manager and the workers,
+      # while Cluster Toolkit splits them, so set the worker image too.
+      submit_cmd.append(f"--pathways-worker-image={PATHWAYS_SERVER_IMAGE}")
     if use_vertex_tensorboard:
       submit_cmd.append("--use-vertex-tensorboard")
     if ramdisk_directory:
