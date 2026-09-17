@@ -30,9 +30,29 @@ from airflow.models.baseoperator import chain
 from airflow.models.param import Param
 from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.utils.trigger_rule import TriggerRule
+from dags.common.vm_resource import DockerImage
 from xlml.utils.github import (
     trigger_github_repository_dispatch,
     validate_git_trigger,
+)
+
+
+def _candidate_image(daily_image: DockerImage) -> str:
+  """Returns the image URI for the candidate build this pipeline tests.
+
+  `DockerImage` members point at the daily build, e.g.
+  `.../maxtext_jax_stable:2026-09-17`. The candidate under test is published to
+  the same repository by the MaxText build workflow, but its build mode and tag
+  are only known at run time, so drop the trailing build mode and date tag and
+  re-attach the templated build mode and GitHub run ID.
+  """
+  repo, _, _ = daily_image.value.rsplit(":", 1)[0].rpartition("_")
+  return repo + "_{{ params.build_mode }}:{{ params.github_run_id }}"
+
+
+PRE_TRAINING_DOCKER_IMAGE = _candidate_image(DockerImage.MAXTEXT_TPU_JAX_STABLE)
+POST_TRAINING_DOCKER_IMAGE = _candidate_image(
+    DockerImage.MAXTEXT_POST_TRAINING_STABLE
 )
 
 with models.DAG(
@@ -87,10 +107,7 @@ with models.DAG(
       trigger_run_id="{{ run_id }}__checkpoint_conversion",
       execution_date="{{ logical_date }}",
       conf={
-          "docker_image": (
-              "gcr.io/tpu-prod-env-multipod/maxtext_post_training_"
-              "{{ params.build_mode }}:{{ params.github_run_id }}"
-          ),
+          "docker_image": POST_TRAINING_DOCKER_IMAGE,
           "run_name": shared_run_name,
       },
       wait_for_completion=False,
@@ -102,10 +119,7 @@ with models.DAG(
       trigger_run_id="{{ run_id }}__pre_training",
       execution_date="{{ logical_date }}",
       conf={
-          "docker_image": (
-              "gcr.io/tpu-prod-env-multipod/maxtext_jax_"
-              "{{ params.build_mode }}:{{ params.github_run_id }}"
-          ),
+          "docker_image": PRE_TRAINING_DOCKER_IMAGE,
           "run_name": shared_run_name,
       },
       wait_for_completion=True,
@@ -118,10 +132,7 @@ with models.DAG(
       trigger_run_id="{{ run_id }}__post_training",
       execution_date="{{ logical_date }}",
       conf={
-          "docker_image": (
-              "gcr.io/tpu-prod-env-multipod/maxtext_post_training_"
-              "{{ params.build_mode }}:{{ params.github_run_id }}"
-          ),
+          "docker_image": POST_TRAINING_DOCKER_IMAGE,
           "run_name": shared_run_name,
       },
       wait_for_completion=True,
