@@ -68,7 +68,6 @@ class Project(enum.Enum):
   CLOUD_TPU_MULTIPOD_DEV = "cloud-tpu-multipod-dev"
   SUPERCOMPUTER_TESTING = "supercomputer-testing"
   CLOUD_TPU_INFERENCE_TEST = "cloud-tpu-inference-test"
-  CLOUD_TPU_SHARED_CAPACITY = "cloud-tpu-shared-capacity"
   TPU_PROD_ENV_LARGE_ADHOC = "tpu-prod-env-large-adhoc"
   TPU_PROD_ENV_ONE_VM = "tpu-prod-env-one-vm"
   TPU_PROD_ENV_LARGE_CONT = "tpu-prod-env-large-cont"
@@ -267,20 +266,11 @@ class GkeClusters:
       zone=Zone.EUROPE_WEST4_B.value,
   )
   TPU_V5P_128_CLUSTER = GkeClusterConfig(
-      name="bodaborg-v5p-nap",
+      name="v5p-128-bodaborg-europe-west4-b",
       device_version=TpuVersion.V5P,
       core_count=128,
-      project=Project.CLOUD_TPU_SHARED_CAPACITY.value,
+      project=Project.CLOUD_TPU_MULTIPOD_DEV.value,
       zone=Zone.EUROPE_WEST4_B.value,
-  )
-  TPU_V5P_BODABORG_NAP_CLUSTER = GkeClusterConfig(
-      name="bodaborg-v5p-nap",
-      device_version=TpuVersion.V5P,
-      core_count=8,
-      project=Project.CLOUD_TPU_SHARED_CAPACITY.value,
-      zone=Region.EUROPE_WEST4.value,
-      namespace="default",
-      queue="default",
   )
   TPU_V5P_MLPERF_CLUSTER = GkeClusterConfig(
       name="mlperf-v5p",
@@ -376,11 +366,11 @@ class DockerImage(enum.Enum):
       f"{datetime.datetime.today().strftime('%Y-%m-%d')}"
   )
   MAXTEXT_TPU_JAX_NIGHTLY = (
-      "us-docker.pkg.dev/tpu-prod-env-multipod/maxtext-images/maxtext_jax_nightly:"
+      "gcr.io/tpu-prod-env-multipod/maxtext_jax_nightly:"
       f"{datetime.datetime.today().strftime('%Y-%m-%d')}"
   )
   MAXTEXT_TPU_JAX_STABLE = (
-      "us-docker.pkg.dev/tpu-prod-env-multipod/maxtext-images/maxtext_jax_stable:"
+      "gcr.io/tpu-prod-env-multipod/maxtext_jax_stable:"
       f"{datetime.datetime.today().strftime('%Y-%m-%d')}"
   )
   MAXDIFFUSION_TPU_JAX_STABLE_STACK = (
@@ -396,11 +386,11 @@ class DockerImage(enum.Enum):
       f"{datetime.datetime.today().strftime('%Y-%m-%d')}"
   )
   MAXTEXT_GPU_JAX_STABLE = (
-      "us-docker.pkg.dev/tpu-prod-env-multipod/maxtext-images/maxtext_gpu_jax_stable:"
+      "gcr.io/tpu-prod-env-multipod/maxtext_gpu_jax_stable:"
       f"{datetime.datetime.today().strftime('%Y-%m-%d')}"
   )
   MAXTEXT_GPU_JAX_NIGHTLY = (
-      "us-docker.pkg.dev/tpu-prod-env-multipod/maxtext-images/maxtext_gpu_jax_nightly:"
+      "gcr.io/tpu-prod-env-multipod/maxtext_gpu_jax_nightly:"
       f"{datetime.datetime.today().strftime('%Y-%m-%d')}"
   )
   CLOUD_HYBRIDSIM_NIGHTLY = (
@@ -412,20 +402,16 @@ class DockerImage(enum.Enum):
       "gcr.io/tpu-prod-env-one-vm/microbenchmarks_runner:latest"
   )
   MAXTEXT_POST_TRAINING_STABLE = (
-      "us-docker.pkg.dev/tpu-prod-env-multipod/maxtext-images/"
-      "maxtext_post_training_stable:"
+      "gcr.io/tpu-prod-env-multipod/maxtext_post_training_stable:"
       f"{datetime.datetime.today().strftime('%Y-%m-%d')}"
   )
   MAXTEXT_POST_TRAINING_NIGHTLY = (
-      "us-docker.pkg.dev/tpu-prod-env-multipod/maxtext-images/"
-      "maxtext_post_training_nightly:"
+      "gcr.io/tpu-prod-env-multipod/maxtext_post_training_nightly:"
       f"{datetime.datetime.today().strftime('%Y-%m-%d')}"
   )
-  LIBTPU_NIGHTLY = (
-      "us-west1-docker.pkg.dev/cienet-cmcs/tpu-obs-cloud-build/libtpu-nightly:"
-      "latest"
+  TPU_OBS_LIBTPU_NIGHTLY = (
+      "us-west1-docker.pkg.dev/cienet-cmcs/tpu-obs-cloud-build/libtpu-nightly:latest"
   )
-  LIBTPU_STABLE = (
-      "us-west1-docker.pkg.dev/cienet-cmcs/tpu-obs-cloud-build/libtpu-stable:"
-      "latest"
+  TPU_OBS_LIBTPU_STABLE = (
+      "us-west1-docker.pkg.dev/cienet-cmcs/tpu-obs-cloud-build/libtpu-stable:latest"
   )

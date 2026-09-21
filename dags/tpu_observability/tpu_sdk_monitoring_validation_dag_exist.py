@@ -23,33 +23,23 @@ from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from airflow.models.baseoperator import chain
 from airflow.utils.task_group import TaskGroup
-from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
 from dags import composer_env
-from dags.common.vm_resource import DockerImage
-from dags.common.task_group_with_timeout import TaskGroupWithTimeout
-from dags.common.scheduling_helper.scheduling_helper import (
-    SchedulingHelper,
-    get_dag_timeout,
-)
+from dags.tpu_observability.utils import jobset_util as jobset
+from dags.tpu_observability.utils import tpu_monitoring_sdk_util as sdk
+from dags.tpu_observability.utils import node_pool_util as node_pool
+from dags.tpu_observability.utils.jobset_util import Workload
 from dags.tpu_observability.configs.common import (
+    MachineConfigMap,
     GCS_CONFIG_PATH,
     GCS_JOBSET_CONFIG_PATH,
-    MachineConfigMap,
 )
-from dags.tpu_observability.utils import jobset_util as jobset
-from dags.tpu_observability.utils import node_pool_util as node_pool
-from dags.tpu_observability.utils import tpu_monitoring_sdk_util as sdk
-from dags.tpu_observability.utils.jobset_util import Workload
+from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper, get_dag_timeout
 
-DAG_ID = "tpu_sdk_monitoring_validation"
+DAG_ID = "tpu_sdk_monitoring_validation_exist"
 DAGRUN_TIMEOUT = get_dag_timeout(DAG_ID)
 SCHEDULE = SchedulingHelper.arrange_schedule_time(DAG_ID)
-
-PRE_TEST_TIMEOUT = datetime.timedelta(minutes=10)
-POST_TEST_TIMEOUT = datetime.timedelta(minutes=10)
-TEST_TIMEOUT = DAGRUN_TIMEOUT - PRE_TEST_TIMEOUT - POST_TEST_TIMEOUT
 
 
 @task
@@ -149,11 +139,6 @@ with models.DAG(
            and hardware devices inside the container.
       """,
 ) as dag:
-  docker_images = {
-      "stable": DockerImage.LIBTPU_STABLE.value,
-      "nightly": DockerImage.LIBTPU_NIGHTLY.value,
-  }
-
   for machine in MachineConfigMap:
     config = machine.value
 
@@ -162,7 +147,9 @@ with models.DAG(
     with TaskGroup(  # pylint: disable=unexpected-keyword-arg
         group_id=f"v{config.tpu_version.value}"
     ):
-      cluster_info = node_pool.build_node_pool_info_from_gcs_yaml(
+      cluster_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
+          task_id="build_node_pool_info_from_gcs_yaml"
+      )(
           gcs_path=GCS_CONFIG_PATH,
           dag_name=DAG_ID,
           is_prod=composer_env.is_prod_env(),
@@ -178,63 +165,45 @@ with models.DAG(
       selector = jobset.generate_node_pool_selector(DAG_ID)
       jobset_name = jobset.generate_jobset_name(jobset_config.dag_id_prefix)
 
-      with TaskGroupWithTimeout(
-          group_id="pre_test",
-          timeout=PRE_TEST_TIMEOUT,
-      ) as pre_test:
-        create_node_pool = node_pool.create.override(
-            task_id="create_node_pool"
-        )(
-            node_pool=cluster_info,
-            node_pool_selector=selector,
-        ).as_setup()
+      # create_node_pool = node_pool.create.override(task_id="create_node_pool")(
+      #     node_pool=cluster_info,
+      # )
 
+      startup = jobset.create_jobset_startup_tasks(
+          node_pool=cluster_info,
+          jobset_config=jobset_config,
+          jobset_name=jobset_name,
+          node_pool_selector=selector,
+          workload_type=Workload.JAX_TPU_BENCHMARK,
+      )
 
-      image_task_groups = []
-      for type_name, image_url in docker_images.items():
-        with TaskGroupWithTimeout(  # pylint: disable=unexpected-keyword-arg
-            group_id=f"test_v{config.tpu_version.value}_{type_name}",
-            timeout=TEST_TIMEOUT,
-        ) as image_tg:
+      sdk_validation = validate_monitoring_sdk.override(
+          task_id="sdk_validation"
+      )(
+          info=cluster_info,
+          pod_names=startup.running_pods,
+      )
 
-          startup = jobset.create_jobset_startup_tasks(
-              node_pool=cluster_info,
-              jobset_config=jobset_config,
-              jobset_name=jobset_name,
-              node_pool_selector=selector,
-              workload_type=Workload.JAX_TPU_BENCHMARK,
-          )
+      cleanup_workload = jobset.end_workload.override(
+          task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
+      )(
+          node_pool=cluster_info,
+          jobset_config=jobset_config,
+          jobset_name=jobset_name,
+      )
 
-          sdk_validation = validate_monitoring_sdk.override(
-              task_id="sdk_validation"
-          )(
-              info=cluster_info,
-              pod_names=startup.running_pods,
-          )
+      # cleanup_node_pool = node_pool.delete.override(
+      #     task_id="cleanup_node_pool", trigger_rule=TriggerRule.ALL_DONE
+      # )(node_pool=cluster_info)
 
-          chain(*startup.tasks, sdk_validation)
-
-      with TaskGroupWithTimeout(
-          group_id="post_test",
-          timeout=POST_TEST_TIMEOUT,
-          is_teardown=True,
-      ) as post_test:
-        cleanup_workload = jobset.end_workload.override(
-            task_id="cleanup_workload", trigger_rule=TriggerRule.ALL_DONE
-        )(
-            node_pool=cluster_info,
-            jobset_config=jobset_config,
-            jobset_name=jobset_name,
-        )
-
-        cleanup_node_pool = node_pool.delete.override(
-            task_id="cleanup_node_pool", trigger_rule=TriggerRule.ALL_DONE
-        )(node_pool=cluster_info)
-        chain(cleanup_workload, cleanup_node_pool)
-
-      current_node = pre_test
-      for tg in image_task_groups:
-        chain(current_node, tg)
-        current_node = tg
-      chain(current_node, post_test)
-
+      chain(
+          selector,
+          jobset_name,
+          jobset_config,
+          cluster_info,
+          # create_node_pool,
+          *startup.tasks,
+          sdk_validation,
+          cleanup_workload,
+          # cleanup_node_pool,
+      )

@@ -13,23 +13,16 @@
 # limitations under the License.
 """Metric verification strategies for the tpu-info CLI tool."""
 
-import enum
-import logging
-import re
-import textwrap
 from abc import ABC, abstractmethod
+import enum
+import re
 from typing import Any
 
-from airflow.exceptions import AirflowException
 from google.cloud import monitoring_v3
 from google.cloud.monitoring_v3 import types as monitoring_types
+from airflow.exceptions import AirflowException
 
 from dags.tpu_observability.utils import tpu_info_util as tpu_info
-from dags.tpu_observability.utils.gcp_util import (
-    list_time_series,
-    query_time_series,
-)
-from dags.tpu_observability.utils.time_util import TimeUtil
 
 
 class _Percentiles(enum.Enum):
@@ -37,6 +30,52 @@ class _Percentiles(enum.Enum):
   P90 = 90
   P95 = 95
   P999 = 99.9
+
+
+def _calculate_percentiles_from_histogram(
+    percentiles: list[float],
+    total_count: int,
+    bounds: list[float],
+    bucket_counts: list[int],
+) -> dict[float, float]:
+  """
+  Estimates multiple percentile values from histogram data in a single pass.
+  """
+  results = {}
+  if total_count == 0:
+    return results
+
+  sorted_percentiles = sorted(percentiles)
+  target_ranks = {p: total_count * (p / 100.0) for p in sorted_percentiles}
+  cumulative_count = 0
+  percentiles_to_find = list(sorted_percentiles)
+
+  for i, count_in_bucket in enumerate(bucket_counts):
+    if not percentiles_to_find:
+      break
+
+    prev_cumulative_count = cumulative_count
+    cumulative_count += count_in_bucket
+
+    while (
+        percentiles_to_find
+        and target_ranks[percentiles_to_find[0]] <= cumulative_count
+    ):
+      p = percentiles_to_find.pop(0)
+      target_rank = target_ranks[p]
+      lower_bound = bounds[i - 1] if i > 0 else 0.0
+      upper_bound = bounds[i]
+
+      if count_in_bucket == 0:
+        results[p] = lower_bound
+        continue
+
+      rank_in_bucket = target_rank - prev_cumulative_count
+      fraction = rank_in_bucket / count_in_bucket
+      estimated_value = lower_bound + fraction * (upper_bound - lower_bound)
+      results[p] = estimated_value
+
+  return results
 
 
 class BaseMetricStrategy(ABC):
@@ -49,18 +88,6 @@ class BaseMetricStrategy(ABC):
   tpu_info_metric_name: str
   dag_id_suffix: str
   tolerance_percent: float = 3.0
-
-  @abstractmethod
-  def list_or_query_metric(
-      self,
-      project_id: str,
-      cluster_name: str,
-      pod_name: str,
-      start_time: TimeUtil,
-      end_time: TimeUtil,
-  ) -> list[monitoring_types.TimeSeries]:
-    """Fetches metric data from Cloud Monitoring via ListTimeSeries or MQL."""
-    pass
 
   @abstractmethod
   def parse_from_monitoring(
@@ -84,14 +111,10 @@ class BaseMetricStrategy(ABC):
     """
     pass
 
-  def get_labels(
-      self, tpu_info_metric_output: list[tpu_info.Table]
-  ) -> list[str] | None:
-    """Gets labels for the metric values.
-
-    Default returns None, which implies using default device labels.
-    """
-    return None
+  @abstractmethod
+  def parse_from_sdk(self, sdk_output: str) -> list[float]:
+    """Parses values from the raw string output of the libtpu SDK."""
+    pass
 
 
 class _BaseSimplePointStrategy(BaseMetricStrategy):
@@ -115,28 +138,6 @@ class _BaseSimplePointStrategy(BaseMetricStrategy):
       The processed value as a float.
     """
     return float(raw_value)
-
-  def list_or_query_metric(
-      self,
-      project_id: str,
-      cluster_name: str,
-      pod_name: str,
-      start_time: TimeUtil,
-      end_time: TimeUtil,
-  ) -> list[monitoring_types.TimeSeries]:
-    filter_string = [
-        f'metric.type = "{self.metric_name}"',
-        f'resource.labels.cluster_name = "{cluster_name}"',
-        f'resource.labels.pod_name = "{pod_name}"',
-    ]
-
-    return list_time_series(
-        project_id=project_id,
-        filter_str=" AND ".join(filter_string),
-        start_time=start_time,
-        end_time=end_time,
-        view=monitoring_types.ListTimeSeriesRequest.TimeSeriesView.FULL,
-    )
 
   def parse_from_monitoring(
       self, time_series_data: list[monitoring_types.TimeSeries]
@@ -194,102 +195,65 @@ class _BaseSimplePointStrategy(BaseMetricStrategy):
 
 
 class _BaseDistributionStrategy(BaseMetricStrategy):
-  """Base strategy for parsing distribution (histogram) data and calculating
-  percentiles.
+  """Base strategy for parsing distribution (histogram) data and calculating percentiles.
 
-  This abstract base class handles the common logic for processing metrics
-  represented as distributions in Cloud Monitoring. It calculates specific
-  percentiles (e.g., P50, P99) from the raw histogram data and parses
-  corresponding percentile values from `tpu-info` command output tables.
+  This abstract base class handles the common logic for processing metrics represented
+  as distributions in Cloud Monitoring. It calculates specific percentiles (e.g., P50, P99)
+  from the raw histogram data and parses corresponding percentile values from
+  `tpu-info` command output tables.
   """
 
   _monitoring_group_by_label: str
   _tpu_info_table_name: str
   _tpu_info_group_by_key: str
   percentiles_to_check = list(_Percentiles)
-  uses_mql = True
-
-  def list_or_query_metric(
-      self,
-      project_id: str,
-      cluster_name: str,
-      pod_name: str,
-      start_time: TimeUtil,
-      end_time: TimeUtil,
-  ) -> list[monitoring_types.TimeSeries]:
-    aggregators = []
-    for p in self.percentiles_to_check:
-      aggregators.append(f"{p.name}: percentile(val(), {p.value})")
-
-    aggregator_str = ",\n        ".join(aggregators)
-    target_group_label = f"metric.{self._monitoring_group_by_label}"
-
-    query = textwrap.dedent(
-        f"""
-        fetch k8s_container
-        | metric '{self.metric_name}'
-        | filter (
-            resource.cluster_name == '{cluster_name}'
-            && resource.pod_name == '{pod_name}'
-        )
-        | within {start_time.to_mql_string()}, {end_time.to_mql_string()}
-        | align delta(1m)
-        | every 1m
-        | group_by [resource.pod_name, {target_group_label}],
-            [{aggregator_str}]
-        """
-    ).strip()
-
-    logging.info("Executing MQL Query:\n%s", query)
-    return query_time_series(project_id, query)
 
   def parse_from_monitoring(
       self, time_series_data: list[monitoring_types.TimeSeries]
   ) -> list[float]:
-    """Parses distribution data from Monitoring and calculates requested
-    percentiles.
+    """Parses distribution data from Monitoring and calculates requested percentiles.
 
-    This method iterates through time series data, extracting distribution
-    values (count, bucket bounds, bucket counts). It groups these distributions
-    by a specific label (defined in subclasses) and calculates the target
-    percentiles for each group using the histogram data.
+    This method iterates through time series data, extracting distribution values
+    (count, bucket bounds, bucket counts). It groups these distributions by a
+    specific label (defined in subclasses) and calculates the target percentiles
+    for each group using the histogram data.
 
     Args:
-      time_series_data: A list of TimeSeries objects containing distribution
-      data.
+      time_series_data: A list of TimeSeries objects containing distribution data.
 
     Returns:
-      A flattened list of calculated percentile values (floats). The list is
-      ordered first by the sorted group key, and then by the sorted percentiles
-      for each group.
+      A flattened list of calculated percentile values (floats). The list is ordered
+      first by the sorted group key, and then by the sorted percentiles for each group.
     """
 
-    if not time_series_data:
-      return []
+    distributions_by_group: dict[str, dict[object, float]] = {}
+    group_label = self._monitoring_group_by_label
 
-    parsed_data = {}
+    for ts in time_series_data:
+      if ts.points and ts.metric.labels.get(group_label):
+        group_key = ts.metric.labels[group_label]
+        dist_value = ts.points[0].value.distribution_value
+        distributions_by_group[group_key] = {
+            "count": dist_value.count,
+            "bounds": dist_value.bucket_options.explicit_buckets.bounds,
+            "bucket_counts": dist_value.bucket_counts,
+        }
 
-    for ts_data in time_series_data:
-      if len(ts_data.label_values) < 2:
-        continue
-
-      group_key_value = ts_data.label_values[1].string_value
-
-      if not ts_data.point_data:
-        continue
-
-      latest_point = ts_data.point_data[0]
-
-      parsed_data[group_key_value] = {}
-
-      for idx, p in enumerate(self.percentiles_to_check):
-        val = latest_point.values[idx].double_value
-        parsed_data[group_key_value][p.name] = val
+    percentile_values_by_group: dict[str, dict[float, float]] = {}
+    for group_key, data in distributions_by_group.items():
+      percentile_values_by_group[
+          group_key
+      ] = _calculate_percentiles_from_histogram(
+          percentiles=[p.value for p in self.percentiles_to_check],
+          total_count=data["count"],
+          bounds=data["bounds"],
+          bucket_counts=data["bucket_counts"],
+      )
 
     monitoring_values = []
-    for group_key in sorted(parsed_data.keys()):
+    for group_key in sorted(distributions_by_group.keys()):
       for p in self.percentiles_to_check:
-        monitoring_values.append(parsed_data[group_key][p.name])
+        monitoring_values.append(percentile_values_by_group[group_key][p.value])
 
     return monitoring_values
 
@@ -298,14 +262,13 @@ class _BaseDistributionStrategy(BaseMetricStrategy):
   ) -> list[float]:
     """Parses pre-calculated percentile values from `tpu-info` output tables.
 
-    This method locates the specific table (defined in subclasses) in the
-    `tpu-info` output and extracts values for the requested percentiles.
-    It handles parsing numeric values from string cells (e.g., "123.45 us")
-    and mapping specific column names (like "P999" for P99.9).
+    This method locates the specific table (defined in subclasses) in the `tpu-info`
+    output and extracts values for the requested percentiles. It handles parsing
+    numeric values from string cells (e.g., "123.45 us") and mapping specific
+    column names (like "P999" for P99.9).
 
     Args:
-      tpu_info_metric_output: A list of parsed Table objects from the `tpu-info`
-      command.
+      tpu_info_metric_output: A list of parsed Table objects from the `tpu-info` command.
 
     Returns:
       A flattened list of percentile values (floats) extracted from the table.
@@ -319,13 +282,15 @@ class _BaseDistributionStrategy(BaseMetricStrategy):
     for metric_table in tpu_info_metric_output:
       if metric_table.name == table_name:
         for row_dict in metric_table.body:
-          group_value = row_dict.get(group_key, "summary")
+          group_value = row_dict.get(group_key)
+          if not group_value:
+            continue
 
-          if group_value not in parsed_values_by_group:
-            parsed_values_by_group[group_value] = {}
+          parsed_values_by_group[group_value] = {}
           for p in self.percentiles_to_check:
             # Use Enum name as key (e.g. "P999")
             value_str = row_dict.get(p.name, "")
+
             match = re.search(r"([\d\.]+)", value_str)
             if match:
               parsed_values_by_group[group_value][p.name] = float(
@@ -339,28 +304,38 @@ class _BaseDistributionStrategy(BaseMetricStrategy):
 
     return tpu_info_data_values
 
-  def get_labels(
-      self, tpu_info_metric_output: list[tpu_info.Table]
-  ) -> list[str] | None:
-    """Parses labels for percentiles from `tpu-info` output tables."""
-    parsed_values_by_group: dict[str, dict[str, float]] = {}
-    table_name = self._tpu_info_table_name
-    group_key = self._tpu_info_group_by_key
+  def _parse_sdk_csv_list(self, sdk_output: str) -> list[float]:
+    """Helper to parse SDK output that looks like a list of CSV strings.
 
-    for metric_table in tpu_info_metric_output:
-      if metric_table.name == table_name:
-        for row_dict in metric_table.body:
-          group_value = row_dict.get(group_key, "summary")
+    Example input: "['LabelA, 1.1, 2.2', 'LabelB, 3.3, 4.4']"
+    """
 
-          if group_value not in parsed_values_by_group:
-            parsed_values_by_group[group_value] = {}
+    raw_entries = re.findall(r"'([^']*)'", sdk_output)
 
-    labels = []
-    for group_value in sorted(parsed_values_by_group.keys()):
+    parsed_data = {}
+    for entry in raw_entries:
+      parts = entry.split(",")
+      if len(parts) < 2:
+        continue
+
+      label = parts[0].strip()
+      try:
+        values = [float(x.strip()) for x in parts[1:]]
+      except ValueError:
+        continue
+
+      row_percentiles = {}
+      for i, p in enumerate(self.percentiles_to_check):
+        if i < len(values):
+          row_percentiles[p.name] = values[i]
+      parsed_data[label] = row_percentiles
+
+    flat_values = []
+    for label in sorted(parsed_data.keys()):
       for p in self.percentiles_to_check:
-        labels.append(f"{group_value} {p.name}")
-
-    return labels
+        if p.name in parsed_data[label]:
+          flat_values.append(parsed_data[label][p.name])
+    return flat_values
 
 
 class MemoryUsedStrategy(_BaseSimplePointStrategy):
@@ -368,6 +343,7 @@ class MemoryUsedStrategy(_BaseSimplePointStrategy):
 
   metric_name = "kubernetes.io/container/accelerator/memory_used"
   tpu_info_metric_name = "hbm_usage"
+  tpu_sdk_metric_name = "hbm_capacity_usage"
   dag_id_suffix = "memory_used"
   tolerance_percent = 1.0
   _monitoring_value_type_key = "int64_value"
@@ -393,12 +369,31 @@ class MemoryUsedStrategy(_BaseSimplePointStrategy):
             tpu_info_data_values.append(float(match.group(1)))
     return tpu_info_data_values
 
+  def parse_from_sdk(self, sdk_output: str) -> list[float]:
+    """Parses raw bytes from SDK output list string and converts to GiB.
+    Example: "['8928295936', '8928215040']"
+    """
+    cleaned = sdk_output.strip("[]").replace("'", "").replace('"', "")
+    if not cleaned:
+      return []
+
+    values = []
+    for x in cleaned.split(","):
+      if x.strip():
+        try:
+          # Use _process_value to convert bytes to GiB
+          values.append(self._process_value(float(x.strip())))
+        except ValueError:
+          continue
+    return values
+
 
 class MemoryTotalStrategy(_BaseSimplePointStrategy):
   """Strategy for verifying Total HBM Memory."""
 
   metric_name = "kubernetes.io/container/accelerator/memory_total"
   tpu_info_metric_name = "hbm_usage"
+  tpu_sdk_metric_name = "hbm_capacity_total"
   dag_id_suffix = "memory_total"
   tolerance_percent = 0.0
   _monitoring_value_type_key = "int64_value"
@@ -425,12 +420,30 @@ class MemoryTotalStrategy(_BaseSimplePointStrategy):
             tpu_info_data_values.append(float(match.group(2)))
     return tpu_info_data_values
 
+  def parse_from_sdk(self, sdk_output: str) -> list[float]:
+    """Parses raw bytes from SDK output list string and converts to GiB.
+    Example: "['33550229504', '33550229504']"
+    """
+    cleaned = sdk_output.strip("[]").replace("'", "").replace('"', "")
+    if not cleaned:
+      return []
+
+    values = []
+    for x in cleaned.split(","):
+      if x.strip():
+        try:
+          values.append(self._process_value(float(x.strip())))
+        except ValueError:
+          continue
+    return values
+
 
 class DutyCycleStrategy(_BaseSimplePointStrategy):
   """Strategy for verifying Duty Cycle."""
 
   metric_name = "kubernetes.io/container/accelerator/duty_cycle"
   tpu_info_metric_name = "duty_cycle_percent"
+  tpu_sdk_metric_name = "duty_cycle_pct"
   dag_id_suffix = "duty_cycle"
   tolerance_percent = 1.0
   _monitoring_value_type_key = "int64_value"
@@ -448,12 +461,30 @@ class DutyCycleStrategy(_BaseSimplePointStrategy):
             tpu_info_data_values.append(float(match.group(1)))
     return tpu_info_data_values
 
+  def parse_from_sdk(self, sdk_output: str) -> list[float]:
+    """Parses percent values from SDK output list string.
+    Example: "['100.00', '100.00']"
+    """
+    cleaned = sdk_output.strip("[]").replace("'", "").replace('"', "")
+    if not cleaned:
+      return []
+
+    values = []
+    for x in cleaned.split(","):
+      if x.strip():
+        try:
+          values.append(float(x.strip()))
+        except ValueError:
+          continue
+    return values
+
 
 class TensorcoreUtilizationStrategy(_BaseSimplePointStrategy):
   """Strategy for verifying TensorCore Utilization."""
 
   metric_name = "kubernetes.io/container/accelerator/tensorcore_utilization"
   tpu_info_metric_name = "tensorcore_utilization"
+  tpu_sdk_metric_name = "tensorcore_util"
   dag_id_suffix = "tensorcore_utilization"
   tolerance_percent = 15.0
   _monitoring_value_type_key = "double_value"
@@ -469,6 +500,23 @@ class TensorcoreUtilizationStrategy(_BaseSimplePointStrategy):
           tpu_info_data_values.append(float(tcu_value))
     return tpu_info_data_values
 
+  def parse_from_sdk(self, sdk_output: str) -> list[float]:
+    """Parses percent values from SDK output list string.
+    Example: "['10.39', '10.96']"
+    """
+    cleaned = sdk_output.strip("[]").replace("'", "").replace('"', "")
+    if not cleaned:
+      return []
+
+    values = []
+    for x in cleaned.split(","):
+      if x.strip():
+        try:
+          values.append(float(x.strip()))
+        except ValueError:
+          continue
+    return values
+
 
 class BufferTransferLatencyStrategy(_BaseDistributionStrategy):
   """Strategy for verifying Buffer Transfer Latency from distribution data."""
@@ -477,27 +525,37 @@ class BufferTransferLatencyStrategy(_BaseDistributionStrategy):
       "kubernetes.io/container/multislice/network/dcn_transfer_latencies"
   )
   tpu_info_metric_name = "buffer_transfer_latency"
+  tpu_sdk_metric_name = "buffer_transfer_latency"
   dag_id_suffix = "buffer_transfer_latency"
-  tolerance_percent = 10.0
+  tolerance_percent = 3.0
   _monitoring_group_by_label = "buffer_size"
   _tpu_info_table_name = "TPU Buffer Transfer Latency"
   _tpu_info_group_by_key = "Buffer Size"
 
+  def parse_from_sdk(self, sdk_output: str) -> list[float]:
+    """Parses buffer transfer latency from SDK output.
+    Example: "['8MB+-grpc, 34587.17, 33414.73...']"
+    """
+    return self._parse_sdk_csv_list(sdk_output)
+
 
 class HostToDeviceTransferLatenciesStrategy(_BaseDistributionStrategy):
-  """Strategy for verifying Host to Device Transfer Latency from distribution
-  data."""
+  """Strategy for verifying Host to Device Transfer Latency from distribution data."""
 
-  metric_name = (
-      "kubernetes.io/container/multislice/accelerator/"
-      "host_to_device_transfer_latencies"
-  )
+  metric_name = "kubernetes.io/container/multislice/accelerator/host_to_device_transfer_latencies"
   tpu_info_metric_name = "host_to_device_transfer_latency"
+  tpu_sdk_metric_name = "host_to_device_transfer_latency"
   dag_id_suffix = "host_to_device_transfer_latency"
-  tolerance_percent = 10.0
+  tolerance_percent = 3.0
   _monitoring_group_by_label = "buffer_size"
   _tpu_info_table_name = "TPU Host to Device Transfer Latency"
   _tpu_info_group_by_key = "Buffer Size"
+
+  def parse_from_sdk(self, sdk_output: str) -> list[float]:
+    """Parses host-to-device latency from SDK output.
+    Example: "['8MB+, 5995.14, 5116.23...']"
+    """
+    return self._parse_sdk_csv_list(sdk_output)
 
 
 class DeviceToHostTransferLatenciesStrategy(_BaseDistributionStrategy):
@@ -505,16 +563,18 @@ class DeviceToHostTransferLatenciesStrategy(_BaseDistributionStrategy):
   Strategy for verifying Device to Host Transfer Latency from distribution data.
   """
 
-  metric_name = (
-      "kubernetes.io/container/multislice/accelerator/"
-      "device_to_host_transfer_latencies"
-  )
+  metric_name = "kubernetes.io/container/multislice/accelerator/device_to_host_transfer_latencies"
   tpu_info_metric_name = "device_to_host_transfer_latency"
+  tpu_sdk_metric_name = "device_to_host_transfer_latency"
   dag_id_suffix = "device_to_host_transfer_latency"
-  tolerance_percent = 10.0
+  tolerance_percent = 3.0
   _monitoring_group_by_label = "buffer_size"
   _tpu_info_table_name = "TPU Device to Host Transfer Latency"
   _tpu_info_group_by_key = "Buffer Size"
+
+  def parse_from_sdk(self, sdk_output: str) -> list[float]:
+    """Parses device-to-host latency from SDK output."""
+    return self._parse_sdk_csv_list(sdk_output)
 
 
 class CollectiveEndToEndLatencyLatenciesStrategy(_BaseDistributionStrategy):
@@ -522,13 +582,11 @@ class CollectiveEndToEndLatencyLatenciesStrategy(_BaseDistributionStrategy):
   Strategy for verifying Collective End to End Latency from distribution data.
   """
 
-  metric_name = (
-      "kubernetes.io/container/multislice/network/"
-      "collective_end_to_end_latencies"
-  )
+  metric_name = "kubernetes.io/container/multislice/network/collective_end_to_end_latencies"
   tpu_info_metric_name = "collective_e2e_latency"
+  tpu_sdk_metric_name = "collective_e2e_latency"
   dag_id_suffix = "collective_e2e_latency"
-  tolerance_percent = 10.0
+  tolerance_percent = 3.0
   _monitoring_group_by_label = "collective_type"
   _tpu_info_table_name = "TPU Collective End to End Latency"
   _tpu_info_group_by_key = "Buffer Size"
@@ -575,16 +633,19 @@ class CollectiveEndToEndLatencyLatenciesStrategy(_BaseDistributionStrategy):
 
     return tpu_info_data_values
 
+  def parse_from_sdk(self, sdk_output: str) -> list[float]:
+    """Parses collective latency from SDK output."""
+    # Note: Logic here assumes same label sorting as parse_from_tpu_info.
+    # SDK labels might not have the "(i)" index suffix if multiple rows have same label.
+    # This might need refinement if labels are not unique.
+    return self._parse_sdk_csv_list(sdk_output)
+
 
 ALL_METRIC_STRATEGIES = [
     MemoryUsedStrategy(),
     MemoryTotalStrategy(),
     DutyCycleStrategy(),
     TensorcoreUtilizationStrategy(),
-    # TODO(b/481177412): Re-enable and validate latency metrics.
-    # Current Monitoring API aggregation differs from tpu-info, making it
-    # unsuitable as a Source of Truth. Investigation for a valid verification
-    # method is ongoing.
     BufferTransferLatencyStrategy(),
     HostToDeviceTransferLatenciesStrategy(),
     DeviceToHostTransferLatenciesStrategy(),

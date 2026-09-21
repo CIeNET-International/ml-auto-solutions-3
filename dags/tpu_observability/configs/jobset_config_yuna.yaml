@@ -1,0 +1,119 @@
+# ==============================================================================
+# CONFIGURATION INHERITANCE & PRIORITY:
+# This file follows a layered override pattern. Values are merged in this order:
+# 1. 'jobset_defaults' section (Lowest Priority): Base defaults for all workloads.
+# 2. 'dag' section (Medium Priority): Overrides specific to a DAG name.
+# 3. Python Task (Highest Priority): Manual overrides passed in code.
+#
+# NOTE: If a key exists in both 'jobset_defaults' and 'dag', the 'dag' value
+# will be used.
+# ==============================================================================
+
+# Base settings applied to all JobSets to avoid repetition
+jobset_defaults:
+  namespace: "default"
+  max_restarts: 5
+  replicated_job_name: "tpu-job-slice"
+  replicas: 1
+  image: "python:3.11"
+  container_name: "jax-tpu-worker"
+  backoff_limit: 0
+  tpu_cores_per_pod: 4
+  tpu_accelerator_type: "tpu-v6e-slice"
+  tpu_topology: "4x4"
+  completions: 4
+  parallelism: 4
+  delay_recovery: false
+
+dag:
+  # The following keys must match the 'dag_name' parameter in the Python task.
+  # dag_id_prefix: User-defined prefix for the JobSet resource name.
+  # Constraint: Must be ≤ 40 characters to accommodate the '-workload-YYYYMMDDhhmmss'
+  # suffix while remaining under the Kubernetes 63-character limit.
+
+  gke_node_pool_status:
+    node_pool_name: "node-pool-status-v6e-autotest"
+    wrong_node_location: "asia-east1-c"
+
+  gke_node_pool_label_update:
+    node_pool_name: "update-node-pool-label-v6e-autotest"
+
+  multi_host_nodepool_rollback:
+    node_pool_name: "multi-host-nodepool-rollback-auto"
+
+  jobset_rollback_ttr:
+    dag_id_prefix: "rollback-ttr"
+
+  tpu_sdk_monitoring_validation:
+    dag_id_prefix: "tpu-sdk-monitor"
+
+  tpu_info_format_validation_dag:
+    dag_id_prefix: "tpu-info-format"
+    replicas: 2
+    image: "asia-northeast1-docker.pkg.dev/cienet-cmcs/yuna-docker/tpu-info:v0.8.1"
+
+  tpu_info_format_validation_dags_exist:
+    dag_id_prefix: "tpu-info-format"
+    replicas: 2
+    image: "asia-northeast1-docker.pkg.dev/cienet-cmcs/yuna-docker/tpu-info:v0.8.1"
+
+  jobset_ttr_pod_delete:
+    dag_id_prefix: "ttr-pod-delete"
+    delay_recovery: true
+
+  jobset_ttr_node_pool_resize:
+    dag_id_prefix: "ttr-node-resize"
+
+  jobset_uptime_validation:
+    dag_id_prefix: "uptime-val"
+
+  tpu_info_metrics_verification:
+    dag_id_prefix: "tpu-info-data-val"
+    replicas: 2
+
+  jobset_ttr_kill_process:
+    dag_id_prefix: "ttr-kill-proc"
+    delay_recovery: true
+
+  tpu_info_cli_validation_dags:
+    dag_id_prefix: "tpu-info-cli-val"
+    image: "asia-northeast1-docker.pkg.dev/cienet-cmcs/yuna-docker/tpu-info:v0.8.1"
+
+  jobset_healthiness_suspended:
+    dag_id_prefix: "health-suspend"
+    replicas: 2
+
+  jobset_ttr_node_reboot:
+    dag_id_prefix: "node-reboot-ttr"
+    image: "asia-northeast1-docker.pkg.dev/cienet-cmcs/yuna-docker/tpu-info:v0.8.1"
+
+  tpu_sdk_monitoring_data_validation:
+    dag_id_prefix: "tpu-sdk-data-val"
+    replicas: 2
+
+  jobset_ttr_kill_process_exist:
+    dag_id_prefix: "ttr-kill-proc-exist"
+    delay_recovery: true
+
+  jobset_ttr_node_pool_resize_exist:
+    dag_id_prefix: "ttr-np-resize-exist"
+    delay_recovery: true
+
+  jobset_ttr_pod_delete_exist:
+    dag_id_prefix: "ttr-pod-delete-exist"
+    delay_recovery: true
+
+  jobset_rollback_ttr_exist:
+    dag_id_prefix: "ttr-rollback-exist"
+    delay_recovery: true
+
+  tpu_info_format_validation_dag_exist:
+    dag_id_prefix: "tpu-info-format-exist"
+    replicas: 2
+
+  tpu_info_metrics_verification_exist:
+    dag_id_prefix: "tpu-info-metrics"
+    replicas: 2
+
+  chips_capacity_validation_dag:
+    dag_id_prefix: "chips-capacity-val"

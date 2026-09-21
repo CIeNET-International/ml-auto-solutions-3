@@ -17,8 +17,7 @@ This script uses a factory pattern to dynamically generate an Airflow DAG for
 each metric verification strategy.
 """
 
-from __unknown__ import all_verification_tasks
-import copy
+from dataclasses import replace
 import datetime
 import logging
 import os
@@ -32,41 +31,27 @@ from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
 from dags import composer_env
-from dags.common.task_group_with_timeout import TaskGroupWithTimeout
-from dags.common.scheduling_helper.scheduling_helper import (
-    SchedulingHelper,
-    get_dag_timeout,
-)from dags.common.vm_resource import DockerImage
 
 from dags.tpu_observability.configs.common import (
+    MachineConfigMap,
     GCS_CONFIG_PATH,
     GCS_JOBSET_CONFIG_PATH,
-    MachineConfigMap,
 )
-from dags.tpu_observability.tpu_info_metric import (
-    ALL_METRIC_STRATEGIES,
-    BaseMetricStrategy,
-)
+from dags.tpu_observability.tpu_info_metric import ALL_METRIC_STRATEGIES
+from dags.tpu_observability.tpu_info_metric import BaseMetricStrategy
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.tpu_observability.utils import tpu_info_util as tpu_info
-from dags.tpu_observability.utils.jobset_util import Workload
 from dags.tpu_observability.utils.node_pool_util import Info
 from dags.tpu_observability.utils.time_util import TimeUtil
 from dags.tpu_observability.utils.jobset_util import Workload
 from dags.tpu_observability.utils.tpu_info_util import parse_tpu_info_output
-from dags.common.task_group_with_timeout import TaskGroupWithTimeout
 from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper, get_dag_timeout
 
-
-DAG_ID = "tpu_info_metrics_verification"
+DAG_ID = "tpu_info_metrics_verification_exist"
 DAGRUN_TIMEOUT = get_dag_timeout(DAG_ID)
 SCHEDULE = SchedulingHelper.arrange_schedule_time(DAG_ID)
-
-PRE_TEST_TIMEOUT = datetime.timedelta(minutes=10)
-POST_TEST_TIMEOUT = datetime.timedelta(minutes=10)
-TEST_TIMEOUT = (DAGRUN_TIMEOUT - PRE_TEST_TIMEOUT - POST_TEST_TIMEOUT)/2
 
 
 def compare_metric_values(
@@ -75,10 +60,8 @@ def compare_metric_values(
     pod_name: str,
     metric_display_name: str,
     tolerance_percent: float,
-    labels: list[str] | None = None,
 ):
-  """Compares two lists of metric values and checks if they are within a
-  tolerance range."""
+  """Compares two lists of metric values and checks if they are within a tolerance range."""
   if len(cmd_values) != len(monitoring_values):
     raise AirflowException(
         f"For pod {pod_name} ({metric_display_name}), data count mismatch. "
@@ -92,15 +75,15 @@ def compare_metric_values(
       metric_display_name,
   )
   logging.info(
-      "%-20s%-15s%-17s%-12s%-15s%-10s",
-      "Label" if labels else "Device",
+      "%-12s%-15s%-17s%-12s%-15s%-10s",
+      "Device",
       "TPU-Info Val",
       "Monitoring Val",
       "Difference",
       "Allowed Diff",
       "Result",
   )
-  logging.info("-" * 95)
+  logging.info("-" * 85)
 
   all_passed = True
   for i, (log_val, mon_val) in enumerate(zip(cmd_values, monitoring_values)):
@@ -109,10 +92,9 @@ def compare_metric_values(
     passed = diff <= allowed_diff
     if not passed:
       all_passed = False
-    label = labels[i] if labels else f"Device {i}"
     logging.info(
-        "%-20s%-15.2f%-17.2f%-12.2f%-15.2f%-10s",
-        label,
+        "%-12s%-15.2f%-17.2f%-12.2f%-15.2f%-10s",
+        f"Device {i}",
         log_val,
         mon_val,
         diff,
@@ -199,17 +181,27 @@ def verify_metric_for_all_pods(
           pod_name,
       )
 
-  labels = metric_strategy.get_labels(tpu_info_output)
-  compare_metric_values(
-      cmd_values,
-      monitoring_values,
-      pod_name,
-      metric_display_name=metric_strategy.dag_id_suffix,
-      tolerance_percent=tolerance_for_metric,
-      labels=labels,
-  )
+      compare_metric_values(
+          cmd_values,
+          monitoring_values,
+          pod_name,
+          metric_display_name=metric_strategy.dag_id_suffix,
+          tolerance_percent=tolerance_for_metric,
+      )
+      results.append(True)
+      logging.info("Validation succeeded for pod: %s", pod_name)
+    except Exception as e:
+      logging.error("Validation failed for pod: %s. Error: %s", pod_name, e)
+      failed_pods.append((pod_name, e))
 
-  return True
+  if failed_pods:
+    failed_pod_names = [name for name, _ in failed_pods]
+    logging.error("The following pods failed validation: %s", failed_pod_names)
+    raise AirflowFailException(
+        f"Task failed because validation failed on pods: {failed_pod_names}"
+    )
+
+  return results
 
 
 @task
@@ -305,16 +297,20 @@ with models.DAG(
       pools.
     """,
 ) as dag:
-  docker_images = {
-      "stable": DockerImage.LIBTPU_STABLE.value,
-      "nightly": DockerImage.LIBTPU_NIGHTLY.value,
-  }
-
   for machine in MachineConfigMap:
     config = machine.value
 
+    @task
+    def generate_second_node_pool_name(
+        node_pool_info: node_pool.Info,
+    ) -> str:
+      """Generates a second node pool name."""
+      return f"{node_pool_info.node_pool_name}-2"
+
     with TaskGroup(group_id=f"v{config.tpu_version.value}"):
-      cluster_info = node_pool.build_node_pool_info_from_gcs_yaml(
+      cluster_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
+          task_id="build_node_pool_info_from_gcs_yaml"
+      )(
           gcs_path=GCS_CONFIG_PATH,
           dag_name=DAG_ID,
           is_prod=composer_env.is_prod_env(),
@@ -330,98 +326,89 @@ with models.DAG(
       selector = jobset.generate_node_pool_selector(DAG_ID)
       jobset_name = jobset.generate_jobset_name(jobset_config.dag_id_prefix)
 
-      cluster_info_2 = copy.deepcopy(cluster_info)
-      cluster_info_2.node_pool_name = f"{cluster_info.node_pool_name}-2"
+      cluster_info_2 = node_pool.copy_node_pool_info_with_override(
+          info=cluster_info,
+          node_pool_name=generate_second_node_pool_name(cluster_info),
+      )
 
-      with TaskGroupWithTimeout(
-          group_id="pre_test",
-          timeout=PRE_TEST_TIMEOUT,
-      ) as pre_test:
-        create_first_node_pool = node_pool.create.override(
-            task_id="node_pool_1",
-        )(
-            node_pool=cluster_info,
-            node_pool_selector=selector,
-        )
+      # with TaskGroup(group_id="create_node_pool") as create_node_pool:
+      #   create_first_node_pool = node_pool.create.override(
+      #       task_id="node_pool_1",
+      #   )(
+      #       node_pool=cluster_info,
+      #   )
 
-        create_second_node_pool = node_pool.create.override(
-            task_id="node_pool_2",
-        )(
-            node_pool=cluster_info_2,
-            node_pool_selector=selector,
-        )
+      #   create_second_node_pool = node_pool.create.override(
+      #       task_id="node_pool_2",
+      #   )(
+      #       node_pool=cluster_info_2,
+      #   )
 
-        _ = [create_first_node_pool, create_second_node_pool]
+      #   _ = [create_first_node_pool, create_second_node_pool]
 
-      image_task_groups = []
-      for type_name, image_url in docker_images.items():
-        with TaskGroupWithTimeout(
-            group_id=f"test_v{config.tpu_version.value}_{type_name}",
-            timeout=TEST_TIMEOUT,
-        ) as image_tg:
-          startup = jobset.create_jobset_startup_tasks(
-              node_pool=cluster_info,
-              jobset_config=jobset_config,
-              jobset_name=jobset_name,
-              node_pool_selector=selector,
-              workload_type=Workload.JAX_TPU_BENCHMARK,
-          )
+      startup = jobset.create_jobset_startup_tasks(
+          node_pool=cluster_info,
+          jobset_config=jobset_config,
+          jobset_name=jobset_name,
+          node_pool_selector=selector,
+          workload_type=Workload.JAX_TPU_BENCHMARK,
+      )
 
-          verification_results = {}
-          all_verification_tasks = []
+      verification_results = {}
+      all_verification_tasks = []
 
-          for strategy in ALL_METRIC_STRATEGIES:
-            verify_metric = verify_metric_for_all_pods.override(
-                task_id=f"verify_{strategy.dag_id_suffix}"
-            )(
-                node_pool=cluster_info,
-                jobset_config=jobset_config,
-                job_apply_time=startup.jobset_start_time,
-                metric_strategy=strategy,
-                pod_names=startup.running_pods,
-            )
-
-            all_verification_tasks.append(verify_metric)
-            verification_results[strategy.dag_id_suffix] = verify_metric
-
-          summary = summarize_results.override(
-              task_id="summarize_results", trigger_rule=TriggerRule.ALL_DONE
-          )(
-              verification_results_dict=verification_results,
-              active_pods=startup.running_pods,
-          )
-          chain(all_verification_tasks, summary)
-
-      with TaskGroupWithTimeout(
-          group_id="post_test",
-          timeout=POST_TEST_TIMEOUT,
-          is_teardown=True,
-      ) as post_test:
-        clean_up_workload = jobset.end_workload.override(
-            task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
+      for strategy in ALL_METRIC_STRATEGIES:
+        verify_metric = verify_metric_for_all_pods.override(
+            task_id=f"verify_{strategy.dag_id_suffix}"
         )(
             node_pool=cluster_info,
             jobset_config=jobset_config,
-            jobset_name=jobset_name,
+            job_apply_time=startup.jobset_start_time,
+            metric_strategy=strategy,
+            pod_names=startup.running_pods,
         )
 
-        cleanup_first_node_pool = node_pool.delete.override(
-            task_id="cleanup_node_pool_1",
-            trigger_rule=TriggerRule.ALL_DONE,
-        )(node_pool=cluster_info)
+        all_verification_tasks.append(verify_metric)
+        verification_results[strategy.dag_id_suffix] = verify_metric
 
-        cleanup_second_node_pool = node_pool.delete.override(
-            task_id="cleanup_node_pool_2",
-            trigger_rule=TriggerRule.ALL_DONE,
-        )(node_pool=cluster_info_2)
+      summary = summarize_results.override(
+          task_id="summarize_results", trigger_rule=TriggerRule.ALL_DONE
+      )(
+          verification_results_dict=verification_results,
+          active_pods=startup.running_pods,
+      )
 
-        chain(
-            clean_up_workload, cleanup_first_node_pool, cleanup_second_node_pool
-        )
+      clean_up_workload = jobset.end_workload.override(
+          task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
+      )(
+          node_pool=cluster_info,
+          jobset_config=jobset_config,
+          jobset_name=jobset_name,
+      )
 
-      current_node = pre_test
-      for tg in image_task_groups:
-        chain(current_node, tg)
-        current_node = tg
-      chain(pre_test, current_node, post_test)
+      # with TaskGroup(group_id="cleanup_node_pool") as cleanup_node_pool:
+      #   cleanup_first_node_pool = node_pool.delete.override(
+      #       task_id="cleanup_node_pool_1",
+      #       trigger_rule=TriggerRule.ALL_DONE,
+      #   )(node_pool=cluster_info)
 
+      #   cleanup_second_node_pool = node_pool.delete.override(
+      #       task_id="cleanup_node_pool_2",
+      #       trigger_rule=TriggerRule.ALL_DONE,
+      #   )(node_pool=cluster_info_2)
+
+      #   chain(cleanup_first_node_pool, cleanup_second_node_pool)
+
+      chain(
+          selector,
+          jobset_name,
+          jobset_config,
+          cluster_info,
+          cluster_info_2,
+          # create_node_pool,
+          *startup.tasks,
+          all_verification_tasks,
+          summary,
+          clean_up_workload,
+          # cleanup_node_pool,
+      )

@@ -35,11 +35,14 @@ from airflow.utils.trigger_rule import TriggerRule
 
 from dags import composer_env
 from dags.common import test_owner
+<<<<<<< HEAD
 from dags.common.scheduling_helper.scheduling_helper import (
     SchedulingHelper,
     get_dag_timeout,
 )
+=======
 from dags.common.vm_resource import DockerImage
+>>>>>>> b5b16638 (feat: update tpu-info parsing and add TPU_OBS image for DAG validation)
 from dags.tpu_observability.configs.common import (
     GCS_CONFIG_PATH,
     GCS_JOBSET_CONFIG_PATH,
@@ -59,9 +62,7 @@ DAGRUN_TIMEOUT = get_dag_timeout(DAG_ID)
 
 PRE_TEST_TIMEOUT = datetime.timedelta(minutes=20)
 POST_TEST_TIMEOUT = datetime.timedelta(minutes=10)
-TEST_TIMEOUT = (
-    DAGRUN_TIMEOUT - PRE_TEST_TIMEOUT - POST_TEST_TIMEOUT
-) / 2  # divided by 2 for two test images
+TEST_TIMEOUT = DAGRUN_TIMEOUT - PRE_TEST_TIMEOUT - POST_TEST_TIMEOUT
 SCHEDULE = SchedulingHelper.arrange_schedule_time(DAG_ID)
 
 
@@ -149,11 +150,6 @@ def verify_table_amount(tpu_info_output: list[tpu_info.Table]):
       "TPU Runtime Utilization",
       "TensorCore Utilization",
       "TPU Buffer Transfer Latency",
-      "TPU Inbound Buffer Transfer Latency",
-      # This metric is not available in currently tpu-info version
-      # "Host Compute Latency Status",
-      "TPU gRPC TCP Minimum RTT",
-      "TPU gRPC TCP Delivery Rate",
   }
 
   found_names = {table.name for table in tpu_info_output}
@@ -351,14 +347,12 @@ def validate_latency_table(tpu_info_output: list[tpu_info.Table]):
         f" output:\n{content.raw_body}"
     )
 
-
 @task
 def generate_second_node_pool_name(
     node_pool_info: node_pool.Info,
 ) -> str:
   """Generates a second node pool name."""
   return f"{node_pool_info.node_pool_name}-2"
-
 
 # Keyword arguments are generated dynamically at runtime (pylint does not
 # know this signature).
@@ -408,16 +402,35 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       """,
 ) as dag:
   docker_images = {
-      "stable": DockerImage.LIBTPU_STABLE.value,
-      "nightly": DockerImage.LIBTPU_NIGHTLY.value,
+      "stable": DockerImage.TPU_OBS_LIBTPU_STABLE.value,
+      "nightly": DockerImage.TPU_OBS_LIBTPU_NIGHTLY.value,
   }
 
   for machine in MachineConfigMap:
     config = machine.value
+<<<<<<< HEAD
+=======
+    selector = jobset.generate_node_pool_selector(
+            DAG_ID
+        )
+
+    cluster_info = node_pool.build_node_pool_info_from_gcs_yaml(
+        gcs_path=GCS_CONFIG_PATH,
+        dag_name=DAG_ID,
+        is_prod=composer_env.is_prod_env(),
+        machine_type=config.machine_version.value,
+        tpu_topology=config.tpu_topology,
+        node_pool_selector=selector,
+    )
+
+    cluster_info_2 = copy.deepcopy(cluster_info)
+    cluster_info_2.node_pool_name = f"{cluster_info.node_pool_name}-2"
+>>>>>>> b5b16638 (feat: update tpu-info parsing and add TPU_OBS image for DAG validation)
 
     # Keyword arguments are generated dynamically at runtime (pylint does not
     # know this signature).
     with TaskGroup(  # pylint: disable=unexpected-keyword-arg
+<<<<<<< HEAD
         group_id=f"v{config.tpu_version.value}"
     ):
       cluster_info = node_pool.build_node_pool_info_from_gcs_yaml(
@@ -428,7 +441,14 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           tpu_topology=config.tpu_topology,
       )
 
+      jobset_config = jobset.build_jobset_from_gcs_yaml(
+          gcs_path=GCS_JOBSET_CONFIG_PATH,
+          dag_name=DAG_ID,
+      )
+
       selector = jobset.generate_node_pool_selector(DAG_ID)
+
+      jobset_name = jobset.generate_jobset_name(jobset_config.dag_id_prefix)
 
       cluster_info_2 = copy.deepcopy(cluster_info)
       cluster_info_2.node_pool_name = f"{cluster_info.node_pool_name}-2"
@@ -443,65 +463,164 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
         )(
             node_pool=cluster_info,
             node_pool_selector=selector,
-        )
+        ).as_setup()
 
         create_second_node_pool = node_pool.create.override(
             task_id="node_pool_2",
             retries=2,
         )(
             node_pool=cluster_info_2,
-        )
-        chain([create_first_node_pool, create_second_node_pool])
+            node_pool_selector=selector,
+        ).as_setup()
 
-      image_task_groups = []
-      for type_name, image_url in docker_images.items():
+        startup = jobset.create_jobset_startup_tasks(
+            node_pool=cluster_info,
+            jobset_config=jobset_config,
+            jobset_name=jobset_name,
+            node_pool_selector=selector,
+            workload_type=Workload.JAX_TPU_BENCHMARK,
+        )
+
+        chain([create_first_node_pool, create_second_node_pool], *startup.tasks)
+
+      with TaskGroupWithTimeout(
+          group_id="test",
+          timeout=TEST_TIMEOUT,
+      ) as test:
+        validate_format = validate_tpu_info_format.override(
+            task_id="validate_tpu_info_format"
+        )(
+            info=cluster_info,
+            tpu_config=config,
+            pod_names=startup.running_pods,
+        )
+
+      with TaskGroupWithTimeout(
+          group_id="post_test",
+          timeout=POST_TEST_TIMEOUT,
+          as_teardown_of=create_first_node_pool,
+      ) as post_test:
+        clean_up_workload = jobset.end_workload.override(
+            task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
+        )(
+            node_pool=cluster_info,
+            jobset_config=jobset_config,
+            jobset_name=jobset_name,
+        )
+
+        cleanup_first_node_pool = node_pool.delete.override(
+            task_id="cleanup_node_pool_1",
+            trigger_rule=TriggerRule.ALL_DONE,
+            retries=2,
+        )(node_pool=cluster_info)
+
+        cleanup_second_node_pool = node_pool.delete.override(
+            task_id="cleanup_node_pool_2",
+            trigger_rule=TriggerRule.ALL_DONE,
+            retries=2,
+        )(node_pool=cluster_info_2)
+
+        chain(
+            clean_up_workload, cleanup_first_node_pool, cleanup_second_node_pool
+        )
+
+=======
+        group_id="create_node_pool"
+    ) as create_node_pool:
+      create_first_node_pool = node_pool.create.override(
+          task_id="node_pool_1",
+      )(
+          node_pool=cluster_info,
+      )
+
+      create_second_node_pool = node_pool.create.override(
+          task_id="node_pool_2",
+          retries=2,
+      )(
+          node_pool=cluster_info_2,
+      )
+
+    image_task_groups = []
+    for type_name, image_url in docker_images.items():
+      # Keyword arguments are generated dynamically at runtime (pylint does not
+      # know this signature).
+      with TaskGroup(  # pylint: disable=unexpected-keyword-arg
+          group_id=f"v{config.tpu_version.value}_{type_name}"
+      ) as image_tg:
+        image_task_groups.append(image_tg)
+
+        jobset_config = jobset.build_jobset_from_gcs_yaml(
+            gcs_path=GCS_JOBSET_CONFIG_PATH,
+            dag_name=DAG_ID,
+            node_pool_selector=selector,
+            image=image_url,
+        )
+
+        startup = jobset.create_jobset_startup_tasks(
+            node_pool=cluster_info,
+            jobset_config=jobset_config,
+            workload_type=Workload.JAX_TPU_BENCHMARK,
+        )
+
+        outputs_of_tpu_info = (
+            get_tpu_info_from_pod.override(task_id="get_tpu_info")
+            .partial(info=cluster_info)
+            .expand(pod_name=startup.running_pods)
+        )
+
+        output_of_tpu_info = (
+            tpu_info.parse_tpu_info_output.override(
+                task_id="get_each_metric_table"
+            )
+            .partial()
+            .expand(output=outputs_of_tpu_info)
+        )
+
         # Keyword arguments are generated dynamically at runtime (pylint does not
         # know this signature).
-        with TaskGroupWithTimeout(  # pylint: disable=unexpected-keyword-arg
-            group_id=f"test_v{config.tpu_version.value}_{type_name}",
-            timeout=TEST_TIMEOUT,
-        ) as image_tg:
-          image_task_groups.append(image_tg)
-
-          jobset_config = jobset.build_jobset_from_gcs_yaml(
-              gcs_path=GCS_JOBSET_CONFIG_PATH,
-              dag_name=DAG_ID,
-              node_pool_selector=selector,
-              image=image_url,
+        with TaskGroup(  # pylint: disable=unexpected-keyword-arg
+            group_id="verification_group"
+        ) as verification_group:
+          verify_table_amount_task = (
+              verify_table_amount.override(task_id="verify_table_amount_task")
+              .partial()
+              .expand(tpu_info_output=output_of_tpu_info)
           )
 
-          jobset_name = jobset.generate_jobset_name(jobset_config.dag_id_prefix)
-
-          startup = jobset.create_jobset_startup_tasks(
-              node_pool=cluster_info,
-              jobset_config=jobset_config,
-              jobset_name=jobset_name,
-              node_pool_selector=selector,
-              workload_type=Workload.JAX_TPU_BENCHMARK,
+          validate_tpu_chips_metric = (
+              validate_chips_table.override(task_id="validate_tpu_chips_metric")
+              .partial(tpu_config=config)
+              .expand(tpu_info_output=output_of_tpu_info)
           )
 
-          validate_format = validate_tpu_info_format.override(
-              task_id="validate_tpu_info_format"
-          )(
-              info=cluster_info,
-              tpu_config=config,
-              pod_names=startup.running_pods,
+          validate_runtime_metric = (
+              validate_runtime_table.override(task_id="validate_runtime_metric")
+              .partial()
+              .expand(tpu_info_output=output_of_tpu_info)
           )
 
-          chain(jobset_name, *startup.tasks, validate_format)
-
-        with TaskGroupWithTimeout(
-            group_id="post_test",
-            timeout=POST_TEST_TIMEOUT,
-            is_teardown=True,
-        ) as post_test:
-          clean_up_workload = jobset.end_workload.override(
-              task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
-          )(
-              node_pool=cluster_info,
-              jobset_config=jobset_config,
-              jobset_name=jobset_name,
+          validate_tensorcore_metric = (
+              validate_tensorcore_table.override(
+                  task_id="validate_tensorcore_metric"
+              )
+              .partial()
+              .expand(tpu_info_output=output_of_tpu_info)
           )
+
+          validate_latency_metric = (
+              validate_latency_table.override(task_id="validate_latency_metric")
+              .partial()
+              .expand(tpu_info_output=output_of_tpu_info)
+          )
+
+      clean_up_workload = jobset.end_workload.override(
+          task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
+      )(
+          node_pool=cluster_info,
+          jobset_config=jobset_config,
+      ).as_teardown(
+          setups=startup.jobset_start_time
+      )
 
         # Keyword arguments are generated dynamically at runtime (pylint does not
         # know this signature).
@@ -512,16 +631,37 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
               task_id="cleanup_node_pool_1",
               trigger_rule=TriggerRule.ALL_DONE,
               retries=2,
-          )(node_pool=cluster_info)
+          )(node_pool=cluster_info).as_teardown(
+              setups=create_node_pool,
+          )
 
           cleanup_second_node_pool = node_pool.delete.override(
               task_id="cleanup_node_pool_2",
               trigger_rule=TriggerRule.ALL_DONE,
               retries=2,
-          )(node_pool=cluster_info_2)
-
-          chain(
-              clean_up_workload, cleanup_first_node_pool, cleanup_second_node_pool
+          )(node_pool=cluster_info_2).as_teardown(
+              setups=create_node_pool,
           )
 
-      chain(selector, pre_test, *image_task_groups, post_test)
+        chain(
+            verify_table_amount_task,
+            [
+                validate_tpu_chips_metric,
+                validate_runtime_metric,
+                validate_tensorcore_metric,
+                validate_latency_metric,
+            ],
+        )
+
+        _ = [create_first_node_pool, create_second_node_pool]
+
+        chain(cleanup_first_node_pool, cleanup_second_node_pool)
+
+>>>>>>> b5b16638 (feat: update tpu-info parsing and add TPU_OBS image for DAG validation)
+      chain(
+          selector,
+          jobset_name,
+          pre_test,
+          test,
+          post_test,
+      )

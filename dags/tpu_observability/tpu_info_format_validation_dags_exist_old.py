@@ -18,50 +18,38 @@ A DAG orchestrates the process of verifying TensorCore utilization metrics.
 This is done by comparing data from Cloud Logging and Cloud Monitoring.
 """
 
-import copy
 import datetime
 import os
 import re
+import subprocess
 import tempfile
-import logging
 
 from airflow import models
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException
 from airflow.models.baseoperator import chain
 from airflow.utils.task_group import TaskGroup
-from dags.common.task_group_with_timeout import TaskGroupWithTimeout
 from airflow.utils.trigger_rule import TriggerRule
 
 from dags import composer_env
 from dags.common import test_owner
-from dags.common.scheduling_helper.scheduling_helper import (
-    SchedulingHelper,
-    get_dag_timeout,
-)
 from dags.common.vm_resource import DockerImage
 from dags.tpu_observability.configs.common import (
-    GCS_CONFIG_PATH,
-    GCS_JOBSET_CONFIG_PATH,
     MachineConfigMap,
     TpuConfig,
+    GCS_CONFIG_PATH,
+    GCS_JOBSET_CONFIG_PATH,
 )
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils import subprocess_util as subprocess
 from dags.tpu_observability.utils import tpu_info_util as tpu_info
-from dags.tpu_observability.utils.tpu_info_util import parse_tpu_info_output
 from dags.tpu_observability.utils.jobset_util import Workload
 from dags.common.scheduling_helper.scheduling_helper import SchedulingHelper, get_dag_timeout
 
-DAG_ID = "tpu_info_format_validation_dag"
-DAGRUN_TIMEOUT = get_dag_timeout(DAG_ID)
 
-PRE_TEST_TIMEOUT = datetime.timedelta(minutes=20)
-POST_TEST_TIMEOUT = datetime.timedelta(minutes=10)
-TEST_TIMEOUT = (
-    DAGRUN_TIMEOUT - PRE_TEST_TIMEOUT - POST_TEST_TIMEOUT
-) / 2  # divided by 2 for two test images
+DAG_ID = "tpu_info_format_validation_dag_exist"
+DAGRUN_TIMEOUT = get_dag_timeout(DAG_ID)
 SCHEDULE = SchedulingHelper.arrange_schedule_time(DAG_ID)
 
 
@@ -94,52 +82,6 @@ def get_tpu_info_from_pod(info: node_pool.Info, pod_name: str) -> str:
 
 
 @task
-def validate_tpu_info_format(
-    info: node_pool.Info,
-    tpu_config: TpuConfig,
-    pod_names: list[str],
-) -> None:
-  """Executes tpu-info command and runs all validations sequentially across all pods."""
-
-  failed_pods = []
-  for pod_name in pod_names:
-    logging.info(
-        "Executing tpu-info and performing format validation for pod: %s",
-        pod_name,
-    )
-
-    try:
-      with tempfile.NamedTemporaryFile() as temp_config_file:
-        env = os.environ.copy()
-        env["KUBECONFIG"] = temp_config_file.name
-
-        cmd = " && ".join([
-            jobset.Command.get_credentials_command(info),
-            f"kubectl exec {pod_name} -n default -- tpu-info",
-        ])
-
-        raw_output = subprocess.run_exec(cmd, env=env)
-
-      tpu_info_output = parse_tpu_info_output(raw_output)
-
-      verify_table_amount(tpu_info_output)
-      validate_chips_table(tpu_info_output, tpu_config)
-      validate_runtime_table(tpu_info_output)
-      validate_tensorcore_table(tpu_info_output)
-      validate_latency_table(tpu_info_output)
-      logging.info("Validation succeeded for pod: %s", pod_name)
-    except Exception as e:
-      logging.error("Validation failed for pod: %s. Error: %s", pod_name, e)
-      failed_pods.append((pod_name, e))
-
-  if failed_pods:
-    failed_pod_names = [name for name, _ in failed_pods]
-    logging.error("The following pods failed validation: %s", failed_pod_names)
-    raise AirflowFailException(
-        f"Task failed because validation failed on pods: {failed_pod_names}"
-    )
-
-
 def verify_table_amount(tpu_info_output: list[tpu_info.Table]):
   """
   Verifies if all expected tables are present.
@@ -150,7 +92,6 @@ def verify_table_amount(tpu_info_output: list[tpu_info.Table]):
       "TensorCore Utilization",
       "TPU Buffer Transfer Latency",
       "TPU Inbound Buffer Transfer Latency",
-      # This metric is not available in currently tpu-info version
       # "Host Compute Latency Status",
       "TPU gRPC TCP Minimum RTT",
       "TPU gRPC TCP Delivery Rate",
@@ -167,6 +108,7 @@ def verify_table_amount(tpu_info_output: list[tpu_info.Table]):
     )
 
 
+@task
 def validate_chips_table(
     tpu_info_output: list[tpu_info.Table],
     tpu_config: TpuConfig,
@@ -219,6 +161,7 @@ def validate_chips_table(
     )
 
 
+@task
 def validate_runtime_table(tpu_info_output: list[tpu_info.Table]):
   """
   Validates the row count and content of table 'TPU Runtime Utilization'
@@ -273,6 +216,7 @@ def validate_runtime_table(tpu_info_output: list[tpu_info.Table]):
     )
 
 
+@task
 def validate_tensorcore_table(tpu_info_output: list[tpu_info.Table]):
   """
   Validates the row count and content of table 'TensorCore Utilization'
@@ -312,6 +256,7 @@ def validate_tensorcore_table(tpu_info_output: list[tpu_info.Table]):
     )
 
 
+@task
 def validate_latency_table(tpu_info_output: list[tpu_info.Table]):
   """
   Validates the row count and content of table 'TPU Buffer Transfer Latency'
@@ -351,7 +296,6 @@ def validate_latency_table(tpu_info_output: list[tpu_info.Table]):
         f" output:\n{content.raw_body}"
     )
 
-
 @task
 def generate_second_node_pool_name(
     node_pool_info: node_pool.Info,
@@ -359,16 +303,12 @@ def generate_second_node_pool_name(
   """Generates a second node pool name."""
   return f"{node_pool_info.node_pool_name}-2"
 
-
 # Keyword arguments are generated dynamically at runtime (pylint does not
 # know this signature).
 with models.DAG(  # pylint: disable=unexpected-keyword-arg
     dag_id=DAG_ID,
-    start_date=datetime.datetime(2025, 8, 15),
-    default_args={
-        "retries": 0,
-        "owner": test_owner.YUNA_T,
-    },
+    start_date=datetime.datetime(2026, 4, 20),
+    default_args={"retries": 0},
     schedule=SCHEDULE if composer_env.is_prod_env() else None,
     dagrun_timeout=DAGRUN_TIMEOUT,
     catchup=False,
@@ -408,60 +348,44 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       """,
 ) as dag:
   docker_images = {
-      "stable": DockerImage.LIBTPU_STABLE.value,
-      "nightly": DockerImage.LIBTPU_NIGHTLY.value,
+      "stable": DockerImage.TPU_OBS_LIBTPU_STABLE.value,
+      "nightly": DockerImage.TPU_OBS_LIBTPU_NIGHTLY.value,
   }
 
   for machine in MachineConfigMap:
     config = machine.value
 
-    # Keyword arguments are generated dynamically at runtime (pylint does not
-    # know this signature).
-    with TaskGroup(  # pylint: disable=unexpected-keyword-arg
-        group_id=f"v{config.tpu_version.value}"
-    ):
-      cluster_info = node_pool.build_node_pool_info_from_gcs_yaml(
-          gcs_path=GCS_CONFIG_PATH,
-          dag_name=DAG_ID,
-          is_prod=composer_env.is_prod_env(),
-          machine_type=config.machine_version.value,
-          tpu_topology=config.tpu_topology,
+    with TaskGroup(group_id=f"v{config.tpu_version.value}"):
+
+      selector = jobset.generate_node_pool_selector(
+          DAG_ID
       )
 
-      selector = jobset.generate_node_pool_selector(DAG_ID)
+      cluster_info = node_pool.build_node_pool_info_from_gcs_yaml.override(
+              task_id="build_node_pool_info_from_gcs_yaml"
+          )(
+              gcs_path=GCS_CONFIG_PATH,
+              dag_name=DAG_ID,
+              is_prod=composer_env.is_prod_env(),
+              machine_type=config.machine_version.value,
+              tpu_topology=config.tpu_topology,
+              node_pool_selector=selector,
+          )
 
-      cluster_info_2 = copy.deepcopy(cluster_info)
-      cluster_info_2.node_pool_name = f"{cluster_info.node_pool_name}-2"
-
-      with TaskGroupWithTimeout(
-          group_id="pre_test",
-          timeout=PRE_TEST_TIMEOUT,
-      ) as pre_test:
-        create_first_node_pool = node_pool.create.override(
-            task_id="node_pool_1",
-            retries=2,
-        )(
-            node_pool=cluster_info,
-            node_pool_selector=selector,
-        )
-
-        create_second_node_pool = node_pool.create.override(
-            task_id="node_pool_2",
-            retries=2,
-        )(
-            node_pool=cluster_info_2,
-        )
-        chain([create_first_node_pool, create_second_node_pool])
+      cluster_info_2 = node_pool.copy_node_pool_info_with_override.override(
+          task_id="copy_node_pool_info_with_override"
+      )(
+          info=cluster_info,
+          node_pool_name=generate_second_node_pool_name(cluster_info),
+      )
 
       image_task_groups = []
       for type_name, image_url in docker_images.items():
         # Keyword arguments are generated dynamically at runtime (pylint does not
         # know this signature).
-        with TaskGroupWithTimeout(  # pylint: disable=unexpected-keyword-arg
-            group_id=f"test_v{config.tpu_version.value}_{type_name}",
-            timeout=TEST_TIMEOUT,
+        with TaskGroup(  # pylint: disable=unexpected-keyword-arg
+            group_id=f"v{config.tpu_version.value}_{type_name}"
         ) as image_tg:
-          image_task_groups.append(image_tg)
 
           jobset_config = jobset.build_jobset_from_gcs_yaml(
               gcs_path=GCS_JOBSET_CONFIG_PATH,
@@ -470,58 +394,113 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
               image=image_url,
           )
 
-          jobset_name = jobset.generate_jobset_name(jobset_config.dag_id_prefix)
-
-          startup = jobset.create_jobset_startup_tasks(
+          apply_time = jobset.run_workload.override(
+              owner=test_owner.YUNA_T, task_id="run_workload"
+          )(
               node_pool=cluster_info,
               jobset_config=jobset_config,
-              jobset_name=jobset_name,
-              node_pool_selector=selector,
               workload_type=Workload.JAX_TPU_BENCHMARK,
           )
 
-          validate_format = validate_tpu_info_format.override(
-              task_id="validate_tpu_info_format"
+          running_pods = jobset.wait_for_all_pods_running.override(
+              task_id="ensure_all_pods_running"
           )(
-              info=cluster_info,
-              tpu_config=config,
-              pod_names=startup.running_pods,
+              node_pool=cluster_info,
+              jobset_config=jobset_config,
           )
 
-          chain(jobset_name, *startup.tasks, validate_format)
+          wait_for_job_start = jobset.wait_for_jobset_started.override(
+              task_id="wait_for_job_start"
+          )(
+              cluster_info,
+              pod_name_list=running_pods,
+              job_apply_time=apply_time,
+          )
 
-        with TaskGroupWithTimeout(
-            group_id="post_test",
-            timeout=POST_TEST_TIMEOUT,
-            is_teardown=True,
-        ) as post_test:
+          outputs_of_tpu_info = (
+              get_tpu_info_from_pod.override(task_id="get_tpu_info")
+              .partial(info=cluster_info)
+              .expand(pod_name=running_pods)
+          )
+
+          output_of_tpu_info = (
+              tpu_info.parse_tpu_info_output.override(
+                  task_id="get_each_metric_table"
+              )
+              .partial()
+              .expand(output=outputs_of_tpu_info)
+          )
+
+          # Keyword arguments are generated dynamically at runtime (pylint does not
+          # know this signature).
+          with TaskGroup(  # pylint: disable=unexpected-keyword-arg
+              group_id="verification_group"
+          ) as verification_group:
+            verify_table_amount_task = (
+                verify_table_amount.override(task_id="verify_table_amount_task")
+                .partial()
+                .expand(tpu_info_output=output_of_tpu_info)
+            )
+
+            validate_tpu_chips_metric = (
+                validate_chips_table.override(task_id="validate_tpu_chips_metric")
+                .partial(tpu_config=config)
+                .expand(tpu_info_output=output_of_tpu_info)
+            )
+
+            validate_runtime_metric = (
+                validate_runtime_table.override(task_id="validate_runtime_metric")
+                .partial()
+                .expand(tpu_info_output=output_of_tpu_info)
+            )
+
+            validate_tensorcore_metric = (
+                validate_tensorcore_table.override(
+                    task_id="validate_tensorcore_metric"
+                )
+                .partial()
+                .expand(tpu_info_output=output_of_tpu_info)
+            )
+
+            validate_latency_metric = (
+                validate_latency_table.override(task_id="validate_latency_metric")
+                .partial()
+                .expand(tpu_info_output=output_of_tpu_info)
+            )
+
+            chain(
+                verify_table_amount_task,
+                [
+                    validate_tpu_chips_metric,
+                    validate_runtime_metric,
+                    validate_tensorcore_metric,
+                    validate_latency_metric,
+                ],
+            )
+
           clean_up_workload = jobset.end_workload.override(
               task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
           )(
               node_pool=cluster_info,
               jobset_config=jobset_config,
-              jobset_name=jobset_name,
+          ).as_teardown(
+              setups=apply_time
           )
-
-        # Keyword arguments are generated dynamically at runtime (pylint does not
-        # know this signature).
-        with TaskGroup(  # pylint: disable=unexpected-keyword-arg
-            group_id="cleanup_node_pool"
-        ) as cleanup_node_pool:
-          cleanup_first_node_pool = node_pool.delete.override(
-              task_id="cleanup_node_pool_1",
-              trigger_rule=TriggerRule.ALL_DONE,
-              retries=2,
-          )(node_pool=cluster_info)
-
-          cleanup_second_node_pool = node_pool.delete.override(
-              task_id="cleanup_node_pool_2",
-              trigger_rule=TriggerRule.ALL_DONE,
-              retries=2,
-          )(node_pool=cluster_info_2)
 
           chain(
-              clean_up_workload, cleanup_first_node_pool, cleanup_second_node_pool
+              apply_time,
+              running_pods,
+              wait_for_job_start,
+              outputs_of_tpu_info,
+              output_of_tpu_info,
+              verification_group,
+              clean_up_workload,
           )
+        image_task_groups.append(image_tg)
 
-      chain(selector, pre_test, *image_task_groups, post_test)
+
+    chain(selector, cluster_info, cluster_info_2)
+
+    if image_task_groups:
+      chain(*image_task_groups)
+
