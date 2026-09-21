@@ -20,12 +20,16 @@ Coordinates the multi-stage MaxText end-to-end testing pipeline for GitHub CI:
    Converts Hugging Face checkpoints to MaxText format on TPU v5p-8.
 2. Stage 2 (maxtext_e2e_tpu_pre_training & maxtext_e2e_tpu_post_training):
    Triggers pre-training and post-training test suites once checkpoints are ready.
+   The `test_scope` param selects which of the two suites run, so manual or
+   GitHub-triggered runs can exercise a single suite without burning TPU
+   capacity on the other one.
 3. Callbacks & Reporting:
    Fires GitHub repository_dispatch events upon stage completion for automated CI.
 """
 import datetime
 
 from airflow import models
+from airflow.decorators import task
 from airflow.models.baseoperator import chain
 from airflow.models.param import Param
 from airflow.operators.trigger_dagrun import TriggerDagRunOperator
@@ -82,6 +86,15 @@ with models.DAG(
             type="string",
             description=(
                 "GitHub PAT used to fire the repository_dispatch callback"
+            ),
+        ),
+        "test_scope": Param(
+            default="all",
+            type="string",
+            enum=["all", "pre-training", "post-training"],
+            description=(
+                "Which Stage 2 suites to run. Checkpoint conversion always"
+                " runs because both suites consume its checkpoints."
             ),
         ),
     },
@@ -165,17 +178,38 @@ with models.DAG(
       },
   )
 
+  # Gate the Stage 2 suites on `test_scope`. `short_circuit` skips everything
+  # downstream, including the GitHub callback, so a suite that was not selected
+  # is never reported back as a success. The scope is read from the dag run conf
+  # first and the params second, mirroring the sensors in the child DAGs.
+  def _scope_includes(suite, params, dag_run):
+    conf = (dag_run.conf if dag_run else {}) or {}
+    scope = conf.get("test_scope") or (params or {}).get("test_scope") or "all"
+    return scope in ("all", suite)
+
+  @task.short_circuit(task_id="pre_training_enabled")
+  def pre_training_enabled(params=None, dag_run=None):
+    return _scope_includes("pre-training", params, dag_run)
+
+  @task.short_circuit(task_id="post_training_enabled")
+  def post_training_enabled(params=None, dag_run=None):
+    return _scope_includes("post-training", params, dag_run)
+
+  # Checkpoint conversion is never gated: both suites wait on its per-model task
+  # groups through an ExternalTaskSensor and share the converted checkpoints.
   chain(
       validate_task,
       trigger_checkpoint_conversion,
   )
   chain(
       validate_task,
+      pre_training_enabled(),
       trigger_pre_training,
       github_callback_pre_training,
   )
   chain(
       validate_task,
+      post_training_enabled(),
       trigger_post_training,
       github_callback_post_training,
   )
