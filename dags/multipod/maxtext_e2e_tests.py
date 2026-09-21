@@ -19,12 +19,14 @@ Coordinates the multi-stage MaxText end-to-end testing pipeline for GitHub CI:
 1. Stage 1 (maxtext_e2e_tpu_checkpoint_conversion):
    Converts Hugging Face checkpoints to MaxText format on TPU v5p-8.
 2. Stage 2 (maxtext_e2e_tpu_pre_training & maxtext_e2e_tpu_post_training):
-   Triggers pre-training and post-training test suites once checkpoints are ready.
+   Triggers pre-training and post-training test suites once
+   checkpoints are ready.
    The `test_scope` param selects which of the two suites run, so manual or
    GitHub-triggered runs can exercise a single suite without burning TPU
    capacity on the other one.
 3. Callbacks & Reporting:
-   Fires GitHub repository_dispatch events upon stage completion for automated CI.
+   Fires GitHub repository_dispatch events upon stage completion
+   for automated CI.
 """
 import datetime
 
