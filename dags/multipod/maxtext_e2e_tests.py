@@ -29,11 +29,13 @@ Coordinates the multi-stage MaxText end-to-end testing pipeline for GitHub CI:
    for automated CI.
 """
 import datetime
+import enum
 
 from airflow import models
 from airflow.decorators import task
 from airflow.models.baseoperator import chain
 from airflow.models.param import Param
+from airflow.operators.python import get_current_context
 from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.utils.trigger_rule import TriggerRule
 from xlml.utils.github import (
@@ -54,6 +56,48 @@ POST_TRAINING_DOCKER_IMAGE = (
     "maxtext_post_training_"
     "{{ params.build_mode }}:{{ params.github_run_id }}"
 )
+
+
+class TestScope(enum.IntFlag):
+  """Stage 2 suites selected by the `test_scope` param."""
+
+  PRE_TRAINING = enum.auto()
+  POST_TRAINING = enum.auto()
+
+  ALL = PRE_TRAINING | POST_TRAINING
+
+  @classmethod
+  def from_string(cls, value: str) -> "TestScope":
+    return {
+        "all": cls.ALL,
+        "pre-training": cls.PRE_TRAINING,
+        "post-training": cls.POST_TRAINING,
+    }[value]
+
+
+def _get_test_scope() -> TestScope:
+  """Resolves the requested scope, defaulting to running every suite."""
+  context = get_current_context()
+  dag_run = context["dag_run"]
+  params = context["params"]
+
+  conf = (dag_run.conf if dag_run else {}) or {}
+  scope = conf.get("test_scope") or (params or {}).get("test_scope") or "all"
+
+  return TestScope.from_string(scope)
+
+
+@task.short_circuit
+def test_scope_enabled(required_scope: int) -> bool:
+  """Skips everything downstream unless `required_scope` was requested.
+
+  `short_circuit` skips the whole downstream branch, including the GitHub
+  callback, so a suite that was not selected is never reported back as a
+  success. The flag is passed as an int because task arguments have to survive
+  DAG serialization.
+  """
+  return bool(_get_test_scope() & TestScope(required_scope))
+
 
 with models.DAG(
     dag_id="maxtext_e2e_tests",
@@ -180,23 +224,6 @@ with models.DAG(
       },
   )
 
-  # Gate the Stage 2 suites on `test_scope`. `short_circuit` skips everything
-  # downstream, including the GitHub callback, so a suite that was not selected
-  # is never reported back as a success. The scope is read from the dag run conf
-  # first and the params second, mirroring the sensors in the child DAGs.
-  def _scope_includes(suite, params, dag_run):
-    conf = (dag_run.conf if dag_run else {}) or {}
-    scope = conf.get("test_scope") or (params or {}).get("test_scope") or "all"
-    return scope in ("all", suite)
-
-  @task.short_circuit(task_id="pre_training_enabled")
-  def pre_training_enabled(params=None, dag_run=None):
-    return _scope_includes("pre-training", params, dag_run)
-
-  @task.short_circuit(task_id="post_training_enabled")
-  def post_training_enabled(params=None, dag_run=None):
-    return _scope_includes("post-training", params, dag_run)
-
   # Checkpoint conversion is never gated: both suites wait on its per-model task
   # groups through an ExternalTaskSensor and share the converted checkpoints.
   chain(
@@ -205,13 +232,17 @@ with models.DAG(
   )
   chain(
       validate_task,
-      pre_training_enabled(),
+      test_scope_enabled.override(task_id="pre_training_enabled")(
+          TestScope.PRE_TRAINING.value
+      ),
       trigger_pre_training,
       github_callback_pre_training,
   )
   chain(
       validate_task,
-      post_training_enabled(),
+      test_scope_enabled.override(task_id="post_training_enabled")(
+          TestScope.POST_TRAINING.value
+      ),
       trigger_post_training,
       github_callback_post_training,
   )
