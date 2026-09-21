@@ -273,6 +273,10 @@ with models.DAG(
               priority="medium",
               max_restart=3,
               use_gcluster=True,
+              # Pathways workers outlive the JobSet when the cluster garbage
+              # collector is backlogged, stranding the v5p chips and timing
+              # this sensor out on a run that actually succeeded (b/563221051).
+              reclaim_leftover_pods=True,
           ).run(skip_post_process=True)
 
           to_hf_flags = mode_test_config.get("to_hf_flags", "false true")

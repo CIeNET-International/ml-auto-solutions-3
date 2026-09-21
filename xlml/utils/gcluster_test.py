@@ -842,6 +842,209 @@ class GclusterTest(unittest.TestCase):
     mock_get_custom.assert_called_once()
     self.assertFalse(completed)
 
+  def _pod(self, name, phase):
+    """Builds a mock pod in the given phase.
+
+    `deletion_timestamp` has to be set explicitly: every attribute of a
+    MagicMock is truthy by default, which would make each pod look like it is
+    already terminating.
+    """
+    pod = mock.MagicMock()
+    pod.metadata.name = name
+    pod.metadata.deletion_timestamp = None
+    pod.status.phase = phase
+    pod.status.container_statuses = []
+    return pod
+
+  @mock.patch("xlml.utils.gke.get_workload_terminal_status")
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_wait_for_workload_completion_does_not_reclaim_by_default(
+      self, mock_get_client, mock_list_pods, mock_terminal_status
+  ):
+    """Leaves the shared sensor untouched unless a DAG opts in."""
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = [self._pod("test-workload-worker-0-0-def", "Running")]
+    mock_list_pods.return_value = mock_pod_list
+    mock_core_api = mock.MagicMock()
+    mock_get_client.return_value = mock_core_api
+
+    completed = gke.wait_for_workload_completion.function(
+        workload_id="test-workload",
+        project_id="test-project",
+        region="us-central1",
+        cluster_name="test-cluster",
+    )
+    self.assertFalse(completed)
+    mock_terminal_status.assert_not_called()
+    mock_core_api.delete_namespaced_pod.assert_not_called()
+
+  @mock.patch("xlml.utils.gke.print_pod_logs")
+  @mock.patch("xlml.utils.gke.get_workload_terminal_status")
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_wait_for_workload_completion_reclaims_leftover_pods(
+      self,
+      mock_get_client,
+      mock_list_pods,
+      mock_terminal_status,
+      mock_print_logs,
+  ):
+    """Completes and frees accelerators when the GC has not collected pods.
+
+    Regression test for b/563221051: once the workload is terminal, pods left
+    in phase Running must not keep the sensor waiting until it times out.
+    """
+    head_pod = self._pod("test-workload-pathways-head-0-0-abc", "Succeeded")
+    worker_pod = self._pod("test-workload-worker-0-0-def", "Running")
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = [head_pod, worker_pod]
+    mock_list_pods.return_value = mock_pod_list
+    mock_terminal_status.return_value = gke.WORKLOAD_COMPLETED
+    mock_core_api = mock.MagicMock()
+    mock_get_client.return_value = mock_core_api
+
+    completed = gke.wait_for_workload_completion.function(
+        workload_id="test-workload",
+        project_id="test-project",
+        region="us-central1",
+        cluster_name="test-cluster",
+        reclaim_leftover_pods=True,
+    )
+    self.assertTrue(completed)
+    mock_core_api.delete_namespaced_pod.assert_called_once_with(
+        name="test-workload-worker-0-0-def", namespace="default"
+    )
+    # Only the pod that already stopped gets its logs printed; the worker was
+    # just asked to terminate.
+    mock_print_logs.assert_called_once()
+    self.assertIs(mock_print_logs.call_args.args[1], head_pod)
+
+  @mock.patch("xlml.utils.gke.print_pod_logs")
+  @mock.patch("xlml.utils.gke.get_workload_terminal_status")
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_wait_for_workload_completion_reclaims_on_failure(
+      self,
+      mock_get_client,
+      mock_list_pods,
+      mock_terminal_status,
+      mock_print_logs,
+  ):
+    """Still frees accelerators when the workload reached a failed state."""
+    worker_pod = self._pod("test-workload-worker-0-0-def", "Running")
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = [worker_pod]
+    mock_list_pods.return_value = mock_pod_list
+    mock_terminal_status.return_value = gke.WORKLOAD_FAILED
+    mock_core_api = mock.MagicMock()
+    mock_get_client.return_value = mock_core_api
+
+    with self.assertRaises(AirflowFailException):
+      gke.wait_for_workload_completion.function(
+          workload_id="test-workload",
+          project_id="test-project",
+          region="us-central1",
+          cluster_name="test-cluster",
+          reclaim_leftover_pods=True,
+      )
+    mock_core_api.delete_namespaced_pod.assert_called_once_with(
+        name="test-workload-worker-0-0-def", namespace="default"
+    )
+
+  @mock.patch("xlml.utils.gke.get_workload_terminal_status", return_value=None)
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_wait_for_workload_completion_reclaim_falls_back_to_pods(
+      self, mock_get_client, mock_list_pods, mock_terminal_status
+  ):
+    """Keeps the original pod-based logic while the workload is not terminal."""
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = [self._pod("test-workload-worker-0-0-def", "Running")]
+    mock_list_pods.return_value = mock_pod_list
+    mock_core_api = mock.MagicMock()
+    mock_get_client.return_value = mock_core_api
+
+    completed = gke.wait_for_workload_completion.function(
+        workload_id="test-workload",
+        project_id="test-project",
+        region="us-central1",
+        cluster_name="test-cluster",
+        reclaim_leftover_pods=True,
+    )
+    self.assertFalse(completed)
+    mock_core_api.delete_namespaced_pod.assert_not_called()
+
+  def test_get_workload_jobset_uses_jobset_api_group(self):
+    """Reads the CRD group `jobset.x-k8s.io`, not the label prefix."""
+    mock_custom_api = mock.MagicMock()
+
+    gke.get_workload_jobset(mock_custom_api, "test-workload")
+    mock_custom_api.get_namespaced_custom_object.assert_called_once_with(
+        group="jobset.x-k8s.io",
+        version="v1alpha2",
+        namespace="default",
+        plural="jobsets",
+        name="test-workload",
+    )
+
+  @mock.patch("xlml.utils.gke.get_workload_job")
+  @mock.patch("xlml.utils.gke.get_batch_api_client")
+  @mock.patch("xlml.utils.gke.get_workload_jobset")
+  @mock.patch("xlml.utils.gke.get_custom_objects_api_client")
+  def test_get_workload_terminal_status_prefers_jobset(
+      self, mock_get_custom, mock_get_jobset, mock_get_batch, mock_get_job
+  ):
+    """Treats the JobSet as authoritative and ignores the per-replica Jobs."""
+    mock_get_jobset.return_value = {
+        "status": {"conditions": [{"type": "Completed", "status": "True"}]}
+    }
+
+    status = gke.get_workload_terminal_status(
+        project_id="test-project",
+        region="us-central1",
+        cluster_name="test-cluster",
+        workload_id="test-workload",
+    )
+    self.assertEqual(status, gke.WORKLOAD_COMPLETED)
+    mock_get_batch.assert_not_called()
+    mock_get_job.assert_not_called()
+
+  def test_delete_leftover_pods_skips_pods_not_holding_resources(self):
+    """Skips pods that already stopped or are already terminating."""
+    succeeded_pod = self._pod("succeeded-pod", "Succeeded")
+    terminating_pod = self._pod("terminating-pod", "Running")
+    terminating_pod.metadata.deletion_timestamp = "2026-09-18T02:06:15Z"
+    running_pod = self._pod("running-pod", "Running")
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = [succeeded_pod, terminating_pod, running_pod]
+    mock_core_api = mock.MagicMock()
+
+    deleted = gke.delete_leftover_pods(mock_core_api, mock_pod_list)
+    self.assertEqual(deleted, 1)
+    mock_core_api.delete_namespaced_pod.assert_called_once_with(
+        name="running-pod", namespace="default"
+    )
+
+  def test_delete_leftover_pods_tolerates_api_errors(self):
+    """Swallows API errors so a best-effort cleanup cannot fail the task."""
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = [
+        self._pod("forbidden-pod", "Running"),
+        self._pod("already-gone-pod", "Running"),
+        self._pod("running-pod", "Running"),
+    ]
+    mock_core_api = mock.MagicMock()
+    mock_core_api.delete_namespaced_pod.side_effect = [
+        kubernetes.client.exceptions.ApiException(status=403),
+        kubernetes.client.exceptions.ApiException(status=404),
+        None,
+    ]
+
+    deleted = gke.delete_leftover_pods(mock_core_api, mock_pod_list)
+    self.assertEqual(deleted, 1)
+    self.assertEqual(mock_core_api.delete_namespaced_pod.call_count, 3)
+
   @mock.patch("xlml.utils.gke.get_authenticated_client")
   @mock.patch("kubernetes.client.CustomObjectsApi")
   @mock.patch("kubernetes.client.BatchV1Api")

@@ -81,6 +81,7 @@ def get_gke_config(
     mounts: str | Iterable[str] | None = None,
     pathways_gcs_location: str = "",
     restart_on_exit_codes: Iterable[int] | None = None,
+    reclaim_leftover_pods: bool = False,
 ) -> task.GclusterTask:
   pass
 
@@ -112,8 +113,12 @@ def get_gke_config(
     pathways_gcs_location: str = "",
     xpk_branch: str = xpk.MAIN_BRANCH,
     restart_on_exit_codes: Iterable[int] | None = None,
+    reclaim_leftover_pods: bool = False,
 ) -> task.GclusterTask | task.XpkTask:
-  """Constructs a GKE task for either Cluster Toolkit (gcluster) or XPK."""
+  """Constructs a GKE task for either Cluster Toolkit (gcluster) or XPK.
+
+  `reclaim_leftover_pods` is only honoured when `use_gcluster` is True.
+  """
   job_gcp_config = gcp_config.GCPConfig(
       project_name=cluster.project,
       zone=cluster.zone,
@@ -167,6 +172,7 @@ def get_gke_config(
         pathways_gcs_location=pathways_gcs_location,
         mounts=mounts,
         queue=cluster.queue,
+        reclaim_leftover_pods=reclaim_leftover_pods,
     )
     return task.GclusterTask(
         runner_config=runner_config,

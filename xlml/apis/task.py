@@ -384,6 +384,8 @@ class GclusterRunnerConfig(RunnerConfig):
   mounts: str | Iterable[str] | None = None
   queue: str = "default"
   pathways_gcs_location: str = ""
+  # Opt in per DAG: see `gke.wait_for_workload_completion` and b/563221051.
+  reclaim_leftover_pods: bool = False
 
 
 @dataclasses.dataclass
@@ -616,6 +618,7 @@ class GclusterRunner(Runner):
         region=gke.zone_to_region(self.configs.task_gcp_config.zone),
         cluster_name=self.configs.task_test_config.cluster_name,
         namespace=self.configs.task_test_config.namespace,
+        reclaim_leftover_pods=self.configs.reclaim_leftover_pods,
     )
 
   def cleanup_workload(self, tear_down_of: BaseOperator) -> DAGNode:

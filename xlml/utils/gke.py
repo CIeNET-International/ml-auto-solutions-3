@@ -146,7 +146,7 @@ def get_workload_jobset(
   """Get the Kubernetes JobSet CRD object for a given workload."""
   try:
     return custom_api.get_namespaced_custom_object(
-        group="jobset.sigs.k8s.io",
+        group="jobset.x-k8s.io",
         version="v1alpha2",
         namespace=namespace,
         plural="jobsets",
@@ -249,7 +249,10 @@ def log_workload_pod_statuses(
           )
         case state if state.terminated:
           t = state.terminated
-          logging.error(
+          # A clean exit is not an error. Logging it at ERROR makes successful
+          # runs look like failures in the Airflow task log.
+          log = logging.info if t.exit_code == 0 else logging.error
+          log(
               f"  Container '{container_status.name}' TERMINATED. "
               f"Reason: {t.reason}. Exit Code: {t.exit_code}"
           )
@@ -263,6 +266,119 @@ LOGGING_URL_FORMAT = (
     "&customFacets=&limitCustomFacetWidth=true"
     "&filters=text:job-name%3D{workload_id}"
 )
+
+# Terminal states of a workload, as reported by its JobSet or Job conditions.
+WORKLOAD_COMPLETED = "completed"
+WORKLOAD_FAILED = "failed"
+
+# Pod phases that mean the pod is still holding on to its node's resources.
+_LIVE_POD_PHASES = frozenset({"Pending", "Running", "Unknown"})
+
+
+def _condition_is_active(conditions: Any, condition_type: str) -> bool:
+  """Checks whether a condition of the given type is set and not False.
+
+  Handles both the dict shape returned for CRDs (JobSet) and the attribute
+  shape of the typed client (Job).
+  """
+  for condition in conditions or []:
+    if isinstance(condition, dict):
+      c_type = condition.get("type")
+      c_status = condition.get("status", "True")
+    else:
+      c_type = getattr(condition, "type", None)
+      c_status = getattr(condition, "status", "True")
+    if c_type == condition_type and c_status != "False":
+      return True
+  return False
+
+
+def get_workload_terminal_status(
+    project_id: str,
+    region: str,
+    cluster_name: str,
+    workload_id: str,
+    namespace: str = "default",
+) -> Optional[str]:
+  """Returns the workload's terminal status, or None if it is still running.
+
+  The JobSet is authoritative when one exists: for Pathways workloads the
+  per-replica Jobs (`{workload}-worker-0`, `{workload}-pathways-head-0`) carry
+  conditions that say nothing about the workload as a whole. Only workloads
+  without a JobSet fall back to the batch Job.
+  """
+  custom_api = get_custom_objects_api_client(project_id, region, cluster_name)
+  jobset = get_workload_jobset(custom_api, workload_id, namespace=namespace)
+  if jobset:
+    conditions = (jobset.get("status") or {}).get("conditions")
+    if _condition_is_active(conditions, "Failed"):
+      return WORKLOAD_FAILED
+    # JobSet spells this condition "Completed"; a batch Job uses "Complete".
+    if _condition_is_active(conditions, "Completed"):
+      return WORKLOAD_COMPLETED
+    return None
+
+  batch_api = get_batch_api_client(project_id, region, cluster_name)
+  job = get_workload_job(batch_api, workload_id, namespace=namespace)
+  if job and job.status:
+    conditions = job.status.conditions
+    if _condition_is_active(conditions, "Failed"):
+      return WORKLOAD_FAILED
+    if _condition_is_active(conditions, "Complete"):
+      return WORKLOAD_COMPLETED
+  return None
+
+
+def delete_leftover_pods(
+    core_api: kubernetes.client.CoreV1Api,
+    pods: kubernetes.client.V1PodList,
+    namespace: str = "default",
+) -> int:
+  """Deletes pods that are still live, and returns how many were deleted.
+
+  This exists because a cascade deletion issued by the JobSet controller can
+  sit in the cluster garbage collector's queue for a long time when the
+  control plane is congested, leaving accelerators occupied by pods that
+  Kubernetes has already decided to delete. Deleting the pods directly goes
+  through the API server instead and is not subject to that backlog.
+
+  The caller MUST have confirmed that the workload is in a terminal state
+  first: Pathways workers run with `restartPolicy: OnFailure` and a very large
+  `backoffLimit`, so deleting them mid-run would disrupt a legitimate restart.
+
+  Deletion is best effort. Failures are logged and swallowed so that a missing
+  permission or an already-collected pod cannot fail the task.
+  """
+  deleted = 0
+  for pod in (pods.items if pods else None) or []:
+    if pod.status.phase not in _LIVE_POD_PHASES:
+      continue
+    if pod.metadata.deletion_timestamp:
+      logging.info(
+          "Pod %s is already terminating.",
+          pod.metadata.name,
+      )
+      continue
+    try:
+      # The default grace period is deliberately kept: force-deleting a TPU
+      # pod can leave the accelerator held by a process the kubelet has
+      # stopped tracking.
+      core_api.delete_namespaced_pod(
+          name=pod.metadata.name, namespace=namespace
+      )
+    except kubernetes.client.exceptions.ApiException as e:
+      if e.status == 404:
+        continue
+      logging.warning("Could not delete pod %s: %s", pod.metadata.name, e)
+      continue
+    deleted += 1
+    logging.info(
+        "Deleted leftover pod %s (phase %s) left behind after the workload"
+        " reached a terminal state.",
+        pod.metadata.name,
+        pod.status.phase,
+    )
+  return deleted
 
 
 @task.sensor(poke_interval=60, timeout=7200, mode="reschedule")
@@ -311,11 +427,68 @@ def wait_for_workload_completion(
     region: str,
     cluster_name: str,
     namespace: str = "default",
+    reclaim_leftover_pods: bool = False,
 ) -> bool:
-  """Wait for workload to finish successfully."""
+  """Wait for workload to finish successfully.
+
+  Args:
+    workload_id: name of the JobSet or Job to watch.
+    project_id: project hosting the cluster.
+    region: region of the cluster.
+    cluster_name: name of the GKE cluster.
+    namespace: namespace the workload runs in.
+    reclaim_leftover_pods: opt in to deciding completion from the JobSet/Job
+      status and deleting the pods that outlive it. Off by default: this sensor
+      is shared by every GKE DAG, and the flag changes both when the sensor
+      succeeds and whether pods survive it. See b/563221051.
+  """
   core_api = get_core_api_client(project_id, region, cluster_name)
   pods = list_workload_pods(core_api, workload_id, namespace=namespace)
   log_workload_pod_statuses(workload_id, pods)
+
+  # Decide from the JobSet/Job rather than from the pods. A cascade deletion
+  # issued by the JobSet controller can sit in the cluster garbage collector's
+  # queue for tens of minutes when the control plane is congested
+  # (see b/563221051). While it does, the leftover pods stay in phase Running
+  # and keep the accelerators busy, and the pod-based check below would keep
+  # waiting until this sensor times out -- reporting a failure for a workload
+  # that actually succeeded.
+  if reclaim_leftover_pods:
+    terminal_status = get_workload_terminal_status(
+        project_id=project_id,
+        region=region,
+        cluster_name=cluster_name,
+        workload_id=workload_id,
+        namespace=namespace,
+    )
+    if terminal_status is not None:
+      logging.info(
+          "Workload %s reached terminal state '%s'.",
+          workload_id,
+          terminal_status,
+      )
+      # Release the accelerators now instead of waiting for the GC.
+      delete_leftover_pods(core_api, pods, namespace=namespace)
+
+      # Only dump logs for pods that have already stopped. The live ones were
+      # just asked to terminate, and for Pathways the still-running pods are
+      # the workers, whose logs are large and say little about the outcome.
+      for pod in pods.items:
+        if pod.status.phase not in _LIVE_POD_PHASES:
+          print_pod_logs(core_api, pod)
+
+      if terminal_status == WORKLOAD_FAILED:
+        url = LOGGING_URL_FORMAT.format(
+            project=project_id,
+            region=region,
+            cluster=cluster_name,
+            namespace=namespace,
+            workload_id=workload_id,
+        )
+        raise AirflowFailException(
+            f"Workload {workload_id} failed. Logs: {url}"
+        )
+      return True
 
   if not pods.items:
     batch_api = get_batch_api_client(project_id, region, cluster_name)
