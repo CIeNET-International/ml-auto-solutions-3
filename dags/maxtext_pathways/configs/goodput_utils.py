@@ -126,6 +126,36 @@ def check_workload_goodput(
       logging.info(f"Badput due to {badput_type.name}: {percentage:.2f}%")
 
 
+@task
+def report_workload_goodput(
+    workload_id: str,
+    project_id: str,
+    using_pathways: bool = False,
+) -> dict:
+  """Queries GoodputCalculator at the end of a training run and logs goodput/badput breakdown."""
+  os.environ["GOOGLE_CLOUD_PROJECT"] = project_id
+  calculator = goodput.GoodputCalculator(
+      job_name=workload_id,
+      logger_name=f"goodput_{workload_id}",
+      using_pathways=using_pathways,
+  )
+  job_goodput, badput_breakdown, last_step = calculator.get_job_goodput(
+      include_badput_breakdown=True
+  )
+  logging.info(f"[{workload_id}] Last step recorded: {last_step}")
+  logging.info(f"[{workload_id}] Computed Goodput (%): {job_goodput:.2f}%")
+  logging.info(f"[{workload_id}] Badput Breakdown: {badput_breakdown}")
+
+  assert (
+      last_step is not None and last_step >= 0
+  ), f"Expected recorded steps for {workload_id}, got last_step={last_step}"
+  return {
+      "job_goodput": job_goodput,
+      "badput_breakdown": str(badput_breakdown),
+      "last_step": last_step,
+  }
+
+
 @task.sensor(poke_interval=30, timeout=3600, mode="poke")
 def elastic_goodput(workload_id: str, project_id: str):
   # Ensure Cloud Logging project and credentials are available
