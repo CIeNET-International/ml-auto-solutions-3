@@ -337,14 +337,30 @@ def _find_target_pod_node(
   if last_node:
     target_pod, target_node = sorted_pairs[-1]
 
+  # The node's own topology label is the authoritative source for its zone.
+  # The cluster location cannot be used as a substitute: for a regional
+  # cluster it is a region, and even for a zonal cluster the caller may have
+  # passed a region (gcluster clusters carry a region in their zone field).
+  target_zone = None
+  try:
+    node = core_api.read_node(name=target_node)
+    labels = (node.metadata.labels or {}) if node.metadata else {}
+    target_zone = labels.get("topology.kubernetes.io/zone") or labels.get(
+        "failure-domain.beta.kubernetes.io/zone"
+    )
+  except Exception as e:  # pylint: disable=broad-exception-caught
+    logging.warning(f"Could not read zone label from node {target_node}: {e}")
+
   logging.info("Identified Pod for node deletion:")
   logging.info(f"  Pod Name:   {target_pod}")
   logging.info(f"  Node Name:  {target_node}")
+  logging.info(f"  Node Zone:  {target_zone}")
   logging.info("-" * 72)
 
   delete_info = {
       "pod": target_pod,
       "node": target_node,
+      "zone": target_zone,
   }
   return delete_info
 
@@ -369,11 +385,15 @@ def delete_node(
       namespace=namespace,
   )
   node_name = delete_info["node"]
+  # Prefer the zone reported by the node itself. `zone` is derived from the
+  # cluster config, which holds a region for regional/gcluster clusters and
+  # would be rejected by the Compute Engine API.
+  node_zone = delete_info.get("zone") or zone
   # Delete the specified compute instance.
   if dry_run:
     logging.info(
         f"DRY RUN: Would delete node: {node_name}"
-        f"in zone: {zone} (project: {project})"
+        f"in zone: {node_zone} (project: {project})"
     )
     return
 
@@ -384,7 +404,7 @@ def delete_node(
 
     # Delete the instance
     operation = instances_client.delete(
-        project=project, zone=zone, instance=node_name
+        project=project, zone=node_zone, instance=node_name
     )
 
     logging.info(f"Deletion operation started for node: {node_name}")
