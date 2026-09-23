@@ -30,9 +30,9 @@ from airflow.sensors.external_task import ExternalTaskSensor
 from airflow.utils.session import provide_session
 from airflow.utils.task_group import TaskGroup
 from dags.common import test_owner
+from dags.common.goodput_utils import check_workload_goodput
 from dags.common.quarantined_tests import safe_get_from_variable
 from dags.common.vm_resource import GkeClusters
-from dags.maxtext_pathways.configs.goodput_utils import check_workload_goodput
 from dags.multipod.configs import gke_config
 
 HF_TOKEN = safe_get_from_variable("HF_TOKEN", None)
