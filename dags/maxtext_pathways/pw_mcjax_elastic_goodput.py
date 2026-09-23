@@ -414,6 +414,7 @@ def create_elastic_goodput_dag(
     )(
         workload_id=calculated_params["workload_id"],
         project_id=fetched_params["project"],
+        using_pathways=True,
     )
 
     clean_up_recipe = xpk.clean_up_workload.override(
