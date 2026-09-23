@@ -266,6 +266,35 @@ class GkeClusters:
       project=Project.CLOUD_TPU_MULTIPOD_DEV.value,
       zone=Zone.EUROPE_WEST4_B.value,
   )
+  # Cluster Toolkit (gcluster) variants of the two v5p-8 clusters above.
+  #
+  # Both underlying clusters are regional (location europe-west4, nodes in
+  # europe-west4-b). The XPK CLI resolves the cluster itself and so tolerates a
+  # zone, but gcluster passes `zone` straight through to
+  # `gcloud container clusters get-credentials --location=`, which does not.
+  # The originals are kept as-is because five XPK-only DAG files still use
+  # them; duplicating is safer than mutating them in place.
+  #
+  # `multislice-queue` is the only LocalQueue on either cluster, and matches
+  # the queue the XPK CLI already labels these workloads with.
+  TPU_V5P_8_GCLUSTER = GkeClusterConfig(
+      name="v5p-8-bodaborg-europe-west4-b",
+      device_version=TpuVersion.V5P,
+      core_count=8,
+      project=Project.CLOUD_TPU_MULTIPOD_DEV.value,
+      zone=Region.EUROPE_WEST4.value,
+      namespace="default",
+      queue="multislice-queue",
+  )
+  TPU_V5P_8_GCLUSTER_V2 = GkeClusterConfig(
+      name="auto-v5p-8-bodaborg",
+      device_version=TpuVersion.V5P,
+      core_count=8,
+      project=Project.CLOUD_TPU_MULTIPOD_DEV.value,
+      zone=Region.EUROPE_WEST4.value,
+      namespace="default",
+      queue="multislice-queue",
+  )
   TPU_V5P_128_CLUSTER = GkeClusterConfig(
       name="bodaborg-v5p-nap",
       device_version=TpuVersion.V5P,
