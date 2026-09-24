@@ -14,6 +14,7 @@
 
 """TaskGroupWithTimeout: timeout enforcement for Airflow TaskGroups."""
 
+import os
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -26,8 +27,9 @@ from airflow.operators.python import PythonOperator, get_current_context
 from airflow.sensors.base import BaseSensorOperator
 from airflow.utils.context import Context
 from airflow.utils.state import TaskInstanceState
-from airflow.utils.task_group import TaskGroup
 from airflow.utils.timeout import timeout as AirflowTimeout
+from airflow.exceptions import AirflowTaskTimeout
+from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
 
@@ -223,9 +225,11 @@ class TaskGroupWithTimeout(TaskGroup):
               f"effective timeout: {effective_timeout_sec}s"
           )
 
-          # Group-budget exhaustion is enforced by the `remaining <= 0` check
-          # above on the next retry; let AirflowTaskTimeout propagate normally.
-          with AirflowTimeout(seconds=int(effective_timeout_sec)):
+          with TaskTimeout(
+              group_deadline=deadline,
+              seconds=float(effective_timeout_sec),
+              error_message=f"{group_name}; task: '{task_instance.task_id}'",
+          ):
             return original_execute(task, context)
 
         node.execute = wrapped_execute
@@ -257,3 +261,42 @@ def _determine_task_timeout(task: BaseOperator) -> float:
     return min(timeout_1, timeout_2)
 
   return timeout_1
+
+
+class TaskTimeout(AirflowTimeout):
+  """An AirflowTimeout that fails outright instead of retrying once the
+  shared group deadline has passed, so a task's own retries can't run past
+  the group's timeout budget.
+
+  Args:
+    group_deadline: Absolute time by which the whole group must finish.
+    seconds: Timeout duration for this task, in seconds.
+    error_message: Message prefix used when the timeout fires.
+  """
+
+  def __init__(
+      self,
+      group_deadline: datetime,
+      seconds: float,
+      error_message: str,
+  ):
+    super().__init__(seconds=seconds, error_message=error_message)
+    self.group_deadline = group_deadline
+
+  def handle_timeout(self, *args):
+    """Log information and raises proper exception."""
+    # Usually self.seconds should be less of at least equal to remaining, that
+    # is, handle_timeout would be called no later than group_deadline. However,
+    # the time to active the timeout may be delayed due to scheduling, so put
+    # a check to capture the condition that the group_deadline has already
+    # passed, and no need to wait and retry.
+    if self.group_deadline <= datetime.now(timezone.utc):
+      raise AirflowFailException(
+          f"{self.error_message}; exceed group timeout, "
+          f"failing without retry."
+      )
+
+    self.log.error("Process timed out, PID: %s", str(os.getpid()))
+    raise AirflowTaskTimeout(
+        f"{self.error_message}; task will retry if retry is allowed."
+    )
