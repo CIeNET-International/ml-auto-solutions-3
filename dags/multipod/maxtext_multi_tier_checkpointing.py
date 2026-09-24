@@ -53,7 +53,7 @@ with models.DAG(
   }
   clusters = {
       # accelerator: cluster name
-      "v5p-8": GkeClusters.TPU_V5P_8_GCLUSTER_V2,
+      "v5p-8": GkeClusters.TPU_V5P_8_CLUSTER_V2,
   }
 
   for mode, image in docker_images:
@@ -65,7 +65,6 @@ with models.DAG(
             f" {base_output_directory} {dataset_path}",
         )
         maxtext_v5p_configs_test = gke_config.get_gke_config(
-            use_gcluster=True,
             num_slices=slice_num,
             cluster=clusters[accelerator],
             time_out_in_min=60,
