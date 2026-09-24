@@ -196,6 +196,7 @@ def get_gke_config_with_interrupt(
     test_owner: str,
     run_model_cmds: Iterable[str],
     expect_reach_to_step: int,
+    use_gcluster: bool = False,
     cluster: GkeClusterConfig = GkeClusters.TPU_V4_8_MAXTEXT_CLUSTER,
     num_slices: int = 1,
     dataset_name: metric_config.DatasetOption = (
@@ -214,8 +215,12 @@ def get_gke_config_with_interrupt(
     ramdisk_directory: str = "",
     mtc_enabled: bool = False,
     use_pathways: bool = False,
+    gcluster_version: str = gcluster.DEFAULT_GCLUSTER_VERSION,
+    mounts: str | Iterable[str] | None = None,
+    pathways_gcs_location: str = "",
     restart_on_exit_codes: Iterable[int] | None = None,
-) -> task.XpkNodeInterruptionTask:
+) -> task.GclusterNodeInterruptionTask | task.XpkNodeInterruptionTask:
+  """Constructs an interruption task for either Cluster Toolkit (gcluster) or XPK."""
   job_gcp_config = gcp_config.GCPConfig(
       project_name=cluster.project,
       zone=cluster.zone,
@@ -238,6 +243,7 @@ def get_gke_config_with_interrupt(
       cluster_name=cluster.name,
       docker_image=docker_image,
       namespace=cluster.namespace,
+      mounts=mounts if use_gcluster else None,
   )
   job_metric_config = user_specified_job_metric_config
   if job_metric_config is None:
@@ -251,6 +257,29 @@ def get_gke_config_with_interrupt(
         )
         if base_output_directory and metric_aggregation_strategy
         else None
+    )
+
+  if use_gcluster:
+    runner_config = task.GclusterRunnerConfig(
+        task_test_config=job_test_config,
+        task_gcp_config=job_gcp_config,
+        task_metric_config=job_metric_config,
+        priority=priority,
+        max_restart=max_restart,
+        restart_on_exit_codes=restart_on_exit_codes,
+        gcluster_version=gcluster_version,
+        ramdisk_directory=ramdisk_directory,
+        mtc_enabled=mtc_enabled,
+        use_pathways=use_pathways,
+        pathways_gcs_location=pathways_gcs_location,
+        mounts=mounts,
+        queue=cluster.queue,
+    )
+    return task.GclusterNodeInterruptionTask(
+        runner_config=runner_config,
+        expect_reach_to_step=expect_reach_to_step,
+        last_node=last_node,
+        check_file_exists=check_file_exists,
     )
 
   runner_config = task.XpkRunnerConfig(
