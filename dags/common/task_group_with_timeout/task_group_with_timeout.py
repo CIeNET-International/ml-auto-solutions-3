@@ -284,6 +284,12 @@ class TaskTimeout(AirflowTimeout):
     self.group_deadline = group_deadline
 
   def handle_timeout(self, *args):
+    """Log information and raises proper exception."""
+    # Usually self.seconds should be less of at least equal to remaining, that
+    # is, handle_timeout would be called no later than group_deadline. However,
+    # the time to active the timeout may be delayed due to scheduling, so put
+    # a check to capture the condition that the group_deadline has already
+    # passed, and no need to wait and retry.
     if self.group_deadline <= datetime.now(timezone.utc):
       raise AirflowFailException(
           f"{self.error_message}; exceed group timeout, "
