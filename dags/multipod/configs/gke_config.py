@@ -220,7 +220,7 @@ def get_gke_config_with_interrupt(
     pathways_gcs_location: str = "",
     restart_on_exit_codes: Iterable[int] | None = None,
 ) -> task.GclusterNodeInterruptionTask | task.XpkNodeInterruptionTask:
-  """Constructs an interruption GKE task for gcluster or XPK."""
+  """Constructs an interruption task for either Cluster Toolkit (gcluster) or XPK."""
   job_gcp_config = gcp_config.GCPConfig(
       project_name=cluster.project,
       zone=cluster.zone,
