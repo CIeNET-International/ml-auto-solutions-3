@@ -264,10 +264,9 @@ def _determine_task_timeout(task: BaseOperator) -> float:
 
 
 class TaskTimeout(AirflowTimeout):
-  """An AirflowTimeout that skips the retry when the group budget is used up.
-
-  On timeout, retry only if there is still time left before `group_deadline`;
-  otherwise fail the task immediately.
+  """An AirflowTimeout that fails outright instead of retrying once the
+  shared group deadline has passed, so a task's own retries can't run past
+  the group's timeout budget.
 
   Args:
     group_deadline: Absolute time by which the whole group must finish.
@@ -285,11 +284,6 @@ class TaskTimeout(AirflowTimeout):
     self.group_deadline = group_deadline
 
   def handle_timeout(self, *args):
-    """Handle timeout for the task.
-
-    If the group deadline has passed, fail the task without retrying.
-    Otherwise, raise an AirflowTaskTimeout to allow retrying if the task is retryable.
-    """
     if self.group_deadline <= datetime.now(timezone.utc):
       raise AirflowFailException(
           f"{self.error_message}; exceed group timeout, "
