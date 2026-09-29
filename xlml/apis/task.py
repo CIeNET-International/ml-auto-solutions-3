@@ -502,7 +502,7 @@ class XpkRunner(Runner):
       check_file_exists: bool,
   ) -> DAGNode:
     with TaskGroup(group_id="wait_workload") as group:
-      wait_reach_to_step = xpk.wait_for_workload_reach_step.override(
+      wait_reach_to_step = gke.wait_for_workload_reach_step.override(
           task_id="wait_for_workload_reach_step"
       )(
           workload_id=self.workload_id,
@@ -544,7 +544,7 @@ class XpkRunner(Runner):
       return group
 
   def interrupt_workload(self, is_targeting_on_last_node: bool) -> DAGNode:
-    return xpk.delete_node.override(
+    return gke.delete_node.override(
         owner=self.configs.task_test_config.task_owner,
         trigger_rule="none_failed",
     )(
@@ -649,7 +649,7 @@ class GclusterRunner(Runner):
       check_file_exists: bool,
   ) -> DAGNode:
     with TaskGroup(group_id="wait_workload") as group:
-      wait_reach_to_step = xpk.wait_for_workload_reach_step.override(
+      wait_reach_to_step = gke.wait_for_workload_reach_step.override(
           task_id="wait_for_workload_reach_step"
       )(
           workload_id=self.workload_id,
@@ -691,7 +691,7 @@ class GclusterRunner(Runner):
       return group
 
   def interrupt_workload(self, is_targeting_on_last_node: bool) -> DAGNode:
-    return xpk.delete_node.override(
+    return gke.delete_node.override(
         owner=self.configs.task_test_config.task_owner,
         trigger_rule="none_failed",
     )(

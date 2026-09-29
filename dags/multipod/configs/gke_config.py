@@ -189,6 +189,72 @@ def get_gke_config(
   )
 
 
+@overload
+def get_gke_config_with_interrupt(
+    time_out_in_min: int,
+    test_name: str,
+    docker_image: str,
+    test_owner: str,
+    run_model_cmds: Iterable[str],
+    expect_reach_to_step: int,
+    use_gcluster: Literal[False] = False,
+    cluster: GkeClusterConfig = GkeClusters.TPU_V4_8_MAXTEXT_CLUSTER,
+    num_slices: int = 1,
+    dataset_name: metric_config.DatasetOption = (
+        metric_config.DatasetOption.XLML_DATASET
+    ),
+    dataset_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
+    composer_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
+    base_output_directory: str = None,
+    metric_aggregation_strategy: metric_config.AggregationStrategy = None,
+    user_specified_job_metric_config: metric_config.MetricConfig = None,
+    last_node: bool = False,
+    check_file_exists: bool = False,
+    priority: str = "high",
+    max_restart: int = 0,
+    xpk_branch: str = xpk.MAIN_BRANCH,
+    ramdisk_directory: str = "",
+    mtc_enabled: bool = False,
+    use_pathways: bool = False,
+    restart_on_exit_codes: Iterable[int] | None = None,
+) -> task.XpkNodeInterruptionTask:
+  pass
+
+
+@overload
+def get_gke_config_with_interrupt(
+    time_out_in_min: int,
+    test_name: str,
+    docker_image: str,
+    test_owner: str,
+    run_model_cmds: Iterable[str],
+    expect_reach_to_step: int,
+    use_gcluster: Literal[True],
+    cluster: GkeClusterConfig = GkeClusters.TPU_V4_8_MAXTEXT_CLUSTER,
+    num_slices: int = 1,
+    dataset_name: metric_config.DatasetOption = (
+        metric_config.DatasetOption.XLML_DATASET
+    ),
+    dataset_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
+    composer_project: str = Project.CLOUD_ML_AUTO_SOLUTIONS.value,
+    base_output_directory: str = None,
+    metric_aggregation_strategy: metric_config.AggregationStrategy = None,
+    user_specified_job_metric_config: metric_config.MetricConfig = None,
+    last_node: bool = False,
+    check_file_exists: bool = False,
+    priority: str = "high",
+    max_restart: int = 0,
+    ramdisk_directory: str = "",
+    mtc_enabled: bool = False,
+    use_pathways: bool = False,
+    gcluster_version: str = gcluster.DEFAULT_GCLUSTER_VERSION,
+    mounts: str | Iterable[str] | None = None,
+    pathways_gcs_location: str = "",
+    restart_on_exit_codes: Iterable[int] | None = None,
+) -> task.GclusterNodeInterruptionTask:
+  pass
+
+
 def get_gke_config_with_interrupt(
     time_out_in_min: int,
     test_name: str,
