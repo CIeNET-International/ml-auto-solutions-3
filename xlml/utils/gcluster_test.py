@@ -1213,6 +1213,7 @@ class GclusterTest(unittest.TestCase):
         cluster_name="test-cluster",
     )
     self.assertTrue(started)
+    mock_get_client.assert_called_once()
     mock_get_custom.assert_not_called()
 
   @mock.patch("xlml.utils.gke.print_pod_logs")
@@ -1293,6 +1294,8 @@ class GclusterTest(unittest.TestCase):
         cluster_name="test-cluster",
     )
     self.assertFalse(completed)
+    mock_get_client.assert_called_once()
+    mock_get_custom.assert_called_once()
 
     # When the final attempt (attempt 3) itself fails, it should raise.
     stale_failed_pod.metadata.labels["jobset.sigs.k8s.io/restart-attempt"] = "3"
@@ -1347,6 +1350,7 @@ class GclusterTest(unittest.TestCase):
         cluster_name="test-cluster",
     )
     self.assertTrue(completed)
+    mock_get_custom.assert_called_once()
     mock_print_pod_logs.assert_called_once_with(
         mock_get_client.return_value, succeeded_worker
     )
@@ -1367,9 +1371,7 @@ class GclusterTest(unittest.TestCase):
     """Handles non-zero exit code when JobSet is restarting or completed."""
     pod = mock.MagicMock()
     pod.metadata.name = "pre-v5p-32-e9be2-main-job-0-0-abcd"
-    pod.metadata.labels = {
-        "jobset.sigs.k8s.io/jobset-name": "pre-v5p-32-e9be2"
-    }
+    pod.metadata.labels = {"jobset.sigs.k8s.io/jobset-name": "pre-v5p-32-e9be2"}
     pod.status.phase = "Succeeded"
     container = mock.MagicMock()
     container.name = "main"
@@ -1400,6 +1402,7 @@ class GclusterTest(unittest.TestCase):
         cluster_name="test-cluster",
     )
     self.assertFalse(completed)
+    mock_get_custom.assert_called_once()
     mock_print_pod_logs.assert_not_called()
 
     # 2. JobSet is completed -> prints succeeded_pod logs and returns True
