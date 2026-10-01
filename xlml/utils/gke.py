@@ -86,6 +86,20 @@ def get_custom_objects_api_client(
   return kubernetes.client.CustomObjectsApi(client)
 
 
+_JOBSET_CRD_GROUP = "jobset.x-k8s.io"
+_JOBSET_CRD_VERSION = "v1alpha2"
+_JOBSET_CRD_PLURAL = "jobsets"
+
+_JOBSET_NAME_LABEL = "jobset.sigs.k8s.io/jobset-name"
+_REPLICATED_JOB_LABEL = "jobset.sigs.k8s.io/replicatedjob-name"
+_RESTART_ATTEMPT_LABEL = "jobset.sigs.k8s.io/restart-attempt"
+_HEAD_REPLICATED_JOB = "pathways-head"
+
+_JOBSET_STATE_COMPLETED = "completed"
+_JOBSET_STATE_RESTARTING = "restarting"
+_JOBSET_STATE_FAILED = "failed"
+
+
 def list_workload_pods(
     core_api: kubernetes.client.CoreV1Api,
     workload_id: str,
@@ -101,7 +115,7 @@ def list_workload_pods(
   if not pods.items:
     pods = core_api.list_namespaced_pod(
         namespace=namespace,
-        label_selector=f"jobset.sigs.k8s.io/jobset-name={workload_id}",
+        label_selector=f"{_JOBSET_NAME_LABEL}={workload_id}",
     )
   return pods
 
@@ -125,7 +139,7 @@ def get_workload_job(
 
   try:
     jobs = batch_api.list_namespaced_job(
-        label_selector=f"jobset.sigs.k8s.io/jobset-name={workload_id}",
+        label_selector=f"{_JOBSET_NAME_LABEL}={workload_id}",
         namespace=namespace,
     )
     if not jobs.items:
@@ -146,10 +160,10 @@ def get_workload_jobset(
   """Get the Kubernetes JobSet CRD object for a given workload."""
   try:
     return custom_api.get_namespaced_custom_object(
-        group="jobset.sigs.k8s.io",
-        version="v1alpha2",
+        group=_JOBSET_CRD_GROUP,
+        version=_JOBSET_CRD_VERSION,
         namespace=namespace,
-        plural="jobsets",
+        plural=_JOBSET_CRD_PLURAL,
         name=workload_id,
     )
   except kubernetes.client.exceptions.ApiException as e:
@@ -265,6 +279,31 @@ LOGGING_URL_FORMAT = (
 )
 
 
+def _restart_attempt(pod: kubernetes.client.V1Pod) -> Optional[int]:
+  labels = getattr(pod.metadata, "labels", None)
+  raw = labels.get(_RESTART_ATTEMPT_LABEL) if isinstance(labels, dict) else None
+  return int(raw) if isinstance(raw, str) and raw.isdigit() else None
+
+
+def _latest_attempt_pods(
+    pods: list[kubernetes.client.V1Pod],
+) -> list[kubernetes.client.V1Pod]:
+  attempts = [a for p in pods if (a := _restart_attempt(p)) is not None]
+  if not attempts:
+    return list(pods)
+  latest = max(attempts)
+  return [p for p in pods if _restart_attempt(p) in (None, latest)]
+
+
+def _has_failed_container(pod: kubernetes.client.V1Pod) -> bool:
+  if not pod.status or not pod.status.container_statuses:
+    return False
+  return any(
+      cs.state and cs.state.terminated and cs.state.terminated.exit_code != 0
+      for cs in pod.status.container_statuses
+  )
+
+
 def _get_jobset_state(
     pod: kubernetes.client.V1Pod,
     project_id: str,
@@ -272,37 +311,92 @@ def _get_jobset_state(
     cluster_name: str,
     workload_id: str,
     namespace: str,
+    jobset_cache: Optional[Dict[str, Any]] = None,
 ) -> str:
   """Returns 'completed', 'restarting', or 'failed' for a JobSet pod."""
   labels = getattr(pod.metadata, "labels", None)
   if not isinstance(labels, dict) or (
-      "jobset.sigs.k8s.io/jobset-name" not in labels
-      and "jobset.sigs.k8s.io/replicatedjob-name" not in labels
+      _JOBSET_NAME_LABEL not in labels and _REPLICATED_JOB_LABEL not in labels
   ):
-    return "failed"
-  custom_api = get_custom_objects_api_client(project_id, region, cluster_name)
-  jobset = get_workload_jobset(custom_api, workload_id, namespace=namespace)
+    return _JOBSET_STATE_FAILED
+  if jobset_cache is not None and "jobset" in jobset_cache:
+    jobset = jobset_cache["jobset"]
+  else:
+    custom_api = get_custom_objects_api_client(project_id, region, cluster_name)
+    jobset = get_workload_jobset(custom_api, workload_id, namespace=namespace)
+    if jobset_cache is not None:
+      jobset_cache["jobset"] = jobset
   if not isinstance(jobset, dict):
-    return "failed"
+    return _JOBSET_STATE_FAILED
   status = jobset.get("status") or {}
   conditions = status.get("conditions") or []
   if any(
       c.get("type") == "Completed" and c.get("status", "True") != "False"
       for c in conditions
   ):
-    return "completed"
+    return _JOBSET_STATE_COMPLETED
   if any(
       c.get("type") == "Failed" and c.get("status", "True") != "False"
       for c in conditions
   ):
-    return "failed"
+    return _JOBSET_STATE_FAILED
   max_restarts = ((jobset.get("spec") or {}).get("failurePolicy") or {}).get(
       "maxRestarts", 0
   )
   restarts = status.get("restarts", 0)
-  if isinstance(max_restarts, int) and max_restarts > restarts:
-    return "restarting"
-  return "failed"
+  pod_attempt = _restart_attempt(pod)
+  is_stale_attempt = (
+      pod_attempt is not None
+      and isinstance(restarts, int)
+      and pod_attempt < restarts
+  )
+  if is_stale_attempt or (
+      isinstance(max_restarts, int)
+      and isinstance(restarts, int)
+      and max_restarts > restarts
+  ):
+    return _JOBSET_STATE_RESTARTING
+  return _JOBSET_STATE_FAILED
+
+
+def _jobset_verdict(
+    pod: kubernetes.client.V1Pod,
+    project_id: str,
+    region: str,
+    cluster_name: str,
+    workload_id: str,
+    namespace: str,
+    core_api: Optional[kubernetes.client.CoreV1Api] = None,
+    pods_to_check: Optional[list[kubernetes.client.V1Pod]] = None,
+    jobset_cache: Optional[Dict[str, Any]] = None,
+) -> Optional[bool]:
+  """Returns sensor verdict (True=done, False=keep polling, None=fail)."""
+  jobset_state = _get_jobset_state(
+      pod,
+      project_id,
+      region,
+      cluster_name,
+      workload_id,
+      namespace,
+      jobset_cache=jobset_cache,
+  )
+  if jobset_state == _JOBSET_STATE_COMPLETED:
+    logging.info(f"Workload {workload_id} JobSet completed successfully.")
+    if core_api is not None and pods_to_check:
+      for succeeded_pod in pods_to_check:
+        if (
+            succeeded_pod.status.phase == "Succeeded"
+            and not _has_failed_container(succeeded_pod)
+        ):
+          print_pod_logs(core_api, succeeded_pod)
+    return True
+  if jobset_state == _JOBSET_STATE_RESTARTING:
+    logging.info(
+        f"Pod {pod.metadata.name} failed, waiting for JobSet"
+        f" {workload_id} to restart."
+    )
+    return False
+  return None
 
 
 @task.sensor(poke_interval=60, timeout=7200, mode="reschedule")
@@ -322,22 +416,24 @@ def wait_for_workload_start(
     logging.info(f"Waiting for pods of workload: {workload_id} to be created.")
     return False
 
-  for pod in pods.items:
+  active_pods = _latest_attempt_pods(pods.items)
+  jobset_cache: Dict[str, Any] = {}
+  for pod in active_pods:
     if pod.status.phase in ["Pending", "Unknown"]:
       logging.info(f"Pod {pod.metadata.name} is in phase {pod.status.phase}")
       return False
     if pod.status.phase == "Failed":
-      if (
-          _get_jobset_state(
-              pod, project_id, region, cluster_name, workload_id, namespace
-          )
-          == "restarting"
-      ):
-        logging.info(
-            f"Pod {pod.metadata.name} failed, waiting for JobSet"
-            f" {workload_id} to restart."
-        )
-        return False
+      verdict = _jobset_verdict(
+          pod,
+          project_id,
+          region,
+          cluster_name,
+          workload_id,
+          namespace,
+          jobset_cache=jobset_cache,
+      )
+      if verdict is not None:
+        return verdict
       print_pod_logs(core_api, pod)
       url = LOGGING_URL_FORMAT.format(
           project=project_id,
@@ -422,45 +518,48 @@ def wait_for_workload_completion(
     logging.info(f"No pods found for workload: {workload_id}")
     return False
 
+  active_pods = _latest_attempt_pods(pods.items)
   # For Pathways workloads, the JobSet completes as soon as pathways-head
   # succeeds. Worker pods may exit non-zero after the head client disconnects
   # before garbage collection deletes them.
   head_pods = [
       pod
-      for pod in pods.items
+      for pod in active_pods
       if (
           isinstance(getattr(pod.metadata, "labels", None), dict)
-          and pod.metadata.labels.get("jobset.sigs.k8s.io/replicatedjob-name")
-          == "pathways-head"
+          and pod.metadata.labels.get(_REPLICATED_JOB_LABEL)
+          == _HEAD_REPLICATED_JOB
       )
       or (
           isinstance(getattr(pod.metadata, "name", None), str)
-          and "-pathways-head-" in pod.metadata.name
+          and f"-{_HEAD_REPLICATED_JOB}-" in pod.metadata.name
       )
   ]
   pods_to_check = (
       head_pods
       if head_pods and all(pod.status.phase == "Succeeded" for pod in head_pods)
-      else pods.items
+      else active_pods
   )
+  jobset_cache: Dict[str, Any] = {}
 
   for pod in pods_to_check:
     if pod.status.phase in ["Pending", "Running", "Unknown"]:
       logging.info(f"Pod {pod.metadata.name} is in phase {pod.status.phase}")
       return False
     if pod.status.phase == "Failed":
-      jobset_state = _get_jobset_state(
-          pod, project_id, region, cluster_name, workload_id, namespace
+      verdict = _jobset_verdict(
+          pod,
+          project_id,
+          region,
+          cluster_name,
+          workload_id,
+          namespace,
+          core_api=core_api,
+          pods_to_check=pods_to_check,
+          jobset_cache=jobset_cache,
       )
-      if jobset_state == "completed":
-        logging.info(f"Workload {workload_id} JobSet completed successfully.")
-        return True
-      if jobset_state == "restarting":
-        logging.info(
-            f"Pod {pod.metadata.name} failed, waiting for JobSet"
-            f" {workload_id} to restart."
-        )
-        return False
+      if verdict is not None:
+        return verdict
       print_pod_logs(core_api, pod)
       url = LOGGING_URL_FORMAT.format(
           project=project_id,
@@ -482,20 +581,19 @@ def wait_for_workload_completion(
             and container_status.state.terminated
             and container_status.state.terminated.exit_code != 0
         ):
-          jobset_state = _get_jobset_state(
-              pod, project_id, region, cluster_name, workload_id, namespace
+          verdict = _jobset_verdict(
+              pod,
+              project_id,
+              region,
+              cluster_name,
+              workload_id,
+              namespace,
+              core_api=core_api,
+              pods_to_check=pods_to_check,
+              jobset_cache=jobset_cache,
           )
-          if jobset_state == "completed":
-            logging.info(
-                f"Workload {workload_id} JobSet completed successfully."
-            )
-            return True
-          if jobset_state == "restarting":
-            logging.info(
-                f"Pod {pod.metadata.name} failed, waiting for JobSet"
-                f" {workload_id} to restart."
-            )
-            return False
+          if verdict is not None:
+            return verdict
           print_container_logs(
               core_api,
               namespace=namespace,

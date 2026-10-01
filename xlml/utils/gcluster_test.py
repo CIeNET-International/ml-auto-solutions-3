@@ -1117,6 +1117,306 @@ class GclusterTest(unittest.TestCase):
     mock_get_client.assert_called_once()
     mock_get_custom.assert_called_once()
 
+  def test_gke_get_workload_jobset(self):
+    """Reads JobSet custom object using group jobset.x-k8s.io."""
+    mock_custom_api = mock.MagicMock()
+    expected = {"metadata": {"name": "test-workload"}}
+    mock_custom_api.get_namespaced_custom_object.return_value = expected
+
+    result = gke.get_workload_jobset(
+        mock_custom_api, "test-workload", namespace="test-ns"
+    )
+    self.assertEqual(result, expected)
+    mock_custom_api.get_namespaced_custom_object.assert_called_once_with(
+        group="jobset.x-k8s.io",
+        version="v1alpha2",
+        namespace="test-ns",
+        plural="jobsets",
+        name="test-workload",
+    )
+
+  def test_gke_get_workload_jobset_api_exception(self):
+    """Returns None when JobSet custom object read raises ApiException."""
+    mock_custom_api = mock.MagicMock()
+    mock_custom_api.get_namespaced_custom_object.side_effect = (
+        kubernetes.client.exceptions.ApiException(status=404)
+    )
+
+    result = gke.get_workload_jobset(
+        mock_custom_api, "test-workload", namespace="test-ns"
+    )
+    self.assertIsNone(result)
+
+  @mock.patch("xlml.utils.gke.get_workload_jobset")
+  @mock.patch("xlml.utils.gke.get_custom_objects_api_client")
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_wait_for_workload_start_failed_pod_jobset_completed(
+      self, mock_get_client, mock_list_pods, mock_get_custom, mock_get_jobset
+  ):
+    """Returns True when a failed worker pod belongs to a completed JobSet."""
+    failed_pod = mock.MagicMock()
+    failed_pod.metadata.name = "rl-v5p-32-12345-worker-0-0-abcde"
+    failed_pod.metadata.labels = {
+        "jobset.sigs.k8s.io/jobset-name": "rl-v5p-32-12345"
+    }
+    failed_pod.status.phase = "Failed"
+
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = [failed_pod]
+    mock_list_pods.return_value = mock_pod_list
+    mock_get_jobset.return_value = {
+        "status": {"conditions": [{"type": "Completed", "status": "True"}]}
+    }
+
+    started = gke.wait_for_workload_start.function(
+        workload_id="rl-v5p-32-12345",
+        project_id="test-project",
+        region="us-central1",
+        cluster_name="test-cluster",
+    )
+    self.assertTrue(started)
+    mock_get_client.assert_called_once()
+    mock_get_custom.assert_called_once()
+
+  @mock.patch("xlml.utils.gke.get_custom_objects_api_client")
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_wait_for_workload_start_ignores_stale_failed_attempt_pod(
+      self, mock_get_client, mock_list_pods, mock_get_custom
+  ):
+    """Ignores stale Failed pod from attempt 0 when attempt 1 pod is Running."""
+    stale_pod = mock.MagicMock()
+    stale_pod.metadata.name = "pre-v5p-32-e9be2-main-job-0-0-old"
+    stale_pod.metadata.labels = {
+        "jobset.sigs.k8s.io/jobset-name": "pre-v5p-32-e9be2",
+        "jobset.sigs.k8s.io/restart-attempt": "0",
+    }
+    stale_pod.status.phase = "Failed"
+
+    active_pod = mock.MagicMock()
+    active_pod.metadata.name = "pre-v5p-32-e9be2-main-job-0-0-new"
+    active_pod.metadata.labels = {
+        "jobset.sigs.k8s.io/jobset-name": "pre-v5p-32-e9be2",
+        "jobset.sigs.k8s.io/restart-attempt": "1",
+    }
+    active_pod.status.phase = "Running"
+
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = [stale_pod, active_pod]
+    mock_list_pods.return_value = mock_pod_list
+
+    started = gke.wait_for_workload_start.function(
+        workload_id="pre-v5p-32-e9be2",
+        project_id="test-project",
+        region="us-central1",
+        cluster_name="test-cluster",
+    )
+    self.assertTrue(started)
+    mock_get_custom.assert_not_called()
+
+  @mock.patch("xlml.utils.gke.print_pod_logs")
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_wait_for_workload_completion_stale_failed_head_pod_ignored(
+      self, mock_get_client, mock_list_pods, mock_print_pod_logs
+  ):
+    """Ignores stale Failed pathways-head when newer attempt succeeded."""
+    stale_head = mock.MagicMock()
+    stale_head.metadata.name = "sft-v5p-32-8bc0e-pathways-head-0-0-old"
+    stale_head.metadata.labels = {
+        "jobset.sigs.k8s.io/replicatedjob-name": "pathways-head",
+        "jobset.sigs.k8s.io/restart-attempt": "0",
+    }
+    stale_head.status.phase = "Failed"
+
+    new_head = mock.MagicMock()
+    new_head.metadata.name = "sft-v5p-32-8bc0e-pathways-head-0-0-new"
+    new_head.metadata.labels = {
+        "jobset.sigs.k8s.io/replicatedjob-name": "pathways-head",
+        "jobset.sigs.k8s.io/restart-attempt": "1",
+    }
+    new_head.status.phase = "Succeeded"
+    new_head.status.container_statuses = []
+
+    worker_pod = mock.MagicMock()
+    worker_pod.metadata.name = "sft-v5p-32-8bc0e-worker-0-0-new"
+    worker_pod.metadata.labels = {
+        "jobset.sigs.k8s.io/replicatedjob-name": "worker",
+        "jobset.sigs.k8s.io/restart-attempt": "1",
+    }
+    worker_pod.status.phase = "Failed"
+
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = [stale_head, new_head, worker_pod]
+    mock_list_pods.return_value = mock_pod_list
+
+    completed = gke.wait_for_workload_completion.function(
+        workload_id="sft-v5p-32-8bc0e",
+        project_id="test-project",
+        region="us-central1",
+        cluster_name="test-cluster",
+    )
+    self.assertTrue(completed)
+    mock_print_pod_logs.assert_called_once_with(
+        mock_get_client.return_value, new_head
+    )
+
+  @mock.patch("xlml.utils.gke.get_workload_jobset")
+  @mock.patch("xlml.utils.gke.get_custom_objects_api_client")
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_wait_for_workload_completion_restarts_at_max_with_stale_attempt(
+      self, mock_get_client, mock_list_pods, mock_get_custom, mock_get_jobset
+  ):
+    """Returns False at restarts == maxRestarts when pod is from old attempt."""
+    stale_failed_pod = mock.MagicMock()
+    stale_failed_pod.metadata.name = "pre-v5p-32-e9be2-main-job-0-0-att2"
+    stale_failed_pod.metadata.labels = {
+        "jobset.sigs.k8s.io/jobset-name": "pre-v5p-32-e9be2",
+        "jobset.sigs.k8s.io/restart-attempt": "2",
+    }
+    stale_failed_pod.status.phase = "Failed"
+
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = [stale_failed_pod]
+    mock_list_pods.return_value = mock_pod_list
+    mock_get_jobset.return_value = {
+        "spec": {"failurePolicy": {"maxRestarts": 3}},
+        "status": {"restarts": 3, "conditions": []},
+    }
+
+    completed = gke.wait_for_workload_completion.function(
+        workload_id="pre-v5p-32-e9be2",
+        project_id="test-project",
+        region="us-central1",
+        cluster_name="test-cluster",
+    )
+    self.assertFalse(completed)
+
+    # When the final attempt (attempt 3) itself fails, it should raise.
+    stale_failed_pod.metadata.labels["jobset.sigs.k8s.io/restart-attempt"] = "3"
+    with self.assertRaises(AirflowFailException):
+      gke.wait_for_workload_completion.function(
+          workload_id="pre-v5p-32-e9be2",
+          project_id="test-project",
+          region="us-central1",
+          cluster_name="test-cluster",
+      )
+
+  @mock.patch("xlml.utils.gke.print_pod_logs")
+  @mock.patch("xlml.utils.gke.get_workload_jobset")
+  @mock.patch("xlml.utils.gke.get_custom_objects_api_client")
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_wait_for_workload_completion_completed_jobset_prints_logs(
+      self,
+      mock_get_client,
+      mock_list_pods,
+      mock_get_custom,
+      mock_get_jobset,
+      mock_print_pod_logs,
+  ):
+    """Streams logs of succeeded pods when returning on Completed JobSet."""
+    failed_worker = mock.MagicMock()
+    failed_worker.metadata.name = "rl-v5p-64-b2019-worker-0-0-abcd"
+    failed_worker.metadata.labels = {
+        "jobset.sigs.k8s.io/replicatedjob-name": "worker"
+    }
+    failed_worker.status.phase = "Failed"
+
+    succeeded_worker = mock.MagicMock()
+    succeeded_worker.metadata.name = "rl-v5p-64-b2019-worker-0-1-efgh"
+    succeeded_worker.metadata.labels = {
+        "jobset.sigs.k8s.io/replicatedjob-name": "worker"
+    }
+    succeeded_worker.status.phase = "Succeeded"
+    succeeded_worker.status.container_statuses = []
+
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = [failed_worker, succeeded_worker]
+    mock_list_pods.return_value = mock_pod_list
+    mock_get_jobset.return_value = {
+        "status": {"conditions": [{"type": "Completed", "status": "True"}]}
+    }
+
+    completed = gke.wait_for_workload_completion.function(
+        workload_id="rl-v5p-64-b2019",
+        project_id="test-project",
+        region="us-central1",
+        cluster_name="test-cluster",
+    )
+    self.assertTrue(completed)
+    mock_print_pod_logs.assert_called_once_with(
+        mock_get_client.return_value, succeeded_worker
+    )
+
+  @mock.patch("xlml.utils.gke.print_pod_logs")
+  @mock.patch("xlml.utils.gke.get_workload_jobset")
+  @mock.patch("xlml.utils.gke.get_custom_objects_api_client")
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_wait_for_workload_completion_nonzero_exit_code_jobset_states(
+      self,
+      mock_get_client,
+      mock_list_pods,
+      mock_get_custom,
+      mock_get_jobset,
+      mock_print_pod_logs,
+  ):
+    """Handles non-zero exit code when JobSet is restarting or completed."""
+    pod = mock.MagicMock()
+    pod.metadata.name = "pre-v5p-32-e9be2-main-job-0-0-abcd"
+    pod.metadata.labels = {
+        "jobset.sigs.k8s.io/jobset-name": "pre-v5p-32-e9be2"
+    }
+    pod.status.phase = "Succeeded"
+    container = mock.MagicMock()
+    container.name = "main"
+    container.state.terminated.exit_code = 134
+    pod.status.container_statuses = [container]
+
+    succeeded_pod = mock.MagicMock()
+    succeeded_pod.metadata.name = "pre-v5p-32-e9be2-main-job-0-1-efgh"
+    succeeded_pod.metadata.labels = {
+        "jobset.sigs.k8s.io/jobset-name": "pre-v5p-32-e9be2"
+    }
+    succeeded_pod.status.phase = "Succeeded"
+    succeeded_pod.status.container_statuses = []
+
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = [pod, succeeded_pod]
+    mock_list_pods.return_value = mock_pod_list
+
+    # 1. JobSet is restarting -> returns False
+    mock_get_jobset.return_value = {
+        "spec": {"failurePolicy": {"maxRestarts": 3}},
+        "status": {"restarts": 1, "conditions": []},
+    }
+    completed = gke.wait_for_workload_completion.function(
+        workload_id="pre-v5p-32-e9be2",
+        project_id="test-project",
+        region="us-central1",
+        cluster_name="test-cluster",
+    )
+    self.assertFalse(completed)
+    mock_print_pod_logs.assert_not_called()
+
+    # 2. JobSet is completed -> prints succeeded_pod logs and returns True
+    mock_get_jobset.return_value = {
+        "status": {"conditions": [{"type": "Completed", "status": "True"}]}
+    }
+    completed = gke.wait_for_workload_completion.function(
+        workload_id="pre-v5p-32-e9be2",
+        project_id="test-project",
+        region="us-central1",
+        cluster_name="test-cluster",
+    )
+    self.assertTrue(completed)
+    mock_print_pod_logs.assert_called_once_with(
+        mock_get_client.return_value, succeeded_pod
+    )
+
 
 if __name__ == "__main__":
   unittest.main()
