@@ -1015,6 +1015,108 @@ class GclusterTest(unittest.TestCase):
     self.assertIn("was interrupted", "\n".join(logs.output))
     mock_response.release_conn.assert_called_once()
 
+  @mock.patch("xlml.utils.gke.print_pod_logs")
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_wait_for_workload_completion_pathways_head_succeeded_worker_failed(
+      self, mock_get_client, mock_list_pods, mock_print_pod_logs
+  ):
+    """Succeeds when pathways-head succeeded even if worker pod failed."""
+    head_pod = mock.MagicMock()
+    head_pod.metadata.name = "sft-v5p-32-8bc0e-pathways-head-0-0-xqsml"
+    head_pod.metadata.labels = {
+        "jobset.sigs.k8s.io/replicatedjob-name": "pathways-head"
+    }
+    head_pod.status.phase = "Succeeded"
+    head_pod.status.container_statuses = []
+
+    worker_pod = mock.MagicMock()
+    worker_pod.metadata.name = "sft-v5p-32-8bc0e-worker-0-0-hkz4z"
+    worker_pod.metadata.labels = {
+        "jobset.sigs.k8s.io/replicatedjob-name": "worker"
+    }
+    worker_pod.status.phase = "Failed"
+
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = [head_pod, worker_pod]
+    mock_list_pods.return_value = mock_pod_list
+
+    completed = gke.wait_for_workload_completion.function(
+        workload_id="sft-v5p-32-8bc0e",
+        project_id="test-project",
+        region="us-central1",
+        cluster_name="test-cluster",
+    )
+    self.assertTrue(completed)
+    mock_print_pod_logs.assert_called_once_with(
+        mock_get_client.return_value, head_pod
+    )
+
+  @mock.patch("xlml.utils.gke.get_workload_jobset")
+  @mock.patch("xlml.utils.gke.get_custom_objects_api_client")
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_wait_for_workload_completion_jobset_completed_worker_failed(
+      self, mock_get_client, mock_list_pods, mock_get_custom, mock_get_jobset
+  ):
+    """Succeeds when JobSet is Completed even with a Failed worker pod."""
+    worker_pod = mock.MagicMock()
+    worker_pod.metadata.name = "rl-v5p-64-b2019-worker-0-1-abcd"
+    worker_pod.metadata.labels = {
+        "jobset.sigs.k8s.io/replicatedjob-name": "worker"
+    }
+    worker_pod.status.phase = "Failed"
+
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = [worker_pod]
+    mock_list_pods.return_value = mock_pod_list
+    mock_get_jobset.return_value = {
+        "status": {"conditions": [{"type": "Completed", "status": "True"}]}
+    }
+
+    completed = gke.wait_for_workload_completion.function(
+        workload_id="rl-v5p-64-b2019",
+        project_id="test-project",
+        region="us-central1",
+        cluster_name="test-cluster",
+    )
+    self.assertTrue(completed)
+    mock_get_client.assert_called_once()
+    mock_get_custom.assert_called_once()
+
+  @mock.patch("xlml.utils.gke.get_workload_jobset")
+  @mock.patch("xlml.utils.gke.get_custom_objects_api_client")
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_wait_for_workload_start_failed_pod_jobset_restarting(
+      self, mock_get_client, mock_list_pods, mock_get_custom, mock_get_jobset
+  ):
+    """Returns False when JobSet is restarting a failed pod during startup."""
+    failed_pod = mock.MagicMock()
+    failed_pod.metadata.name = "pre-v5p-32-e9be2-main-job-0-0-npmrm"
+    failed_pod.metadata.labels = {
+        "jobset.sigs.k8s.io/jobset-name": "pre-v5p-32-e9be2"
+    }
+    failed_pod.status.phase = "Failed"
+
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = [failed_pod]
+    mock_list_pods.return_value = mock_pod_list
+    mock_get_jobset.return_value = {
+        "spec": {"failurePolicy": {"maxRestarts": 3}},
+        "status": {"restarts": 1, "conditions": []},
+    }
+
+    started = gke.wait_for_workload_start.function(
+        workload_id="pre-v5p-32-e9be2",
+        project_id="test-project",
+        region="us-central1",
+        cluster_name="test-cluster",
+    )
+    self.assertFalse(started)
+    mock_get_client.assert_called_once()
+    mock_get_custom.assert_called_once()
+
 
 if __name__ == "__main__":
   unittest.main()

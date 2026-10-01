@@ -265,6 +265,46 @@ LOGGING_URL_FORMAT = (
 )
 
 
+def _get_jobset_state(
+    pod: kubernetes.client.V1Pod,
+    project_id: str,
+    region: str,
+    cluster_name: str,
+    workload_id: str,
+    namespace: str,
+) -> str:
+  """Returns 'completed', 'restarting', or 'failed' for a JobSet pod."""
+  labels = getattr(pod.metadata, "labels", None)
+  if not isinstance(labels, dict) or (
+      "jobset.sigs.k8s.io/jobset-name" not in labels
+      and "jobset.sigs.k8s.io/replicatedjob-name" not in labels
+  ):
+    return "failed"
+  custom_api = get_custom_objects_api_client(project_id, region, cluster_name)
+  jobset = get_workload_jobset(custom_api, workload_id, namespace=namespace)
+  if not isinstance(jobset, dict):
+    return "failed"
+  status = jobset.get("status") or {}
+  conditions = status.get("conditions") or []
+  if any(
+      c.get("type") == "Completed" and c.get("status", "True") != "False"
+      for c in conditions
+  ):
+    return "completed"
+  if any(
+      c.get("type") == "Failed" and c.get("status", "True") != "False"
+      for c in conditions
+  ):
+    return "failed"
+  max_restarts = ((jobset.get("spec") or {}).get("failurePolicy") or {}).get(
+      "maxRestarts", 0
+  )
+  restarts = status.get("restarts", 0)
+  if isinstance(max_restarts, int) and max_restarts > restarts:
+    return "restarting"
+  return "failed"
+
+
 @task.sensor(poke_interval=60, timeout=7200, mode="reschedule")
 def wait_for_workload_start(
     workload_id: str,
@@ -287,6 +327,17 @@ def wait_for_workload_start(
       logging.info(f"Pod {pod.metadata.name} is in phase {pod.status.phase}")
       return False
     if pod.status.phase == "Failed":
+      if (
+          _get_jobset_state(
+              pod, project_id, region, cluster_name, workload_id, namespace
+          )
+          == "restarting"
+      ):
+        logging.info(
+            f"Pod {pod.metadata.name} failed, waiting for JobSet"
+            f" {workload_id} to restart."
+        )
+        return False
       print_pod_logs(core_api, pod)
       url = LOGGING_URL_FORMAT.format(
           project=project_id,
@@ -371,11 +422,45 @@ def wait_for_workload_completion(
     logging.info(f"No pods found for workload: {workload_id}")
     return False
 
-  for pod in pods.items:
+  # For Pathways workloads, the JobSet completes as soon as pathways-head
+  # succeeds. Worker pods may exit non-zero after the head client disconnects
+  # before garbage collection deletes them.
+  head_pods = [
+      pod
+      for pod in pods.items
+      if (
+          isinstance(getattr(pod.metadata, "labels", None), dict)
+          and pod.metadata.labels.get("jobset.sigs.k8s.io/replicatedjob-name")
+          == "pathways-head"
+      )
+      or (
+          isinstance(getattr(pod.metadata, "name", None), str)
+          and "-pathways-head-" in pod.metadata.name
+      )
+  ]
+  pods_to_check = (
+      head_pods
+      if head_pods and all(pod.status.phase == "Succeeded" for pod in head_pods)
+      else pods.items
+  )
+
+  for pod in pods_to_check:
     if pod.status.phase in ["Pending", "Running", "Unknown"]:
       logging.info(f"Pod {pod.metadata.name} is in phase {pod.status.phase}")
       return False
     if pod.status.phase == "Failed":
+      jobset_state = _get_jobset_state(
+          pod, project_id, region, cluster_name, workload_id, namespace
+      )
+      if jobset_state == "completed":
+        logging.info(f"Workload {workload_id} JobSet completed successfully.")
+        return True
+      if jobset_state == "restarting":
+        logging.info(
+            f"Pod {pod.metadata.name} failed, waiting for JobSet"
+            f" {workload_id} to restart."
+        )
+        return False
       print_pod_logs(core_api, pod)
       url = LOGGING_URL_FORMAT.format(
           project=project_id,
@@ -389,7 +474,7 @@ def wait_for_workload_completion(
           f" Link to logs: {url}"
       )
 
-  for pod in pods.items:
+  for pod in pods_to_check:
     if pod.status.container_statuses:
       for container_status in pod.status.container_statuses:
         if (
@@ -397,6 +482,20 @@ def wait_for_workload_completion(
             and container_status.state.terminated
             and container_status.state.terminated.exit_code != 0
         ):
+          jobset_state = _get_jobset_state(
+              pod, project_id, region, cluster_name, workload_id, namespace
+          )
+          if jobset_state == "completed":
+            logging.info(
+                f"Workload {workload_id} JobSet completed successfully."
+            )
+            return True
+          if jobset_state == "restarting":
+            logging.info(
+                f"Pod {pod.metadata.name} failed, waiting for JobSet"
+                f" {workload_id} to restart."
+            )
+            return False
           print_container_logs(
               core_api,
               namespace=namespace,
@@ -418,7 +517,7 @@ def wait_for_workload_completion(
           )
 
   # Fetch logs for successful pods before returning
-  for pod in pods.items:
+  for pod in pods_to_check:
     print_pod_logs(core_api, pod)
 
   logging.info("All pod(s) phase are succeeded.")
