@@ -957,8 +957,8 @@ class GclusterTest(unittest.TestCase):
         namespace="test-ns",
     )
 
-  def test_gke_get_workload_job_selects_latest_active_attempt(self):
-    """Selects the latest non-deleting Job by restart-attempt and timestamp."""
+  def test_gke_get_workload_job_selects_latest_active_job(self):
+    """Selects the latest non-deleting Job by creation_timestamp."""
     mock_batch_api = mock.MagicMock()
     mock_batch_api.read_namespaced_job.side_effect = (
         kubernetes.client.exceptions.ApiException(status=404)
@@ -967,7 +967,6 @@ class GclusterTest(unittest.TestCase):
     stale_job = mock.MagicMock()
     stale_job.metadata.name = "test-workload-main-job-0"
     stale_job.metadata.uid = "uid-attempt-0"
-    stale_job.metadata.labels = {"jobset.sigs.k8s.io/restart-attempt": "0"}
     stale_job.metadata.creation_timestamp = datetime.datetime(
         2026, 3, 28, 1, 0, tzinfo=datetime.timezone.utc
     )
@@ -976,7 +975,6 @@ class GclusterTest(unittest.TestCase):
     deleting_job = mock.MagicMock()
     deleting_job.metadata.name = "test-workload-main-job-0"
     deleting_job.metadata.uid = "uid-attempt-2-deleting"
-    deleting_job.metadata.labels = {"jobset.sigs.k8s.io/restart-attempt": "2"}
     deleting_job.metadata.creation_timestamp = datetime.datetime(
         2026, 3, 28, 3, 0, tzinfo=datetime.timezone.utc
     )
@@ -987,7 +985,6 @@ class GclusterTest(unittest.TestCase):
     latest_job = mock.MagicMock()
     latest_job.metadata.name = "test-workload-main-job-0"
     latest_job.metadata.uid = "uid-attempt-1"
-    latest_job.metadata.labels = {"jobset.sigs.k8s.io/restart-attempt": "1"}
     latest_job.metadata.creation_timestamp = datetime.datetime(
         2026, 3, 28, 2, 0, tzinfo=datetime.timezone.utc
     )
@@ -1013,7 +1010,6 @@ class GclusterTest(unittest.TestCase):
     worker_job.metadata.name = "test-workload-worker-0"
     worker_job.metadata.labels = {
         "jobset.sigs.k8s.io/replicatedjob-name": "worker",
-        "jobset.sigs.k8s.io/restart-attempt": "1",
     }
     worker_job.metadata.deletion_timestamp = None
 
@@ -1021,7 +1017,6 @@ class GclusterTest(unittest.TestCase):
     head_job.metadata.name = "test-workload-pathways-head-0"
     head_job.metadata.labels = {
         "jobset.sigs.k8s.io/replicatedjob-name": "pathways-head",
-        "jobset.sigs.k8s.io/restart-attempt": "1",
     }
     head_job.metadata.deletion_timestamp = None
 
@@ -1182,8 +1177,10 @@ class GclusterTest(unittest.TestCase):
     head_job.metadata.uid = "uid-head-1"
     head_job.metadata.labels = {
         "jobset.sigs.k8s.io/replicatedjob-name": "pathways-head",
-        "jobset.sigs.k8s.io/restart-attempt": "1",
     }
+    head_job.metadata.creation_timestamp = datetime.datetime(
+        2026, 3, 28, 1, 0, tzinfo=datetime.timezone.utc
+    )
     head_job.metadata.deletion_timestamp = None
 
     worker_job = mock.MagicMock()
@@ -1191,8 +1188,10 @@ class GclusterTest(unittest.TestCase):
     worker_job.metadata.uid = "uid-worker-1"
     worker_job.metadata.labels = {
         "jobset.sigs.k8s.io/replicatedjob-name": "worker",
-        "jobset.sigs.k8s.io/restart-attempt": "1",
     }
+    worker_job.metadata.creation_timestamp = datetime.datetime(
+        2026, 3, 28, 1, 1, tzinfo=datetime.timezone.utc
+    )
     worker_job.metadata.deletion_timestamp = None
 
     mock_job_list = mock.MagicMock()
@@ -1219,50 +1218,6 @@ class GclusterTest(unittest.TestCase):
     )
     self.assertEqual(result.items, [head_pod, worker_pod])
     self.assertEqual(mock_core_api.list_namespaced_pod.call_count, 2)
-
-  @mock.patch("xlml.utils.gke.get_workload_jobset")
-  @mock.patch("xlml.utils.gke.get_custom_objects_api_client")
-  @mock.patch("xlml.utils.gke.list_workload_pods")
-  @mock.patch("xlml.utils.gke.get_core_api_client")
-  def test_wait_for_workload_completion_waits_for_jobset_restart(
-      self,
-      mock_get_client,
-      mock_list_pods,
-      mock_get_custom,
-      mock_get_jobset,
-  ):
-    """Returns False when attempt 0 fails and JobSet has remaining restarts."""
-    head_pod = mock.MagicMock()
-    head_pod.metadata.name = "test-workload-pathways-head-0-0-abc"
-    head_pod.metadata.labels = {
-        "jobset.sigs.k8s.io/jobset-name": "test-workload",
-        "jobset.sigs.k8s.io/replicatedjob-name": "pathways-head",
-        "jobset.sigs.k8s.io/restart-attempt": "0",
-    }
-    head_pod.status.phase = "Running"
-    workload_cs = mock.MagicMock()
-    workload_cs.name = "workload-container"
-    workload_cs.state.waiting = None
-    workload_cs.state.terminated.exit_code = 134
-    head_pod.status.container_statuses = [workload_cs]
-
-    mock_pod_list = mock.MagicMock()
-    mock_pod_list.items = [head_pod]
-    mock_list_pods.return_value = mock_pod_list
-    mock_get_jobset.return_value = {
-        "spec": {"failurePolicy": {"maxRestarts": 3}},
-        "status": {"conditions": []},
-    }
-
-    completed = gke.wait_for_workload_completion.function(
-        workload_id="test-workload",
-        project_id="test-project",
-        region="us-central1",
-        cluster_name="test-cluster",
-    )
-    mock_get_client.assert_called_once()
-    mock_get_custom.assert_called_once()
-    self.assertFalse(completed)
 
   @mock.patch("xlml.utils.gke.list_workload_pods")
   @mock.patch("xlml.utils.gke.get_core_api_client")
