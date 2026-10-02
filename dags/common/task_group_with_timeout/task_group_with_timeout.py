@@ -210,7 +210,10 @@ class TaskGroupWithTimeout(TaskGroup):
           deadline = start_time + timeout
           remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
           if remaining <= 0:
-            raise AirflowFailException(f"{group_name} timeout exceeded")
+            raise AirflowFailException(
+                f"Group {group_name} deadline {deadline.isoformat()}"
+                "exceeded; "
+            )
 
           task = task_instance.task
 
@@ -220,7 +223,8 @@ class TaskGroupWithTimeout(TaskGroup):
           logging.info(
               f"{group_name}; "
               f"task: '{task_instance.task_id}'; "
-              f"effective timeout: {effective_timeout_sec}s"
+              f"effective timeout: {effective_timeout_sec}s;"
+              f"group deadline: {deadline.isoformat()}; "
           )
 
           with SharedDeadlineTimeout(
@@ -290,6 +294,9 @@ class SharedDeadlineTimeout(AirflowTimeout):
     # a check to capture the condition that the group_deadline has already
     # passed, and no need to wait and retry.
     if self.group_deadline <= datetime.now(timezone.utc):
-      raise AirflowFailException("failing without retry.")
+      raise AirflowFailException(
+          f"Group deadline {self.group_deadline.isoformat()} exceeded; "
+          "failing without retry."
+      )
 
     super().handle_timeout(*args)
