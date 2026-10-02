@@ -174,6 +174,7 @@ with models.DAG(
           test_owner=test_owner.SURBHI_J,
           priority="medium",
           max_restart=3,
+          restart_on_exit_codes=[134, 137, 143],
           use_gcluster=True,
       ).run(skip_post_process=True)
 

@@ -1420,6 +1420,41 @@ class GclusterTest(unittest.TestCase):
         mock_get_client.return_value, succeeded_pod
     )
 
+  @mock.patch("xlml.utils.gke.get_custom_objects_api_client")
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_wait_for_workload_completion_failed_worker_before_running_head(
+      self, mock_get_client, mock_list_pods, mock_get_custom
+  ):
+    """Returns False when a Failed worker precedes a Running head pod."""
+    failed_worker = mock.MagicMock()
+    failed_worker.metadata.name = "sft-v5p-32-8bc0e-worker-0-0-hkz4z"
+    failed_worker.metadata.labels = {
+        "jobset.sigs.k8s.io/replicatedjob-name": "worker"
+    }
+    failed_worker.status.phase = "Failed"
+
+    running_head = mock.MagicMock()
+    running_head.metadata.name = "sft-v5p-32-8bc0e-pathways-head-0-0-xqsml"
+    running_head.metadata.labels = {
+        "jobset.sigs.k8s.io/replicatedjob-name": "pathways-head"
+    }
+    running_head.status.phase = "Running"
+
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = [failed_worker, running_head]
+    mock_list_pods.return_value = mock_pod_list
+
+    completed = gke.wait_for_workload_completion.function(
+        workload_id="sft-v5p-32-8bc0e",
+        project_id="test-project",
+        region="us-central1",
+        cluster_name="test-cluster",
+    )
+    self.assertFalse(completed)
+    mock_get_client.assert_called_once()
+    mock_get_custom.assert_not_called()
+
 
 if __name__ == "__main__":
   unittest.main()

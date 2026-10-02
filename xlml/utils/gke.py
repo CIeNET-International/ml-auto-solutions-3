@@ -6,7 +6,7 @@ import datetime
 import logging
 import tempfile
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from airflow.decorators import task, task_group
 from airflow.exceptions import AirflowFailException
@@ -280,14 +280,16 @@ LOGGING_URL_FORMAT = (
 
 
 def _restart_attempt(pod: kubernetes.client.V1Pod) -> Optional[int]:
+  """Returns the JobSet restart attempt number from pod labels, if present."""
   labels = getattr(pod.metadata, "labels", None)
   raw = labels.get(_RESTART_ATTEMPT_LABEL) if isinstance(labels, dict) else None
   return int(raw) if isinstance(raw, str) and raw.isdigit() else None
 
 
 def _latest_attempt_pods(
-    pods: list[kubernetes.client.V1Pod],
-) -> list[kubernetes.client.V1Pod]:
+    pods: List[kubernetes.client.V1Pod],
+) -> List[kubernetes.client.V1Pod]:
+  """Filters pods to keep only those from the latest JobSet restart attempt."""
   attempts = [a for p in pods if (a := _restart_attempt(p)) is not None]
   if not attempts:
     return list(pods)
@@ -296,6 +298,7 @@ def _latest_attempt_pods(
 
 
 def _has_failed_container(pod: kubernetes.client.V1Pod) -> bool:
+  """Returns True if any container in the pod terminated with non-zero code."""
   if not pod.status or not pod.status.container_statuses:
     return False
   return any(
@@ -341,9 +344,13 @@ def _get_jobset_state(
   ):
     return _JOBSET_STATE_FAILED
   max_restarts = ((jobset.get("spec") or {}).get("failurePolicy") or {}).get(
-      "maxRestarts", 0
+      "maxRestarts"
   )
-  restarts = status.get("restarts", 0)
+  if max_restarts is None:
+    max_restarts = 0
+  restarts = status.get("restarts")
+  if restarts is None:
+    restarts = 0
   pod_attempt = _restart_attempt(pod)
   is_stale_attempt = (
       pod_attempt is not None
@@ -367,7 +374,7 @@ def _jobset_verdict(
     workload_id: str,
     namespace: str,
     core_api: Optional[kubernetes.client.CoreV1Api] = None,
-    pods_to_check: Optional[list[kubernetes.client.V1Pod]] = None,
+    pods_to_check: Optional[List[kubernetes.client.V1Pod]] = None,
     jobset_cache: Optional[Dict[str, Any]] = None,
 ) -> Optional[bool]:
   """Returns sensor verdict (True=done, False=keep polling, None=fail)."""
@@ -546,6 +553,8 @@ def wait_for_workload_completion(
     if pod.status.phase in ["Pending", "Running", "Unknown"]:
       logging.info(f"Pod {pod.metadata.name} is in phase {pod.status.phase}")
       return False
+
+  for pod in pods_to_check:
     if pod.status.phase == "Failed":
       verdict = _jobset_verdict(
           pod,
