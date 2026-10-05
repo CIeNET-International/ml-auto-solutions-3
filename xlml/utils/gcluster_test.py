@@ -957,47 +957,33 @@ class GclusterTest(unittest.TestCase):
         namespace="test-ns",
     )
 
-  def test_gke_get_workload_job_selects_latest_active_job(self):
-    """Selects the latest non-deleting Job by creation_timestamp."""
+  def test_gke_get_workload_job_excludes_deleting_jobs(self):
+    """Excludes deleting Jobs and returns the active Job."""
     mock_batch_api = mock.MagicMock()
     mock_batch_api.read_namespaced_job.side_effect = (
         kubernetes.client.exceptions.ApiException(status=404)
     )
 
-    stale_job = mock.MagicMock()
-    stale_job.metadata.name = "test-workload-main-job-0"
-    stale_job.metadata.uid = "uid-attempt-0"
-    stale_job.metadata.creation_timestamp = datetime.datetime(
-        2026, 3, 28, 1, 0, tzinfo=datetime.timezone.utc
-    )
-    stale_job.metadata.deletion_timestamp = None
-
     deleting_job = mock.MagicMock()
     deleting_job.metadata.name = "test-workload-main-job-0"
-    deleting_job.metadata.uid = "uid-attempt-2-deleting"
-    deleting_job.metadata.creation_timestamp = datetime.datetime(
-        2026, 3, 28, 3, 0, tzinfo=datetime.timezone.utc
-    )
+    deleting_job.metadata.uid = "uid-attempt-0-deleting"
     deleting_job.metadata.deletion_timestamp = datetime.datetime(
         2026, 3, 28, 3, 5, tzinfo=datetime.timezone.utc
     )
 
-    latest_job = mock.MagicMock()
-    latest_job.metadata.name = "test-workload-main-job-0"
-    latest_job.metadata.uid = "uid-attempt-1"
-    latest_job.metadata.creation_timestamp = datetime.datetime(
-        2026, 3, 28, 2, 0, tzinfo=datetime.timezone.utc
-    )
-    latest_job.metadata.deletion_timestamp = None
+    active_job = mock.MagicMock()
+    active_job.metadata.name = "test-workload-main-job-0"
+    active_job.metadata.uid = "uid-attempt-1"
+    active_job.metadata.deletion_timestamp = None
 
     mock_job_list = mock.MagicMock()
-    mock_job_list.items = [stale_job, deleting_job, latest_job]
+    mock_job_list.items = [deleting_job, active_job]
     mock_batch_api.list_namespaced_job.return_value = mock_job_list
 
     result = gke.get_workload_job(
         mock_batch_api, "test-workload", namespace="test-ns"
     )
-    self.assertEqual(result, latest_job)
+    self.assertEqual(result, active_job)
 
   def test_gke_get_workload_job_prefers_pathways_head(self):
     """Prefers pathways-head Job over worker Jobs in a Pathways JobSet."""

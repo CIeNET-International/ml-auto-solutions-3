@@ -108,52 +108,6 @@ def _is_deleting(resource: Any) -> bool:
   return isinstance(deletion_ts, (datetime.datetime, str)) and bool(deletion_ts)
 
 
-def _job_creation_timestamp(job: kubernetes.client.V1Job) -> float:
-  """Return the creation_timestamp of a Job as a float (default 0.0)."""
-  metadata = getattr(job, "metadata", None)
-  created = getattr(metadata, "creation_timestamp", None)
-  if isinstance(created, datetime.datetime):
-    return created.timestamp()
-  if isinstance(created, (int, float)) and not isinstance(created, bool):
-    return float(created)
-  return 0.0
-
-
-def _select_latest_jobs(
-    jobs: list[kubernetes.client.V1Job],
-    controller_only: bool = False,
-) -> list[kubernetes.client.V1Job]:
-  """Select the latest active Job(s) by creation_timestamp."""
-  active_jobs = [job for job in jobs if not _is_deleting(job)]
-  if not active_jobs:
-    return []
-  if controller_only:
-    head_jobs = [
-        job
-        for job in active_jobs
-        if _replicated_job_name(job) == _PATHWAYS_HEAD_REPLICATED_JOB
-    ]
-    if head_jobs:
-      active_jobs = head_jobs
-
-  latest_by_name: dict[str, kubernetes.client.V1Job] = {}
-  unnamed_jobs: list[kubernetes.client.V1Job] = []
-  for job in active_jobs:
-    metadata = getattr(job, "metadata", None)
-    name = getattr(metadata, "name", None)
-    if isinstance(name, str) and name:
-      existing = latest_by_name.get(name)
-      if existing is None or (
-          _job_creation_timestamp(job) >= _job_creation_timestamp(existing)
-      ):
-        latest_by_name[name] = job
-    else:
-      unnamed_jobs.append(job)
-
-  selected = list(latest_by_name.values()) + unnamed_jobs
-  return sorted(selected, key=_job_creation_timestamp)
-
-
 def _get_container_status(
     pod: kubernetes.client.V1Pod, container_name: str
 ) -> Optional[kubernetes.client.V1ContainerStatus]:
@@ -188,7 +142,7 @@ def get_workload_jobs(
     namespace: str = "default",
     controller_only: bool = False,
 ) -> list[kubernetes.client.V1Job]:
-  """Get the latest active Kubernetes Job objects for a given workload."""
+  """Get the active Kubernetes Job objects for a given workload."""
   logging.info(
       f"Getting job for workload_id: {workload_id} in namespace: {namespace}"
   )
@@ -206,11 +160,16 @@ def get_workload_jobs(
         label_selector=f"{_JOBSET_NAME_LABEL}={workload_id}",
         namespace=namespace,
     )
-    if not jobs.items:
-      return []
-    return _select_latest_jobs(
-        list(jobs.items), controller_only=controller_only
-    )
+    active_jobs = [job for job in jobs.items if not _is_deleting(job)]
+    if controller_only:
+      head_jobs = [
+          job
+          for job in active_jobs
+          if _replicated_job_name(job) == _PATHWAYS_HEAD_REPLICATED_JOB
+      ]
+      if head_jobs:
+        return head_jobs
+    return active_jobs
   except kubernetes.client.exceptions.ApiException as e:
     logging.info(f"Could not list Kubernetes Jobs for {workload_id}: {e}")
     return []
@@ -223,7 +182,7 @@ def list_workload_pods(
     batch_api: Optional[kubernetes.client.BatchV1Api] = None,
     controller_only: bool = False,
 ) -> kubernetes.client.V1PodList:
-  """List pods belonging to the latest Job(s) for the given workload."""
+  """List pods belonging to the active Job(s) for the given workload."""
   logging.info(
       f"Getting pods for workload_id: {workload_id} in namespace: {namespace}"
   )
@@ -262,7 +221,7 @@ def get_workload_job(
     namespace: str = "default",
     controller_only: bool = True,
 ) -> Optional[kubernetes.client.V1Job]:
-  """Get the latest Kubernetes Job object for a given workload."""
+  """Get the active Kubernetes Job object for a given workload."""
   jobs = get_workload_jobs(
       batch_api,
       workload_id,
@@ -273,7 +232,7 @@ def get_workload_job(
     return None
   if len(jobs) > 1:
     logging.info(f"Got more than one job for workload_id: {workload_id}")
-  return jobs[-1]
+  return jobs[0]
 
 
 def get_workload_jobset(
@@ -524,15 +483,14 @@ def wait_for_workload_completion(
       terminated = getattr(
           getattr(workload_container, "state", None), "terminated", None
       )
-      exit_code = getattr(terminated, "exit_code", None)
-      if isinstance(exit_code, int) and not isinstance(exit_code, bool):
-        if exit_code != 0:
-          print_container_logs(
-              core_api,
-              namespace=namespace,
-              pod_name=pod.metadata.name,
-              container_name=_WORKLOAD_CONTAINER_NAME,
-          )
+      if terminated is not None:
+        print_container_logs(
+            core_api,
+            namespace=namespace,
+            pod_name=pod.metadata.name,
+            container_name=_WORKLOAD_CONTAINER_NAME,
+        )
+        if terminated.exit_code != 0:
           url = LOGGING_URL_FORMAT.format(
               project=project_id,
               region=region,
@@ -542,9 +500,11 @@ def wait_for_workload_completion(
           )
           raise AirflowFailException(
               f"Workload {workload_id} failed with container exit code "
-              f"{exit_code}. Logs: {url}"
+              f"{terminated.exit_code}. Logs: {url}"
           )
-      elif pod.status.phase == "Failed":
+        continue
+
+      if pod.status.phase == "Failed":
         print_pod_logs(core_api, pod)
         url = LOGGING_URL_FORMAT.format(
             project=project_id,
@@ -558,33 +518,8 @@ def wait_for_workload_completion(
             f" Link to logs: {url}"
         )
 
-    for pod in head_pods:
-      workload_container = _get_container_status(pod, _WORKLOAD_CONTAINER_NAME)
-      terminated = getattr(
-          getattr(workload_container, "state", None), "terminated", None
-      )
-      exit_code = getattr(terminated, "exit_code", None)
-      if isinstance(exit_code, int) and not isinstance(exit_code, bool):
-        continue
-      if pod.status.phase in ["Pending", "Running", "Unknown"]:
-        logging.info(f"Pod {pod.metadata.name} is in phase {pod.status.phase}")
-        return False
-
-    for pod in head_pods:
-      workload_container = _get_container_status(pod, _WORKLOAD_CONTAINER_NAME)
-      terminated = getattr(
-          getattr(workload_container, "state", None), "terminated", None
-      )
-      exit_code = getattr(terminated, "exit_code", None)
-      if isinstance(exit_code, int) and not isinstance(exit_code, bool):
-        print_container_logs(
-            core_api,
-            namespace=namespace,
-            pod_name=pod.metadata.name,
-            container_name=_WORKLOAD_CONTAINER_NAME,
-        )
-      else:
-        print_pod_logs(core_api, pod)
+      logging.info(f"Pod {pod.metadata.name} is in phase {pod.status.phase}")
+      return False
 
     logging.info("All pod(s) phase are succeeded.")
     return True
