@@ -210,26 +210,13 @@ class TaskGroupWithTimeout(TaskGroup):
           deadline = start_time + timeout
           remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
           if remaining <= 0:
-            raise AirflowFailException(
-                f"Group {group_name} deadline {deadline.isoformat()}"
-                "exceeded; "
-            )
+            raise AirflowFailException(f"{group_name} timeout exceeded")
 
           task = task_instance.task
 
-          # Take the minimum value as the effective timeout to ensure all tasks
-          # are strictly bounded under this task group's shared deadline.
-          effective_timeout_sec = min(remaining, _determine_task_timeout(task))
-          logging.info(
-              f"{group_name}; "
-              f"task: '{task_instance.task_id}'; "
-              f"effective timeout: {effective_timeout_sec}s;"
-              f"group deadline: {deadline.isoformat()}; "
-          )
-
-          with SharedDeadlineTimeout(
-              group_deadline=deadline,
-              seconds=float(effective_timeout_sec),
+          with _TaskGroupBudgetTimeout(
+              remaining_group_budget_sec=remaining,
+              task_timeout_sec=_determine_task_timeout(task),
           ):
             return original_execute(task, context)
 
@@ -264,39 +251,43 @@ def _determine_task_timeout(task: BaseOperator) -> float:
   return timeout_1
 
 
-class SharedDeadlineTimeout(AirflowTimeout):
-  """An AirflowTimeout that fails outright instead of retrying once the
-  shared group deadline has passed, so a task's own retries can't run past
-  the group's timeout budget.
+class _TaskGroupBudgetTimeout(AirflowTimeout):
+  """
+  Enforces the earlier of the task timeout and remaining TaskGroup budget.
 
-  Args:
-    group_deadline: Absolute time by which the whole group must finish.
-    seconds: Timeout duration for this task, in seconds.
+  If the TaskGroup budget is the limiting timeout, the task fails without
+  retry. Otherwise, the parent Airflow timeout behavior is preserved.
   """
 
   def __init__(
       self,
-      group_deadline: datetime,
-      seconds: float,
-  ):
-    super().__init__(seconds=seconds)
-    self.group_deadline = group_deadline
+      remaining_group_budget_sec: float,
+      task_timeout_sec: float,
+  ) -> None:
+    self.remaining_group_budget_sec = remaining_group_budget_sec
+    self.task_timeout_sec = task_timeout_sec
+
+    # Whichever limit expires first determines when the timeout fires.
+    self.effective_timeout_sec = min(
+        self.remaining_group_budget_sec,
+        self.task_timeout_sec,
+    )
+
+    logging.info(
+        "Effective timeout: %ss; "
+        "remaining TaskGroup budget: %ss; "
+        "task timeout: %ss",
+        self.effective_timeout_sec,
+        self.remaining_group_budget_sec,
+        self.task_timeout_sec,
+    )
+
+    super().__init__(seconds=self.effective_timeout_sec)
 
   def handle_timeout(self, *args):
-    """
-    Overrides the parent to fail without retry, once the shared
-    group deadline has passed; otherwise, falls back to the normal
-    retryable timeout handling.
-    """
-    # Usually self.seconds should be less of at least equal to remaining, that
-    # is, handle_timeout would be called no later than group_deadline. However,
-    # the time to active the timeout may be delayed due to scheduling, so put
-    # a check to capture the condition that the group_deadline has already
-    # passed, and no need to wait and retry.
-    if self.group_deadline <= datetime.now(timezone.utc):
+    if self.remaining_group_budget_sec <= self.task_timeout_sec:
       raise AirflowFailException(
-          f"Group deadline {self.group_deadline.isoformat()} exceeded; "
-          "failing without retry."
+          "TaskGroup timeout budget exhausted; skipping retry."
       )
 
-    super().handle_timeout(*args)
+    return super().handle_timeout(*args)
