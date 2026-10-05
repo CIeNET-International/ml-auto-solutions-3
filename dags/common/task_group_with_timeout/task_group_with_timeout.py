@@ -26,8 +26,8 @@ from airflow.operators.python import PythonOperator, get_current_context
 from airflow.sensors.base import BaseSensorOperator
 from airflow.utils.context import Context
 from airflow.utils.state import TaskInstanceState
-from airflow.utils.task_group import TaskGroup
 from airflow.utils.timeout import timeout as AirflowTimeout
+from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
 
@@ -214,18 +214,10 @@ class TaskGroupWithTimeout(TaskGroup):
 
           task = task_instance.task
 
-          # Take the minimum value as the effective timeout to ensure all tasks
-          # are strictly bounded under this task group's shared deadline.
-          effective_timeout_sec = min(remaining, _determine_task_timeout(task))
-          logging.info(
-              f"{group_name}; "
-              f"task: '{task_instance.task_id}'; "
-              f"effective timeout: {effective_timeout_sec}s"
-          )
-
-          # Group-budget exhaustion is enforced by the `remaining <= 0` check
-          # above on the next retry; let AirflowTaskTimeout propagate normally.
-          with AirflowTimeout(seconds=int(effective_timeout_sec)):
+          with _TaskGroupBudgetTimeout(
+              remaining_group_budget_sec=remaining,
+              task_timeout_sec=_determine_task_timeout(task),
+          ):
             return original_execute(task, context)
 
         node.execute = wrapped_execute
@@ -257,3 +249,45 @@ def _determine_task_timeout(task: BaseOperator) -> float:
     return min(timeout_1, timeout_2)
 
   return timeout_1
+
+
+class _TaskGroupBudgetTimeout(AirflowTimeout):
+  """
+  Enforces the earlier of the task timeout and remaining TaskGroup budget.
+
+  If the TaskGroup budget is the limiting timeout, the task fails without
+  retry. Otherwise, the parent Airflow timeout behavior is preserved.
+  """
+
+  def __init__(
+      self,
+      remaining_group_budget_sec: float,
+      task_timeout_sec: float,
+  ) -> None:
+    self.remaining_group_budget_sec = remaining_group_budget_sec
+    self.task_timeout_sec = task_timeout_sec
+
+    # Whichever limit expires first determines when the timeout fires.
+    self.effective_timeout_sec = min(
+        self.remaining_group_budget_sec,
+        self.task_timeout_sec,
+    )
+
+    logging.info(
+        "Effective timeout: %ss; "
+        "remaining TaskGroup budget: %ss; "
+        "task timeout: %ss",
+        self.effective_timeout_sec,
+        self.remaining_group_budget_sec,
+        self.task_timeout_sec,
+    )
+
+    super().__init__(seconds=self.effective_timeout_sec)
+
+  def handle_timeout(self, *args):
+    if self.remaining_group_budget_sec <= self.task_timeout_sec:
+      raise AirflowFailException(
+          "TaskGroup timeout budget exhausted; skipping retry."
+      )
+
+    return super().handle_timeout(*args)
