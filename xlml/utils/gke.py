@@ -86,69 +86,41 @@ def get_custom_objects_api_client(
   return kubernetes.client.CustomObjectsApi(client)
 
 
-_JOBSET_NAME_LABEL = "jobset.sigs.k8s.io/jobset-name"
-_REPLICATED_JOB_LABEL = "jobset.sigs.k8s.io/replicatedjob-name"
-_PATHWAYS_HEAD_REPLICATED_JOB = "pathways-head"
-_WORKLOAD_CONTAINER_NAME = "workload-container"
+def list_workload_pods(
+    core_api: kubernetes.client.CoreV1Api,
+    workload_id: str,
+    namespace: str = "default",
+    batch_api: Optional[kubernetes.client.BatchV1Api] = None,
+) -> kubernetes.client.V1PodList:
+  """List pods belonging to the active Job for the given workload."""
+  logging.info(
+      f"Getting pods for workload_id: {workload_id} in namespace: {namespace}"
+  )
+  if batch_api is None:
+    batch_api = kubernetes.client.BatchV1Api(core_api.api_client)
+
+  job = get_workload_job(batch_api, workload_id, namespace=namespace)
+  if not job:
+    return kubernetes.client.V1PodList(items=[])
+
+  return core_api.list_namespaced_pod(
+      namespace=namespace,
+      label_selector=f"job-name={job.metadata.name}",
+  )
 
 
-def _replicated_job_name(resource: Any) -> str:
-  """Return the JobSet replicatedJob name label for a Job or Pod."""
-  metadata = getattr(resource, "metadata", None)
-  labels = getattr(metadata, "labels", None)
-  if not isinstance(labels, dict):
-    return ""
-  return str(labels.get(_REPLICATED_JOB_LABEL, ""))
-
-
-def _is_deleting(resource: Any) -> bool:
-  """Return True if the Kubernetes resource has a deletionTimestamp set."""
-  metadata = getattr(resource, "metadata", None)
-  deletion_ts = getattr(metadata, "deletion_timestamp", None)
-  return isinstance(deletion_ts, (datetime.datetime, str)) and bool(deletion_ts)
-
-
-def _get_container_status(
-    pod: kubernetes.client.V1Pod, container_name: str
-) -> Optional[kubernetes.client.V1ContainerStatus]:
-  """Return the container status matching container_name, if present."""
-  status = getattr(pod, "status", None)
-  container_statuses = getattr(status, "container_statuses", None) or []
-  for container_status in container_statuses:
-    if getattr(container_status, "name", None) == container_name:
-      return container_status
-  return None
-
-
-def _pod_label_selector_for_job(
-    job: kubernetes.client.V1Job, workload_id: str
-) -> str:
-  """Build a label selector matching pods owned by the given Job."""
-  metadata = getattr(job, "metadata", None)
-  job_name = getattr(metadata, "name", None)
-  job_uid = getattr(metadata, "uid", None)
-
-  selectors = []
-  if isinstance(job_name, str) and job_name:
-    selectors.append(f"job-name={job_name}")
-  if isinstance(job_uid, str) and job_uid:
-    selectors.append(f"controller-uid={job_uid}")
-  return ",".join(selectors) if selectors else f"job-name={workload_id}"
-
-
-def get_workload_jobs(
+def get_workload_job(
     batch_api: kubernetes.client.BatchV1Api,
     workload_id: str,
     namespace: str = "default",
-    controller_only: bool = False,
-) -> list[kubernetes.client.V1Job]:
-  """Get the active Kubernetes Job objects for a given workload."""
+) -> Optional[kubernetes.client.V1Job]:
+  """Get the active Kubernetes Job object for a given workload."""
   logging.info(
       f"Getting job for workload_id: {workload_id} in namespace: {namespace}"
   )
   try:
     job = batch_api.read_namespaced_job(name=workload_id, namespace=namespace)
-    return [] if _is_deleting(job) else [job]
+    return None if job.metadata.deletion_timestamp else job
   except kubernetes.client.exceptions.ApiException as e:
     logging.info(
         f"Direct job read failed for {workload_id} ({e}); trying label"
@@ -157,82 +129,30 @@ def get_workload_jobs(
 
   try:
     jobs = batch_api.list_namespaced_job(
-        label_selector=f"{_JOBSET_NAME_LABEL}={workload_id}",
+        label_selector=f"jobset.sigs.k8s.io/jobset-name={workload_id}",
         namespace=namespace,
     )
-    active_jobs = [job for job in jobs.items if not _is_deleting(job)]
-    if controller_only:
-      head_jobs = [
-          job
-          for job in active_jobs
-          if _replicated_job_name(job) == _PATHWAYS_HEAD_REPLICATED_JOB
-      ]
-      if head_jobs:
-        return head_jobs
-    return active_jobs
+    active_jobs = [
+        job for job in jobs.items if not job.metadata.deletion_timestamp
+    ]
+    if not active_jobs:
+      return None
+    head_jobs = [
+        job
+        for job in active_jobs
+        if (job.metadata.labels or {}).get(
+            "jobset.sigs.k8s.io/replicatedjob-name"
+        )
+        == "pathways-head"
+    ]
+    if head_jobs:
+      active_jobs = head_jobs
+    if len(active_jobs) > 1:
+      logging.info(f"Got more than one job for workload_id: {workload_id}")
+    return active_jobs[0]
   except kubernetes.client.exceptions.ApiException as e:
     logging.info(f"Could not list Kubernetes Jobs for {workload_id}: {e}")
-    return []
-
-
-def list_workload_pods(
-    core_api: kubernetes.client.CoreV1Api,
-    workload_id: str,
-    namespace: str = "default",
-    batch_api: Optional[kubernetes.client.BatchV1Api] = None,
-    controller_only: bool = False,
-) -> kubernetes.client.V1PodList:
-  """List pods belonging to the active Job(s) for the given workload."""
-  logging.info(
-      f"Getting pods for workload_id: {workload_id} in namespace: {namespace}"
-  )
-  if batch_api is None:
-    batch_api = kubernetes.client.BatchV1Api(core_api.api_client)
-
-  jobs = get_workload_jobs(
-      batch_api,
-      workload_id,
-      namespace=namespace,
-      controller_only=controller_only,
-  )
-  if not jobs:
-    return kubernetes.client.V1PodList(items=[])
-
-  if len(jobs) == 1:
-    return core_api.list_namespaced_pod(
-        namespace=namespace,
-        label_selector=_pod_label_selector_for_job(jobs[0], workload_id),
-    )
-
-  all_pods = []
-  for job in jobs:
-    pod_list = core_api.list_namespaced_pod(
-        namespace=namespace,
-        label_selector=_pod_label_selector_for_job(job, workload_id),
-    )
-    if pod_list and pod_list.items:
-      all_pods.extend(pod_list.items)
-  return kubernetes.client.V1PodList(items=all_pods)
-
-
-def get_workload_job(
-    batch_api: kubernetes.client.BatchV1Api,
-    workload_id: str,
-    namespace: str = "default",
-    controller_only: bool = True,
-) -> Optional[kubernetes.client.V1Job]:
-  """Get the active Kubernetes Job object for a given workload."""
-  jobs = get_workload_jobs(
-      batch_api,
-      workload_id,
-      namespace=namespace,
-      controller_only=controller_only,
-  )
-  if not jobs:
     return None
-  if len(jobs) > 1:
-    logging.info(f"Got more than one job for workload_id: {workload_id}")
-  return jobs[0]
 
 
 def get_workload_jobset(
@@ -380,6 +300,9 @@ def wait_for_workload_start(
     return False
 
   for pod in pods.items:
+    if pod.status.phase in ["Pending", "Unknown"]:
+      logging.info(f"Pod {pod.metadata.name} is in phase {pod.status.phase}")
+      return False
     if pod.status.phase == "Failed":
       print_pod_logs(core_api, pod)
       url = LOGGING_URL_FORMAT.format(
@@ -393,11 +316,6 @@ def wait_for_workload_start(
           f"Workload {workload_id} failed during startup with pod phase:"
           f" {pod.status.phase}. Link to logs: {url}"
       )
-
-  for pod in pods.items:
-    if pod.status.phase in ["Pending", "Unknown"]:
-      logging.info(f"Pod {pod.metadata.name} is in phase {pod.status.phase}")
-      return False
 
   logging.info("All pod(s) phase are ready to run.")
   return True
@@ -413,9 +331,7 @@ def wait_for_workload_completion(
 ) -> bool:
   """Wait for workload to finish successfully."""
   core_api = get_core_api_client(project_id, region, cluster_name)
-  pods = list_workload_pods(
-      core_api, workload_id, namespace=namespace, controller_only=True
-  )
+  pods = list_workload_pods(core_api, workload_id, namespace=namespace)
   log_workload_pod_statuses(workload_id, pods)
 
   if not pods.items:
@@ -472,59 +388,10 @@ def wait_for_workload_completion(
     logging.info(f"No pods found for workload: {workload_id}")
     return False
 
-  head_pods = [
-      pod
-      for pod in pods.items
-      if _replicated_job_name(pod) == _PATHWAYS_HEAD_REPLICATED_JOB
-  ]
-  if head_pods:
-    for pod in head_pods:
-      workload_container = _get_container_status(pod, _WORKLOAD_CONTAINER_NAME)
-      terminated = getattr(
-          getattr(workload_container, "state", None), "terminated", None
-      )
-      if terminated is not None:
-        print_container_logs(
-            core_api,
-            namespace=namespace,
-            pod_name=pod.metadata.name,
-            container_name=_WORKLOAD_CONTAINER_NAME,
-        )
-        if terminated.exit_code != 0:
-          url = LOGGING_URL_FORMAT.format(
-              project=project_id,
-              region=region,
-              cluster=cluster_name,
-              namespace=namespace,
-              workload_id=workload_id,
-          )
-          raise AirflowFailException(
-              f"Workload {workload_id} failed with container exit code "
-              f"{terminated.exit_code}. Logs: {url}"
-          )
-        continue
-
-      if pod.status.phase == "Failed":
-        print_pod_logs(core_api, pod)
-        url = LOGGING_URL_FORMAT.format(
-            project=project_id,
-            region=region,
-            cluster=cluster_name,
-            namespace=namespace,
-            workload_id=workload_id,
-        )
-        raise AirflowFailException(
-            f"Workload {workload_id} failed with pod phase: {pod.status.phase}."
-            f" Link to logs: {url}"
-        )
-
+  for pod in pods.items:
+    if pod.status.phase in ["Pending", "Running", "Unknown"]:
       logging.info(f"Pod {pod.metadata.name} is in phase {pod.status.phase}")
       return False
-
-    logging.info("All pod(s) phase are succeeded.")
-    return True
-
-  for pod in pods.items:
     if pod.status.phase == "Failed":
       print_pod_logs(core_api, pod)
       url = LOGGING_URL_FORMAT.format(
@@ -566,11 +433,6 @@ def wait_for_workload_completion(
               f"Workload {workload_id} failed with container exit code "
               f"{container_status.state.terminated.exit_code}. Logs: {url}"
           )
-
-  for pod in pods.items:
-    if pod.status.phase in ["Pending", "Running", "Unknown"]:
-      logging.info(f"Pod {pod.metadata.name} is in phase {pod.status.phase}")
-      return False
 
   # Fetch logs for successful pods before returning
   for pod in pods.items:
