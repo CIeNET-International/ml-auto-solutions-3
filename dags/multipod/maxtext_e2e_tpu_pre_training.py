@@ -111,7 +111,6 @@ with models.DAG(
       "llama3_1-70b": {
           "core_count": 64,
           "cpu_cluster": GkeClusters.CPU_M1_MEGAMEM_96_CLUSTER,
-          "time_out_in_min": 120,
           "training": {
               "command": "bash tests/end_to_end/tpu/llama3.1/70b/test_llama3.1_70b.sh",
               "maxtext_ckpt_path": "gs://runner-maxtext-logs/llama3.1-70b/train/{run_name}/checkpoints/1/items",
@@ -171,7 +170,7 @@ with models.DAG(
           core_count=training_core_count
       )
       training_task = gke_config.get_gke_config(
-          time_out_in_min=test_config.get("time_out_in_min", 90),
+          time_out_in_min=120,
           test_name="pre",
           run_model_cmds=training_cmd,
           docker_image="{{ params.docker_image }}",
@@ -179,7 +178,7 @@ with models.DAG(
           test_owner=test_owner.SURBHI_J,
           priority="medium",
           max_restart=3,
-          restart_on_exit_codes=[134, 137, 143],
+          restart_on_exit_codes=[137, 143],
           use_gcluster=True,
       ).run(skip_post_process=True)
 
