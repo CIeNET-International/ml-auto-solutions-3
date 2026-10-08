@@ -15,7 +15,8 @@
 """
 This file is used to look up the GitHub username of a test owner.
 
-The GitHub username is then used to assign the GitHub Issue created by the alert plugin.
+The GitHub username is then used to assign the GitHub Issue created by the
+alert plugin.
 
 Please append your GitHub username if you need to add your test owner item.
 """
@@ -99,8 +100,8 @@ GUNJAN_J = "gunjanj007"
 BRYAN_W = "bwuu"
 
 # Bite
-Maggie_Z = "jiya-zhang"
-Andrew_S = "asall"
+MAGGIE_Z = "jiya-zhang"
+ANDREW_S = "asall"
 
 # Dashboard
 SEVERUS_H = "severus-ho"
