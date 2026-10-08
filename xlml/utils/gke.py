@@ -695,15 +695,17 @@ def _find_target_pod_node(
   # The cluster location cannot be used as a substitute: for a regional
   # cluster it is a region, and even for a zonal cluster the caller may have
   # passed a region (gcluster clusters carry a region in their zone field).
-  target_zone = None
-  try:
-    node = core_api.read_node(name=target_node)
-    labels = (node.metadata.labels or {}) if node.metadata else {}
-    target_zone = labels.get("topology.kubernetes.io/zone") or labels.get(
-        "failure-domain.beta.kubernetes.io/zone"
+  # Compute Engine rejects a region, so fail here rather than fall back.
+  node = core_api.read_node(name=target_node)
+  labels = (node.metadata.labels or {}) if node.metadata else {}
+  target_zone = labels.get("topology.kubernetes.io/zone") or labels.get(
+      "failure-domain.beta.kubernetes.io/zone"
+  )
+  if not target_zone:
+    raise AirflowFailException(
+        f"Node {target_node} (pod {target_pod}) has no zone label;"
+        " refusing to delete without a verified zone."
     )
-  except Exception as e:  # pylint: disable=broad-exception-caught
-    logging.warning(f"Could not read zone label from node {target_node}: {e}")
 
   logging.info("Identified Pod for node deletion:")
   logging.info(f"  Pod Name:   {target_pod}")
@@ -739,10 +741,10 @@ def delete_node(
       namespace=namespace,
   )
   node_name = delete_info["node"]
-  # Prefer the zone reported by the node itself. `zone` is derived from the
-  # cluster config, which holds a region for regional/gcluster clusters and
-  # would be rejected by the Compute Engine API.
-  node_zone = delete_info.get("zone") or zone
+  # `zone` only locates the cluster above; it holds a region for gcluster
+  # clusters and would be rejected by the Compute Engine API, so the instance
+  # zone always comes from the node's own label.
+  node_zone = delete_info["zone"]
   # Delete the specified compute instance.
   if dry_run:
     logging.info(
