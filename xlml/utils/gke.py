@@ -91,19 +91,19 @@ def list_workload_pods(
     workload_id: str,
     namespace: str = "default",
 ) -> kubernetes.client.V1PodList:
-  """List all pods for the given workload (Job or JobSet)."""
+  """List pods belonging to the active Job for the given workload."""
   logging.info(
       f"Getting pods for workload_id: {workload_id} in namespace: {namespace}"
   )
-  pods = core_api.list_namespaced_pod(
-      namespace=namespace, label_selector=f"job-name={workload_id}"
+  batch_api = kubernetes.client.BatchV1Api(core_api.api_client)
+  job = get_workload_job(batch_api, workload_id, namespace=namespace)
+  if not job:
+    return kubernetes.client.V1PodList(items=[])
+
+  return core_api.list_namespaced_pod(
+      namespace=namespace,
+      label_selector=f"job-name={job.metadata.name}",
   )
-  if not pods.items:
-    pods = core_api.list_namespaced_pod(
-        namespace=namespace,
-        label_selector=f"jobset.sigs.k8s.io/jobset-name={workload_id}",
-    )
-  return pods
 
 
 def get_workload_job(
@@ -111,12 +111,13 @@ def get_workload_job(
     workload_id: str,
     namespace: str = "default",
 ) -> Optional[kubernetes.client.V1Job]:
-  """Get the Kubernetes Job object for a given workload."""
+  """Get the active Kubernetes Job object for a given workload."""
   logging.info(
       f"Getting job for workload_id: {workload_id} in namespace: {namespace}"
   )
   try:
-    return batch_api.read_namespaced_job(name=workload_id, namespace=namespace)
+    job = batch_api.read_namespaced_job(name=workload_id, namespace=namespace)
+    return None if job.metadata.deletion_timestamp else job
   except kubernetes.client.exceptions.ApiException as e:
     logging.info(
         f"Direct job read failed for {workload_id} ({e}); trying label"
@@ -128,11 +129,24 @@ def get_workload_job(
         label_selector=f"jobset.sigs.k8s.io/jobset-name={workload_id}",
         namespace=namespace,
     )
-    if not jobs.items:
+    active_jobs = [
+        job for job in jobs.items if not job.metadata.deletion_timestamp
+    ]
+    if not active_jobs:
       return None
-    if len(jobs.items) > 1:
+    head_jobs = [
+        job
+        for job in active_jobs
+        if (job.metadata.labels or {}).get(
+            "jobset.sigs.k8s.io/replicatedjob-name"
+        )
+        == "pathways-head"
+    ]
+    if head_jobs:
+      active_jobs = head_jobs
+    if len(active_jobs) > 1:
       logging.info(f"Got more than one job for workload_id: {workload_id}")
-    return jobs.items[0]
+    return active_jobs[0]
   except kubernetes.client.exceptions.ApiException as e:
     logging.info(f"Could not list Kubernetes Jobs for {workload_id}: {e}")
     return None
@@ -146,7 +160,7 @@ def get_workload_jobset(
   """Get the Kubernetes JobSet CRD object for a given workload."""
   try:
     return custom_api.get_namespaced_custom_object(
-        group="jobset.sigs.k8s.io",
+        group="jobset.x-k8s.io",
         version="v1alpha2",
         namespace=namespace,
         plural="jobsets",

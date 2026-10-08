@@ -165,7 +165,7 @@ with models.DAG(
           core_count=training_core_count
       )
       training_task = gke_config.get_gke_config(
-          time_out_in_min=60,
+          time_out_in_min=120,
           test_name="pre",
           run_model_cmds=training_cmd,
           docker_image="{{ params.docker_image }}",
