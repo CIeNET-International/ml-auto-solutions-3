@@ -90,15 +90,12 @@ def list_workload_pods(
     core_api: kubernetes.client.CoreV1Api,
     workload_id: str,
     namespace: str = "default",
-    batch_api: Optional[kubernetes.client.BatchV1Api] = None,
 ) -> kubernetes.client.V1PodList:
   """List pods belonging to the active Job for the given workload."""
   logging.info(
       f"Getting pods for workload_id: {workload_id} in namespace: {namespace}"
   )
-  if batch_api is None:
-    batch_api = kubernetes.client.BatchV1Api(core_api.api_client)
-
+  batch_api = kubernetes.client.BatchV1Api(core_api.api_client)
   job = get_workload_job(batch_api, workload_id, namespace=namespace)
   if not job:
     return kubernetes.client.V1PodList(items=[])

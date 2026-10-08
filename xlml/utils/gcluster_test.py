@@ -898,12 +898,14 @@ class GclusterTest(unittest.TestCase):
     matched_pods.items = [mock.MagicMock()]
     mock_core_api.list_namespaced_pod.return_value = matched_pods
 
-    result = gke.list_workload_pods(
-        mock_core_api,
-        "test-workload",
-        namespace="test-ns",
-        batch_api=mock_batch_api,
-    )
+    with mock.patch.object(
+        kubernetes.client, "BatchV1Api", return_value=mock_batch_api
+    ):
+      result = gke.list_workload_pods(
+          mock_core_api,
+          "test-workload",
+          namespace="test-ns",
+      )
     self.assertEqual(result, matched_pods)
     mock_core_api.list_namespaced_pod.assert_called_once_with(
         namespace="test-ns",
@@ -921,12 +923,14 @@ class GclusterTest(unittest.TestCase):
     mock_job_list.items = []
     mock_batch_api.list_namespaced_job.return_value = mock_job_list
 
-    result = gke.list_workload_pods(
-        mock_core_api,
-        "test-workload",
-        namespace="test-ns",
-        batch_api=mock_batch_api,
-    )
+    with mock.patch.object(
+        kubernetes.client, "BatchV1Api", return_value=mock_batch_api
+    ):
+      result = gke.list_workload_pods(
+          mock_core_api,
+          "test-workload",
+          namespace="test-ns",
+      )
     self.assertEqual(result.items, [])
     mock_core_api.list_namespaced_pod.assert_not_called()
 
