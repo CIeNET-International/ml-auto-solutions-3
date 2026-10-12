@@ -373,10 +373,25 @@ def wait_for_workload_completion(
     logging.info(f"No pods found for workload: {workload_id}")
     return False
 
+  # A pod may fail while the rest of the workload is still running, e.g. the
+  # node interruption tests delete one node and rely on the JobSet restart
+  # policy to recover. Judge the workload only once no pod is active anymore;
+  # otherwise a Failed pod that happens to be listed first (pod `-0-0-`, the
+  # default interruption target) fails the task before the JobSet can restart.
+  active_pods = [
+      pod
+      for pod in pods.items
+      if pod.status.phase in ["Pending", "Running", "Unknown"]
+  ]
+  if active_pods:
+    logging.info(
+        f"{len(active_pods)} of {len(pods.items)} pod(s) still active, e.g."
+        f" {active_pods[0].metadata.name} in phase"
+        f" {active_pods[0].status.phase}."
+    )
+    return False
+
   for pod in pods.items:
-    if pod.status.phase in ["Pending", "Running", "Unknown"]:
-      logging.info(f"Pod {pod.metadata.name} is in phase {pod.status.phase}")
-      return False
     if pod.status.phase == "Failed":
       print_pod_logs(core_api, pod)
       url = LOGGING_URL_FORMAT.format(
