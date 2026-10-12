@@ -652,9 +652,14 @@ def wait_for_workload_reach_step(
   return False
 
 
+# Workload pod names are `<workload>-slice-job-<slice>-<index>-<hash>` on XPK
+# and `<workload>-main-job-<slice>-<index>-<hash>` on gcluster.
+_WORKLOAD_POD_NAME_PATTERN = re.compile(r"-(?:slice|main)-job-(\d+)-(\d+)-\w+")
+
+
 def extract_numbers(pod_name: str) -> Tuple[int, int]:
   """Extract slice and pod numbers from pod name."""
-  match = re.search(r"slice-job-(\d+)-(\d+)-", pod_name)
+  match = _WORKLOAD_POD_NAME_PATTERN.search(pod_name)
   if match:
     return int(match.group(1)), int(match.group(2))
   return (0, 0)
@@ -671,17 +676,17 @@ def _find_target_pod_node(
   """find the node name for the workload."""
   core_api = get_core_api_client(project_id, region, cluster_name)
   pods = list_workload_pods(core_api, workload_id, namespace=namespace)
-  pod_node_pairs = []
-  pattern = re.compile(r".*slice-job-(\d+)-(\d+)-\w+")
 
   pod_node_pairs = [
       (pod.metadata.name, pod.spec.node_name)
       for pod in pods.items
-      if pod.status.phase == "Running" and pattern.match(pod.metadata.name)
+      if pod.status.phase == "Running"
+      and _WORKLOAD_POD_NAME_PATTERN.search(pod.metadata.name)
   ]
   if not pod_node_pairs:
     raise AirflowFailException(
-        f"No running pods found for workload {workload_id} matching pattern."
+        f"No running pods found for workload {workload_id} matching pattern"
+        f" {_WORKLOAD_POD_NAME_PATTERN.pattern}."
     )
 
   # Find the pod with the highest slice and pod numbers.

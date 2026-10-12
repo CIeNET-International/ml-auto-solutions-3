@@ -16,6 +16,7 @@ from dags.common import test_owner
 from dags.common.vm_resource import GkeClusters
 from dags.multipod.configs import gke_config
 from dags.orbax.util import validation_util, test_config_util
+from xlml.utils import gcluster
 from xlml.utils.gke import zone_to_region
 
 SCHEDULE = "45 17 * * *" if composer_env.is_prod_env() else None
@@ -153,12 +154,15 @@ with models.DAG(
             task_id="generate_end_time"
         )()
 
+        # gcluster truncates workload IDs (and thus pod names) to a short
+        # prefix of the benchmark ID, so the pod filter must use that prefix.
+        workload_prefix = gcluster.get_workload_id_prefix(test_config.short_id)
         validate_restore_step = (
             validation_util.validate_restored_correct_checkpoint(
                 project_id=test_config.cluster.project,
                 location=zone_to_region(test_config.cluster.zone),
                 cluster_name=test_config.cluster.name,
-                pod_pattern=f"{test_config.short_id}.*0-0",
+                pod_pattern=f"{workload_prefix}.*0-0",
                 interrupt_at_step=step_to_interrupt,
                 start_time=start_time,
                 end_time=end_time,
