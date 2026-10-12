@@ -29,7 +29,7 @@ Settings come from environment variables (set on the job, or overridden with
                  environment's Composer bucket folder).
 
 Writes <date>.json, <date>.triage.json, <date>.draft.json, and
-<date>.search.json with GEMINI_SEARCH, the same files as the DAG.
+<date>.search.json with GEMINI_SEARCH.
 """
 
 import dataclasses

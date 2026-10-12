@@ -14,10 +14,8 @@
 
 """Builds the daily digest from the Airflow REST API and Cloud Logging.
 
-The REST version of the orbax_daily_monitor DAG's build_registry,
-collect_runs and write_digest tasks (and of the Jetski skill's
-collect_local.py). The digest itself comes from dag_monitor.build_digest, so
-it has the same schema as the DAG's.
+Collects the same data as the Jetski skill's collect_local.py. The digest
+itself comes from dag_monitor.build_digest, so both have the same schema.
 """
 
 import datetime

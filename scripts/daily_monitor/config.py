@@ -16,14 +16,15 @@
 
 import dataclasses
 
-# Every environment reports to the same Chat space, "[TEST erniechang-test]
-# Testing Orbax Daily Monitoring" (spaces/AAQAmKHsv1s), through this webhook.
+# Every environment reports to the same Chat space, "[Daily Monitoring]"
+# (spaces/AAQA57164nY), through this webhook.
 WEBHOOK_SECRET = "orbax-daily-monitor-chat-webhook-erniechang-test"
 
 MONITORED_FOLDER = "dags/orbax"
+# The retired monitor DAG. Skipped if an environment still has it deployed.
 SELF_DAG_ID = "orbax_daily_monitor"
 
-# Same limits as the orbax_daily_monitor DAG.
+# Collection limits.
 HISTORY_RUNS = 7
 MAX_RUNS_IN_WINDOW = 100
 AIRFLOW_ERROR_LINES_PER_TASK = 50
@@ -62,7 +63,7 @@ ENVIRONMENTS = {
         ),
         bucket=WRITE_BUCKET,
         prefix="data/dag_monitor/orbax",
-        title="[TEST erniechang-test] Testing Orbax Daily Monitoring",
+        title="Orbax DAG daily report",
     ),
     # Reads the prod Composer (Airflow REST API GETs and Cloud Logging only);
     # writes to the erniechang-test bucket. Never posts: posting only works in
@@ -77,6 +78,6 @@ ENVIRONMENTS = {
         ),
         bucket=WRITE_BUCKET,
         prefix="data/dag_monitor/orbax-prod",
-        title="[TEST erniechang-test] Testing Orbax Daily Monitoring",
+        title="Orbax DAG daily report",
     ),
 }

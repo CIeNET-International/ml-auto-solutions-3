@@ -1,26 +1,58 @@
 # Orbax daily monitor (Cloud Run Job)
 
 Builds the daily Orbax DAG health report **outside Airflow**. Every day at
-00:30 UTC, Cloud Scheduler starts a Cloud Run Job. The job reads the
-`dags/orbax` runs of the Composer environment `erniechang-test` through the
-Airflow REST API and Cloud Logging. It builds the same digest as the
-`orbax_daily_monitor` DAG with `xlml/utils/dag_monitor.py`, triages failures
-with Gemini (`gemini-3.5-flash`, global endpoint), and writes the files to the
-Composer bucket. The Jetski `orbax-daily-monitor` skill reads them from there.
+00:30 UTC, Cloud Scheduler starts one Cloud Run Job per environment. Each job
+reads the `dags/orbax` runs of one Composer environment through the Airflow
+REST API and Cloud Logging. It builds the digest with
+`xlml/utils/dag_monitor.py`, triages failures with Gemini (`gemini-3.5-flash`,
+global endpoint), and writes the files to the erniechang-test bucket. The
+Jetski `orbax-daily-monitor` skill reads them from there.
+
+## Environments
+
+| `ENV` | Reads (Composer) | Cloud Run Job | Writes to `gs://us-east1-erniechang-test-72c040a8-bucket/` |
+|---|---|---|---|
+| `test` | `erniechang-test` (us-east1) | `orbax-daily-monitor` | `data/dag_monitor/orbax/` |
+| `prod` | `ml-automation-solutions` (us-central1) | `orbax-daily-monitor-prod` | `data/dag_monitor/orbax-prod/` |
+
+- Both jobs run in `cloud-ml-auto-solutions` / `us-east1` as
+  `ml-auto-solutions-dev@`, with Airflow REST API GETs and Cloud Logging reads
+  only.
+- The monitor never writes to the Composer environment it reads; every
+  environment writes to the erniechang-test bucket. This is temporary: we
+  don't have permission yet to create a dedicated bucket, so the monitor uses
+  the erniechang-test bucket until we do.
+- Both report to the same Chat space, "[Daily Monitoring]"
+  (`spaces/AAQA57164nY`), with the same title.
+- Prod never auto-posts: posting only works in `dag_monitor.AUTO_POST_ENVS`
+  (erniechang-test).
 
 ```
-Cloud Scheduler (30 0 * * * UTC) ──► Cloud Run Job orbax-daily-monitor
+Cloud Scheduler (30 0 * * * UTC) ──► Cloud Run Job orbax-daily-monitor[-prod]
                                      (runs as ml-auto-solutions-dev@)
   ├─ Airflow REST API (GET only) ── DAGs, runs, task instances, XCom, sources
   ├─ Cloud Logging (read only) ──── worker ERROR lines, pod logs, checkpoint events
   ├─ Vertex AI ──────────────────── triage (+ optional read-only search_logs)
   └─ GCS ────────────────────────── gs://us-east1-erniechang-test-72c040a8-bucket/
-                                    data/dag_monitor/orbax/<date>.{json,triage.json,draft.json[,search.json]}
+                                    data/dag_monitor/orbax[-prod]/<date>.{json,triage.json,draft.json[,search.json]}
 ```
 
+## Chat report
+
+`<date>.draft.json` holds the messages, posted in one thread:
+
+- **Main message:** title, totals, and one bullet per failure cause. DAGs with
+  the same cause share a bullet: `- *Label* (N DAGs): a, b. summary`. No links.
+- **One reply per folder** (for example `*orbax/*`): one line per failed DAG
+  with its Airflow link, `` - `dag`: Airflow ``. A reply continues in another
+  message only past about 4,000 characters (about 12 failures).
+
 Posting to Chat is off by default (`POST=false`): new Chat webhooks need a
-policy exception (go/webhook-security-decision). Until then, review and post
-the draft with the Jetski skill.
+policy exception (go/webhook-security-decision). Until then, the Jetski skill
+drafts the report (`orbax report [date] [--env test|prod]`) and posts it only
+after an explicit "post". The skill can also draft one `[CIeNET-Sheriff]` bug
+for a DAG that failed 2 or more runs in a row (`orbax report bug <date>`); it
+files the bug only after an explicit "file".
 
 ## Files
 
@@ -44,7 +76,7 @@ the draft with the Jetski skill.
 | `GEMINI_SEARCH` | `false` | Let Gemini run up to 5 read-only log searches per failing DAG |
 | `POST` | `false` | Post the draft through the Chat webhook |
 | `FORCE_POST` | `false` | Post even if `<date>.posted.json` exists |
-| `OUTPUT` | Composer bucket folder | `gs://bucket/prefix`, or `local:<dir>` for local runs |
+| `OUTPUT` | The environment's folder (see Environments) | `gs://bucket/prefix`, or `local:<dir>` for local runs |
 
 ## Test
 
@@ -62,11 +94,12 @@ CI only checks `dags/` and `xlml/`, so run these locally.
 
 ```
 gcloud auth application-default login
-PYTHONPATH=. REPORT_DATE=2026-10-08 OUTPUT=local:/tmp/orbax-monitor \
+PYTHONPATH=. ENV=test REPORT_DATE=2026-10-08 OUTPUT=local:/tmp/orbax-monitor \
   python3 -m scripts.daily_monitor.main
 ```
 
-This uses your credentials and calls Vertex AI (a few cents).
+This uses your credentials and calls Vertex AI (a few cents). Use `ENV=prod`
+for the prod Composer.
 
 ## Deploy (project cloud-ml-auto-solutions, region us-east1)
 
@@ -86,12 +119,10 @@ Logs: Cloud Run → Jobs → `orbax-daily-monitor` → Executions, or
 If the Airflow API returns HTTP 403, `ml-auto-solutions-dev@` needs an Airflow
 role in `erniechang-test` (Airflow UI → Security → List Users).
 
-## Prod environment
+### Prod
 
-`ENV=prod` reads the prod Composer `ml-automation-solutions` (us-central1)
-with Airflow REST API GETs and Cloud Logging reads only, and writes to the
-erniechang-test bucket under `data/dag_monitor/orbax-prod/`. It never posts.
-It runs as its own job, `orbax-daily-monitor-prod`:
+`MONITOR_ENV=prod` makes `deploy.sh` target `orbax-daily-monitor-prod`. The
+image is shared, so `build` is needed only once:
 
 ```
 MONITOR_ENV=prod scripts/daily_monitor/deploy.sh job
@@ -99,14 +130,16 @@ MONITOR_ENV=prod scripts/daily_monitor/deploy.sh execute REPORT_DATE=2026-10-08
 MONITOR_ENV=prod scripts/daily_monitor/deploy.sh schedule
 ```
 
-If the first run gets HTTP 403 from the Airflow API, `ml-auto-solutions-dev@`
-needs an Airflow role (Viewer is enough) in `ml-automation-solutions`.
+`ml-auto-solutions-dev@` can read the prod Airflow API (verified by the
+2026-10-12 executions). If that changes and the job gets HTTP 403, it needs an
+Airflow role (Viewer is enough) in `ml-automation-solutions`.
 
 ## Pause or roll back
 
 ```
 gcloud scheduler jobs pause orbax-daily-monitor --location us-east1 --project cloud-ml-auto-solutions
+gcloud scheduler jobs pause orbax-daily-monitor-prod --location us-east1 --project cloud-ml-auto-solutions
 ```
 
-The `orbax_daily_monitor` DAG still exists and writes the same files; trigger
-it from the Airflow UI as before.
+Pausing stops the daily reports; run `deploy.sh execute` by hand when needed.
+The `orbax_daily_monitor` DAG it replaced was removed on 2026-10-12.

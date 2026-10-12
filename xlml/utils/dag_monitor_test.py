@@ -900,7 +900,7 @@ class ValidateTriageTest(unittest.TestCase):
     )
     self.assertEqual(triage["source"], "gemini")
     self.assertEqual(triage["dropped"], 0)
-    self.assertEqual(triage["items"], [_good_item()])
+    self.assertEqual(triage["items"], [_good_item(recommendation="")])
 
   def test_drops_unsupported_items(self):
     bad_items = [
@@ -994,6 +994,7 @@ class FallbackTriageTest(unittest.TestCase):
                 "category": "unknown",
                 "summary": f"validate_restored_correct_checkpoint: {ERR_RESTORE}",
                 "evidence": [],
+                "recommendation": "",
             }
         ],
     )
@@ -1072,13 +1073,13 @@ class GoldenCaseTest(unittest.TestCase):
     self.assertEqual(triage["source"], "gemini")
     self.assertEqual(triage["dropped"], 0)
     self.assertEqual(triage["items"][0]["summary"], GOLDEN_SUMMARY)
-    (text,) = dag_monitor.render_report(
+    self.assertIn(GOLDEN_RESTORE, triage["items"][0]["evidence"])
+    main, _ = dag_monitor.render_report(
         _golden_digest(), triage, RenderReportTest.TITLE
     )
     self.assertIn(
-        f"`{RESTORE_DAG}` (latest of 2 failed runs). {GOLDEN_SUMMARY}", text
+        f"`{RESTORE_DAG}` (latest of 2 failed runs). {GOLDEN_SUMMARY}", main
     )
-    self.assertIn(f"- `{RESTORE_DAG}`: `{GOLDEN_RESTORE}`", text)
 
   def test_drops_a_restore_event_that_was_never_logged(self):
     made_up = "{'step': 39, 'event_type': 'restore', 'directory': 'gs://b'}"
@@ -1096,54 +1097,127 @@ class RenderReportTest(unittest.TestCase):
     triage = dag_monitor.validate_triage(reply, digest)
     return dag_monitor.render_report(digest, triage, self.TITLE)
 
-  def test_one_message_with_links_from_the_digest(self):
-    (text,) = self._render(_test_digest(), {"items": [_good_item()]})
-    lines = text.splitlines()
+  def test_main_message_and_one_folder_reply(self):
+    main, reply = self._render(_test_digest(), {"items": [_good_item()]})
+    lines = main.splitlines()
     self.assertEqual(lines[0], f"📊 *{self.TITLE}: 2026-10-08*")
     self.assertIn(
         "Cluster `bodaborg-v5p-nap` (cloud-tpu-shared-capacity, europe-west4)",
-        text,
+        main,
     )
-    self.assertIn("Runs: ✅ 3 passed · ❌ 2 failed · ⏳ 0 running", text)
-    self.assertIn("DAGs: 4 · ⚠️ 0 missing · ⚪ 1 no runs", text)
-    self.assertIn("🟡 *Failed earlier in the window*", text)
+    self.assertIn("Runs: ✅ 3 passed · ❌ 2 failed · ⏳ 0 running", main)
+    self.assertIn("DAGs: 4 · ⚠️ 0 missing · ⚪ 1 no runs", main)
+    self.assertIn("🟡 *Failed earlier in the window*", main)
     self.assertIn(
         f"- *Checkpoint validation*: `{RESTORE_DAG}` "
         "(latest of 2 failed runs). The "
-        "restored workload did not resume at the expected step. "
-        f"<{AIRFLOW_URL}|Airflow> · <{LOGS_URLS[0]}|Logs 1> · "
-        f"<{LOGS_URLS[1]}|Logs 2>",
-        text,
+        "restored workload did not resume at the expected step.",
+        main,
     )
-    self.assertIn("🟡 *Flaky*: `maxtext_emc_orbax_res_gcs`", text)
-    self.assertIn("🟢 *Passed*: `maxtext_emc_save_gcs`", text)
-    self.assertIn(f"- `{RESTORE_DAG}`: `{ERR_RESTORE}`", text)
-    self.assertNotIn("Gemini unavailable", text)
-    links = set(re.findall(r"<(https://[^|>]+)\|", text))
-    self.assertEqual(links, {AIRFLOW_URL, *LOGS_URLS})
+    self.assertIn("🟡 *Flaky*: `maxtext_emc_orbax_res_gcs`", main)
+    self.assertIn("🟢 *Passed*: `maxtext_emc_save_gcs`", main)
+    self.assertNotIn("Gemini unavailable", main)
+    self.assertNotIn("https://", main)
+    # One reply for the folder: Airflow links only, no Logs links, no errors.
+    self.assertEqual(
+        reply, f"*orbax/*\n- `{RESTORE_DAG}`: <{AIRFLOW_URL}|Airflow>"
+    )
+    self.assertNotIn(ERR_RESTORE, main + reply)
+
+  def test_no_reply_without_failures(self):
+    digest = _test_digest(_test_digest()["dags"][1:])
+    (main,) = self._render(digest, {"items": []})
+    self.assertIn("🟢 *Passed*: `maxtext_emc_save_gcs`", main)
 
   def test_says_when_the_triage_is_digest_only(self):
-    (text,) = self._render(_test_digest(), "not json")
-    self.assertIn("_Triage: digest only (Gemini unavailable)_", text)
-    self.assertIn("- *Unknown*: `maxtext_regular_restore", text)
+    main, _ = self._render(_test_digest(), "not json")
+    self.assertIn("_Triage: digest only (Gemini unavailable)_", main)
+    self.assertIn("- *Unknown*: `maxtext_regular_restore", main)
 
-  def test_long_report_moves_evidence_to_a_thread_reply(self):
-    long_line = "E" * 190
-    dags = [
-        _restore_dag(pod_text=long_line, dag_id=f"dag_{i:02d}")
-        for i in range(30)
-    ]
+  def test_identical_summaries_share_one_bullet(self):
+    dags = [_restore_dag(dag_id=f"dag_{i}") for i in range(3)]
+    reply = {"items": [_good_item(dag_id=f"dag_{i}") for i in range(3)]}
+    main, folder = self._render(_test_digest(dags), reply)
+    self.assertEqual(main.count("- *Checkpoint validation*"), 1)
+    self.assertIn(
+        "- *Checkpoint validation* (3 DAGs): `dag_0`, `dag_1`, `dag_2`.", main
+    )
+    self.assertEqual(folder.count("|Airflow>"), 3)
+
+  def test_recommendation_follows_its_bullet(self):
+    dags = [_restore_dag(dag_id=f"dag_{i}") for i in range(2)]
+    advice = "Check why the resumed workload never logs the restore metric."
     reply = {
         "items": [
-            _good_item(dag_id=f"dag_{i:02d}", evidence=[long_line])
+            _good_item(dag_id="dag_0", recommendation=f"**{advice}**"),
+            _good_item(dag_id="dag_1", recommendation="Other advice."),
+        ]
+    }
+    main, _ = self._render(_test_digest(dags), reply)
+    lines = main.splitlines()
+    bullet = lines.index(
+        "- *Checkpoint validation* (2 DAGs): `dag_0`, `dag_1`. The restored"
+        " workload did not resume at the expected step."
+    )
+    self.assertEqual(
+        lines[bullet + 1], f"  *Recommendation (experimental)*: {advice}"
+    )
+    self.assertNotIn("Other advice.", main)
+
+  def test_no_recommendation_line_without_one(self):
+    main, _ = self._render(_test_digest(), {"items": [_good_item()]})
+    self.assertNotIn("Recommendation", main)
+
+  def test_long_recommendation_is_cut(self):
+    triage = dag_monitor.validate_triage(
+        {"items": [_good_item(recommendation="x" * 500)]}, _test_digest()
+    )
+    recommendation = triage["items"][0]["recommendation"]
+    self.assertEqual(len(recommendation), dag_monitor.RECOMMENDATION_LIMIT)
+    self.assertTrue(recommendation.endswith("…"))
+
+  def test_twelve_failures_fit_one_reply_without_logs_links(self):
+    # 2026-10-11 in prod: 12 failures, each with long Logs links.
+    long_url = "https://console.cloud.google.com/logs/query;" + "q" * 620
+    dags, items = [], []
+    for i in range(12):
+      dag = _restore_dag(dag_id=f"maxtext_dag_with_a_long_name_{i:02d}")
+      dag["runs"][1]["workloads"] = [{"id": f"w{i}", "logs_url": long_url}]
+      dag["runs"][1]["airflow_url"] = AIRFLOW_URL + "x" * 80
+      dags.append(dag)
+      items.append(
+          _good_item(dag_id=dag["dag_id"], summary=f"Different cause {i}.")
+      )
+    messages = self._render(_test_digest(dags), {"items": items})
+    self.assertEqual(len(messages), 2)
+    main, reply = messages
+    self.assertTrue(reply.startswith("*orbax/*\n"))
+    self.assertLessEqual(len(reply), dag_monitor.CHAT_TEXT_LIMIT)
+    self.assertNotIn(long_url, main + reply)
+    for dag in dags:
+      self.assertIn(f"`{dag['dag_id']}`", main)
+      self.assertIn(f"- `{dag['dag_id']}`: <", reply)
+
+  def test_many_failures_continue_the_reply(self):
+    url = AIRFLOW_URL + "x" * 200
+    dags = [_restore_dag(dag_id=f"dag_{i:02d}") for i in range(30)]
+    for dag in dags:
+      dag["runs"][1]["airflow_url"] = url
+    reply = {
+        "items": [
+            _good_item(dag_id=f"dag_{i:02d}", summary=f"Cause {i}.")
             for i in range(30)
         ]
     }
     messages = self._render(_test_digest(dags), reply)
-    self.assertEqual(len(messages), 2)
-    self.assertTrue(messages[1].startswith("*Evidence*"))
+    self.assertGreater(len(messages), 2)
+    self.assertTrue(messages[1].startswith("*orbax/*"))
     for message in messages:
       self.assertLessEqual(len(message), dag_monitor.CHAT_TEXT_LIMIT)
+      self.assertNotIn("(truncated)", message)
+    links = "\n".join(messages[1:])
+    for i in range(30):
+      self.assertIn(f"- `dag_{i:02d}`: <{url}|Airflow>", links)
 
 
 # Phase 2: the search_logs conversation, with a scripted fake Gemini.

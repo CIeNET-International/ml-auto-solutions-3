@@ -15,8 +15,8 @@
 """Helpers that turn Airflow DAG runs and their logs into a daily digest.
 
 Pure Python (standard library only, no Airflow or Google Cloud imports) so
-the in-Composer monitor DAG and local tooling share one implementation, and
-the tests run anywhere.
+the Cloud Run monitor job (scripts/daily_monitor) and local tooling share one
+implementation, and the tests run anywhere.
 """
 
 import ast
@@ -582,18 +582,18 @@ def build_digest(
 
 
 # Decision 7: Gemini triage and the automatic Chat post, erniechang-test only.
-# Everything below is pure Python; the DAG makes the network calls.
+# Everything below is pure Python; the monitor job makes the network calls.
 
-# Composer environments whose monitor DAG may post to Chat with no review.
+# Composer environments whose monitor may post to Chat with no review.
 AUTO_POST_ENVS = frozenset({"erniechang-test"})
 CHAT_TEXT_LIMIT = 4000
 SUMMARY_LIMIT = 300
+RECOMMENDATION_LIMIT = 200
 _MAX_EVIDENCE = 3
 _PROMPT_MAX_POD_ERRORS = 20
 _PROMPT_MAX_LINE = 500
 # The whole tail the collector keeps (the last 100 lines of slice-job-0-0).
 _PROMPT_MAX_TAIL_LINES = 100
-_EVIDENCE_SHOWN = 200
 
 TRIAGE_CATEGORIES = (
     "checkpoint_validation",
@@ -675,6 +675,7 @@ TRIAGE_SCHEMA = {
                     },
                     "summary": {"type": "STRING"},
                     "evidence": {"type": "ARRAY", "items": {"type": "STRING"}},
+                    "recommendation": {"type": "STRING"},
                 },
                 "required": [
                     "dag_id",
@@ -682,6 +683,7 @@ TRIAGE_SCHEMA = {
                     "category",
                     "summary",
                     "evidence",
+                    "recommendation",
                 ],
             },
         }
@@ -706,7 +708,12 @@ clusters. For each failed run below, return one item with:
   When present, the task log is the failed task's own log, and the
   checkpoint events list every checkpoint save, restore and load line that
   each workload's first pod printed during the run, oldest first. Use them
-  to check whether a save or restore happened and at which step.
+  to check whether a save or restore happened and at which step;
+- recommendation: one plain sentence, at most {RECOMMENDATION_LIMIT}
+  characters, with no URLs and no markdown: the next step for the DAG owner to
+  fix the failure or narrow it down. Base it only on the log data. When the
+  cause is not in the log data, say what to check next. Do not invent file
+  names, flags, versions or settings that the log data does not show.
 Only state a cause the log data shows. Do not present normal progress
 (checkpoint saves, completed steps) as the cause. When the data shows which
 check failed but not why, say that and that the cause is not in the log data.
@@ -849,12 +856,12 @@ def _run_block(dag: Mapping[str, Any], run: Mapping[str, Any]) -> str:
   )
 
 
-def _clean_summary(text: Any) -> str:
-  """Plain text: no URLs or Chat formatting, at most SUMMARY_LIMIT chars."""
+def _clean_summary(text: Any, limit: int = SUMMARY_LIMIT) -> str:
+  """Plain text: no URLs or Chat formatting, at most `limit` chars."""
   text = _FORMATTING.sub("", _URL.sub("", str(text or "")))
   text = " ".join(text.split())
-  if len(text) > SUMMARY_LIMIT:
-    text = text[: SUMMARY_LIMIT - 1].rstrip() + "…"
+  if len(text) > limit:
+    text = text[: limit - 1].rstrip() + "…"
   return text
 
 
@@ -870,6 +877,7 @@ def _fallback_item(dag_id: str, run: Mapping[str, Any]) -> dict[str, Any]:
       "category": "unknown",
       "summary": _clean_summary(summary),
       "evidence": [],
+      "recommendation": "",
   }
 
 
@@ -909,7 +917,8 @@ def validate_triage(
   category is in TRIAGE_CATEGORIES, and it has 1 to 3 evidence lines that are
   each a verbatim substring of that run's log text (after dropping a copied
   prompt label such as "exception: " and collapsing whitespace, as the prompt
-  does). Summaries lose URLs and formatting. Failures with no valid item get
+  does). Summaries and recommendations lose URLs and formatting; a missing
+  recommendation is kept as "". Failures with no valid item get
   the fallback item.
 
   Args:
@@ -981,6 +990,9 @@ def _valid_item(
       "category": item["category"],
       "summary": summary,
       "evidence": lines,
+      "recommendation": _clean_summary(
+          item.get("recommendation"), RECOMMENDATION_LIMIT
+      ),
   }
 
 
@@ -1264,15 +1276,6 @@ def _link(url: Any, text: str) -> Optional[str]:
   return f"<{url}|{text}>"
 
 
-def _run_links(run: Mapping[str, Any]) -> str:
-  links = [_link(run.get("airflow_url"), "Airflow")]
-  logs = [w.get("logs_url") for w in run.get("workloads") or []]
-  logs = [url for url in logs if url]
-  for i, url in enumerate(logs, 1):
-    links.append(_link(url, "Logs" if len(logs) == 1 else f"Logs {i}"))
-  return " · ".join(link for link in links if link)
-
-
 def _utc_minute(value: str) -> str:
   return _parse_utc(value).strftime("%Y-%m-%d %H:%M")
 
@@ -1284,6 +1287,31 @@ def _limit(text: str) -> str:
   return text[: CHAT_TEXT_LIMIT - len(tail)] + tail
 
 
+def _pack(lines: Sequence[str]) -> list[str]:
+  """Joins lines into messages of at most CHAT_TEXT_LIMIT characters.
+
+  Lines are never split (only a single line over the limit is cut).
+  """
+  messages, current, size = [], [], 0
+  for line in lines:
+    line = _limit(line)
+    if current and size + 1 + len(line) > CHAT_TEXT_LIMIT:
+      messages.append("\n".join(current))
+      current, size = [], 0
+    size += len(line) + (1 if current else 0)
+    current.append(line)
+  if current:
+    messages.append("\n".join(current))
+  return messages
+
+
+_SECTIONS = {
+    "new_failure": "🔴 *New failures*",
+    "persistent_failure": "🟠 *Still failing*",
+    "other": "🟡 *Failed earlier in the window*",
+}
+
+
 def render_report(
     digest: Mapping[str, Any], triage: Mapping[str, Any], title: str
 ) -> list[str]:
@@ -1292,9 +1320,15 @@ def render_report(
   Uses Chat's basic format (`*bold*`, `<url|text>`), since webhook messages
   don't get markdown mode. Every link comes from the digest.
 
+  Failures with the same section, category and summary share one bullet.
+  The bullet's recommendation, if any, follows on its own line.
+  Error evidence stays in the triage file; Chat gets no log lines.
+
   Returns:
-    One message, or two (main message, then a thread reply with the
-    evidence) when one would exceed CHAT_TEXT_LIMIT characters.
+    The main message, then, when a run failed, one thread reply for the
+    monitored folder (`*orbax/*`) with each failed run's Airflow link. The
+    reply continues in another message only past CHAT_TEXT_LIMIT characters
+    (about 12 failures).
   """
   summary = digest.get("summary") or {}
   window = digest.get("window") or {}
@@ -1329,9 +1363,12 @@ def render_report(
   if failed_runs and triage.get("source") != "gemini":
     head.append("_Triage: digest only (Gemini unavailable)_")
 
-  sections = {"new_failure": [], "persistent_failure": [], "other": []}
+  # (section, label, summary) -> [(dag_id, count)], in DAG order.
+  groups = {}
+  # (section, label, summary) -> the first member's recommendation.
+  recommendations = {}
   flaky, passed, running, missing = [], [], [], []
-  details = []
+  airflow_links = []
   for dag in digest.get("dags") or []:
     dag_id = dag["dag_id"]
     status = (dag.get("history") or {}).get("status")
@@ -1342,15 +1379,13 @@ def render_report(
       failures = sum(1 for run in runs if run.get("state") == FAILED)
       # The summary is about the latest failed run only.
       count = f" (latest of {failures} failed runs)" if failures > 1 else ""
-      line = f"- *{label}*: `{dag_id}`{count}. {item['summary']}"
-      links = _run_links(failed_runs[dag_id])
-      if links:
-        line += f" {links}"
-      key = status if status in sections else "other"
-      sections[key].append(line)
-      for evidence in item.get("evidence") or []:
-        shown = evidence.replace("`", "'")[:_EVIDENCE_SHOWN]
-        details.append(f"- `{dag_id}`: `{shown}`")
+      key = status if status in _SECTIONS else "other"
+      group = (key, label, item["summary"])
+      groups.setdefault(group, []).append((dag_id, count))
+      if item.get("recommendation") and group not in recommendations:
+        recommendations[group] = item["recommendation"]
+      airflow = _link(failed_runs[dag_id].get("airflow_url"), "Airflow")
+      airflow_links.append(f"- `{dag_id}`: {airflow or 'no Airflow link'}")
     elif not runs:
       if dag.get("schedule"):
         missing.append(f"`{dag_id}`")
@@ -1360,13 +1395,22 @@ def render_report(
       running.append(f"`{dag_id}`")
 
   body = []
-  for key, heading in (
-      ("new_failure", "🔴 *New failures*"),
-      ("persistent_failure", "🟠 *Still failing*"),
-      ("other", "🟡 *Failed earlier in the window*"),
-  ):
-    if sections[key]:
-      body += ["", heading] + sections[key]
+  for key, heading in _SECTIONS.items():
+    bullets = []
+    for (section, label, summary), members in groups.items():
+      if section != key:
+        continue
+      if len(members) == 1:
+        dag_id, count = members[0]
+        bullets.append(f"- *{label}*: `{dag_id}`{count}. {summary}")
+      else:
+        names = ", ".join(f"`{dag_id}`" for dag_id, _ in members)
+        bullets.append(f"- *{label}* ({len(members)} DAGs): {names}. {summary}")
+      recommendation = recommendations.get((section, label, summary))
+      if recommendation:
+        bullets.append(f"  *Recommendation (experimental)*: {recommendation}")
+    if bullets:
+      body += ["", heading] + bullets
   tail = []
   for heading, names in (
       ("⚠️ *Missing*", missing),
@@ -1379,11 +1423,10 @@ def render_report(
   if tail:
     body += [""] + tail
 
-  main = "\n".join(head + body)
-  if not details:
-    return [_limit(main)]
-  evidence = "\n".join(["*Evidence*"] + details)
-  combined = f"{main}\n\n{evidence}"
-  if len(combined) <= CHAT_TEXT_LIMIT:
-    return [combined]
-  return [_limit(main), _limit(evidence)]
+  main = _limit("\n".join(head + body))
+  if not airflow_links:
+    return [main]
+  folder = str(digest.get("scope") or "").rstrip("/").rsplit("/", 1)[-1]
+  return [main] + _pack(
+      [f"*{folder}/*" if folder else "*Details*"] + airflow_links
+  )

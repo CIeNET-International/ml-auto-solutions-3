@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Gemini triage on Vertex AI, moved from the orbax_daily_monitor DAG.
+"""Gemini triage on Vertex AI.
 
 Gemini only returns triage JSON. dag_monitor.validate_triage checks every
 quoted evidence line against the collected logs, and code does all writes

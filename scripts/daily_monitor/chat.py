@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Posts the Chat draft through an incoming webhook (moved from the DAG).
+"""Posts the Chat draft through an incoming webhook.
 
 Off unless POST=true. New Chat webhooks at Google need a policy exception
 (go/webhook-security-decision); until then the Jetski skill posts the draft

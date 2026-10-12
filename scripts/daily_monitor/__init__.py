@@ -15,7 +15,7 @@
 """Orbax daily monitor that runs outside Airflow (Cloud Run Job).
 
 Reads the Orbax DAG runs of one Composer environment through the Airflow REST
-API and Cloud Logging, builds the same digest as the orbax_daily_monitor DAG
-with xlml.utils.dag_monitor, triages it with Gemini, and writes the digest,
-triage and Chat draft to the Composer bucket. Entry point: main.py.
+API and Cloud Logging, builds the daily digest with xlml.utils.dag_monitor,
+triages it with Gemini, and writes the digest, triage and Chat draft to the
+erniechang-test Composer bucket. Entry point: main.py.
 """
