@@ -698,24 +698,45 @@ def wait_for_workload_reach_step(
   if all(pod.status.phase in ["Running"] for pod in pods.items):
     # Pick last one running pod
     pod = pods.items[len(pods.items) - 1]
-    logs = core_api.read_namespaced_pod_log(
-        name=pod.metadata.name, namespace=pod.metadata.namespace
-    )
-    # Check if the workload completed step reached over the expected step
-    completed_step_matches = re.findall(r"completed step: (\d+)", logs)
-    if completed_step_matches:
-      current_step = int(completed_step_matches[-1])
-      if current_step >= int(expect_reach_to_step):
-        logging.info(
-            "Reached to the expected step %s. Current step is %s.",
-            expect_reach_to_step,
-            current_step,
-        )
-        return True
+    current_step = _latest_completed_step(core_api, pod)
+    if current_step is not None and current_step >= int(expect_reach_to_step):
+      logging.info(
+          "Reached to the expected step %s. Current step is %s.",
+          expect_reach_to_step,
+          current_step,
+      )
+      return True
 
   logging.info("Waiting for reaching expected step %s.", expect_reach_to_step)
 
   return False
+
+
+# Trailing log lines scanned for the latest `completed step:` marker on each
+# poll. MaxText logs one marker per step, so this spans the chatty stretches
+# around checkpoint saves; the full log is only read if the tail has none.
+STEP_LOG_TAIL_LINES = 1000
+_COMPLETED_STEP_PATTERN = re.compile(r"completed step: (\d+)")
+
+
+def _latest_completed_step(
+    core_api: kubernetes.client.CoreV1Api, pod: kubernetes.client.V1Pod
+) -> Optional[int]:
+  """Returns the last step `pod` logged as completed, or None if none yet.
+
+  The sensor polls every few seconds, so this reads only the tail of the log
+  rather than the whole log each time, falling back to the full log when the
+  tail holds no step marker.
+  """
+  for tail_lines in (STEP_LOG_TAIL_LINES, None):
+    log_kwargs = {} if tail_lines is None else {"tail_lines": tail_lines}
+    logs = core_api.read_namespaced_pod_log(
+        name=pod.metadata.name, namespace=pod.metadata.namespace, **log_kwargs
+    )
+    completed_step_matches = _COMPLETED_STEP_PATTERN.findall(logs)
+    if completed_step_matches:
+      return int(completed_step_matches[-1])
+  return None
 
 
 # Workload pod names are `<workload>-slice-job-<slice>-<index>-<hash>` on XPK
