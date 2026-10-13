@@ -23,6 +23,13 @@ class FilterMode(Flag):
   jsonPayload_message = auto()  # 0b10
 
 
+# Orbax's restore event; `emergency_restore` for the emergency manager.
+RESTORE_EVENT_PATTERN = r"'event_type': '(emergency_)?restore'"
+# MaxText's own restore line. Regular checkpointing runs on Orbax v1, which no
+# longer emits the restore event, so this is the only restore marker there.
+MAXTEXT_RESTORING_PATTERN = r"restoring from this run's directory step (\d+)"
+
+
 @task
 def generate_timestamp():
   return datetime.now(timezone.utc)
@@ -457,10 +464,19 @@ def validate_log_exist(
     pod_pattern: str = ".*",
     container_name: Optional[str] = None,
     text_filter: Optional[str] = None,
+    text_filters: Optional[list[str]] = None,
+    filter_mode: FilterMode = (
+        FilterMode.textPayload | FilterMode.jsonPayload_message
+    ),
     start_time: Optional[datetime] = None,
     end_time: Optional[datetime] = None,
 ) -> None:
-  """Validate the workload log text filter it is found during training."""
+  """Validate the workload log text filter it is found during training.
+
+  `text_filter` is a raw Logging filter clause; `text_filters` is a list of
+  RE2 regexes applied to the payload fields in `filter_mode`, matching if any
+  of them matches (see `list_log_entries`).
+  """
 
   entries = list_log_entries(
       project_id=project_id,
@@ -470,6 +486,8 @@ def validate_log_exist(
       pod_pattern=pod_pattern,
       container_name=container_name,
       text_filter=text_filter,
+      text_filters=text_filters,
+      filter_mode=filter_mode,
       start_time=start_time,
       end_time=end_time,
   )
@@ -492,10 +510,8 @@ def validate_restored_correct_checkpoint(
   """Validate the restored step is in the expected range."""
 
   reg_save_event = r"'event_type': 'save'"
-  reg_restore_event = r"'event_type': '(emergency_)?restore'"
-  # Newer Orbax versions no longer emit an `'event_type': 'restore'` dict on
-  # regular restores, so also accept MaxText's own restore log line.
-  reg_restoring = r"restoring from this run's directory step (\d+)"
+  reg_restore_event = RESTORE_EVENT_PATTERN
+  reg_restoring = MAXTEXT_RESTORING_PATTERN
 
   entries = list_log_entries(
       project_id=project_id,
