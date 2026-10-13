@@ -1154,6 +1154,146 @@ class GclusterTest(unittest.TestCase):
           "test-project", "europe-west4", "test-cluster", "w"
       )
 
+  def test_gke_is_zone(self):
+    self.assertTrue(gke.is_zone("europe-west4-b"))
+    self.assertTrue(gke.is_zone("us-central1-a"))
+    self.assertFalse(gke.is_zone("europe-west4"))
+    self.assertFalse(gke.is_zone("us-central1"))
+    self.assertFalse(gke.is_zone(""))
+
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_gke_find_target_pod_node_falls_back_to_zonal_location(
+      self, mock_get_client, mock_list_pods
+  ):
+    """Uses the cluster location as the zone only when it is a zone."""
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = [self._mock_pod("w-main-job-0-0-aaaaa", "node-0-0")]
+    mock_list_pods.return_value = mock_pod_list
+    mock_core_api = mock.MagicMock()
+    mock_core_api.read_node.return_value.metadata.labels = {}
+    mock_get_client.return_value = mock_core_api
+
+    info = gke._find_target_pod_node(
+        "test-project",
+        "europe-west4",
+        "test-cluster",
+        "w",
+        cluster_location="europe-west4-b",
+    )
+    self.assertEqual(info["zone"], "europe-west4-b")
+
+    with self.assertRaisesRegex(AirflowFailException, "is not a zone"):
+      gke._find_target_pod_node(
+          "test-project",
+          "europe-west4",
+          "test-cluster",
+          "w",
+          cluster_location="europe-west4",
+      )
+
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_gke_wait_for_workload_reach_step_reports_failed_pod_over_pending(
+      self, mock_get_client, mock_list_pods
+  ):
+    """A Failed pod fails the sensor even while another pod is Pending."""
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = [
+        self._mock_pod("w-main-job-0-0-aaaaa", "node-0-0", phase="Pending"),
+        self._mock_pod("w-main-job-0-1-bbbbb", "node-0-1", phase="Failed"),
+    ]
+    mock_list_pods.return_value = mock_pod_list
+    mock_get_client.return_value = mock.MagicMock()
+
+    with self.assertRaises(AirflowFailException):
+      gke.wait_for_workload_reach_step.function(
+          "test-project", "europe-west4", "test-cluster", "w", "40"
+      )
+
+  @mock.patch("xlml.utils.gke.compute_v1.InstancesClient")
+  @mock.patch("xlml.utils.gke._find_target_pod_node")
+  def test_gke_delete_node_waits_for_operation(
+      self, mock_find_target, mock_instances_client_cls
+  ):
+    """delete_node blocks on the deletion operation and passes the location."""
+    mock_find_target.return_value = {
+        "pod": "w-main-job-0-0-aaaaa",
+        "node": "node-0-0",
+        "zone": "europe-west4-b",
+    }
+    operation = mock.MagicMock()
+    operation.error_code = None
+    operation.warnings = []
+    mock_instances_client_cls.return_value.delete.return_value = operation
+
+    gke.delete_node.function(
+        cluster_name="test-cluster",
+        workload_id="w",
+        zone="europe-west4",
+        project="test-project",
+    )
+
+    mock_find_target.assert_called_once_with(
+        "test-project",
+        "europe-west4",
+        "test-cluster",
+        "w",
+        False,
+        namespace="default",
+        cluster_location="europe-west4",
+    )
+    mock_instances_client_cls.return_value.delete.assert_called_once_with(
+        project="test-project", zone="europe-west4-b", instance="node-0-0"
+    )
+    operation.result.assert_called_once_with(
+        timeout=gke.NODE_DELETE_TIMEOUT_SECONDS
+    )
+
+  @mock.patch("xlml.utils.gke.compute_v1.InstancesClient")
+  @mock.patch("xlml.utils.gke._find_target_pod_node")
+  def test_gke_delete_node_fails_when_operation_reports_error(
+      self, mock_find_target, mock_instances_client_cls
+  ):
+    mock_find_target.return_value = {
+        "pod": "w-main-job-0-0-aaaaa",
+        "node": "node-0-0",
+        "zone": "europe-west4-b",
+    }
+    operation = mock.MagicMock()
+    operation.error_code = "RESOURCE_NOT_FOUND"
+    operation.error_message = "instance not found"
+    mock_instances_client_cls.return_value.delete.return_value = operation
+
+    with self.assertRaisesRegex(AirflowFailException, "RESOURCE_NOT_FOUND"):
+      gke.delete_node.function(
+          cluster_name="test-cluster",
+          workload_id="w",
+          zone="europe-west4",
+          project="test-project",
+      )
+
+  @mock.patch("xlml.utils.gke.compute_v1.InstancesClient")
+  @mock.patch("xlml.utils.gke._find_target_pod_node")
+  def test_gke_delete_node_dry_run_does_not_call_compute(
+      self, mock_find_target, mock_instances_client_cls
+  ):
+    mock_find_target.return_value = {
+        "pod": "w-main-job-0-0-aaaaa",
+        "node": "node-0-0",
+        "zone": "europe-west4-b",
+    }
+
+    gke.delete_node.function(
+        cluster_name="test-cluster",
+        workload_id="w",
+        zone="europe-west4",
+        project="test-project",
+        dry_run=True,
+    )
+
+    mock_instances_client_cls.assert_not_called()
+
 
 if __name__ == "__main__":
   unittest.main()
