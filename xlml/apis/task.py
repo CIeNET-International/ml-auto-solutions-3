@@ -367,6 +367,7 @@ class RunnerConfig:
   mtc_enabled: bool = False
   use_pathways: bool = False
   restart_on_exit_codes: Iterable[int] | None = None
+  workload_kind: gke.WorkloadKind = gke.WorkloadKind.JOBSET
 
 
 @dataclasses.dataclass
@@ -453,6 +454,8 @@ class XpkRunner(Runner):
           region=gke.zone_to_region(self.configs.task_gcp_config.zone),
           cluster_name=self.configs.task_test_config.cluster_name,
           namespace=self.configs.task_test_config.namespace,
+          use_pathways=self.configs.use_pathways,
+          workload_kind=self.configs.workload_kind,
       )
       chain(run_workload, wait_for_workload_start)
       return group
@@ -469,6 +472,8 @@ class XpkRunner(Runner):
         region=gke.zone_to_region(self.configs.task_gcp_config.zone),
         cluster_name=self.configs.task_test_config.cluster_name,
         namespace=self.configs.task_test_config.namespace,
+        use_pathways=self.configs.use_pathways,
+        workload_kind=self.configs.workload_kind,
     )
 
   def cleanup_workload(self, tear_down_of: BaseOperator) -> DAGNode:
@@ -600,6 +605,8 @@ class GclusterRunner(Runner):
           region=gke.zone_to_region(self.configs.task_gcp_config.zone),
           cluster_name=self.configs.task_test_config.cluster_name,
           namespace=self.configs.task_test_config.namespace,
+          use_pathways=self.configs.use_pathways,
+          workload_kind=self.configs.workload_kind,
       )
       chain(run_workload, wait_for_workload_start)
       return group
@@ -616,6 +623,8 @@ class GclusterRunner(Runner):
         region=gke.zone_to_region(self.configs.task_gcp_config.zone),
         cluster_name=self.configs.task_test_config.cluster_name,
         namespace=self.configs.task_test_config.namespace,
+        use_pathways=self.configs.use_pathways,
+        workload_kind=self.configs.workload_kind,
     )
 
   def cleanup_workload(self, tear_down_of: BaseOperator) -> DAGNode:

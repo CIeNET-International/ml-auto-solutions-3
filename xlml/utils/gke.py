@@ -3,6 +3,7 @@
 import base64
 import concurrent.futures
 import datetime
+import enum
 import logging
 import tempfile
 import time
@@ -26,6 +27,13 @@ class PodsNotReadyError(Exception):
 
   def __init__(self, message):
     super().__init__(message)
+
+
+class WorkloadKind(str, enum.Enum):
+  """Kubernetes workload resource kinds."""
+
+  JOB = "Job"
+  JOBSET = "JobSet"
 
 
 def get_authenticated_client(
@@ -90,13 +98,21 @@ def list_workload_pods(
     core_api: kubernetes.client.CoreV1Api,
     workload_id: str,
     namespace: str = "default",
+    use_pathways: bool = False,
+    workload_kind: WorkloadKind = WorkloadKind.JOBSET,
 ) -> kubernetes.client.V1PodList:
   """List pods belonging to the active Job for the given workload."""
   logging.info(
       f"Getting pods for workload_id: {workload_id} in namespace: {namespace}"
   )
   batch_api = kubernetes.client.BatchV1Api(core_api.api_client)
-  job = get_workload_job(batch_api, workload_id, namespace=namespace)
+  job = get_workload_job(
+      batch_api,
+      workload_id,
+      namespace=namespace,
+      use_pathways=use_pathways,
+      workload_kind=workload_kind,
+  )
   if not job:
     return kubernetes.client.V1PodList(items=[])
 
@@ -110,23 +126,28 @@ def get_workload_job(
     batch_api: kubernetes.client.BatchV1Api,
     workload_id: str,
     namespace: str = "default",
-) -> Optional[kubernetes.client.V1Job]:
+    use_pathways: bool = False,
+    workload_kind: WorkloadKind = WorkloadKind.JOBSET,
+) -> kubernetes.client.V1Job | None:
   """Get the active Kubernetes Job object for a given workload."""
   logging.info(
       f"Getting job for workload_id: {workload_id} in namespace: {namespace}"
   )
-  try:
-    job = batch_api.read_namespaced_job(name=workload_id, namespace=namespace)
-    return None if job.metadata.deletion_timestamp else job
-  except kubernetes.client.exceptions.ApiException as e:
-    logging.info(
-        f"Direct job read failed for {workload_id} ({e}); trying label"
-        " selector..."
-    )
+  if workload_kind == WorkloadKind.JOB:
+    try:
+      job = batch_api.read_namespaced_job(name=workload_id, namespace=namespace)
+      return None if job.metadata.deletion_timestamp else job
+    except kubernetes.client.exceptions.ApiException as e:
+      logging.info(f"Could not read Kubernetes Job {workload_id}: {e}")
+      return None
+
+  label_selector = f"jobset.sigs.k8s.io/jobset-name={workload_id}"
+  if use_pathways:
+    label_selector += ",jobset.sigs.k8s.io/replicatedjob-name=pathways-head"
 
   try:
     jobs = batch_api.list_namespaced_job(
-        label_selector=f"jobset.sigs.k8s.io/jobset-name={workload_id}",
+        label_selector=label_selector,
         namespace=namespace,
     )
     active_jobs = [
@@ -134,16 +155,6 @@ def get_workload_job(
     ]
     if not active_jobs:
       return None
-    head_jobs = [
-        job
-        for job in active_jobs
-        if (job.metadata.labels or {}).get(
-            "jobset.sigs.k8s.io/replicatedjob-name"
-        )
-        == "pathways-head"
-    ]
-    if head_jobs:
-      active_jobs = head_jobs
     if len(active_jobs) > 1:
       logging.info(f"Got more than one job for workload_id: {workload_id}")
     return active_jobs[0]
@@ -286,10 +297,18 @@ def wait_for_workload_start(
     region: str,
     cluster_name: str,
     namespace: str = "default",
+    use_pathways: bool = False,
+    workload_kind: WorkloadKind = WorkloadKind.JOBSET,
 ) -> bool:
   """Wait for workload to start running."""
   core_api = get_core_api_client(project_id, region, cluster_name)
-  pods = list_workload_pods(core_api, workload_id, namespace=namespace)
+  pods = list_workload_pods(
+      core_api,
+      workload_id,
+      namespace=namespace,
+      use_pathways=use_pathways,
+      workload_kind=workload_kind,
+  )
   log_workload_pod_statuses(workload_id, pods)
 
   if not pods.items:
@@ -325,15 +344,29 @@ def wait_for_workload_completion(
     region: str,
     cluster_name: str,
     namespace: str = "default",
+    use_pathways: bool = False,
+    workload_kind: WorkloadKind = WorkloadKind.JOBSET,
 ) -> bool:
   """Wait for workload to finish successfully."""
   core_api = get_core_api_client(project_id, region, cluster_name)
-  pods = list_workload_pods(core_api, workload_id, namespace=namespace)
+  pods = list_workload_pods(
+      core_api,
+      workload_id,
+      namespace=namespace,
+      use_pathways=use_pathways,
+      workload_kind=workload_kind,
+  )
   log_workload_pod_statuses(workload_id, pods)
 
   if not pods.items:
     batch_api = get_batch_api_client(project_id, region, cluster_name)
-    job = get_workload_job(batch_api, workload_id, namespace=namespace)
+    job = get_workload_job(
+        batch_api,
+        workload_id,
+        namespace=namespace,
+        use_pathways=use_pathways,
+        workload_kind=workload_kind,
+    )
     if job and job.status and job.status.conditions:
       conditions = job.status.conditions
       if any(
@@ -357,30 +390,33 @@ def wait_for_workload_completion(
         logging.info(f"Workload {workload_id} Job completed successfully.")
         return True
 
-    custom_api = get_custom_objects_api_client(project_id, region, cluster_name)
-    jobset = get_workload_jobset(custom_api, workload_id, namespace=namespace)
-    if jobset and "status" in jobset and "conditions" in jobset["status"]:
-      conditions = jobset["status"]["conditions"]
-      if any(
-          c.get("type") == "Failed" and c.get("status", "True") != "False"
-          for c in conditions
-      ):
-        url = LOGGING_URL_FORMAT.format(
-            project=project_id,
-            region=region,
-            cluster=cluster_name,
-            namespace=namespace,
-            workload_id=workload_id,
-        )
-        raise AirflowFailException(
-            f"Workload {workload_id} JobSet failed. Logs: {url}"
-        )
-      if any(
-          c.get("type") == "Completed" and c.get("status", "True") != "False"
-          for c in conditions
-      ):
-        logging.info(f"Workload {workload_id} JobSet completed successfully.")
-        return True
+    if workload_kind == WorkloadKind.JOBSET:
+      custom_api = get_custom_objects_api_client(
+          project_id, region, cluster_name
+      )
+      jobset = get_workload_jobset(custom_api, workload_id, namespace=namespace)
+      if jobset and "status" in jobset and "conditions" in jobset["status"]:
+        conditions = jobset["status"]["conditions"]
+        if any(
+            c.get("type") == "Failed" and c.get("status", "True") != "False"
+            for c in conditions
+        ):
+          url = LOGGING_URL_FORMAT.format(
+              project=project_id,
+              region=region,
+              cluster=cluster_name,
+              namespace=namespace,
+              workload_id=workload_id,
+          )
+          raise AirflowFailException(
+              f"Workload {workload_id} JobSet failed. Logs: {url}"
+          )
+        if any(
+            c.get("type") == "Completed" and c.get("status", "True") != "False"
+            for c in conditions
+        ):
+          logging.info(f"Workload {workload_id} JobSet completed successfully.")
+          return True
 
     logging.info(f"No pods found for workload: {workload_id}")
     return False
