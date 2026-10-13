@@ -1211,6 +1211,79 @@ class GclusterTest(unittest.TestCase):
           "test-project", "europe-west4", "test-cluster", "w", "40"
       )
 
+  def _running_pod_list(self):
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = [self._mock_pod("w-main-job-0-0-aaaaa", "node-0-0")]
+    return mock_pod_list
+
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_gke_wait_for_workload_reach_step_reads_log_tail_only(
+      self, mock_get_client, mock_list_pods
+  ):
+    """Finds the latest step in the log tail without reading the full log."""
+    mock_list_pods.return_value = self._running_pod_list()
+    mock_core_api = mock.MagicMock()
+    mock_core_api.read_namespaced_pod_log.return_value = (
+        "completed step: 39, loss: 0.1\ncompleted step: 40, loss: 0.1\n"
+    )
+    mock_get_client.return_value = mock_core_api
+
+    reached = gke.wait_for_workload_reach_step.function(
+        "test-project", "europe-west4", "test-cluster", "w", "40"
+    )
+
+    self.assertTrue(reached)
+    mock_core_api.read_namespaced_pod_log.assert_called_once_with(
+        name="w-main-job-0-0-aaaaa",
+        namespace=mock.ANY,
+        tail_lines=gke.STEP_LOG_TAIL_LINES,
+    )
+
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_gke_wait_for_workload_reach_step_falls_back_to_full_log(
+      self, mock_get_client, mock_list_pods
+  ):
+    """Reads the full log only when the tail has no step marker."""
+    mock_list_pods.return_value = self._running_pod_list()
+    mock_core_api = mock.MagicMock()
+    mock_core_api.read_namespaced_pod_log.side_effect = [
+        "saving checkpoint...\n" * 5,  # tail: no step marker
+        "completed step: 40, loss: 0.1\nsaving checkpoint...\n",  # full log
+    ]
+    mock_get_client.return_value = mock_core_api
+
+    reached = gke.wait_for_workload_reach_step.function(
+        "test-project", "europe-west4", "test-cluster", "w", "40"
+    )
+
+    self.assertTrue(reached)
+    calls = mock_core_api.read_namespaced_pod_log.call_args_list
+    self.assertEqual(len(calls), 2)
+    self.assertEqual(calls[0].kwargs["tail_lines"], gke.STEP_LOG_TAIL_LINES)
+    self.assertNotIn("tail_lines", calls[1].kwargs)
+
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_gke_wait_for_workload_reach_step_keeps_waiting_below_step(
+      self, mock_get_client, mock_list_pods
+  ):
+    mock_list_pods.return_value = self._running_pod_list()
+    mock_core_api = mock.MagicMock()
+    mock_core_api.read_namespaced_pod_log.return_value = (
+        "completed step: 12, loss: 0.1\n"
+    )
+    mock_get_client.return_value = mock_core_api
+
+    self.assertFalse(
+        gke.wait_for_workload_reach_step.function(
+            "test-project", "europe-west4", "test-cluster", "w", "40"
+        )
+    )
+    # A marker was found in the tail, so the full log is not re-read.
+    self.assertEqual(mock_core_api.read_namespaced_pod_log.call_count, 1)
+
   @mock.patch("xlml.utils.gke.compute_v1.InstancesClient")
   @mock.patch("xlml.utils.gke._find_target_pod_node")
   def test_gke_delete_node_waits_for_operation(
