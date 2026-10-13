@@ -186,6 +186,9 @@ class TaskGroupWithTimeout(TaskGroup):
         return node
 
       case BaseOperator():
+        if self.is_teardown:
+          node.trigger_rule = TriggerRule.ALL_DONE
+
         # Use the unbound method so `self` binds at execution time, after
         # Airflow resolves XComArg placeholders. Binding via `node.execute` at
         # the parsing phase leaks unresolved placeholders into XCom and breaks

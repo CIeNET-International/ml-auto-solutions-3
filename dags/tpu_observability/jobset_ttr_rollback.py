@@ -32,6 +32,7 @@ from dags.tpu_observability.configs.common import (
     GCS_JOBSET_CONFIG_PATH,
     MachineConfigMap,
 )
+from dags.common.vm_resource import DockerImage
 from dags.tpu_observability.utils import jobset_util as jobset
 from dags.tpu_observability.utils import node_pool_util as node_pool
 from dags.tpu_observability.utils.jobset_util import Workload
@@ -95,6 +96,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
     with TaskGroup(  # pylint: disable=unexpected-keyword-arg
         group_id=f"v{config.tpu_version.value}"
     ):
+
       cluster_info = node_pool.build_node_pool_info_from_gcs_yaml(
           gcs_path=GCS_CONFIG_PATH,
           dag_name=DAG_ID,
@@ -106,6 +108,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       jobset_config = jobset.build_jobset_from_gcs_yaml(
           gcs_path=GCS_JOBSET_CONFIG_PATH,
           dag_name=DAG_ID,
+          image=DockerImage.TPU_OBS_LIBTPU_STABLE.value,
       )
 
       selector = jobset.generate_node_pool_selector(DAG_ID)
@@ -146,6 +149,11 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             jobset_name=jobset_name,
         )
 
+        intentional_failure = BashOperator(
+            task_id="intentional_failure",
+            bash_command="exit 1"
+        )
+
         verify_duration = jobset.verify_recovery_duration.override(
             task_id="verify_recovery_duration"
         )(
@@ -163,10 +171,12 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
             )
         )
 
+
         chain(
             *startup.tasks,
             rollback_node_pool,
             wait_for_recovery,
+            intentional_failure,
             verify_duration,
             wait_for_metric_upload,
         )
