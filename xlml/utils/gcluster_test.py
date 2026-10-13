@@ -922,9 +922,6 @@ class GclusterTest(unittest.TestCase):
     mock_job = mock.MagicMock()
     mock_job.metadata.name = "test-workload-main-job-0"
     mock_job.metadata.deletion_timestamp = None
-    mock_batch_api.read_namespaced_job.side_effect = (
-        kubernetes.client.exceptions.ApiException(status=404)
-    )
     mock_job_list = mock.MagicMock()
     mock_job_list.items = [mock_job]
     mock_batch_api.list_namespaced_job.return_value = mock_job_list
@@ -951,9 +948,6 @@ class GclusterTest(unittest.TestCase):
     """Returns empty V1PodList when no active Job exists for the workload."""
     mock_core_api = mock.MagicMock()
     mock_batch_api = mock.MagicMock()
-    mock_batch_api.read_namespaced_job.side_effect = (
-        kubernetes.client.exceptions.ApiException(status=404)
-    )
     mock_job_list = mock.MagicMock()
     mock_job_list.items = []
     mock_batch_api.list_namespaced_job.return_value = mock_job_list
@@ -969,12 +963,9 @@ class GclusterTest(unittest.TestCase):
     self.assertEqual(result.items, [])
     mock_core_api.list_namespaced_pod.assert_not_called()
 
-  def test_gke_get_workload_job_fallback(self):
-    """Reads Job by name and falls back to label selector on ApiException."""
+  def test_gke_get_workload_job(self):
+    """Lists Job by jobset-name label selector when workload_kind is JOBSET."""
     mock_batch_api = mock.MagicMock()
-    mock_batch_api.read_namespaced_job.side_effect = (
-        kubernetes.client.exceptions.ApiException(status=404)
-    )
 
     mock_job = mock.MagicMock()
     mock_job.metadata.deletion_timestamp = None
@@ -986,20 +977,34 @@ class GclusterTest(unittest.TestCase):
         mock_batch_api, "test-workload", namespace="test-ns"
     )
     self.assertEqual(result, mock_job)
-    mock_batch_api.read_namespaced_job.assert_called_once_with(
-        name="test-workload", namespace="test-ns"
-    )
+    mock_batch_api.read_namespaced_job.assert_not_called()
     mock_batch_api.list_namespaced_job.assert_called_once_with(
         label_selector="jobset.sigs.k8s.io/jobset-name=test-workload",
         namespace="test-ns",
     )
 
+  def test_gke_get_workload_job_kind_job(self):
+    """Reads Job directly by name when workload_kind is JOB."""
+    mock_batch_api = mock.MagicMock()
+    mock_job = mock.MagicMock()
+    mock_job.metadata.deletion_timestamp = None
+    mock_batch_api.read_namespaced_job.return_value = mock_job
+
+    result = gke.get_workload_job(
+        mock_batch_api,
+        "test-workload",
+        namespace="test-ns",
+        workload_kind=gke.WorkloadKind.JOB,
+    )
+    self.assertEqual(result, mock_job)
+    mock_batch_api.read_namespaced_job.assert_called_once_with(
+        name="test-workload", namespace="test-ns"
+    )
+    mock_batch_api.list_namespaced_job.assert_not_called()
+
   def test_gke_get_workload_job_excludes_deleting_jobs(self):
     """Excludes deleting Jobs and returns the active Job."""
     mock_batch_api = mock.MagicMock()
-    mock_batch_api.read_namespaced_job.side_effect = (
-        kubernetes.client.exceptions.ApiException(status=404)
-    )
 
     deleting_job = mock.MagicMock()
     deleting_job.metadata.name = "test-workload-main-job-0"
@@ -1020,35 +1025,32 @@ class GclusterTest(unittest.TestCase):
     )
     self.assertEqual(result, active_job)
 
-  def test_gke_get_workload_job_prefers_pathways_head(self):
-    """Prefers pathways-head Job over worker Jobs in a Pathways JobSet."""
+  def test_gke_get_workload_job_use_pathways(self):
+    """Scopes Job query to pathways-head when use_pathways is True."""
     mock_batch_api = mock.MagicMock()
-    mock_batch_api.read_namespaced_job.side_effect = (
-        kubernetes.client.exceptions.ApiException(status=404)
-    )
-
-    worker_job = mock.MagicMock()
-    worker_job.metadata.name = "test-workload-worker-0"
-    worker_job.metadata.labels = {
-        "jobset.sigs.k8s.io/replicatedjob-name": "worker",
-    }
-    worker_job.metadata.deletion_timestamp = None
 
     head_job = mock.MagicMock()
     head_job.metadata.name = "test-workload-pathways-head-0"
-    head_job.metadata.labels = {
-        "jobset.sigs.k8s.io/replicatedjob-name": "pathways-head",
-    }
     head_job.metadata.deletion_timestamp = None
 
     mock_job_list = mock.MagicMock()
-    mock_job_list.items = [worker_job, head_job]
+    mock_job_list.items = [head_job]
     mock_batch_api.list_namespaced_job.return_value = mock_job_list
 
     result = gke.get_workload_job(
-        mock_batch_api, "test-workload", namespace="test-ns"
+        mock_batch_api,
+        "test-workload",
+        namespace="test-ns",
+        use_pathways=True,
     )
     self.assertEqual(result, head_job)
+    mock_batch_api.list_namespaced_job.assert_called_once_with(
+        label_selector=(
+            "jobset.sigs.k8s.io/jobset-name=test-workload,"
+            "jobset.sigs.k8s.io/replicatedjob-name=pathways-head"
+        ),
+        namespace="test-ns",
+    )
 
   def test_gke_get_workload_jobset_uses_x_k8s_io_group(self):
     """Queries JobSet custom objects using the jobset.x-k8s.io API group."""
