@@ -1,5 +1,9 @@
 """Tests for the CheckpointConfiguration lease in checkpoint_util."""
 
+# The tests drive the lease state machine through the module's private
+# helpers directly, so Airflow task plumbing is not involved.
+# pylint: disable=protected-access
+
 import datetime
 import unittest
 from unittest import mock

@@ -74,7 +74,7 @@ class CheckpointConfiguration:
       self,
   ) -> tuple[str, str, str, str, dict[str, any]]:
     """
-    Loads a YAML string template, populates it with class attributes, and parses the resulting body.
+    Loads a YAML template, fills it from the class attributes and parses it.
 
     This method constructs a CheckpointConfiguration YAML manifest as a string,
     using class attributes such as `self.gcs_bucket`, `self.machine_type`,
@@ -215,7 +215,7 @@ def _describe_holder(cpc_object: dict[str, Any]) -> str:
 
 
 class _CpcClient:
-  """Thin wrapper around the CustomObjectsApi for one CheckpointConfiguration."""
+  """Thin wrapper around CustomObjectsApi for one CheckpointConfiguration."""
 
   def __init__(self, cpc: CheckpointConfiguration):
     self._api = cpc.create_custom_objects_api_client()
