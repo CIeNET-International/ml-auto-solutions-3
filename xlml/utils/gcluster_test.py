@@ -159,6 +159,41 @@ class GclusterTest(unittest.TestCase):
     self.assertEqual(res, "my-long-test-names-12345")
     self.assertFalse(res.startswith("my-long-test-names--"))
 
+  def test_get_workload_id_prefix(self):
+    """Returns the sanitized 19-char prefix shared with generate_workload_id."""
+    self.assertEqual(
+        gcluster.get_workload_id_prefix("max-reg-res-gcs-resume-training"),
+        "max-reg-res-gcs-res",
+    )
+    self.assertEqual(
+        gcluster.get_workload_id_prefix("max-reg-res-gcs-node"),
+        "max-reg-res-gcs-nod",
+    )
+    self.assertEqual(
+        gcluster.get_workload_id_prefix("max-res-gcs"), "max-res-gcs"
+    )
+    self.assertEqual(
+        gcluster.get_workload_id_prefix("my-long-test-names-extra"),
+        "my-long-test-names",
+    )
+    self.assertEqual(
+        gcluster.get_workload_id_prefix("MaxText TPU"), "maxtext-tpu"
+    )
+    self.assertEqual(gcluster.get_workload_id_prefix(""), "job")
+
+  @mock.patch("uuid.uuid4")
+  def test_generate_workload_id_starts_with_prefix(self, mock_uuid):
+    """Generated workload IDs start with get_workload_id_prefix output."""
+    fake_uuid = mock.MagicMock()
+    fake_uuid.hex = "abcdef123456"
+    mock_uuid.return_value = fake_uuid
+
+    benchmark_id = "max-reg-res-gcs-resume-training-re-2xv5p-128"
+    workload_id = gcluster.generate_workload_id.function(benchmark_id)
+    self.assertEqual(
+        workload_id, f"{gcluster.get_workload_id_prefix(benchmark_id)}-abcde"
+    )
+
   @mock.patch("tempfile.TemporaryDirectory")
   @mock.patch("xlml.utils.composer.log_metadata_for_xlml_dashboard")
   @mock.patch("xlml.utils.gcluster.SubprocessHook")
@@ -1014,6 +1049,323 @@ class GclusterTest(unittest.TestCase):
 
     self.assertIn("was interrupted", "\n".join(logs.output))
     mock_response.release_conn.assert_called_once()
+
+  def test_gke_extract_numbers_xpk_and_gcluster_pod_names(self):
+    """Parses slice and pod index from both XPK and gcluster pod names."""
+    self.assertEqual(
+        gke.extract_numbers("test-workload-slice-job-1-12-abcde"), (1, 12)
+    )
+    self.assertEqual(
+        gke.extract_numbers("max-res-gcs-emc-2xv-d05e4-main-job-0-0-m7tgv"),
+        (0, 0),
+    )
+    self.assertEqual(
+        gke.extract_numbers("max-res-gcs-emc-2xv-d05e4-main-job-1-15-x7k2p"),
+        (1, 15),
+    )
+    self.assertEqual(gke.extract_numbers("unrelated-pod-name"), (0, 0))
+
+  @staticmethod
+  def _mock_pod(name, node, phase="Running"):
+    pod = mock.MagicMock()
+    pod.metadata.name = name
+    pod.spec.node_name = node
+    pod.status.phase = phase
+    return pod
+
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_gke_find_target_pod_node_gcluster_pod_names(
+      self, mock_get_client, mock_list_pods
+  ):
+    """Finds first/last node for gcluster-style `main-job` pod names."""
+    prefix = "max-res-gcs-emc-2xv-d05e4-main-job"
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = [
+        self._mock_pod(f"{prefix}-1-3-aaaaa", "node-1-3"),
+        self._mock_pod(f"{prefix}-0-0-bbbbb", "node-0-0"),
+        self._mock_pod(f"{prefix}-1-15-ccccc", "node-1-15"),
+        self._mock_pod(f"{prefix}-0-7-ddddd", "node-0-7", phase="Pending"),
+    ]
+    mock_list_pods.return_value = mock_pod_list
+    mock_core_api = mock.MagicMock()
+    mock_core_api.read_node.return_value.metadata.labels = {
+        "topology.kubernetes.io/zone": "europe-west4-b"
+    }
+    mock_get_client.return_value = mock_core_api
+
+    first = gke._find_target_pod_node(
+        "test-project", "europe-west4", "test-cluster", "test-workload"
+    )
+    self.assertEqual(first["pod"], f"{prefix}-0-0-bbbbb")
+    self.assertEqual(first["node"], "node-0-0")
+    self.assertEqual(first["zone"], "europe-west4-b")
+
+    last = gke._find_target_pod_node(
+        "test-project",
+        "europe-west4",
+        "test-cluster",
+        "test-workload",
+        last_node=True,
+    )
+    self.assertEqual(last["pod"], f"{prefix}-1-15-ccccc")
+    self.assertEqual(last["node"], "node-1-15")
+
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_gke_find_target_pod_node_xpk_pod_names(
+      self, mock_get_client, mock_list_pods
+  ):
+    """Still finds nodes for XPK-style `slice-job` pod names."""
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = [
+        self._mock_pod("test-workload-slice-job-0-1-aaaaa", "node-0-1"),
+        self._mock_pod("test-workload-slice-job-0-0-bbbbb", "node-0-0"),
+    ]
+    mock_list_pods.return_value = mock_pod_list
+    mock_core_api = mock.MagicMock()
+    mock_core_api.read_node.return_value.metadata.labels = {
+        "topology.kubernetes.io/zone": "us-central2-b"
+    }
+    mock_get_client.return_value = mock_core_api
+
+    result = gke._find_target_pod_node(
+        "test-project", "us-central2", "test-cluster", "test-workload"
+    )
+    self.assertEqual(result["pod"], "test-workload-slice-job-0-0-bbbbb")
+    self.assertEqual(result["node"], "node-0-0")
+
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_gke_find_target_pod_node_no_running_pods(
+      self, mock_get_client, mock_list_pods
+  ):
+    """Fails when no Running pod matches the workload pod-name pattern."""
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = [
+        self._mock_pod("w-main-job-0-0-aaaaa", "node-0-0", phase="Pending"),
+        self._mock_pod("w-sidecar-0", "node-0-1"),
+    ]
+    mock_list_pods.return_value = mock_pod_list
+    mock_get_client.return_value = mock.MagicMock()
+
+    with self.assertRaises(AirflowFailException):
+      gke._find_target_pod_node(
+          "test-project", "europe-west4", "test-cluster", "w"
+      )
+
+  def test_gke_is_zone(self):
+    self.assertTrue(gke.is_zone("europe-west4-b"))
+    self.assertTrue(gke.is_zone("us-central1-a"))
+    self.assertFalse(gke.is_zone("europe-west4"))
+    self.assertFalse(gke.is_zone("us-central1"))
+    self.assertFalse(gke.is_zone(""))
+
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_gke_find_target_pod_node_falls_back_to_zonal_location(
+      self, mock_get_client, mock_list_pods
+  ):
+    """Uses the cluster location as the zone only when it is a zone."""
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = [self._mock_pod("w-main-job-0-0-aaaaa", "node-0-0")]
+    mock_list_pods.return_value = mock_pod_list
+    mock_core_api = mock.MagicMock()
+    mock_core_api.read_node.return_value.metadata.labels = {}
+    mock_get_client.return_value = mock_core_api
+
+    info = gke._find_target_pod_node(
+        "test-project",
+        "europe-west4",
+        "test-cluster",
+        "w",
+        cluster_location="europe-west4-b",
+    )
+    self.assertEqual(info["zone"], "europe-west4-b")
+
+    with self.assertRaisesRegex(AirflowFailException, "is not a zone"):
+      gke._find_target_pod_node(
+          "test-project",
+          "europe-west4",
+          "test-cluster",
+          "w",
+          cluster_location="europe-west4",
+      )
+
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_gke_wait_for_workload_reach_step_reports_failed_pod_over_pending(
+      self, mock_get_client, mock_list_pods
+  ):
+    """A Failed pod fails the sensor even while another pod is Pending."""
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = [
+        self._mock_pod("w-main-job-0-0-aaaaa", "node-0-0", phase="Pending"),
+        self._mock_pod("w-main-job-0-1-bbbbb", "node-0-1", phase="Failed"),
+    ]
+    mock_list_pods.return_value = mock_pod_list
+    mock_get_client.return_value = mock.MagicMock()
+
+    with self.assertRaises(AirflowFailException):
+      gke.wait_for_workload_reach_step.function(
+          "test-project", "europe-west4", "test-cluster", "w", "40"
+      )
+
+  def _running_pod_list(self):
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = [self._mock_pod("w-main-job-0-0-aaaaa", "node-0-0")]
+    return mock_pod_list
+
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_gke_wait_for_workload_reach_step_reads_log_tail_only(
+      self, mock_get_client, mock_list_pods
+  ):
+    """Finds the latest step in the log tail without reading the full log."""
+    mock_list_pods.return_value = self._running_pod_list()
+    mock_core_api = mock.MagicMock()
+    mock_core_api.read_namespaced_pod_log.return_value = (
+        "completed step: 39, loss: 0.1\ncompleted step: 40, loss: 0.1\n"
+    )
+    mock_get_client.return_value = mock_core_api
+
+    reached = gke.wait_for_workload_reach_step.function(
+        "test-project", "europe-west4", "test-cluster", "w", "40"
+    )
+
+    self.assertTrue(reached)
+    mock_core_api.read_namespaced_pod_log.assert_called_once_with(
+        name="w-main-job-0-0-aaaaa",
+        namespace=mock.ANY,
+        tail_lines=gke.STEP_LOG_TAIL_LINES,
+    )
+
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_gke_wait_for_workload_reach_step_falls_back_to_full_log(
+      self, mock_get_client, mock_list_pods
+  ):
+    """Reads the full log only when the tail has no step marker."""
+    mock_list_pods.return_value = self._running_pod_list()
+    mock_core_api = mock.MagicMock()
+    mock_core_api.read_namespaced_pod_log.side_effect = [
+        "saving checkpoint...\n" * 5,  # tail: no step marker
+        "completed step: 40, loss: 0.1\nsaving checkpoint...\n",  # full log
+    ]
+    mock_get_client.return_value = mock_core_api
+
+    reached = gke.wait_for_workload_reach_step.function(
+        "test-project", "europe-west4", "test-cluster", "w", "40"
+    )
+
+    self.assertTrue(reached)
+    calls = mock_core_api.read_namespaced_pod_log.call_args_list
+    self.assertEqual(len(calls), 2)
+    self.assertEqual(calls[0].kwargs["tail_lines"], gke.STEP_LOG_TAIL_LINES)
+    self.assertNotIn("tail_lines", calls[1].kwargs)
+
+  @mock.patch("xlml.utils.gke.list_workload_pods")
+  @mock.patch("xlml.utils.gke.get_core_api_client")
+  def test_gke_wait_for_workload_reach_step_keeps_waiting_below_step(
+      self, mock_get_client, mock_list_pods
+  ):
+    mock_list_pods.return_value = self._running_pod_list()
+    mock_core_api = mock.MagicMock()
+    mock_core_api.read_namespaced_pod_log.return_value = (
+        "completed step: 12, loss: 0.1\n"
+    )
+    mock_get_client.return_value = mock_core_api
+
+    self.assertFalse(
+        gke.wait_for_workload_reach_step.function(
+            "test-project", "europe-west4", "test-cluster", "w", "40"
+        )
+    )
+    # A marker was found in the tail, so the full log is not re-read.
+    self.assertEqual(mock_core_api.read_namespaced_pod_log.call_count, 1)
+
+  @mock.patch("xlml.utils.gke.compute_v1.InstancesClient")
+  @mock.patch("xlml.utils.gke._find_target_pod_node")
+  def test_gke_delete_node_waits_for_operation(
+      self, mock_find_target, mock_instances_client_cls
+  ):
+    """delete_node blocks on the deletion operation and passes the location."""
+    mock_find_target.return_value = {
+        "pod": "w-main-job-0-0-aaaaa",
+        "node": "node-0-0",
+        "zone": "europe-west4-b",
+    }
+    operation = mock.MagicMock()
+    operation.error_code = None
+    operation.warnings = []
+    mock_instances_client_cls.return_value.delete.return_value = operation
+
+    gke.delete_node.function(
+        cluster_name="test-cluster",
+        workload_id="w",
+        zone="europe-west4",
+        project="test-project",
+    )
+
+    mock_find_target.assert_called_once_with(
+        "test-project",
+        "europe-west4",
+        "test-cluster",
+        "w",
+        False,
+        namespace="default",
+        cluster_location="europe-west4",
+    )
+    mock_instances_client_cls.return_value.delete.assert_called_once_with(
+        project="test-project", zone="europe-west4-b", instance="node-0-0"
+    )
+    operation.result.assert_called_once_with(
+        timeout=gke.NODE_DELETE_TIMEOUT_SECONDS
+    )
+
+  @mock.patch("xlml.utils.gke.compute_v1.InstancesClient")
+  @mock.patch("xlml.utils.gke._find_target_pod_node")
+  def test_gke_delete_node_fails_when_operation_reports_error(
+      self, mock_find_target, mock_instances_client_cls
+  ):
+    mock_find_target.return_value = {
+        "pod": "w-main-job-0-0-aaaaa",
+        "node": "node-0-0",
+        "zone": "europe-west4-b",
+    }
+    operation = mock.MagicMock()
+    operation.error_code = "RESOURCE_NOT_FOUND"
+    operation.error_message = "instance not found"
+    mock_instances_client_cls.return_value.delete.return_value = operation
+
+    with self.assertRaisesRegex(AirflowFailException, "RESOURCE_NOT_FOUND"):
+      gke.delete_node.function(
+          cluster_name="test-cluster",
+          workload_id="w",
+          zone="europe-west4",
+          project="test-project",
+      )
+
+  @mock.patch("xlml.utils.gke.compute_v1.InstancesClient")
+  @mock.patch("xlml.utils.gke._find_target_pod_node")
+  def test_gke_delete_node_dry_run_does_not_call_compute(
+      self, mock_find_target, mock_instances_client_cls
+  ):
+    mock_find_target.return_value = {
+        "pod": "w-main-job-0-0-aaaaa",
+        "node": "node-0-0",
+        "zone": "europe-west4-b",
+    }
+
+    gke.delete_node.function(
+        cluster_name="test-cluster",
+        workload_id="w",
+        zone="europe-west4",
+        project="test-project",
+        dry_run=True,
+    )
+
+    mock_instances_client_cls.assert_not_called()
 
 
 if __name__ == "__main__":
