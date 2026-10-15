@@ -451,6 +451,8 @@ class GclusterTest(unittest.TestCase):
         project_id="test-project",
         region="us-central1",
         cluster_name="test-cluster",
+        use_pathways=False,
+        workload_kind=gke.WorkloadKind.JOBSET,
     )
     mock_get_client.assert_called_once()
     self.assertTrue(started)
@@ -478,6 +480,8 @@ class GclusterTest(unittest.TestCase):
         project_id="test-project",
         region="us-central1",
         cluster_name="test-cluster",
+        use_pathways=False,
+        workload_kind=gke.WorkloadKind.JOBSET,
     )
     mock_get_client.assert_called_once()
     self.assertFalse(started)
@@ -497,6 +501,8 @@ class GclusterTest(unittest.TestCase):
         project_id="test-project",
         region="us-central1",
         cluster_name="test-cluster",
+        use_pathways=False,
+        workload_kind=gke.WorkloadKind.JOBSET,
     )
     mock_get_client.assert_called_once()
     self.assertFalse(started)
@@ -520,6 +526,8 @@ class GclusterTest(unittest.TestCase):
           project_id="test-project",
           region="us-central1",
           cluster_name="test-cluster",
+          use_pathways=False,
+          workload_kind=gke.WorkloadKind.JOBSET,
       )
     mock_get_client.assert_called_once()
 
@@ -546,6 +554,8 @@ class GclusterTest(unittest.TestCase):
         project_id="test-project",
         region="us-central1",
         cluster_name="test-cluster",
+        use_pathways=False,
+        workload_kind=gke.WorkloadKind.JOBSET,
     )
     mock_get_client.assert_called_once()
     self.assertTrue(completed)
@@ -583,6 +593,8 @@ class GclusterTest(unittest.TestCase):
           project_id="test-project",
           region="us-central1",
           cluster_name="test-cluster",
+          use_pathways=False,
+          workload_kind=gke.WorkloadKind.JOBSET,
       )
     mock_get_client.assert_called_once()
     mock_core_api.read_namespaced_pod_log.assert_called_once()
@@ -605,6 +617,8 @@ class GclusterTest(unittest.TestCase):
         project_id="test-project",
         region="us-central1",
         cluster_name="test-cluster",
+        use_pathways=False,
+        workload_kind=gke.WorkloadKind.JOBSET,
     )
     mock_get_client.assert_called_once()
     self.assertFalse(completed)
@@ -628,17 +642,19 @@ class GclusterTest(unittest.TestCase):
           project_id="test-project",
           region="us-central1",
           cluster_name="test-cluster",
+          use_pathways=False,
+          workload_kind=gke.WorkloadKind.JOBSET,
       )
     mock_get_client.assert_called_once()
 
-  @mock.patch("xlml.utils.gke.get_workload_job")
+  @mock.patch("xlml.utils.gke.get_workload_jobs")
   @mock.patch("xlml.utils.gke.get_batch_api_client")
   @mock.patch("xlml.utils.gke.list_workload_pods")
   @mock.patch("xlml.utils.gke.get_core_api_client")
   def test_wait_for_workload_completion_no_pods_job_completed(
-      self, mock_get_client, mock_list_pods, mock_get_batch, mock_get_job
+      self, mock_get_client, mock_list_pods, mock_get_batch, mock_get_jobs
   ):
-    """Falls back to batch Job status Complete when pod list is empty."""
+    """Checks batch Job status Complete when pod list is empty for JOB."""
     mock_pod_list = mock.MagicMock()
     mock_pod_list.items = []
     mock_list_pods.return_value = mock_pod_list
@@ -648,26 +664,28 @@ class GclusterTest(unittest.TestCase):
     mock_condition.status = "True"
     mock_job = mock.MagicMock()
     mock_job.status.conditions = [mock_condition]
-    mock_get_job.return_value = mock_job
+    mock_get_jobs.return_value = [mock_job]
 
     completed = gke.wait_for_workload_completion.function(
         workload_id="test-workload",
         project_id="test-project",
         region="us-central1",
         cluster_name="test-cluster",
+        use_pathways=False,
+        workload_kind=gke.WorkloadKind.JOB,
     )
     mock_get_client.assert_called_once()
     mock_get_batch.assert_called_once()
     self.assertTrue(completed)
 
-  @mock.patch("xlml.utils.gke.get_workload_job")
+  @mock.patch("xlml.utils.gke.get_workload_jobs")
   @mock.patch("xlml.utils.gke.get_batch_api_client")
   @mock.patch("xlml.utils.gke.list_workload_pods")
   @mock.patch("xlml.utils.gke.get_core_api_client")
   def test_wait_for_workload_completion_no_pods_job_failed(
-      self, mock_get_client, mock_list_pods, mock_get_batch, mock_get_job
+      self, mock_get_client, mock_list_pods, mock_get_batch, mock_get_jobs
   ):
-    """Raises AirflowFailException on batch Job Failed status fallback."""
+    """Raises AirflowFailException on batch Job Failed status for JOB."""
     mock_pod_list = mock.MagicMock()
     mock_pod_list.items = []
     mock_list_pods.return_value = mock_pod_list
@@ -677,7 +695,7 @@ class GclusterTest(unittest.TestCase):
     mock_condition.status = "True"
     mock_job = mock.MagicMock()
     mock_job.status.conditions = [mock_condition]
-    mock_get_job.return_value = mock_job
+    mock_get_jobs.return_value = [mock_job]
 
     with self.assertRaises(AirflowFailException):
       gke.wait_for_workload_completion.function(
@@ -685,12 +703,13 @@ class GclusterTest(unittest.TestCase):
           project_id="test-project",
           region="us-central1",
           cluster_name="test-cluster",
+          use_pathways=False,
+          workload_kind=gke.WorkloadKind.JOB,
       )
     mock_get_client.assert_called_once()
     mock_get_batch.assert_called_once()
 
-  @mock.patch("xlml.utils.gke.get_custom_objects_api_client")
-  @mock.patch("xlml.utils.gke.get_workload_job")
+  @mock.patch("xlml.utils.gke.get_workload_jobs")
   @mock.patch("xlml.utils.gke.get_batch_api_client")
   @mock.patch("xlml.utils.gke.list_workload_pods")
   @mock.patch("xlml.utils.gke.get_core_api_client")
@@ -699,8 +718,7 @@ class GclusterTest(unittest.TestCase):
       mock_get_client,
       mock_list_pods,
       mock_get_batch,
-      mock_get_job,
-      mock_get_custom,
+      mock_get_jobs,
   ):
     """Returns False when Job condition Complete has status False."""
     mock_pod_list = mock.MagicMock()
@@ -712,16 +730,15 @@ class GclusterTest(unittest.TestCase):
     mock_condition.status = "False"
     mock_job = mock.MagicMock()
     mock_job.status.conditions = [mock_condition]
-    mock_get_job.return_value = mock_job
-    mock_custom_api = mock.MagicMock()
-    mock_custom_api.get_namespaced_custom_object.return_value = None
-    mock_get_custom.return_value = mock_custom_api
+    mock_get_jobs.return_value = [mock_job]
 
     completed = gke.wait_for_workload_completion.function(
         workload_id="test-workload",
         project_id="test-project",
         region="us-central1",
         cluster_name="test-cluster",
+        use_pathways=False,
+        workload_kind=gke.WorkloadKind.JOB,
     )
     mock_get_client.assert_called_once()
     mock_get_batch.assert_called_once()
@@ -729,24 +746,19 @@ class GclusterTest(unittest.TestCase):
 
   @mock.patch("xlml.utils.gke.get_workload_jobset")
   @mock.patch("xlml.utils.gke.get_custom_objects_api_client")
-  @mock.patch("xlml.utils.gke.get_workload_job")
-  @mock.patch("xlml.utils.gke.get_batch_api_client")
   @mock.patch("xlml.utils.gke.list_workload_pods")
   @mock.patch("xlml.utils.gke.get_core_api_client")
   def test_wait_for_workload_completion_no_pods_jobset_completed(
       self,
       mock_get_client,
       mock_list_pods,
-      mock_get_batch,
-      mock_get_job,
       mock_get_custom,
       mock_get_jobset,
   ):
-    """Falls back to JobSet CRD status Completed when pod list is empty."""
+    """Checks JobSet CRD status Completed when pod list is empty for JOBSET."""
     mock_pod_list = mock.MagicMock()
     mock_pod_list.items = []
     mock_list_pods.return_value = mock_pod_list
-    mock_get_job.return_value = None
 
     mock_jobset = {
         "status": {"conditions": [{"type": "Completed", "status": "True"}]}
@@ -758,32 +770,28 @@ class GclusterTest(unittest.TestCase):
         project_id="test-project",
         region="us-central1",
         cluster_name="test-cluster",
+        use_pathways=False,
+        workload_kind=gke.WorkloadKind.JOBSET,
     )
     mock_get_client.assert_called_once()
-    mock_get_batch.assert_called_once()
     mock_get_custom.assert_called_once()
     self.assertTrue(completed)
 
   @mock.patch("xlml.utils.gke.get_workload_jobset")
   @mock.patch("xlml.utils.gke.get_custom_objects_api_client")
-  @mock.patch("xlml.utils.gke.get_workload_job")
-  @mock.patch("xlml.utils.gke.get_batch_api_client")
   @mock.patch("xlml.utils.gke.list_workload_pods")
   @mock.patch("xlml.utils.gke.get_core_api_client")
   def test_wait_for_workload_completion_no_pods_jobset_failed(
       self,
       mock_get_client,
       mock_list_pods,
-      mock_get_batch,
-      mock_get_job,
       mock_get_custom,
       mock_get_jobset,
   ):
-    """Raises AirflowFailException on JobSet CRD status Failed fallback."""
+    """Raises AirflowFailException on JobSet CRD status Failed for JOBSET."""
     mock_pod_list = mock.MagicMock()
     mock_pod_list.items = []
     mock_list_pods.return_value = mock_pod_list
-    mock_get_job.return_value = None
 
     mock_jobset = {
         "status": {"conditions": [{"type": "Failed", "status": "True"}]}
@@ -796,23 +804,20 @@ class GclusterTest(unittest.TestCase):
           project_id="test-project",
           region="us-central1",
           cluster_name="test-cluster",
+          use_pathways=False,
+          workload_kind=gke.WorkloadKind.JOBSET,
       )
     mock_get_client.assert_called_once()
-    mock_get_batch.assert_called_once()
     mock_get_custom.assert_called_once()
 
   @mock.patch("xlml.utils.gke.get_workload_jobset")
   @mock.patch("xlml.utils.gke.get_custom_objects_api_client")
-  @mock.patch("xlml.utils.gke.get_workload_job")
-  @mock.patch("xlml.utils.gke.get_batch_api_client")
   @mock.patch("xlml.utils.gke.list_workload_pods")
   @mock.patch("xlml.utils.gke.get_core_api_client")
   def test_wait_for_workload_completion_no_pods_jobset_status_false(
       self,
       mock_get_client,
       mock_list_pods,
-      mock_get_batch,
-      mock_get_job,
       mock_get_custom,
       mock_get_jobset,
   ):
@@ -820,7 +825,6 @@ class GclusterTest(unittest.TestCase):
     mock_pod_list = mock.MagicMock()
     mock_pod_list.items = []
     mock_list_pods.return_value = mock_pod_list
-    mock_get_job.return_value = None
 
     mock_jobset = {
         "status": {
@@ -837,9 +841,10 @@ class GclusterTest(unittest.TestCase):
         project_id="test-project",
         region="us-central1",
         cluster_name="test-cluster",
+        use_pathways=False,
+        workload_kind=gke.WorkloadKind.JOBSET,
     )
     mock_get_client.assert_called_once()
-    mock_get_batch.assert_called_once()
     mock_get_custom.assert_called_once()
     self.assertFalse(completed)
 
@@ -880,15 +885,18 @@ class GclusterTest(unittest.TestCase):
     self.assertEqual(mock_get_auth_client.call_count, 3)
 
   def test_gke_list_workload_pods_from_latest_job(self):
-    """Lists pods belonging to the active Job by job-name."""
+    """Lists pods belonging to all active Jobs by job-name."""
     mock_core_api = mock.MagicMock()
     mock_batch_api = mock.MagicMock()
 
-    mock_job = mock.MagicMock()
-    mock_job.metadata.name = "test-workload-main-job-0"
-    mock_job.metadata.deletion_timestamp = None
+    mock_job0 = mock.MagicMock()
+    mock_job0.metadata.name = "test-workload-slice-job-0"
+    mock_job0.metadata.deletion_timestamp = None
+    mock_job1 = mock.MagicMock()
+    mock_job1.metadata.name = "test-workload-slice-job-1"
+    mock_job1.metadata.deletion_timestamp = None
     mock_job_list = mock.MagicMock()
-    mock_job_list.items = [mock_job]
+    mock_job_list.items = [mock_job0, mock_job1]
     mock_batch_api.list_namespaced_job.return_value = mock_job_list
 
     matched_pods = mock.MagicMock()
@@ -901,12 +909,16 @@ class GclusterTest(unittest.TestCase):
       result = gke.list_workload_pods(
           mock_core_api,
           "test-workload",
+          use_pathways=False,
+          workload_kind=gke.WorkloadKind.JOBSET,
           namespace="test-ns",
       )
     self.assertEqual(result, matched_pods)
     mock_core_api.list_namespaced_pod.assert_called_once_with(
         namespace="test-ns",
-        label_selector="job-name=test-workload-main-job-0",
+        label_selector=(
+            "job-name in (test-workload-slice-job-0,test-workload-slice-job-1)"
+        ),
     )
 
   def test_gke_list_workload_pods_returns_empty_when_no_job(self):
@@ -923,13 +935,15 @@ class GclusterTest(unittest.TestCase):
       result = gke.list_workload_pods(
           mock_core_api,
           "test-workload",
+          use_pathways=False,
+          workload_kind=gke.WorkloadKind.JOBSET,
           namespace="test-ns",
       )
     self.assertEqual(result.items, [])
     mock_core_api.list_namespaced_pod.assert_not_called()
 
-  def test_gke_get_workload_job(self):
-    """Lists Job by jobset-name label selector when workload_kind is JOBSET."""
+  def test_gke_get_workload_jobs(self):
+    """Lists Jobs by jobset-name label selector when workload_kind is JOBSET."""
     mock_batch_api = mock.MagicMock()
 
     mock_job = mock.MagicMock()
@@ -938,37 +952,42 @@ class GclusterTest(unittest.TestCase):
     mock_job_list.items = [mock_job]
     mock_batch_api.list_namespaced_job.return_value = mock_job_list
 
-    result = gke.get_workload_job(
-        mock_batch_api, "test-workload", namespace="test-ns"
+    result = gke.get_workload_jobs(
+        mock_batch_api,
+        "test-workload",
+        use_pathways=False,
+        workload_kind=gke.WorkloadKind.JOBSET,
+        namespace="test-ns",
     )
-    self.assertEqual(result, mock_job)
+    self.assertEqual(result, [mock_job])
     mock_batch_api.read_namespaced_job.assert_not_called()
     mock_batch_api.list_namespaced_job.assert_called_once_with(
         label_selector="jobset.sigs.k8s.io/jobset-name=test-workload",
         namespace="test-ns",
     )
 
-  def test_gke_get_workload_job_kind_job(self):
+  def test_gke_get_workload_jobs_kind_job(self):
     """Reads Job directly by name when workload_kind is JOB."""
     mock_batch_api = mock.MagicMock()
     mock_job = mock.MagicMock()
     mock_job.metadata.deletion_timestamp = None
     mock_batch_api.read_namespaced_job.return_value = mock_job
 
-    result = gke.get_workload_job(
+    result = gke.get_workload_jobs(
         mock_batch_api,
         "test-workload",
-        namespace="test-ns",
+        use_pathways=False,
         workload_kind=gke.WorkloadKind.JOB,
+        namespace="test-ns",
     )
-    self.assertEqual(result, mock_job)
+    self.assertEqual(result, [mock_job])
     mock_batch_api.read_namespaced_job.assert_called_once_with(
         name="test-workload", namespace="test-ns"
     )
     mock_batch_api.list_namespaced_job.assert_not_called()
 
-  def test_gke_get_workload_job_excludes_deleting_jobs(self):
-    """Excludes deleting Jobs and returns the active Job."""
+  def test_gke_get_workload_jobs_excludes_deleting_jobs(self):
+    """Excludes deleting Jobs and returns the active Jobs."""
     mock_batch_api = mock.MagicMock()
 
     deleting_job = mock.MagicMock()
@@ -985,12 +1004,16 @@ class GclusterTest(unittest.TestCase):
     mock_job_list.items = [deleting_job, active_job]
     mock_batch_api.list_namespaced_job.return_value = mock_job_list
 
-    result = gke.get_workload_job(
-        mock_batch_api, "test-workload", namespace="test-ns"
+    result = gke.get_workload_jobs(
+        mock_batch_api,
+        "test-workload",
+        use_pathways=False,
+        workload_kind=gke.WorkloadKind.JOBSET,
+        namespace="test-ns",
     )
-    self.assertEqual(result, active_job)
+    self.assertEqual(result, [active_job])
 
-  def test_gke_get_workload_job_use_pathways(self):
+  def test_gke_get_workload_jobs_use_pathways(self):
     """Scopes Job query to pathways-head when use_pathways is True."""
     mock_batch_api = mock.MagicMock()
 
@@ -1002,13 +1025,14 @@ class GclusterTest(unittest.TestCase):
     mock_job_list.items = [head_job]
     mock_batch_api.list_namespaced_job.return_value = mock_job_list
 
-    result = gke.get_workload_job(
+    result = gke.get_workload_jobs(
         mock_batch_api,
         "test-workload",
-        namespace="test-ns",
         use_pathways=True,
+        workload_kind=gke.WorkloadKind.JOBSET,
+        namespace="test-ns",
     )
-    self.assertEqual(result, head_job)
+    self.assertEqual(result, [head_job])
     mock_batch_api.list_namespaced_job.assert_called_once_with(
         label_selector=(
             "jobset.sigs.k8s.io/jobset-name=test-workload,"
