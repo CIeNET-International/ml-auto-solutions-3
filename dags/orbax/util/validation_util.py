@@ -79,7 +79,7 @@ def validate_checkpoint_at_steps_are_saved(
       location=location,
       cluster_name=cluster_name,
       pod_pattern=pod_pattern,
-      text_filter=(
+      raw_filter=(
           "\"'event_type': 'save'\" AND "
           f'(textPayload=~"{log_pattern}" OR '
           f'jsonPayload.message=~"{log_pattern}")'
@@ -200,7 +200,7 @@ def validate_log_with_gcs(
       namespace=namespace,
       pod_pattern=pod_pattern,
       container_name=container_name,
-      text_filter=f'textPayload=~"{text_filter}"',
+      raw_filter=f'textPayload=~"{text_filter}"',
       start_time=start_time,
       end_time=end_time,
   )
@@ -371,8 +371,8 @@ def list_log_entries(
     namespace: str = "default",
     pod_pattern: str = ".*",
     container_name: Optional[str] = None,
-    text_filter: Optional[str] = None,
-    text_filters: Optional[list[str]] = None,
+    raw_filter: Optional[str] = None,
+    payload_regexes: Optional[list[str]] = None,
     filter_mode: FilterMode = (
         FilterMode.textPayload | FilterMode.jsonPayload_message
     ),
@@ -396,11 +396,11 @@ def list_log_entries(
     namespace: Kubernetes namespace (defaults to "default")
     pod_pattern: Pattern to match pod names (defaults to "*")
     container_name: Optional container name to filter logs
-    text_filter: Optional comma-separated string to
-      filter log entries by textPayload content
-    text_filters: Optional list of RE2 regexes. An entry matches if any regex
-      matches any of the payload fields selected by `filter_mode`.
-    filter_mode: Payload fields `text_filters` are applied to. Defaults to
+    raw_filter: Optional Cloud Logging filter clause, appended to the query
+      verbatim (e.g. `textPayload=~"foo"` or a bare quoted search term).
+    payload_regexes: Optional list of RE2 regexes. An entry matches if any
+      regex matches any of the payload fields selected by `filter_mode`.
+    filter_mode: Payload fields `payload_regexes` are applied to. Defaults to
       both `textPayload` and `jsonPayload.message`.
     start_time: Optional start time for log retrieval
       (defaults to 12 hours ago)
@@ -435,13 +435,13 @@ def list_log_entries(
 
   if container_name:
     conditions.append(f'resource.labels.container_name="{container_name}"')
-  if text_filter:
-    conditions.append(f"{text_filter}")
-  if text_filters:
+  if raw_filter:
+    conditions.append(f"{raw_filter}")
+  if payload_regexes:
     filters = []
-    for txt in text_filters:
+    for regex in payload_regexes:
       # Escape only double quotes; Logging passes regex backslashes through.
-      escaped = txt.replace('"', '\\"')
+      escaped = regex.replace('"', '\\"')
       if FilterMode.textPayload in filter_mode:
         filters.append(f'textPayload=~"{escaped}"')
       if FilterMode.jsonPayload_message in filter_mode:
@@ -463,8 +463,8 @@ def validate_log_exist(
     namespace: str = "default",
     pod_pattern: str = ".*",
     container_name: Optional[str] = None,
-    text_filter: Optional[str] = None,
-    text_filters: Optional[list[str]] = None,
+    raw_filter: Optional[str] = None,
+    payload_regexes: Optional[list[str]] = None,
     filter_mode: FilterMode = (
         FilterMode.textPayload | FilterMode.jsonPayload_message
     ),
@@ -473,9 +473,9 @@ def validate_log_exist(
 ) -> None:
   """Validate the workload log text filter it is found during training.
 
-  `text_filter` is a raw Logging filter clause; `text_filters` is a list of
-  RE2 regexes applied to the payload fields in `filter_mode`, matching if any
-  of them matches (see `list_log_entries`).
+  `raw_filter` is a Cloud Logging filter clause used verbatim;
+  `payload_regexes` is a list of RE2 regexes applied to the payload fields in
+  `filter_mode`, matching if any of them matches (see `list_log_entries`).
   """
 
   entries = list_log_entries(
@@ -485,8 +485,8 @@ def validate_log_exist(
       namespace=namespace,
       pod_pattern=pod_pattern,
       container_name=container_name,
-      text_filter=text_filter,
-      text_filters=text_filters,
+      raw_filter=raw_filter,
+      payload_regexes=payload_regexes,
       filter_mode=filter_mode,
       start_time=start_time,
       end_time=end_time,
@@ -519,7 +519,7 @@ def validate_restored_correct_checkpoint(
       cluster_name=cluster_name,
       namespace="default",
       pod_pattern=pod_pattern,
-      text_filters=[reg_save_event, reg_restore_event, reg_restoring],
+      payload_regexes=[reg_save_event, reg_restore_event, reg_restoring],
       filter_mode=FilterMode.textPayload | FilterMode.jsonPayload_message,
       start_time=start_time,
       end_time=end_time,
@@ -639,7 +639,7 @@ def validate_replicator_gcs_restore_log(
       namespace=namespace,
       pod_pattern=pod_pattern,
       container_name=container_name,
-      text_filter="Restoring from backup",
+      raw_filter="Restoring from backup",
       start_time=start_time,
       end_time=end_time,
   )
@@ -734,7 +734,7 @@ def validate_replicator_gcs_backup_log(
       namespace=namespace,
       pod_pattern=pod_pattern,
       container_name=container_name,
-      text_filter=f'textPayload=~"{step_regex}"',
+      raw_filter=f'textPayload=~"{step_regex}"',
       start_time=start_time,
       end_time=end_time,
   )
@@ -791,7 +791,7 @@ def validate_checkpoints_save_regular_axlearn(
       location=location,
       cluster_name=cluster_name,
       pod_pattern=pod_pattern,
-      text_filter=f'jsonPayload.message=~"{log_pattern}"',
+      raw_filter=f'jsonPayload.message=~"{log_pattern}"',
       start_time=start_time,
       end_time=end_time,
   )

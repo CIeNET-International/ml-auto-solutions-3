@@ -174,7 +174,7 @@ with models.DAG(
             project_id=test_config.cluster.project,
             location=zone_to_region(test_config.cluster.zone),
             cluster_name=test_config.cluster.name,
-            text_filters=[
+            payload_regexes=[
                 validation_util.RESTORE_EVENT_PATTERN,
                 validation_util.MAXTEXT_RESTORING_PATTERN,
             ],
