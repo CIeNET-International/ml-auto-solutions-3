@@ -1,6 +1,7 @@
 """Utilities for GKE."""
 
 import base64
+import collections
 import concurrent.futures
 import datetime
 import logging
@@ -371,38 +372,35 @@ def wait_for_workload_completion(
     logging.info(f"No pods found for workload: {workload_id}")
     return False
 
-  # A pod may fail while the rest of the workload is still running, e.g. the
-  # node interruption tests delete one node and rely on the JobSet restart
-  # policy to recover. Judge the workload only once no pod is active anymore;
-  # otherwise a Failed pod that happens to be listed first (pod `-0-0-`, the
-  # default interruption target) fails the task before the JobSet can restart.
-  active_pods = [
-      pod
-      for pod in pods.items
-      if pod.status.phase in ["Pending", "Running", "Unknown"]
-  ]
-  if active_pods:
-    logging.info(
-        f"{len(active_pods)} of {len(pods.items)} pod(s) still active, e.g."
-        f" {active_pods[0].metadata.name} in phase"
-        f" {active_pods[0].status.phase}."
-    )
+  # Collect the raw pod phases in one pass, then judge the workload from the
+  # aggregate rather than while iterating over individual pods. A pod may fail
+  # while the rest of the workload is still running, e.g. the node interruption
+  # tests delete one node and rely on the JobSet restart policy to recover, so
+  # a Failed pod only counts once no pod is active anymore.
+  phase_counts = collections.Counter(pod.status.phase for pod in pods.items)
+
+  active_count = sum(
+      phase_counts[phase] for phase in ("Pending", "Running", "Unknown")
+  )
+  if active_count:
+    logging.info(f"{active_count} of {len(pods.items)} pod(s) still active.")
     return False
 
-  for pod in pods.items:
-    if pod.status.phase == "Failed":
-      print_pod_logs(core_api, pod)
-      url = LOGGING_URL_FORMAT.format(
-          project=project_id,
-          region=region,
-          cluster=cluster_name,
-          namespace=namespace,
-          workload_id=workload_id,
-      )
-      raise AirflowFailException(
-          f"Workload {workload_id} failed with pod phase: {pod.status.phase}."
-          f" Link to logs: {url}"
-      )
+  if phase_counts["Failed"]:
+    for pod in pods.items:
+      if pod.status.phase == "Failed":
+        print_pod_logs(core_api, pod)
+    url = LOGGING_URL_FORMAT.format(
+        project=project_id,
+        region=region,
+        cluster=cluster_name,
+        namespace=namespace,
+        workload_id=workload_id,
+    )
+    raise AirflowFailException(
+        f"Workload {workload_id} failed with {phase_counts['Failed']} of"
+        f" {len(pods.items)} pod(s) in phase Failed. Link to logs: {url}"
+    )
 
   for pod in pods.items:
     if pod.status.container_statuses:
