@@ -565,18 +565,29 @@ class GclusterRunner(Runner):
       if mounts is None and hasattr(self.configs.task_test_config, "mounts"):
         mounts = self.configs.task_test_config.mounts
 
+      accelerator = self.configs.task_test_config.accelerator
+      is_cpu = isinstance(accelerator, test_config.Cpu)
+      accelerator_type = (
+          accelerator.device_type.value if is_cpu else accelerator.name
+      )
+      zone = (
+          gke.zone_to_region(self.configs.task_gcp_config.zone)
+          if is_cpu
+          else self.configs.task_gcp_config.zone
+      )
+
       run_workload = gcluster.run_workload.override(
           owner=self.configs.task_test_config.task_owner
       )(
           task_id="run_workload",
           cluster_project=self.configs.task_gcp_config.project_name,
-          zone=self.configs.task_gcp_config.zone,
+          zone=zone,
           cluster_name=self.configs.task_test_config.cluster_name,
           benchmark_id=self.configs.task_test_config.benchmark_id,
           workload_id=self.workload_id,
           gcs_path=self.gcs_path,
           docker_image=self.configs.task_test_config.docker_image,
-          accelerator_type=self.configs.task_test_config.accelerator.name,
+          accelerator_type=accelerator_type,
           run_cmds=self.configs.task_test_config.test_script,
           num_slices=self.configs.task_test_config.num_slices,
           use_vertex_tensorboard=use_vertex_tensorboard,
@@ -619,10 +630,18 @@ class GclusterRunner(Runner):
     )
 
   def cleanup_workload(self, tear_down_of: BaseOperator) -> DAGNode:
+    is_cpu = isinstance(
+        self.configs.task_test_config.accelerator, test_config.Cpu
+    )
+    zone = (
+        gke.zone_to_region(self.configs.task_gcp_config.zone)
+        if is_cpu
+        else self.configs.task_gcp_config.zone
+    )
     return gcluster.clean_up_workload(
         workload_id=self.workload_id,
         project_id=self.configs.task_gcp_config.project_name,
-        zone=self.configs.task_gcp_config.zone,
+        zone=zone,
         cluster_name=self.configs.task_test_config.cluster_name,
         gcluster_version=self.configs.gcluster_version,
         namespace=self.configs.task_test_config.namespace,
