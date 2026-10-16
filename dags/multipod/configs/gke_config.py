@@ -19,7 +19,7 @@ import datetime
 from typing import Any, Literal, overload
 
 from dags import gcs_bucket
-from dags.common.vm_resource import GkeClusters, Project
+from dags.common.vm_resource import CpuVersion, GkeClusters, Project
 from xlml.apis import gcp_config, metric_config, task, test_config
 from xlml.apis.gke_cluster_config import GkeClusterConfig
 from xlml.utils import gcluster, xpk
@@ -122,11 +122,21 @@ def get_gke_config(
       composer_project=composer_project,
   )
 
-  job_test_config = test_config.TpuGkeTest(
-      test_config.Tpu(
-          version=cluster.device_version,
-          cores=cluster.core_count,
-      ),
+  if isinstance(cluster.device_version, CpuVersion):
+    test_cls = test_config.CpuGkeTest
+    accelerator = test_config.Cpu(
+        device_type=cluster.device_version,
+        machine_count=1,
+    )
+  else:
+    test_cls = test_config.TpuGkeTest
+    accelerator = test_config.Tpu(
+        version=cluster.device_version,
+        cores=cluster.core_count,
+    )
+
+  job_test_config = test_cls(
+      accelerator,
       test_name=test_name,
       run_model_cmds=run_model_cmds,
       set_up_cmds=None,

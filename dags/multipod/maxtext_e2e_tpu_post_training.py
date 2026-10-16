@@ -137,6 +137,7 @@ with models.DAG(
       },
       "llama3_1-70b": {
           "core_count": 64,
+          "cpu_cluster": GkeClusters.CPU_M1_MEGAMEM_96_CLUSTER,
           "to_huggingface": "bash tests/end_to_end/tpu/llama3.1/70b/test_llama3.1_70b_to_hf.sh",
           "post_training": {
               "sft": {
@@ -196,6 +197,7 @@ with models.DAG(
       },
       "qwen3_5-35b": {
           "core_count": 64,
+          "cpu_cluster": GkeClusters.CPU_M1_MEGAMEM_96_CLUSTER,
           "to_huggingface": "bash tests/end_to_end/tpu/qwen3.5/35b/test_qwen3.5_to_hf.sh",
           "post_training": {
               "rl": {
@@ -292,17 +294,19 @@ with models.DAG(
           convert_to_huggingface_cmd = (
               f"export HF_TOKEN={HF_TOKEN}",
               'export HF_HOME="/mnt/shm/hf_cache"',
-              'export LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=20480"',
               f"{to_hf_script} {run_name} {model_path} {to_hf_flags}",
+          )
+          cpu_cluster = test_config.get(
+              "cpu_cluster", GkeClusters.CPU_N2_STANDARD_64_CLUSTER
           )
           convert_to_huggingface_task = gke_config.get_gke_config(
               time_out_in_min=90,
               test_name="to-hf",
               run_model_cmds=convert_to_huggingface_cmd,
               docker_image="{{ params.docker_image }}",
-              cluster=GkeClusters.TPU_V5P_BODABORG_NAP_CLUSTER,
+              cluster=cpu_cluster,
               test_owner=test_owner.SURBHI_J,
-              priority="medium",
+              priority="very-high",
               use_gcluster=True,
               mounts="/dev/shm;/mnt/shm;rw",
           ).run(skip_post_process=True)
