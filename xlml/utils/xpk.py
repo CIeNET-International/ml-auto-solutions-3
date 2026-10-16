@@ -258,7 +258,13 @@ def wait_for_workload_reach_step(
   deleting a node
   """
   core_api = gke.get_core_api_client(project_id, region, cluster_name)
-  pods = gke.list_workload_pods(core_api, workload_id, namespace=namespace)
+  pods = gke.list_workload_pods(
+      core_api,
+      workload_id,
+      use_pathways=False,
+      workload_kind=gke.WorkloadKind.JOBSET,
+      namespace=namespace,
+  )
 
   if not pods.items:
     logging.info("No pods found for workload selector: %s.", workload_id)
@@ -316,7 +322,13 @@ def _find_target_pod_node(
 ) -> str:
   """find the node name for the workload."""
   core_api = gke.get_core_api_client(project_id, region, cluster_name)
-  pods = gke.list_workload_pods(core_api, workload_id, namespace=namespace)
+  pods = gke.list_workload_pods(
+      core_api,
+      workload_id,
+      use_pathways=False,
+      workload_kind=gke.WorkloadKind.JOBSET,
+      namespace=namespace,
+  )
   pod_node_pairs = []
   pattern = re.compile(r".*slice-job-(\d+)-(\d+)-\w+")
 
