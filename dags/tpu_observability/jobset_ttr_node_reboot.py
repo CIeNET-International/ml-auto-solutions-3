@@ -108,15 +108,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
         group_id=f"v{config.tpu_version.value}",
         timeout=timedelta(minutes=90),
     ):
-      selector = jobset.generate_node_pool_selector("jobset-ttr-node-reboot")
-
-      jobset_config = jobset.build_jobset_from_gcs_yaml(
-          gcs_path=GCS_JOBSET_CONFIG_PATH,
-          dag_name=DAG_ID,
-          node_pool_selector=selector,
-          privileged=True,
-          image=DockerImage.LIBTPU_STABLE.value,
-      )
 
       cluster_info = node_pool.build_node_pool_info_from_gcs_yaml(
           gcs_path=GCS_CONFIG_PATH,
@@ -130,6 +121,7 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           gcs_path=GCS_JOBSET_CONFIG_PATH,
           dag_name=DAG_ID,
           privileged=True,
+          image=DockerImage.LIBTPU_STABLE.value,
       )
 
       selector = jobset.generate_node_pool_selector(DAG_ID)
