@@ -189,14 +189,12 @@ with models.DAG(
             node_pool_selector=selector,
         )
 
-
       image_task_groups = []
       for type_name, image_url in docker_images.items():
         with TaskGroupWithTimeout(  # pylint: disable=unexpected-keyword-arg
             group_id=f"test_v{config.tpu_version.value}_{type_name}",
             timeout=TEST_TIMEOUT,
         ) as image_tg:
-
           startup = jobset.create_jobset_startup_tasks(
               node_pool=cluster_info,
               jobset_config=jobset_config,
@@ -237,4 +235,3 @@ with models.DAG(
         chain(current_node, tg)
         current_node = tg
       chain(current_node, post_test)
-

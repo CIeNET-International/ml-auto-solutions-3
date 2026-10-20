@@ -522,7 +522,9 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
           )(node_pool=cluster_info_2)
 
           chain(
-              clean_up_workload, cleanup_first_node_pool, cleanup_second_node_pool
+              clean_up_workload,
+              cleanup_first_node_pool,
+              cleanup_second_node_pool,
           )
 
       chain(selector, pre_test, *image_task_groups, post_test)

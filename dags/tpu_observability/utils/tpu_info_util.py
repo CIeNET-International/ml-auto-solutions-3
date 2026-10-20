@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from enum import IntEnum, auto
 
 
-
 # A type alias for a parsed row, mapping column headers to their values.
 _TableRow = dict[str, str]
 
