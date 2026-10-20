@@ -425,14 +425,18 @@ def wait_for_workload_completion(
         f" {len(pods.items)} pod(s) in phase Failed. Link to logs: {url}"
     )
 
-  # Every pod is Succeeded. Fetch their logs, then confirm no container exited
-  # non-zero; the phases are final at this point, so a bad exit code is a
-  # failure rather than something to poll for again.
-  for pod in pods.items:
-    print_pod_logs(core_api, pod)
+  # Every pod is Succeeded. Confirm no container exited non-zero; the phases
+  # are final at this point, so a bad exit code is a failure rather than
+  # something to poll for again.
   failed_container = find_failed_container(pods)
   if failed_container:
     pod, container_status = failed_container
+    print_container_logs(
+        core_api,
+        namespace=namespace,
+        pod_name=pod.metadata.name,
+        container_name=container_status.name,
+    )
     url = LOGGING_URL_FORMAT.format(
         project=project_id,
         region=region,
@@ -445,6 +449,10 @@ def wait_for_workload_completion(
         f" pod {pod.metadata.name} exited with code"
         f" {container_status.state.terminated.exit_code}. Logs: {url}"
     )
+
+  # Fetch logs for successful pods before returning
+  for pod in pods.items:
+    print_pod_logs(core_api, pod)
 
   logging.info("All pod(s) phase are succeeded.")
   return True
