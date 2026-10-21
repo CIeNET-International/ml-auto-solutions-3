@@ -17,7 +17,6 @@ This script uses a factory pattern to dynamically generate an Airflow DAG for
 each metric verification strategy.
 """
 
-from __unknown__ import all_verification_tasks
 import copy
 import datetime
 import logging
@@ -36,7 +35,8 @@ from dags.common.task_group_with_timeout import TaskGroupWithTimeout
 from dags.common.scheduling_helper.scheduling_helper import (
     SchedulingHelper,
     get_dag_timeout,
-)from dags.common.vm_resource import DockerImage
+)
+from dags.common.vm_resource import DockerImage
 
 from dags.tpu_observability.configs.common import (
     GCS_CONFIG_PATH,
@@ -65,7 +65,7 @@ SCHEDULE = SchedulingHelper.arrange_schedule_time(DAG_ID)
 
 PRE_TEST_TIMEOUT = datetime.timedelta(minutes=10)
 POST_TEST_TIMEOUT = datetime.timedelta(minutes=10)
-TEST_TIMEOUT = (DAGRUN_TIMEOUT - PRE_TEST_TIMEOUT - POST_TEST_TIMEOUT)/2
+TEST_TIMEOUT = (DAGRUN_TIMEOUT - PRE_TEST_TIMEOUT - POST_TEST_TIMEOUT) / 2
 
 
 def compare_metric_values(
@@ -198,17 +198,29 @@ def verify_metric_for_all_pods(
           pod_name,
       )
 
-  labels = metric_strategy.get_labels(tpu_info_output)
-  compare_metric_values(
-      cmd_values,
-      monitoring_values,
-      pod_name,
-      metric_display_name=metric_strategy.dag_id_suffix,
-      tolerance_percent=tolerance_for_metric,
-      labels=labels,
-  )
+      labels = metric_strategy.get_labels(tpu_info_output)
+      compare_metric_values(
+          cmd_values,
+          monitoring_values,
+          pod_name,
+          metric_display_name=metric_strategy.dag_id_suffix,
+          tolerance_percent=tolerance_for_metric,
+          labels=labels,
+      )
+      results.append(True)
+      logging.info("Validation succeeded for pod: %s", pod_name)
+    except Exception as e:
+      logging.error("Validation failed for pod: %s. Error: %s", pod_name, e)
+      failed_pods.append((pod_name, e))
 
-  return True
+  if failed_pods:
+    failed_pod_names = [name for name, _ in failed_pods]
+    logging.error("The following pods failed validation: %s", failed_pod_names)
+    raise AirflowFailException(
+        f"Task failed because validation failed on pods: {failed_pod_names}"
+    )
+
+  return results
 
 
 @task
@@ -423,4 +435,3 @@ with models.DAG(
         chain(current_node, tg)
         current_node = tg
       chain(pre_test, current_node, post_test)
-
