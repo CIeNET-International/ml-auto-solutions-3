@@ -432,27 +432,19 @@ def wait_for_workload_completion(
   # Judge the workload from the state of all its pods at once, so the verdict
   # does not depend on the order the API lists them in.
   #
-  # A Failed pod is final for that pod, but not for the workload: these
-  # workloads are submitted with `max_restart` (the JobSet's
-  # failurePolicy.maxRestarts), so when a pod fails the JobSet controller
-  # recreates the child Jobs and the Failed pod is replaced by new ones. The
-  # node-interruption tests rely on exactly this: they delete the node under
-  # pod -0-0- on purpose and expect the workload to recover. The sensor cannot
-  # see whether a restart is coming, only whether anything is still active, so
-  # a Failed pod is treated as terminal only once no pod is active anymore.
+  # A Failed pod does not necessarily mean the workload failed: pod damaged
+  # (e.g. the node-interruption tests delete its node) -> k8s restarts the
+  # job -> the damaged pod gets recycled. So only judge once no pod is active.
   states = collect_pod_state(pods)
   if states.active_pods:
-    # The outcome is still undetermined: the workload is either still running
-    # or being restarted. Keep polling; the Failed pods are counted in the log
-    # line, not forgotten.
+    # Still running or being restarted; keep polling.
     logging.info(
         f"{len(states.not_completed_pods)} of {len(pods.items)} pod(s) not"
         f" completed, {len(states.failed)} of them failed. Logs: {url}"
     )
     return False
   if states.failed:
-    # Nothing is active, so no restart can be in flight: the Failed pods are
-    # the workload's final state.
+    # Nothing left to restart: the Failed pods are final.
     for pod in states.failed:
       print_pod_logs(core_api, pod)
     raise AirflowFailException(
