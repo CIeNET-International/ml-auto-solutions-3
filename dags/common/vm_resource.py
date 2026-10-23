@@ -434,3 +434,11 @@ class DockerImage(enum.Enum):
       "maxtext_post_training_nightly:"
       f"{datetime.datetime.today().strftime('%Y-%m-%d')}"
   )
+  LIBTPU_NIGHTLY = (
+      "us-west1-docker.pkg.dev/cienet-cmcs/tpu-obs-cloud-build/libtpu-nightly:"
+      "latest"
+  )
+  LIBTPU_STABLE = (
+      "us-west1-docker.pkg.dev/cienet-cmcs/tpu-obs-cloud-build/libtpu-stable:"
+      "latest"
+  )

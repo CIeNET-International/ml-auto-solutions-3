@@ -36,6 +36,8 @@ from dags.common.scheduling_helper.scheduling_helper import (
     SchedulingHelper,
     get_dag_timeout,
 )
+from dags.common.vm_resource import DockerImage
+
 from dags.tpu_observability.configs.common import (
     GCS_CONFIG_PATH,
     GCS_JOBSET_CONFIG_PATH,
@@ -63,7 +65,7 @@ SCHEDULE = SchedulingHelper.arrange_schedule_time(DAG_ID)
 
 PRE_TEST_TIMEOUT = datetime.timedelta(minutes=10)
 POST_TEST_TIMEOUT = datetime.timedelta(minutes=10)
-TEST_TIMEOUT = DAGRUN_TIMEOUT - PRE_TEST_TIMEOUT - POST_TEST_TIMEOUT
+TEST_TIMEOUT = (DAGRUN_TIMEOUT - PRE_TEST_TIMEOUT - POST_TEST_TIMEOUT) / 2
 
 
 def compare_metric_values(
@@ -72,6 +74,7 @@ def compare_metric_values(
     pod_name: str,
     metric_display_name: str,
     tolerance_percent: float,
+    labels: list[str] | None = None,
 ):
   """Compares two lists of metric values and checks if they are within a
   tolerance range."""
@@ -88,15 +91,15 @@ def compare_metric_values(
       metric_display_name,
   )
   logging.info(
-      "%-12s%-15s%-17s%-12s%-15s%-10s",
-      "Device",
+      "%-20s%-15s%-17s%-12s%-15s%-10s",
+      "Label" if labels else "Device",
       "TPU-Info Val",
       "Monitoring Val",
       "Difference",
       "Allowed Diff",
       "Result",
   )
-  logging.info("-" * 85)
+  logging.info("-" * 95)
 
   all_passed = True
   for i, (log_val, mon_val) in enumerate(zip(cmd_values, monitoring_values)):
@@ -105,9 +108,10 @@ def compare_metric_values(
     passed = diff <= allowed_diff
     if not passed:
       all_passed = False
+    label = labels[i] if labels else f"Device {i}"
     logging.info(
-        "%-12s%-15.2f%-17.2f%-12.2f%-15.2f%-10s",
-        f"Device {i}",
+        "%-20s%-15.2f%-17.2f%-12.2f%-15.2f%-10s",
+        label,
         log_val,
         mon_val,
         diff,
@@ -194,12 +198,14 @@ def verify_metric_for_all_pods(
           pod_name,
       )
 
+      labels = metric_strategy.get_labels(tpu_info_output)
       compare_metric_values(
           cmd_values,
           monitoring_values,
           pod_name,
           metric_display_name=metric_strategy.dag_id_suffix,
           tolerance_percent=tolerance_for_metric,
+          labels=labels,
       )
       results.append(True)
       logging.info("Validation succeeded for pod: %s", pod_name)
@@ -310,6 +316,11 @@ with models.DAG(
       pools.
     """,
 ) as dag:
+  docker_images = {
+      "stable": DockerImage.LIBTPU_STABLE.value,
+      "nightly": DockerImage.LIBTPU_NIGHTLY.value,
+  }
+
   for machine in MachineConfigMap:
     config = machine.value
 
@@ -351,43 +362,46 @@ with models.DAG(
             node_pool_selector=selector,
         )
 
-        startup = jobset.create_jobset_startup_tasks(
-            node_pool=cluster_info,
-            jobset_config=jobset_config,
-            jobset_name=jobset_name,
-            node_pool_selector=selector,
-            workload_type=Workload.JAX_TPU_BENCHMARK,
-        )
-        chain([create_first_node_pool, create_second_node_pool], *startup.tasks)
+        _ = [create_first_node_pool, create_second_node_pool]
 
-      with TaskGroupWithTimeout(
-          group_id="test",
-          timeout=TEST_TIMEOUT,
-      ) as test:
-        verification_results = {}
-        all_verification_tasks = []
-
-        for strategy in ALL_METRIC_STRATEGIES:
-          verify_metric = verify_metric_for_all_pods.override(
-              task_id=f"verify_{strategy.dag_id_suffix}"
-          )(
+      image_task_groups = []
+      for type_name, image_url in docker_images.items():
+        with TaskGroupWithTimeout(
+            group_id=f"test_v{config.tpu_version.value}_{type_name}",
+            timeout=TEST_TIMEOUT,
+        ) as image_tg:
+          startup = jobset.create_jobset_startup_tasks(
               node_pool=cluster_info,
               jobset_config=jobset_config,
-              job_apply_time=startup.jobset_start_time,
-              metric_strategy=strategy,
-              pod_names=startup.running_pods,
+              jobset_name=jobset_name,
+              node_pool_selector=selector,
+              workload_type=Workload.JAX_TPU_BENCHMARK,
           )
 
-          all_verification_tasks.append(verify_metric)
-          verification_results[strategy.dag_id_suffix] = verify_metric
+          verification_results = {}
+          all_verification_tasks = []
 
-        summary = summarize_results.override(
-            task_id="summarize_results", trigger_rule=TriggerRule.ALL_DONE
-        )(
-            verification_results_dict=verification_results,
-            active_pods=startup.running_pods,
-        )
-        chain(all_verification_tasks, summary)
+          for strategy in ALL_METRIC_STRATEGIES:
+            verify_metric = verify_metric_for_all_pods.override(
+                task_id=f"verify_{strategy.dag_id_suffix}"
+            )(
+                node_pool=cluster_info,
+                jobset_config=jobset_config,
+                job_apply_time=startup.jobset_start_time,
+                metric_strategy=strategy,
+                pod_names=startup.running_pods,
+            )
+
+            all_verification_tasks.append(verify_metric)
+            verification_results[strategy.dag_id_suffix] = verify_metric
+
+          summary = summarize_results.override(
+              task_id="summarize_results", trigger_rule=TriggerRule.ALL_DONE
+          )(
+              verification_results_dict=verification_results,
+              active_pods=startup.running_pods,
+          )
+          chain(all_verification_tasks, summary)
 
       with TaskGroupWithTimeout(
           group_id="post_test",
@@ -416,4 +430,8 @@ with models.DAG(
             clean_up_workload, cleanup_first_node_pool, cleanup_second_node_pool
         )
 
-      chain(pre_test, test, post_test)
+      current_node = pre_test
+      for tg in image_task_groups:
+        chain(current_node, tg)
+        current_node = tg
+      chain(pre_test, current_node, post_test)
