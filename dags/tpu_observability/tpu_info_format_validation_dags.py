@@ -489,42 +489,37 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
               pod_names=startup.running_pods,
           )
 
-          chain(jobset_name, *startup.tasks, validate_format)
-
-        with TaskGroupWithTimeout(
-            group_id="post_test",
-            timeout=POST_TEST_TIMEOUT,
-            is_teardown=True,
-        ) as post_test:
           clean_up_workload = jobset.end_workload.override(
-              task_id="clean_up_workload", trigger_rule=TriggerRule.ALL_DONE
+              task_id="clean_up_workload",
+              trigger_rule=TriggerRule.ALL_DONE,
           )(
               node_pool=cluster_info,
               jobset_config=jobset_config,
               jobset_name=jobset_name,
           )
 
-        # Keyword arguments are generated dynamically at runtime (pylint does not
-        # know this signature).
-        with TaskGroup(  # pylint: disable=unexpected-keyword-arg
-            group_id="cleanup_node_pool"
-        ) as cleanup_node_pool:
-          cleanup_first_node_pool = node_pool.delete.override(
-              task_id="cleanup_node_pool_1",
-              trigger_rule=TriggerRule.ALL_DONE,
-              retries=2,
-          )(node_pool=cluster_info)
+          chain(jobset_name, *startup.tasks, validate_format, clean_up_workload)
 
-          cleanup_second_node_pool = node_pool.delete.override(
-              task_id="cleanup_node_pool_2",
-              trigger_rule=TriggerRule.ALL_DONE,
-              retries=2,
-          )(node_pool=cluster_info_2)
+      with TaskGroupWithTimeout(
+          group_id="post_test",
+          timeout=POST_TEST_TIMEOUT,
+          is_teardown=True,
+      ) as post_test:
+        cleanup_first_node_pool = node_pool.delete.override(
+            task_id="cleanup_node_pool_1",
+            trigger_rule=TriggerRule.ALL_DONE,
+            retries=2,
+        )(node_pool=cluster_info)
 
-          chain(
-              clean_up_workload,
-              cleanup_first_node_pool,
-              cleanup_second_node_pool,
-          )
+        cleanup_second_node_pool = node_pool.delete.override(
+            task_id="cleanup_node_pool_2",
+            trigger_rule=TriggerRule.ALL_DONE,
+            retries=2,
+        )(node_pool=cluster_info_2)
+
+        chain(
+            cleanup_first_node_pool,
+            cleanup_second_node_pool,
+        )
 
       chain(selector, pre_test, *image_task_groups, post_test)

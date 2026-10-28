@@ -106,7 +106,6 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
       jobset_config = jobset.build_jobset_from_gcs_yaml(
           gcs_path=GCS_JOBSET_CONFIG_PATH,
           dag_name=DAG_ID,
-          node_pool_selector=selector,
           image=DockerImage.LIBTPU_STABLE.value,
       )
 

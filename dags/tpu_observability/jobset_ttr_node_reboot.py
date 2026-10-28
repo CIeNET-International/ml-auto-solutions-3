@@ -104,9 +104,8 @@ with models.DAG(  # pylint: disable=unexpected-keyword-arg
 
     # Keyword arguments are generated dynamically at runtime (pylint does not
     # know this signature).
-    with TaskGroupWithTimeout(  # pylint: disable=unexpected-keyword-arg
-        group_id=f"v{config.tpu_version.value}",
-        timeout=timedelta(minutes=90),
+    with TaskGroup(  # pylint: disable=unexpected-keyword-arg
+        group_id=f"v{config.tpu_version.value}"
     ):
       cluster_info = node_pool.build_node_pool_info_from_gcs_yaml(
           gcs_path=GCS_CONFIG_PATH,
