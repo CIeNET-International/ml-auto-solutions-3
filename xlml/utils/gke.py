@@ -681,23 +681,27 @@ def wait_for_workload_reach_step(
     logging.info("No pods found for workload selector: %s.", workload_id)
     return False
 
+  states = collect_pod_state(pods)
+
   # Report a dead pod before waiting on the others: a Pending peer must not
   # keep the sensor polling until its timeout when the workload has already
   # failed.
-  for pod in pods.items:
-    if pod.status.phase == "Failed":
-      # Don't keep retrying if the pod has failed
-      raise AirflowFailException(f"Bad pod phase: {pod.status.phase}")
-    elif pod.status.phase in ["Unknown"]:
-      raise RuntimeError(f"Bad pod phase: {pod.status.phase}")
+  if states.failed:
+    # Don't keep retrying if the pod has failed
+    raise AirflowFailException(
+        f"Bad pod phase: Failed ({len(states.failed)} of {len(pods.items)}"
+        " pod(s))"
+    )
+  if states.unknown:
+    raise RuntimeError(f"Bad pod phase: {states.unknown[0].status.phase}")
 
-  if any(pod.status.phase in ["Pending"] for pod in pods.items):
+  if states.pending:
     logging.info("Some of the pods is still pending. Waiting to start")
     return False
 
-  if all(pod.status.phase in ["Running"] for pod in pods.items):
+  if len(states.running) == len(pods.items):
     # Pick last one running pod
-    pod = pods.items[len(pods.items) - 1]
+    pod = states.running[-1]
     current_step = _latest_completed_step(core_api, pod)
     if current_step is not None and current_step >= int(expect_reach_to_step):
       logging.info(
