@@ -82,7 +82,7 @@ replica_params.update({
 })
 
 
-# TODO(cienet):(b/576036761) Remove the temporary branch checkout once
+# TODO(b/576036761): Remove the temporary branch checkout once
 # feat/benchmarks-elastic-goodput-ckpt-flags is merged into maxtext.
 @task
 def generate_commands(
