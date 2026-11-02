@@ -108,19 +108,25 @@ def generate_commands(
       patch_cmd_runner = (
           r'sed -i "/python3 -m maxtext.trainers.pre_train.train/a '
           r"          f\"elastic_enabled=True\",\n"
+          r"          f\"elastic_backup_kind=checkpoint\",\n"
           r"          f\"enable_single_controller=True\",\n"
           r"          f\"grain_use_elastic_iterator=True\",\n"
+          r"          f\"packing=False\",\n"
           f'          \\"elastic_min_slice_count='
           f'{derived_params["elastic_min_slice_count"]}\\",\\n'
+          r"          f\"async_checkpointing=True\",\n"
+          r"          f\"checkpoint_period=10\",\n"
           r"          f\"colocated_python_data_input=True\",\n"
           r"          f\"tokenizer_path="
           r'"src/maxtext/assets/tokenizers/tokenizer.llama2"\"," '
           r"benchmarks/maxtext_ctk_runner.py"
       )
       patch_cmd_model_configs_sub = (
-          r'sed -i "/model_name=\"default-basic-1\"/,/)/ { '
+          r'sed -i "/model_name=\"default-basic-1\"/,/xla_flags/ { '
           r"s/\"dataset_type\": \"synthetic\"/\"dataset_type\": \"grain\"/; "
           r"s/\"dataset_path\":/# \"dataset_path\":/; "
+          r"s/\"enable_checkpointing\": False/\"enable_checkpointing\": True/; "
+          r"/\"profiler\":/d; "
           r'}" benchmarks/maxtext_trillium_model_configs.py'
       )
       insert_line = (
@@ -136,6 +142,7 @@ def generate_commands(
       patch_cmd_runner = (
           r'sed -i "/python3 -m maxtext.trainers.pre_train.train/a '
           r"          f\"elastic_enabled=True\",\n"
+          r"          f\"elastic_backup_kind=checkpoint\",\n"
           r"          f\"enable_single_controller=True\",\n"
           f'          \\"elastic_min_slice_count='
           f'{derived_params["elastic_min_slice_count"]}\\",\\n'

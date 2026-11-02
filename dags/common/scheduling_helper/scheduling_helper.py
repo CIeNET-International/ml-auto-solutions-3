@@ -100,6 +100,9 @@ REGISTERED_DAGS: dict[str, DagIdToTimeout] = {
         "pw_elastic_goodput_replica": DefaultTimeout,
         "pw_elastic_goodput_se": DefaultTimeout,
         "pw_elastic_goodput_replica_se": DefaultTimeout,
+        "pw_elastic_snapshot_replica_resize": DefaultTimeout,
+        "pw_elastic_snapshot_pause_resume": DefaultTimeout,
+        "pw_elastic_snapshot_ckpt_fallback": DefaultTimeout,
     },
 }
 # pylint: enable=line-too-long

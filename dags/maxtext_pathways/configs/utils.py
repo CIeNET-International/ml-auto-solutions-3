@@ -32,11 +32,50 @@ from google.cloud import logging as gcp_logging
 
 from xlml.utils import gcluster, gke, subprocess_utils
 
-
 # TODO(cienet): Replace this with an official one.
 COLOCATED_PYTHON_IMAGE = (
     "gcr.io/tpu-prod-env-multipod/lidanny_maxtext-colocated-python:latest"
 )
+
+_V5E_V6E_TOPOLOGIES = {
+    1: "1x1",
+    4: "2x2",
+    8: "2x4",
+    16: "4x4",
+    32: "4x8",
+    64: "8x8",
+    128: "8x16",
+    256: "16x16",
+}
+
+_V5P_TOPOLOGIES = {
+    8: "2x2x1",
+    16: "2x2x2",
+    32: "2x2x4",
+    64: "2x4x4",
+    128: "4x4x4",
+    256: "4x4x8",
+    512: "4x8x8",
+    1024: "8x8x8",
+    2048: "8x8x16",
+    4096: "8x16x16",
+}
+
+
+def resolve_pathways_slice_topology(
+    device_version: str, core_count: int
+) -> str:
+  """Maps (device_version, core_count) to a Pathways virtual_slices token."""
+  cores = int(core_count)
+  if device_version == "v5p":
+    if cores not in _V5P_TOPOLOGIES:
+      raise ValueError(f"Unsupported v5p core_count for Pathways: {cores}")
+    return f"tpuv5:{_V5P_TOPOLOGIES[cores]}"
+  if device_version in ("v5litepod", "v5e"):
+    shape = _V5E_V6E_TOPOLOGIES.get(cores, f"4x{cores // 4}")
+    return f"tpuv5e:{shape}"
+  shape = _V5E_V6E_TOPOLOGIES.get(cores, f"4x{cores // 4}")
+  return f"tpuv6e:{shape}"
 
 
 def _get_kubeconfig_env(
@@ -136,15 +175,17 @@ def generate_derived_parameters(dag_params: dict, dag_id: str) -> dict:
     derived_params["selected_model_names"] = dag_params["customized_model_name"]
 
   if dag_params["elastic_type"] in ["Pause-resume", "Replica-resize"]:
-    core_calc = dag_params["core_count"] // 4
+    slice_topology = resolve_pathways_slice_topology(
+        dag_params["device_version"], dag_params["core_count"]
+    )
     if dag_params["elastic_type"] == "Pause-resume":
+      num_slices = max(1, int(dag_params.get("num_slices_list", 1)))
       derived_params["elastic_min_slice_count"] = -1
-      derived_params["topology"] = f"tpuv6e:4x{core_calc}"
-      derived_params["num_elastic_slices"] = 1
     else:
+      num_slices = max(2, int(dag_params.get("num_slices_list", 2)))
       derived_params["elastic_min_slice_count"] = 1
-      derived_params["topology"] = ",".join([f"tpuv6e:4x{core_calc}"] * 2)
-      derived_params["num_elastic_slices"] = 2
+    derived_params["topology"] = ",".join([slice_topology] * num_slices)
+    derived_params["num_elastic_slices"] = num_slices
 
   return derived_params
 
@@ -230,6 +271,84 @@ def check_gcp_logs_exist(
   return False
 
 
+def wait_for_running_head_pod(
+    workload_id: str,
+    env: dict[str, str] | None = None,
+    startup_timeout: int = 600,
+    poll_interval: int = 10,
+) -> tuple[dict, str | None]:
+  """Polls until the head pod exists and its workload container starts."""
+  head_prefixes = (
+      f"{workload_id}-pathways-head-0-0-",
+      f"{workload_id}-head-0-0-",
+  )
+  deadline = time.time() + startup_timeout
+  while True:
+    pods = _list_workload_pods_kubectl(workload_id, env=env)
+    if pods:
+      matching_heads = [
+          p
+          for p in pods
+          if p.get("metadata", {}).get("name", "").startswith(head_prefixes)
+      ]
+      active_heads = [
+          p
+          for p in matching_heads
+          if p.get("status", {}).get("phase") in ("Running", "Succeeded")
+      ]
+      head_pod = (
+          active_heads[0]
+          if active_heads
+          else (matching_heads[0] if matching_heads else pods[0])
+      )
+      phase = head_pod.get("status", {}).get("phase")
+      head_name = head_pod.get("metadata", {}).get("name", "<unknown>")
+      if phase in ("Failed", "Unknown"):
+        raise AirflowFailException(
+            f"Head pod {head_name} in bad phase: {phase}"
+        )
+
+      containers = [
+          c.get("name")
+          for c in head_pod.get("spec", {}).get("containers", [])
+          if c.get("name")
+      ]
+      container_name = next(
+          (c for c in ("workload-container", "jax-tpu") if c in containers),
+          containers[0] if containers else None,
+      )
+      statuses = head_pod.get("status", {}).get("containerStatuses") or []
+      is_waiting = (
+          phase == "Pending"
+          if not statuses
+          else any(
+              "waiting" in s.get("state", {})
+              for s in statuses
+              if not container_name or s.get("name") == container_name
+          )
+      )
+      if phase in ("Running", "Succeeded") and not is_waiting:
+        return head_pod, container_name
+      logging.info(
+          "Head pod %s in phase %s (container %s initializing); waiting...",
+          head_name,
+          phase,
+          container_name,
+      )
+    else:
+      logging.info(
+          "No pods found yet for workload %s (queued or starting); waiting...",
+          workload_id,
+      )
+
+    if time.time() >= deadline:
+      raise AirflowException(
+          f"Timed out after {startup_timeout}s waiting for head pod of"
+          f" workload: {workload_id}"
+      )
+    time.sleep(poll_interval)
+
+
 # TODO(cienet): remove pod detection logic (caller must specify it)
 @task
 def interrupt_worker_pod(
@@ -243,9 +362,11 @@ def interrupt_worker_pod(
         project_id, region, cluster_name, kubeconfig_path=temp_config_file.name
     )
 
-    target_worker_index = "0-1"
-    # container_name = "pathways-worker"
-    pod_prefix = f"{workload_id}-worker-{target_worker_index}-"
+    candidate_prefixes = (
+        f"{workload_id}-worker-0-1-",
+        f"{workload_id}-worker-1-0-",
+        f"{workload_id}-worker-0-0-",
+    )
     pods = _list_workload_pods_kubectl(workload_id, env=env)
 
     if not pods:
@@ -253,28 +374,62 @@ def interrupt_worker_pod(
           f"No pods found for workload selector: {workload_id}"
       )
 
-    target_pod_name = None
     for pod in pods:
       phase = pod.get("status", {}).get("phase")
-      if phase in ("Failed", "Unknown"):
+      pod_name = pod.get("metadata", {}).get("name", "")
+      if phase in ("Failed", "Unknown") and not pod_name.startswith(
+          candidate_prefixes
+      ):
         raise AirflowFailException(f"Bad pod phase: {phase}")
 
-      pod_name = pod.get("metadata", {}).get("name", "")
-      if pod_name.startswith(pod_prefix):
-        target_pod_name = pod_name
+    target_pod_name = None
+    for prefix in candidate_prefixes:
+      for pod in pods:
+        phase = pod.get("status", {}).get("phase")
+        pod_name = pod.get("metadata", {}).get("name", "")
+        if pod_name.startswith(prefix) and phase == "Running":
+          target_pod_name = pod_name
+          break
+      if target_pod_name:
         break
 
     if not target_pod_name:
-      raise AirflowFailException(f"No pod found matching prefix: {pod_prefix}")
+      raise AirflowFailException(
+          f"No pod found matching prefixes: {candidate_prefixes}"
+      )
 
     logging.info(f"Found target pod: {target_pod_name}")
 
-    cmd = f"kubectl exec -it {target_pod_name} -n default -- /bin/sh -c 'kill -s SIGILL 1'"
+    cmd = (
+        f"kubectl exec {target_pod_name} -n default -- /bin/sh -c 'kill -s"
+        " SIGILL 1'"
+    )
 
     try:
       subprocess_utils.run_exec(cmd, env=env)
     except subprocess_utils.ProcessKilledException:
       logging.info("Process was terminated with SIGKILL")
+    except AirflowException as exc:
+      if any(
+          code in str(exc)
+          for code in (
+              "command terminated with exit code 132",
+              "command terminated with exit code 137",
+          )
+      ):
+        logging.info("Worker process terminated via SIGILL as expected.")
+      elif "Forbidden" in str(exc) and "pods/exec" in str(exc):
+        logging.info(
+            "pods/exec forbidden by cluster RBAC; deleting pod %s instead.",
+            target_pod_name,
+        )
+        delete_cmd = (
+            f"kubectl delete pod {target_pod_name} -n default"
+            " --grace-period=5 --wait=false"
+        )
+        subprocess_utils.run_exec(delete_cmd, env=env)
+      else:
+        raise
 
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
@@ -361,24 +516,7 @@ def check_logs_stream(
     env = _get_kubeconfig_env(
         project_id, region, cluster_name, kubeconfig_path=temp_config_file.name
     )
-    pods = _list_workload_pods_kubectl(workload_id, env=env)
-
-    if not pods:
-      raise AirflowException(
-          f"No pods found for workload selector: {workload_id}"
-      )
-
-    first_pod = pods[0]
-    pod_prefix = f"{workload_id}-head-0-0-"
-    # Validate pod health
-    for pod in pods:
-      phase = pod.get("status", {}).get("phase")
-      if phase in ("Failed", "Unknown"):
-        raise AirflowFailException(f"Bad pod phase: {phase}")
-
-      pod_name = pod.get("metadata", {}).get("name", "")
-      if pod_name.startswith(pod_prefix):
-        first_pod = pod_name
+    head_pod, container_name = wait_for_running_head_pod(workload_id, env=env)
 
     if since_time:
       effective_since_time = since_time
@@ -392,9 +530,8 @@ def check_logs_stream(
           effective_since_time,
       )
 
-    container_name = "jax-tpu"
-    pod_name = first_pod["metadata"]["name"]
-    pod_namespace = first_pod["metadata"].get("namespace", "default")
+    pod_name = head_pod["metadata"]["name"]
+    pod_namespace = head_pod["metadata"].get("namespace", "default")
 
     # Stream logs continuously until string is found
     timestamp = _stream_pod_logs(

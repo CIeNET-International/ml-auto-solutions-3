@@ -110,7 +110,10 @@ def generate_commands(
       r'sed -i "/python3 -m maxtext.trainers.pre_train.train/a '
       # enable elastice training
       r"          f\"elastic_enabled=True\",\n"
+      r"          f\"elastic_backup_kind=checkpoint\",\n"
       r"          f\"enable_single_controller=True\",\n"
+      r"          f\"grain_use_elastic_iterator=True\",\n"
+      r"          f\"packing=False\",\n"
       f'          \\"elastic_min_slice_count='
       f'{derived_params["elastic_min_slice_count"]}\\",\\n'
       # enable goodput setting
@@ -121,7 +124,7 @@ def generate_commands(
       # enanble checkpointing for elastic training
       r"          f\"async_checkpointing=True\",\n"
       r"          f\"enable_checkpoint_cloud_logger=True\",\n"
-      r"          f\"checkpoint_period=10\","
+      r"          f\"checkpoint_period=10\",\n"
       # enable colocated python data input
       r"          f\"colocated_python_data_input=True\",\n"
       r"          f\"tokenizer_path="
