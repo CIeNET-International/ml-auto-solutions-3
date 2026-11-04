@@ -448,15 +448,47 @@ class SafetensorsUtilTest(unittest.TestCase):
           )
         self.assertEqual(ctx.exception.code, 1)
 
+  def test_resolve_comparison_enabled(self):
+    # `resolve_comparison_enabled` requires `e2e_only` or `compare`
+    self.assertTrue(
+        safetensors_dag.resolve_comparison_enabled(
+            params={"run_mode": "compare"}
+        )
+    )
+    self.assertFalse(
+        safetensors_dag.resolve_comparison_enabled(
+            params={"run_mode": "e2e_only"}
+        )
+    )
+    # `dag_run.conf` overrides `params`
+    self.assertTrue(
+        safetensors_dag.resolve_comparison_enabled(
+            params={"run_mode": "e2e_only"},
+            conf={"run_mode": "compare"},
+        )
+    )
+    with self.assertRaises(ValueError):
+      safetensors_dag.resolve_comparison_enabled(params={})
+    with self.assertRaises(ValueError):
+      safetensors_dag.resolve_comparison_enabled(
+          params={"run_mode": "invalid_mode"}
+      )
+
   def test_dag_structure_jinja_rendering_and_bash_syntax(self):
     # Verify default DAG loads cleanly with expected 1-slice & 2-slice groups
     dag = safetensors_dag.dag
     self.assertEqual(dag.dag_id, "maxtext_e2e_tpu_safetensors_dynamic")
+    self.assertIn("run_mode", dag.params)
+    self.assertNotIn("models", dag.params)
+    self.assertEqual(safetensors_dag.VALID_RUN_MODES, ("e2e_only", "compare"))
     group_ids = set(dag.task_group.children.keys())
     self.assertIn("llama3_1-70b-v5p-32", group_ids)
     self.assertIn("llama3_1-70b-2x-v5p-32", group_ids)
 
-    # Also build a full 3-task comparison TaskGroup and capture all commands
+    # Build TaskGroups covering:
+    # 1. `comparison_supported=True` (3 tasks built, toggled by `run_mode`)
+    # 2. `comparison_supported=False` (1 task built, for >200B models that
+    #    cannot run single-host `to_maxtext`)
     captured_cmds: list[tuple[str, tuple[str, ...]]] = []
     real_get_gke_config = safetensors_dag.gke_config.get_gke_config
 
@@ -478,21 +510,21 @@ class SafetensorsUtilTest(unittest.TestCase):
       ):
         safetensors_dag.create_safetensors_comparison_task_group(
             safetensors_dag.SafetensorsComparisonSpec(
-                model_name="qwen3-0.6b",
-                hf_repo="Qwen/Qwen3-0.6B",
-                core_count=8,
+                model_name="llama3.1-70b",
+                hf_repo="meta-llama/Llama-3.1-70B",
+                core_count=32,
                 num_slices=1,
-                enable_comparison=True,
+                comparison_supported=True,
                 prestage_hf_to_gcs=True,
             )
         )
         safetensors_dag.create_safetensors_comparison_task_group(
             safetensors_dag.SafetensorsComparisonSpec(
-                model_name="llama3.1-70b",
-                hf_repo="meta-llama/Llama-3.1-70B",
-                core_count=32,
+                model_name="qwen3-480b-a35b",
+                hf_repo="Qwen/Qwen3-480B-A35B",
+                core_count=64,
                 num_slices=2,
-                enable_comparison=False,
+                comparison_supported=False,
                 prestage_hf_to_gcs=True,
                 extra_maxtext_flags=("dcn_data_parallelism=2",),
             )
@@ -503,29 +535,50 @@ class SafetensorsUtilTest(unittest.TestCase):
         test_names, ["safetensors-dyn", "to-mt", "cmp-ckpt", "safetensors-dyn"]
     )
 
-    # Render every shell command with Jinja2 and check bash syntax via `bash -n`
-    for test_name, cmds in captured_cmds:
-      rendered = [
-          jinja2.Template(c).render(
-              params={"run_name": "unit-run-01"},
-              ts_nodash="20261027T060000",
-          )
-          for c in cmds
-      ]
-      script = "\n".join(rendered)
-      self.assertNotIn("{{", script, msg=f"Unrendered Jinja in {test_name}")
-      proc = subprocess.run(
-          ["bash", "-n"],
-          input=script,
-          text=True,
-          capture_output=True,
-          check=False,
-      )
-      self.assertEqual(
-          proc.returncode,
-          0,
-          msg=f"Invalid bash syntax in {test_name}: {proc.stderr}",
-      )
+    # Verify runtime Jinja rendering of `safetensors-dyn` checkpoint flags:
+    dyn_70b_cmds = "\n".join(captured_cmds[0][1])
+    rendered_e2e = jinja2.Template(dyn_70b_cmds).render(
+        params={"run_name": "unit-run-01", "run_mode": "e2e_only"},
+        ts_nodash="20261027T060000",
+    )
+    self.assertIn(
+        "save_checkpoint_on_start=false save_checkpoint_on_completion=false",
+        rendered_e2e,
+    )
+    rendered_compare = jinja2.Template(dyn_70b_cmds).render(
+        params={"run_name": "unit-run-01", "run_mode": "compare"},
+        ts_nodash="20261027T060000",
+    )
+    self.assertIn(
+        "checkpoint_period=1 save_checkpoint_on_start=true",
+        rendered_compare,
+    )
+
+    # Render every command across all `run_mode` values and check `bash -n`
+    for run_mode in safetensors_dag.VALID_RUN_MODES:
+      for test_name, cmds in captured_cmds:
+        rendered = [
+            jinja2.Template(c).render(
+                params={"run_name": "unit-run-01", "run_mode": run_mode},
+                ts_nodash="20261027T060000",
+            )
+            for c in cmds
+        ]
+        script = "\n".join(rendered)
+        self.assertNotIn("{{", script, msg=f"Unrendered Jinja in {test_name}")
+        self.assertNotIn("{%", script, msg=f"Unrendered Jinja in {test_name}")
+        proc = subprocess.run(
+            ["bash", "-n"],
+            input=script,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(
+            proc.returncode,
+            0,
+            msg=f"Invalid bash syntax in {test_name}: {proc.stderr}",
+        )
 
 
 if __name__ == "__main__":
