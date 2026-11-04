@@ -39,8 +39,10 @@ import datetime
 import re
 
 from airflow import models
+from airflow.decorators import task
 from airflow.models.baseoperator import chain
 from airflow.models.param import Param
+from airflow.operators.python import get_current_context
 from airflow.utils.task_group import TaskGroup
 from dags import gcs_bucket
 from dags.common import test_owner
@@ -51,6 +53,36 @@ from dags.multipod.util import safetensors_util
 from xlml.apis.gke_cluster_config import GkeClusterConfig
 
 HF_TOKEN = safe_get_from_variable("HF_TOKEN", None)
+
+RUN_MODE_E2E_ONLY = "e2e_only"
+RUN_MODE_COMPARE = "compare"
+VALID_RUN_MODES = (
+    RUN_MODE_E2E_ONLY,
+    RUN_MODE_COMPARE,
+)
+
+
+def resolve_comparison_enabled(
+    params: dict[str, object] | None = None,
+    conf: dict[str, object] | None = None,
+) -> bool:
+  """Resolves whether `to-mt` + `cmp-ckpt` should run for this DAG run."""
+  mode = (conf or {}).get("run_mode") or (params or {}).get("run_mode")
+  if mode == RUN_MODE_COMPARE:
+    return True
+  if mode == RUN_MODE_E2E_ONLY:
+    return False
+  raise ValueError(f"run_mode must be one of {VALID_RUN_MODES}; got {mode!r}")
+
+
+@task.short_circuit(task_id="check_comparison_enabled")
+def check_comparison_enabled() -> bool:
+  """Skips `to-mt` and `cmp-ckpt` when running in `e2e_only` mode."""
+  context = get_current_context()
+  dag_run = context.get("dag_run")
+  conf = (dag_run.conf if dag_run else {}) or {}
+  params = context.get("params") or {}
+  return resolve_comparison_enabled(params=params, conf=conf)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -70,7 +102,7 @@ class SafetensorsComparisonSpec:
   per_device_batch_size: int = 1
   max_target_length: int = 2048
   atol: float = 0.0
-  enable_comparison: bool = True
+  comparison_supported: bool = True
   save_checkpoints: bool | None = None
   prestage_hf_to_gcs: bool = True
   extra_maxtext_flags: tuple[str, ...] = ()
@@ -79,12 +111,23 @@ class SafetensorsComparisonSpec:
   priority: str = "medium"
   group_id_override: str | None = None
 
-  @property
-  def should_save_checkpoints(self) -> bool:
-    """Whether training runs write Step-0 & trained Orbax checkpoints to GCS."""
-    if self.save_checkpoints is not None:
-      return self.save_checkpoints
-    return self.enable_comparison
+  def dyn_ckpt_save_flags_template(self) -> str:
+    """Returns Jinja-templated checkpoint flags for `safetensors-dyn`."""
+    save_flags = "checkpoint_period=1 save_checkpoint_on_start=true"
+    skip_flags = (
+        "save_checkpoint_on_start=false save_checkpoint_on_completion=false"
+    )
+    if self.save_checkpoints is True:
+      return save_flags
+    if self.save_checkpoints is False or not self.comparison_supported:
+      return skip_flags
+    return (
+        "{% if params.get('run_mode') == 'compare' %}"
+        f"{save_flags}"
+        "{% else %}"
+        f"{skip_flags}"
+        "{% endif %}"
+    )
 
   @property
   def group_id(self) -> str:
@@ -168,16 +211,10 @@ def create_safetensors_comparison_task_group(
 
     # Keep `enable_checkpointing=true` even when not writing checkpoints so
     # multi-host / multi-slice TPU runs initialize `jax.distributed` on `main`.
-    ckpt_save_flags = (
-        "checkpoint_period=1 save_checkpoint_on_start=true"
-        if spec.should_save_checkpoints
-        else (
-            "save_checkpoint_on_start=false "
-            "save_checkpoint_on_completion=false"
-        )
-    )
+    dyn_ckpt_save_flags = spec.dyn_ckpt_save_flags_template()
+    ref_ckpt_save_flags = "checkpoint_period=1 save_checkpoint_on_start=true"
 
-    common_train_flags = (
+    base_train_flags = (
         "src/maxtext/configs/base.yml "
         f"model_name={model} "
         f"scan_layers={scan_layers} "
@@ -194,7 +231,12 @@ def create_safetensors_comparison_task_group(
         f"steps={spec.steps} "
         "enable_checkpointing=true "
         "async_checkpointing=false "
-        f"{ckpt_save_flags}{extra_flags_str}"
+    )
+    dyn_train_flags = (
+        f"{base_train_flags}{dyn_ckpt_save_flags}{extra_flags_str}"
+    )
+    ref_train_flags = (
+        f"{base_train_flags}{ref_ckpt_save_flags}{extra_flags_str}"
     )
 
     # `safetensors_dynamic` workflow (always runs)
@@ -223,7 +265,7 @@ def create_safetensors_comparison_task_group(
         ),
         (
             "python3 -m maxtext.trainers.pre_train.train "
-            f"{common_train_flags} "
+            f"{dyn_train_flags} "
             f"base_output_directory={train_dyn_dir} "
             f"run_name={train_dyn_run} "
             f"load_parameters_path={dyn_load_parameters_path} "
@@ -250,7 +292,8 @@ def create_safetensors_comparison_task_group(
         mounts="/dev/shm;/mnt/shm;rw",
     ).run(skip_post_process=True)
 
-    if spec.enable_comparison:
+    if spec.comparison_supported:
+      comparison_gate = check_comparison_enabled()
       local_hf_dir = f"/mnt/shm/{model}_hf"
 
       # Task 1: Original `to_maxtext` workflow (Pod 0 converts; all pods train)
@@ -293,7 +336,7 @@ def create_safetensors_comparison_task_group(
           ),
           (
               "python3 -m maxtext.trainers.pre_train.train "
-              f"{common_train_flags} "
+              f"{ref_train_flags} "
               f"base_output_directory={train_ref_dir} "
               f"run_name={train_ref_run} "
               f"load_parameters_path={to_maxtext_step0_ckpt} "
@@ -367,6 +410,7 @@ def create_safetensors_comparison_task_group(
           mounts="/dev/shm;/mnt/shm;rw",
       ).run(skip_post_process=True)
 
+      chain(comparison_gate, to_maxtext_task)
       chain(
           [to_maxtext_task, safetensors_dynamic_task],
           compare_checkpoints_task,
@@ -376,23 +420,13 @@ def create_safetensors_comparison_task_group(
 
 
 # Add new models or single-slice / multi-slice specs to `TEST_SPECS` below.
-# Set `enable_comparison=True` for full `to-mt` + `safetensors-dyn` + `cmp-ckpt`
-# parity tests, or `enable_comparison=False` for standalone `safetensors-dyn`
-# functional runs.
-# Example full comparison spec (with direct `hf://` URI test on a small model):
-#   SafetensorsComparisonSpec(
-#       model_name="qwen3-0.6b",
-#       hf_repo="Qwen/Qwen3-0.6B",
-#       core_count=8,
-#       num_slices=1,
-#       weight_dtype="float32",
-#       scan_layers=True,
-#       atol=0.0,
-#       enable_comparison=True,
-#       prestage_hf_to_gcs=False,
-#   ),
+# Callers choose the workflow mode at trigger time via `run_mode`
+# (`e2e_only` for standalone `safetensors-dyn` or `compare` for
+# `to-mt` + `safetensors-dyn` + `cmp-ckpt`).
+# Set `comparison_supported=False` on ultra-large models (>200B) that cannot run
+# single-host CPU `to_maxtext`.
 TEST_SPECS: tuple[SafetensorsComparisonSpec, ...] = (
-    # 1. Single-slice Llama-3.1-70B vanilla functional run (1x v5p-32)
+    # 1. Single-slice Llama-3.1-70B (1x v5p-32)
     SafetensorsComparisonSpec(
         model_name="llama3.1-70b",
         hf_repo="meta-llama/Llama-3.1-70B",
@@ -401,10 +435,9 @@ TEST_SPECS: tuple[SafetensorsComparisonSpec, ...] = (
         weight_dtype="bfloat16",
         scan_layers=True,
         steps=2,
-        enable_comparison=False,
         time_out_in_min=90,
     ),
-    # 2. Multi-slice Llama-3.1-70B vanilla functional run (2x v5p-32)
+    # 2. Multi-slice Llama-3.1-70B (2x v5p-32)
     SafetensorsComparisonSpec(
         model_name="llama3.1-70b",
         hf_repo="meta-llama/Llama-3.1-70B",
@@ -413,7 +446,6 @@ TEST_SPECS: tuple[SafetensorsComparisonSpec, ...] = (
         weight_dtype="bfloat16",
         scan_layers=True,
         steps=2,
-        enable_comparison=False,
         extra_maxtext_flags=("dcn_data_parallelism=2",),
         time_out_in_min=90,
     ),
@@ -447,6 +479,15 @@ with models.DAG(
             description=(
                 "Unique run name for checkpoints and comparison outputs "
                 "(defaults to sd-cmp-{{ ts_nodash }})"
+            ),
+        ),
+        "run_mode": Param(
+            type="string",
+            enum=list(VALID_RUN_MODES),
+            description=(
+                "Workflow mode (required): 'e2e_only' runs only standalone "
+                "safetensors-dyn; 'compare' runs to-mt + safetensors-dyn + "
+                "cmp-ckpt."
             ),
         ),
     },
