@@ -1141,7 +1141,7 @@ def query_uptime_metrics(
   )
 
 
-@task.sensor(poke_interval=30, timeout=3600, mode="poke")
+@task.sensor(poke_interval=30, timeout=3900, mode="poke")
 def wait_for_jobset_uptime_data(
     node_pool: node_pool_info,
     jobset_name: str,
