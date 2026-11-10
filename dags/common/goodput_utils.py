@@ -61,11 +61,7 @@ def isolate_latest_completed_run_entries(
         if "job_start_time" in entry
     )
     logging.warning(
-        "Isolated latest completed run entries [%d:%d] out of %d total "
-        "entries in stream (dropped %d attempt(s)).",
-        last_start,
-        last_end + 1,
-        len(entries),
+        "Isolated latest completed run (dropped %d attempt(s)).",
         dropped_attempts,
     )
   return entries[last_start : last_end + 1]
