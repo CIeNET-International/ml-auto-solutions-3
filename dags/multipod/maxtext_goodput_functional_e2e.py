@@ -63,7 +63,7 @@ from xlml.utils import gcp_util, time_util
 
 DAG_ID = "maxtext_goodput_functional_e2e"
 SCHEDULED_TIME = "0 10 * * *" if composer_env.is_prod_env() else None
-DEFAULT_CLUSTER = GkeClusters.TPU_V5P_BODABORG_NAP_CLUSTER
+DEFAULT_CLUSTER = GkeClusters.TPU_V6E_BODABORG_NAP_CLUSTER
 
 # Calibrated Goodput regression thresholds (%) across all 22 model workloads in
 # maxtext_e2e_tpu_pre_training and maxtext_e2e_tpu_post_training on TPU v6e,
@@ -788,7 +788,7 @@ def _run_goodput_monitor_worker_lifecycle(
       enable_gcp_goodput_metrics=True,
       enable_gcp_step_deviation_metrics=True,
       project_id=gcm_project_id,
-      acc_type="v5p-8",
+      acc_type="v6e-8",
       replica_id="0",
   )
 
@@ -992,7 +992,7 @@ with models.DAG(
         "nightly",
         "mlscale_devx",
         "TPU",
-        "v5p-8",
+        "v6e-8",
     ],
     start_date=datetime.datetime(2026, 6, 10),
     catchup=False,
