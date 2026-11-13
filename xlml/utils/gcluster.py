@@ -28,6 +28,17 @@ from xlml.utils import composer, gke
 
 DEFAULT_GCLUSTER_VERSION = "v1.105.0"
 
+# TPU7x slices run on tpu7x-standard-4t hosts and gcluster cannot infer their
+# topology, so request the machine type with an explicit topology (in chips;
+# a TPU7x chip has two cores).
+_TPU7X_TOPOLOGIES = {
+    "tpu7x-8": "2x2x1",
+    "tpu7x-16": "2x2x2",
+    "tpu7x-32": "2x2x4",
+    "tpu7x-64": "2x4x4",
+    "tpu7x-128": "4x4x4",
+}
+
 # Multi-host v6e slices run only on ct6e-standard-4t hosts (ct6e-standard-8t is
 # single-host). gcluster cannot resolve the "v6e" shorthand in a cluster that
 # has node pools of both types, so request the machine type with the topology.
@@ -219,6 +230,14 @@ def run_workload(
     queue: str = "default",
 ):
   """Run workload through Cluster Toolkit (gcluster) tool."""
+  if (
+      accelerator_type.startswith("tpu7x-")
+      and accelerator_type not in _TPU7X_TOPOLOGIES
+  ):
+    raise ValueError(
+        f"No TPU7x topology for {accelerator_type!r}; expected one of "
+        f"{sorted(_TPU7X_TOPOLOGIES)}."
+    )
   composer.log_metadata_for_xlml_dashboard({
       "cluster_project": cluster_project,
       "zone": zone,
@@ -241,10 +260,15 @@ def run_workload(
     env.pop("KUBERNETES_SERVICE_PORT", None)
 
     gcluster_bin = _setup_gcluster(tmpdir, gcluster_version, env)
-    topology = _V6E_MULTI_HOST_TOPOLOGIES.get(accelerator_type)
-    compute_type = (
-        MachineVersion.CT6E_STAND_4T.value if topology else accelerator_type
-    )
+    if accelerator_type in _TPU7X_TOPOLOGIES:
+      topology = _TPU7X_TOPOLOGIES[accelerator_type]
+      compute_type = MachineVersion.TPU7X_STAND_4T.value
+    elif accelerator_type in _V6E_MULTI_HOST_TOPOLOGIES:
+      topology = _V6E_MULTI_HOST_TOPOLOGIES[accelerator_type]
+      compute_type = MachineVersion.CT6E_STAND_4T.value
+    else:
+      topology = None
+      compute_type = accelerator_type
     slice_keyword = (
         "--num-nodes"
         if is_valid_gpu_version(accelerator_type)

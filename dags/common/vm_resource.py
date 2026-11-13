@@ -166,6 +166,7 @@ class MachineVersion(enum.Enum):
   G2_STAND_96 = "g2-standard-96"  # 8 GPUs, 384GB memory
   CT6E_STAND_4T = "ct6e-standard-4t"
   CT5P_HIGHTPU_4T = "ct5p-hightpu-4t"
+  TPU7X_STAND_4T = "tpu7x-standard-4t"
 
 
 class AcceleratorType(enum.Enum):
@@ -183,6 +184,7 @@ class TpuVersion(enum.Enum):
   V5E = "5litepod"
   V5P = "5p"
   TRILLIUM = "6e"
+  V7X = "7x"
 
 
 class GpuVersion(enum.Enum):
@@ -325,6 +327,17 @@ class GkeClusters:
       core_count=16,
       project=Project.TPU_PROD_ENV_ONE_VM.value,
       zone=Zone.US_EAST5_C.value,
+  )
+  # Regional node-auto-provisioning TPU7x cluster for gcluster callers. Pick
+  # the slice size with override(core_count=...); a TPU7x chip has two cores.
+  TPU7X_BODABORG_NAP_CLUSTER = GkeClusterConfig(
+      name="bodaborg-tpu7x-nap",
+      device_version=TpuVersion.V7X,
+      core_count=32,
+      project=Project.CLOUD_TPU_SHARED_CAPACITY.value,
+      zone=Region.US_CENTRAL1.value,
+      namespace="default",
+      queue="multislice-queue",
   )
   # Regional node-auto-provisioning cluster for gcluster callers. Pick the
   # slice size with override(core_count=...); a v6e chip has one core.

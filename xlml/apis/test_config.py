@@ -88,7 +88,9 @@ class Tpu(Accelerator):
 
   @property
   def name(self):
-    """Name of this TPU type in the Cloud TPU API (e.g. 'v4-8')."""
+    """Name of this TPU type in the Cloud TPU API (e.g. 'v4-8', 'tpu7x-32')."""
+    if self.version == TpuVersion.V7X:
+      return f'tpu{self.version.value}-{self.cores}'
     return f'v{self.version.value}-{self.cores}'
 
 

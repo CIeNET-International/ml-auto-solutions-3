@@ -406,6 +406,70 @@ class GclusterTest(unittest.TestCase):
 
   @mock.patch("xlml.utils.composer.log_metadata_for_xlml_dashboard")
   @mock.patch("xlml.utils.gcluster.SubprocessHook")
+  def test_run_workload_tpu7x_machine_type_and_topology(
+      self, mock_hook_cls, mock_log_meta
+  ):
+    """Requests tpu7x-standard-4t with an explicit topology for TPU7x."""
+    mock_hook = mock.MagicMock()
+    mock_result = mock.MagicMock()
+    mock_result.exit_code = 0
+    mock_hook.run_command.return_value = mock_result
+    mock_hook_cls.return_value = mock_hook
+
+    expected = {
+        "tpu7x-8": "2x2x1",
+        "tpu7x-16": "2x2x2",
+        "tpu7x-32": "2x2x4",
+        "tpu7x-64": "2x4x4",
+        "tpu7x-128": "4x4x4",
+    }
+    for accelerator_type, topology in expected.items():
+      with self.subTest(accelerator_type=accelerator_type):
+        mock_hook.run_command.reset_mock()
+        mock_log_meta.reset_mock()
+        gcluster.run_workload.function(
+            task_id="run_workload",
+            cluster_project="test-project",
+            zone="us-central1",
+            cluster_name="test-cluster",
+            benchmark_id="test-bench",
+            workload_id="test-workload-12345",
+            gcs_path="gs://test-bucket/output",
+            docker_image="us-docker.pkg.dev/img:latest",
+            accelerator_type=accelerator_type,
+            run_cmds="bash run.sh",
+            num_slices=2,
+            queue="multislice-queue",
+        )
+        mock_log_meta.assert_called_once()
+        submit_cmd = mock_hook.run_command.call_args_list[4][0][0]
+        self.assertIn("--compute-type=tpu7x-standard-4t", submit_cmd)
+        self.assertIn(f"--topology={topology}", submit_cmd)
+        self.assertIn("--num-slices=2", submit_cmd)
+        self.assertIn("--queue=multislice-queue", submit_cmd)
+
+  @mock.patch("xlml.utils.gcluster.SubprocessHook")
+  def test_run_workload_tpu7x_unknown_size_raises(self, mock_hook_cls):
+    """Rejects a TPU7x size with no known topology before running anything."""
+    mock_hook = mock.MagicMock()
+    mock_hook_cls.return_value = mock_hook
+    with self.assertRaisesRegex(ValueError, "No TPU7x topology"):
+      gcluster.run_workload.function(
+          task_id="run_workload",
+          cluster_project="test-project",
+          zone="us-central1",
+          cluster_name="test-cluster",
+          benchmark_id="test-bench",
+          workload_id="test-workload-12345",
+          gcs_path="gs://test-bucket/output",
+          docker_image="us-docker.pkg.dev/img:latest",
+          accelerator_type="tpu7x-48",
+          run_cmds="bash run.sh",
+      )
+    mock_hook.run_command.assert_not_called()
+
+  @mock.patch("xlml.utils.composer.log_metadata_for_xlml_dashboard")
+  @mock.patch("xlml.utils.gcluster.SubprocessHook")
   def test_run_workload_omits_optional_arguments(
       self, mock_hook_cls, mock_log_meta
   ):
@@ -435,6 +499,8 @@ class GclusterTest(unittest.TestCase):
     submit_cmd = mock_hook.run_command.call_args_list[4][0][0]
     self.assertNotIn("--queue", submit_cmd)
     self.assertNotIn("--gke-namespace", submit_cmd)
+    for arg in submit_cmd:
+      self.assertFalse(arg.startswith("--topology"))
     for arg in submit_cmd:
       self.assertFalse(arg.startswith("--mount"))
 
