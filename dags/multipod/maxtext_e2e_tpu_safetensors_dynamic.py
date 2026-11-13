@@ -14,24 +14,19 @@
 
 """MaxText E2E TPU safetensors_dynamic vs. to_maxtext Checkpoint Comparison DAG.
 
-Compares two checkpoint loading/generation workflows end-to-end on TPU across
-configurable models and single-slice / multi-slice topologies:
-1. Original `to_maxtext` workflow:
-   - Offline conversion via `maxtext.checkpoint_conversion.to_maxtext` producing
-     the reference untrained Orbax checkpoint (`.../to_maxtext/0/items`).
-   - Deterministic pre-training with `save_checkpoint_on_start=true` producing
-     Step-0 (`.../train_to_maxtext/run/checkpoints/0/items`) and trained
-     Step-(N-1) (`.../train_to_maxtext/run/checkpoints/{steps-1}/items`) Orbax
-     checkpoints plus training metrics.
-2. `safetensors_dynamic` workflow:
-   - On-the-fly `.safetensors` loading via
-     `source_checkpoint_layout=safetensors_dynamic` with deterministic
-     pre-training, optionally writing Step-0 and trained Step-(N-1) Orbax
-     checkpoints plus training metrics.
-3. Checkpoint & Metrics Comparison:
-   - Compares (a) in-memory `safetensors_dynamic` load vs. `to_maxtext/0/items`,
-     (b) saved Step-0 Orbax checkpoints, (c) saved trained Step-(N-1) Orbax
-     checkpoints, and (d) per-step training losses.
+Supports two execution modes (`run_mode`) across configurable models and
+one- and two-slice TPU7x topologies (`tpu7x-8`, `tpu7x-32`):
+1. `e2e_only` mode:
+   - Standalone `safetensors_dynamic` loading (`source_checkpoint_layout=
+     safetensors_dynamic`) with 2 pre-training steps on C4 (`to-mt` and
+     `cmp-ckpt` are short-circuited).
+2. `compare` mode:
+   - Offline conversion via `maxtext.checkpoint_conversion.to_maxtext` plus
+     deterministic pre-training from both `to_maxtext` and
+     `safetensors_dynamic`, followed by 4-way weight & loss verification
+     (`safetensors_util.py compare`: in-memory weights leaf-by-leaf, Step-0
+     Orbax checkpoints, trained Step-(N-1) Orbax checkpoints, and per-step
+     training losses).
 """
 
 import dataclasses
@@ -56,10 +51,7 @@ HF_TOKEN = safe_get_from_variable("HF_TOKEN", None)
 
 RUN_MODE_E2E_ONLY = "e2e_only"
 RUN_MODE_COMPARE = "compare"
-VALID_RUN_MODES = (
-    RUN_MODE_E2E_ONLY,
-    RUN_MODE_COMPARE,
-)
+VALID_RUN_MODES = (RUN_MODE_E2E_ONLY, RUN_MODE_COMPARE)
 
 
 def resolve_comparison_enabled(
@@ -92,24 +84,27 @@ class SafetensorsComparisonSpec:
   model_name: str
   hf_repo: str
   cluster: GkeClusterConfig = dataclasses.field(
-      default_factory=lambda: GkeClusters.TPU_V5P_BODABORG_NAP_CLUSTER
+      default_factory=lambda: GkeClusters.TPU7X_BODABORG_NAP_CLUSTER
   )
-  core_count: int = 8
+  core_count: int = 32
   num_slices: int = 1
   scan_layers: bool = True
   weight_dtype: str = "float32"
+  to_maxtext_save_dtype: str | None = None
   steps: int = 2
   per_device_batch_size: int = 1
   max_target_length: int = 2048
   atol: float = 0.0
   comparison_supported: bool = True
-  save_checkpoints: bool | None = None
-  prestage_hf_to_gcs: bool = True
   extra_maxtext_flags: tuple[str, ...] = ()
   extra_to_maxtext_flags: tuple[str, ...] = ()
   time_out_in_min: int = 60
   priority: str = "medium"
-  group_id_override: str | None = None
+
+  @property
+  def effective_to_maxtext_save_dtype(self) -> str:
+    """Returns `--save_dtype` for `to_maxtext` (defaults to `weight_dtype`)."""
+    return self.to_maxtext_save_dtype or self.weight_dtype
 
   def dyn_ckpt_save_flags_template(self) -> str:
     """Returns Jinja-templated checkpoint flags for `safetensors-dyn`."""
@@ -117,9 +112,7 @@ class SafetensorsComparisonSpec:
     skip_flags = (
         "save_checkpoint_on_start=false save_checkpoint_on_completion=false"
     )
-    if self.save_checkpoints is True:
-      return save_flags
-    if self.save_checkpoints is False or not self.comparison_supported:
+    if not self.comparison_supported:
       return skip_flags
     return (
         "{% if params.get('run_mode') == 'compare' %}"
@@ -132,8 +125,6 @@ class SafetensorsComparisonSpec:
   @property
   def group_id(self) -> str:
     """Returns an Airflow-safe TaskGroup ID (alphanumeric, dashes, `_`)."""
-    if self.group_id_override:
-      return self.group_id_override
     safe_model = re.sub(r"[^a-zA-Z0-9_-]", "_", self.model_name)
     tpu_ver = f"v{self.cluster.device_version.value}"
     if self.num_slices > 1:
@@ -148,11 +139,13 @@ def create_safetensors_comparison_task_group(
   """Builds the `safetensors-dyn` (and optional `to-mt` + `cmp-ckpt`) group."""
   with TaskGroup(group_id=spec.group_id) as model_group:
     run_name = (
-        "{{ params.run_name if params.run_name else 'sd-cmp-' ~ ts_nodash }}"
+        "{{ params.run_name if params.run_name else 'safetensors-dynamic-' ~"
+        " ts_nodash }}"
     )
     model = spec.model_name
     hf_repo = spec.hf_repo
     weight_dtype = spec.weight_dtype
+    to_mt_save_dtype = spec.effective_to_maxtext_save_dtype
     scan_layers = "true" if spec.scan_layers else "false"
     trained_step = spec.steps - 1
     extra_flags_str = (
@@ -167,15 +160,20 @@ def create_safetensors_comparison_task_group(
     )
 
     cluster = spec.cluster.override(core_count=spec.core_count)
+    tpu_ver = f"v{cluster.device_version.value}"
 
-    topology_tag = (
-        f"{spec.num_slices}x_v{cluster.device_version.value}_{spec.core_count}"
-    )
+    topology_tag = f"{spec.num_slices}x_{tpu_ver}_{spec.core_count}"
     base_dir = (
         f"{gcs_bucket.BASE_OUTPUT_DIR}/{model}/safetensors_compare/"
         f"{topology_tag}/{run_name}"
     )
     markers_dir = f"{base_dir}/markers"
+    logs_dir = f"{base_dir}/logs"
+    dyn_log_gcs = f"{logs_dir}/safetensors_dynamic.log"
+    ref_log_gcs = f"{logs_dir}/to_maxtext.log"
+    cmp_log_gcs = f"{logs_dir}/compare_ckpts.log"
+    stage_timings_gcs = f"{base_dir}/stage_timings.json"
+
     to_maxtext_dir = f"{base_dir}/to_maxtext"
     to_maxtext_step0_ckpt = f"{to_maxtext_dir}/0/items"
 
@@ -205,9 +203,7 @@ def create_safetensors_comparison_task_group(
         f"{gcs_bucket.BASE_OUTPUT_DIR}/hf_safetensors_cache/"
         f"{hf_repo.replace('/', '_')}"
     )
-    dyn_load_parameters_path = (
-        shared_hf_gcs_cache if spec.prestage_hf_to_gcs else f"hf://{hf_repo}"
-    )
+    dyn_load_parameters_path = shared_hf_gcs_cache
 
     # Keep `enable_checkpointing=true` even when not writing checkpoints so
     # multi-host / multi-slice TPU runs initialize `jax.distributed` on `main`.
@@ -240,38 +236,71 @@ def create_safetensors_comparison_task_group(
     )
 
     # `safetensors_dynamic` workflow (always runs)
-    dyn_pod0_prep_cmds = [
+    dyn_local_log = "/tmp/safetensors_dynamic.log"
+    prestage_timing_local = "/tmp/prestage_timing.json"
+    force_download_jinja = (
+        "{{ '--force_download' if params.get('force_hf_download', False) else"
+        " '' }}"
+    )
+    dyn_pod0_prep = (
         (
             f"if gsutil ls {train_dyn_dir} >/dev/null 2>&1; then "
             f"gsutil -m rm -rf {train_dyn_dir} || true; "
             "fi"
         ),
-    ]
-    if spec.prestage_hf_to_gcs:
-      dyn_pod0_prep_cmds.extend(
-          safetensors_util.build_prestage_cmds(
-              hf_repo=hf_repo,
-              gcs_cache_dir=shared_hf_gcs_cache,
-          )
-      )
-    dyn_pod0_prep = tuple(dyn_pod0_prep_cmds)
+        *safetensors_util.build_prestage_cmds(
+            hf_repo=hf_repo,
+            gcs_cache_dir=shared_hf_gcs_cache,
+            timing_out=prestage_timing_local,
+            force_download_expr=force_download_jinja,
+        ),
+    )
+
+    stage_summary_cmd = safetensors_util.build_stage_summary_cmd(
+        dyn_log=dyn_local_log,
+        prestage_timing=prestage_timing_local,
+        gcs_cache_dir=shared_hf_gcs_cache,
+        stage_timings_gcs=stage_timings_gcs,
+        weight_dtype=weight_dtype,
+        to_maxtext_save_dtype=to_mt_save_dtype,
+        dyn_log_gcs=dyn_log_gcs,
+    )
+    stage_summary_trap_cmd = (
+        f"python3 {safetensors_util.REMOTE_UTIL_PATH} summarize_stages "
+        f"--dyn_log={dyn_local_log} "
+        f"--out={stage_timings_gcs} "
+        f"--weight_dtype={weight_dtype} "
+        f"--to_maxtext_save_dtype={to_mt_save_dtype} "
+        f"--dyn_log_gcs={dyn_log_gcs} "
+        f"--prestage_timing={prestage_timing_local} "
+        f"--gcs_cache_dir={shared_hf_gcs_cache}"
+    )
 
     safetensors_dynamic_cmds = (
         f"export HF_TOKEN={HF_TOKEN}",
         'export HF_HOME="/mnt/shm/hf_cache"',
         'export LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=20480"',
-        safetensors_util.pod0_barrier_cmd(
-            dyn_pod0_prep, f"{markers_dir}/sd_dyn_prep.done"
+        safetensors_util.stage_remote_util_cmd(),
+        safetensors_util.pod0_upload_log_trap_cmd(
+            dyn_local_log, dyn_log_gcs, on_exit_cmd=stage_summary_trap_cmd
         ),
-        (
+        safetensors_util.pod0_tee_cmd(
+            safetensors_util.pod0_barrier_cmd(
+                dyn_pod0_prep, f"{markers_dir}/safetensors_dynamic_prep.done"
+            ),
+            dyn_local_log,
+        ),
+        safetensors_util.pod0_tee_cmd(
             "python3 -m maxtext.trainers.pre_train.train "
             f"{dyn_train_flags} "
             f"base_output_directory={train_dyn_dir} "
             f"run_name={train_dyn_run} "
             f"load_parameters_path={dyn_load_parameters_path} "
             "source_checkpoint_layout=safetensors_dynamic "
-            "metrics_file=/tmp/metrics_safetensors_dynamic.txt"
+            "metrics_file=/tmp/metrics_safetensors_dynamic.txt",
+            dyn_local_log,
         ),
+        safetensors_util.pod0_tee_cmd(stage_summary_cmd, dyn_local_log),
         (
             f"if {safetensors_util.POD0_CONDITION}; then "
             f"gsutil cp /tmp/metrics_safetensors_dynamic.txt {dyn_metrics_gcs};"
@@ -295,8 +324,11 @@ def create_safetensors_comparison_task_group(
     if spec.comparison_supported:
       comparison_gate = check_comparison_enabled()
       local_hf_dir = f"/mnt/shm/{model}_hf"
+      ref_local_log = "/tmp/to_maxtext.log"
+      cmp_local_log = "/tmp/compare_ckpts.log"
 
-      # Task 1: Original `to_maxtext` workflow (Pod 0 converts; all pods train)
+      # Task 1: Original `to_maxtext` workflow (Pod 0 converts; all pods run
+      # `train.py` from the converted checkpoint).
       to_mt_pod0_prep = (
           (
               f"if gsutil ls {to_maxtext_dir} >/dev/null 2>&1; then "
@@ -304,12 +336,15 @@ def create_safetensors_comparison_task_group(
               "fi"
           ),
           (
-              'python3 -c "import os, huggingface_hub as h; '
+              'python3 -c "import os, time, huggingface_hub as h; '
+              "t0 = time.time(); "
               f"h.snapshot_download('{hf_repo}', local_dir='{local_hf_dir}', "
               "allow_patterns=["
               "'*.safetensors','*.json','*.model','*.txt','*.jinja','*.py'"
               "], "
-              "token=os.environ.get('HF_TOKEN'), max_workers=16)\""
+              "token=os.environ.get('HF_TOKEN'), max_workers=16); "
+              "print(f'[to_maxtext] HF snapshot_download completed in "
+              "{time.time() - t0:.2f}s', flush=True)\""
           ),
           (
               "env JAX_PLATFORMS=cpu python3 -m "
@@ -322,31 +357,40 @@ def create_safetensors_comparison_task_group(
               f"skip_jax_distributed_system=True{extra_to_mt_str} "
               f"--hf_model_path={local_hf_dir} "
               "--lazy_load_tensors=True "
-              f"--save_dtype={weight_dtype}"
+              f"--save_dtype={to_mt_save_dtype}"
           ),
           f"rm -rf {local_hf_dir}",
+      )
+
+      to_mt_body_cmd = (
+          "python3 -m maxtext.trainers.pre_train.train "
+          f"{ref_train_flags} "
+          f"base_output_directory={train_ref_dir} "
+          f"run_name={train_ref_run} "
+          f"load_parameters_path={to_maxtext_step0_ckpt} "
+          "metrics_file=/tmp/metrics_ref.jsonl"
+      )
+      to_mt_post_cmd = (
+          f"if {safetensors_util.POD0_CONDITION}; then "
+          f"gsutil cp /tmp/metrics_ref.jsonl {ref_metrics_gcs} && "
+          f"gsutil -q cp {ref_local_log} {ref_log_gcs}; "
+          "fi"
       )
 
       to_maxtext_cmds = (
           f"export HF_TOKEN={HF_TOKEN}",
           'export HF_HOME="/mnt/shm/hf_cache"',
           'export LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=20480"',
-          safetensors_util.pod0_barrier_cmd(
-              to_mt_pod0_prep, f"{markers_dir}/to_maxtext_prep.done"
+          safetensors_util.stage_remote_util_cmd(),
+          safetensors_util.pod0_upload_log_trap_cmd(ref_local_log, ref_log_gcs),
+          safetensors_util.pod0_tee_cmd(
+              safetensors_util.pod0_barrier_cmd(
+                  to_mt_pod0_prep, f"{markers_dir}/to_maxtext_prep.done"
+              ),
+              ref_local_log,
           ),
-          (
-              "python3 -m maxtext.trainers.pre_train.train "
-              f"{ref_train_flags} "
-              f"base_output_directory={train_ref_dir} "
-              f"run_name={train_ref_run} "
-              f"load_parameters_path={to_maxtext_step0_ckpt} "
-              "metrics_file=/tmp/metrics_ref.jsonl"
-          ),
-          (
-              f"if {safetensors_util.POD0_CONDITION}; then "
-              f"gsutil cp /tmp/metrics_ref.jsonl {ref_metrics_gcs}; "
-              "fi"
-          ),
+          safetensors_util.pod0_tee_cmd(to_mt_body_cmd, ref_local_log),
+          to_mt_post_cmd,
       )
 
       to_maxtext_task = gke_config.get_gke_config(
@@ -362,7 +406,7 @@ def create_safetensors_comparison_task_group(
           mounts="/dev/shm;/mnt/shm;rw",
       ).run(skip_post_process=True)
 
-      # Task 3: Compare in-memory weights, Step-0 & trained ckpts, and metrics
+      # Task 3: Compare weights, checkpoints and losses.
       compare_maxtext_args = (
           "src/maxtext/configs/base.yml "
           f"model_name={model} "
@@ -378,23 +422,32 @@ def create_safetensors_comparison_task_group(
           "enable_checkpointing=true "
           f"async_checkpointing=false{extra_flags_str}"
       )
+      raw_compare_cmds = safetensors_util.build_compare_cmds(
+          to_maxtext_ckpt=to_maxtext_step0_ckpt,
+          ref_step0_ckpt=train_ref_step0_ckpt,
+          dyn_step0_ckpt=train_dyn_step0_ckpt,
+          ref_trained_ckpt=train_ref_trained_ckpt,
+          dyn_trained_ckpt=train_dyn_trained_ckpt,
+          trained_step=trained_step,
+          ref_metrics=ref_metrics_gcs,
+          dyn_metrics=dyn_metrics_gcs,
+          report_gcs=report_gcs,
+          atol=spec.atol,
+          maxtext_args=compare_maxtext_args,
+          weight_dtype=weight_dtype,
+          to_maxtext_save_dtype=to_mt_save_dtype,
+          stage_timings_gcs=stage_timings_gcs,
+          dyn_log_gcs=dyn_log_gcs,
+          ref_log_gcs=ref_log_gcs,
+          cmp_log_gcs=cmp_log_gcs,
+      )
       compare_cmds = (
           f"export HF_TOKEN={HF_TOKEN}",
           'export HF_HOME="/mnt/shm/hf_cache"',
           'export LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=20480"',
-          *safetensors_util.build_compare_cmds(
-              to_maxtext_ckpt=to_maxtext_step0_ckpt,
-              ref_step0_ckpt=train_ref_step0_ckpt,
-              dyn_step0_ckpt=train_dyn_step0_ckpt,
-              ref_trained_ckpt=train_ref_trained_ckpt,
-              dyn_trained_ckpt=train_dyn_trained_ckpt,
-              trained_step=trained_step,
-              ref_metrics=ref_metrics_gcs,
-              dyn_metrics=dyn_metrics_gcs,
-              report_gcs=report_gcs,
-              atol=spec.atol,
-              maxtext_args=compare_maxtext_args,
-          ),
+          safetensors_util.stage_remote_util_cmd(),
+          safetensors_util.pod0_upload_log_trap_cmd(cmp_local_log, cmp_log_gcs),
+          safetensors_util.pod0_tee_cmd(raw_compare_cmds[1], cmp_local_log),
       )
 
       compare_checkpoints_task = gke_config.get_gke_config(
@@ -419,33 +472,75 @@ def create_safetensors_comparison_task_group(
   return model_group
 
 
-# Add new models or single-slice / multi-slice specs to `TEST_SPECS` below.
-# Callers choose the workflow mode at trigger time via `run_mode`
-# (`e2e_only` for standalone `safetensors-dyn` or `compare` for
-# `to-mt` + `safetensors-dyn` + `cmp-ckpt`).
-# Set `comparison_supported=False` on ultra-large models (>200B) that cannot run
-# single-host CPU `to_maxtext`.
+# Phase 1 of the v7x plan: four kinds of model (tiny, FP32 checkpoint, MoE,
+# large dense), each with 1 and 2 slices on `bodaborg-tpu7x-nap`. The small
+# models use one-host `tpu7x-8` slices; llama3.1-70b uses `tpu7x-32`.
+# Callers choose the workflow mode at trigger time via `run_mode`:
+# - `e2e_only`: standalone `safetensors-dyn` (`train.py`)
+# - `compare`: `to-mt` + `safetensors-dyn` + `cmp-ckpt` (weights/ckpts/losses)
+# Set `comparison_supported=False` on models that cannot run single-host CPU
+# `to_maxtext` (the >200B models of phase 3).
 TEST_SPECS: tuple[SafetensorsComparisonSpec, ...] = (
-    # 1. Single-slice Llama-3.1-70B (1x v5p-32)
+    SafetensorsComparisonSpec(
+        model_name="qwen3-0.6b",
+        hf_repo="Qwen/Qwen3-0.6B",
+        core_count=8,
+        num_slices=1,
+    ),
+    SafetensorsComparisonSpec(
+        model_name="qwen3-0.6b",
+        hf_repo="Qwen/Qwen3-0.6B",
+        core_count=8,
+        num_slices=2,
+        extra_maxtext_flags=("dcn_data_parallelism=2",),
+    ),
+    SafetensorsComparisonSpec(
+        model_name="gemma2-2b",
+        hf_repo="google/gemma-2-2b",
+        core_count=8,
+        num_slices=1,
+        weight_dtype="bfloat16",
+        to_maxtext_save_dtype="float32",
+    ),
+    SafetensorsComparisonSpec(
+        model_name="gemma2-2b",
+        hf_repo="google/gemma-2-2b",
+        core_count=8,
+        num_slices=2,
+        weight_dtype="bfloat16",
+        to_maxtext_save_dtype="float32",
+        extra_maxtext_flags=("dcn_data_parallelism=2",),
+    ),
+    SafetensorsComparisonSpec(
+        model_name="qwen3-30b-a3b",
+        hf_repo="Qwen/Qwen3-30B-A3B-Thinking-2507",
+        core_count=8,
+        num_slices=1,
+        weight_dtype="bfloat16",
+        extra_maxtext_flags=("sparse_matmul=false",),
+    ),
+    SafetensorsComparisonSpec(
+        model_name="qwen3-30b-a3b",
+        hf_repo="Qwen/Qwen3-30B-A3B-Thinking-2507",
+        core_count=8,
+        num_slices=2,
+        weight_dtype="bfloat16",
+        extra_maxtext_flags=("sparse_matmul=false", "dcn_data_parallelism=2"),
+    ),
     SafetensorsComparisonSpec(
         model_name="llama3.1-70b",
         hf_repo="meta-llama/Llama-3.1-70B",
         core_count=32,
         num_slices=1,
         weight_dtype="bfloat16",
-        scan_layers=True,
-        steps=2,
         time_out_in_min=90,
     ),
-    # 2. Multi-slice Llama-3.1-70B (2x v5p-32)
     SafetensorsComparisonSpec(
         model_name="llama3.1-70b",
         hf_repo="meta-llama/Llama-3.1-70B",
         core_count=32,
         num_slices=2,
         weight_dtype="bfloat16",
-        scan_layers=True,
-        steps=2,
         extra_maxtext_flags=("dcn_data_parallelism=2",),
         time_out_in_min=90,
     ),
@@ -478,7 +573,7 @@ with models.DAG(
             type="string",
             description=(
                 "Unique run name for checkpoints and comparison outputs "
-                "(defaults to sd-cmp-{{ ts_nodash }})"
+                "(defaults to safetensors-dynamic-{{ ts_nodash }})"
             ),
         ),
         "run_mode": Param(
@@ -487,7 +582,17 @@ with models.DAG(
             description=(
                 "Workflow mode (required): 'e2e_only' runs only standalone "
                 "safetensors-dyn; 'compare' runs to-mt + safetensors-dyn + "
-                "cmp-ckpt."
+                "cmp-ckpt (weight/ckpt/loss comparison)."
+            ),
+        ),
+        "force_hf_download": Param(
+            default=False,
+            type="boolean",
+            description=(
+                "If true, forces a cold HF -> GCS download even when the "
+                "shared GCS safetensors cache is already populated. Use it "
+                "for benchmark runs; otherwise only a model's first run "
+                "measures HF -> GCS and later runs report WARM."
             ),
         ),
     },
