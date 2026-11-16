@@ -27,6 +27,7 @@ from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
 from dags import composer_env
+from dags.common.vm_resource import DockerImage
 from dags.common.task_group_with_timeout import TaskGroupWithTimeout
 from dags.common.scheduling_helper.scheduling_helper import (
     SchedulingHelper,
@@ -148,6 +149,11 @@ with models.DAG(
            and hardware devices inside the container.
       """,
 ) as dag:
+  docker_images = {
+      "stable": DockerImage.LIBTPU_STABLE.value,
+      "nightly": DockerImage.LIBTPU_NIGHTLY.value,
+  }
+
   for machine in MachineConfigMap:
     config = machine.value
 
@@ -183,25 +189,28 @@ with models.DAG(
             node_pool_selector=selector,
         )
 
-        startup = jobset.create_jobset_startup_tasks(
-            node_pool=cluster_info,
-            jobset_config=jobset_config,
-            jobset_name=jobset_name,
-            node_pool_selector=selector,
-            workload_type=Workload.JAX_TPU_BENCHMARK,
-        )
-        chain(create_node_pool, *startup.tasks)
+      image_task_groups = []
+      for type_name, image_url in docker_images.items():
+        with TaskGroupWithTimeout(  # pylint: disable=unexpected-keyword-arg
+            group_id=f"test_v{config.tpu_version.value}_{type_name}",
+            timeout=TEST_TIMEOUT,
+        ) as image_tg:
+          startup = jobset.create_jobset_startup_tasks(
+              node_pool=cluster_info,
+              jobset_config=jobset_config,
+              jobset_name=jobset_name,
+              node_pool_selector=selector,
+              workload_type=Workload.JAX_TPU_BENCHMARK,
+          )
 
-      with TaskGroupWithTimeout(
-          group_id="test",
-          timeout=TEST_TIMEOUT,
-      ) as test:
-        sdk_validation = validate_monitoring_sdk.override(
-            task_id="sdk_validation"
-        )(
-            info=cluster_info,
-            pod_names=startup.running_pods,
-        )
+          sdk_validation = validate_monitoring_sdk.override(
+              task_id="sdk_validation"
+          )(
+              info=cluster_info,
+              pod_names=startup.running_pods,
+          )
+
+          chain(*startup.tasks, sdk_validation)
 
       with TaskGroupWithTimeout(
           group_id="post_test",
@@ -221,4 +230,8 @@ with models.DAG(
         )(node_pool=cluster_info)
         chain(cleanup_workload, cleanup_node_pool)
 
-      chain(pre_test, test, post_test)
+      current_node = pre_test
+      for tg in image_task_groups:
+        chain(current_node, tg)
+        current_node = tg
+      chain(current_node, post_test)
