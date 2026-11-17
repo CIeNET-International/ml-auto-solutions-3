@@ -477,6 +477,63 @@ class SafetensorsUtilTest(unittest.TestCase):
       self.assertEqual(to_mt["offline_convert_save_orbax_seconds"], 180.0)
       self.assertEqual(to_mt["offline_convert_total_seconds"], 210.0)
 
+  def test_summarize_stages_logs_dtype_line_on_pods(self):
+    """On pods `_log` goes through absl, which drops INFO unless enabled."""
+
+    class FakeAbslLogging:
+      """Drops INFO messages until the verbosity is raised, like absl."""
+
+      INFO = 0
+      WARNING = -1
+
+      def __init__(self):
+        self.verbosity = self.WARNING
+        self.lines = []
+
+      def set_verbosity(self, level):
+        self.verbosity = level
+
+      def info(self, message):
+        if self.verbosity >= self.INFO:
+          self.lines.append(message)
+
+    def run_summary(fake_absl):
+      fake_max_logging = (
+          types.SimpleNamespace(log=fake_absl.info) if fake_absl else None
+      )
+      with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = pathlib.Path(tmp_dir)
+        dyn_log = tmp / "safetensors_dynamic.log"
+        dyn_log.write_text("no stage lines\n")
+        stdout = io.StringIO()
+        with (
+            mock.patch.object(safetensors_util, "absl_logging", fake_absl),
+            mock.patch.object(
+                safetensors_util, "max_logging", fake_max_logging
+            ),
+            contextlib.redirect_stdout(stdout),
+        ):
+          safetensors_util.main([
+              "summarize_stages",
+              f"--dyn_log={dyn_log}",
+              f"--out={tmp / 'stage_timings.json'}",
+              "--weight_dtype=bfloat16",
+              "--to_maxtext_save_dtype=bfloat16",
+          ])
+        return stdout.getvalue()
+
+    fake_absl = FakeAbslLogging()
+    run_summary(fake_absl)
+    self.assertEqual(fake_absl.verbosity, FakeAbslLogging.INFO)
+    self.assertIn(
+        "[dtype] hf=unknown weight=bfloat16 save=bfloat16", fake_absl.lines
+    )
+
+    # Without absl and MaxText (e.g. Composer), the line falls back to stdout.
+    self.assertIn(
+        "[dtype] hf=unknown weight=bfloat16 save=bfloat16", run_summary(None)
+    )
+
   def test_hf_dtype_record_happy_path_and_exception_handling(self):
     buckets: dict[str, _FakeBucket] = {}
     fake_storage = types.SimpleNamespace(

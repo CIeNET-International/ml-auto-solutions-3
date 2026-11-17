@@ -1208,8 +1208,6 @@ def run_compare(
   """Runs 4-way checkpoint and metrics parity verification on TPU."""
   if jax is None or pyconfig is None or maxtext_utils is None:
     raise RuntimeError("JAX and MaxText are required for compare.")
-  if absl_logging is not None:
-    absl_logging.set_verbosity(absl_logging.INFO)
 
   config = pyconfig.initialize(["compare_ckpts"] + model_rest)
   mesh = maxtext_utils.get_mesh_from_config(config)
@@ -1405,6 +1403,9 @@ def main(argv: list[str] | None = None) -> None:
   """Entrypoint when executed as a standalone script on TPU pods."""
   parser = build_arg_parser()
   args, extra_args = parser.parse_known_args(argv)
+  # `max_logging` logs at INFO, which absl drops by default outside `app.run`.
+  if absl_logging is not None:
+    absl_logging.set_verbosity(absl_logging.INFO)
   if args.subcommand == "prestage":
     if extra_args:
       parser.error(f"Unrecognized arguments for prestage: {extra_args}")
