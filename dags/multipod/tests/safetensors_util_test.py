@@ -449,6 +449,28 @@ class SafetensorsUtilTest(unittest.TestCase):
         ])
 
       stage_summary = json.loads(summary_out.read_text(encoding="utf-8"))
+      self.assertEqual(
+          stage_summary["log_links"],
+          {
+              "safetensors_dynamic_log": (
+                  "gs://bkt/logs/safetensors_dynamic.log"
+              ),
+              "to_maxtext_log": "gs://bkt/logs/to_maxtext.log",
+          },
+      )
+      self.assertEqual(
+          stage_summary["log_urls"],
+          {
+              "safetensors_dynamic_log": (
+                  "https://console.cloud.google.com/storage/browser/_details/"
+                  "bkt/logs/safetensors_dynamic.log"
+              ),
+              "to_maxtext_log": (
+                  "https://console.cloud.google.com/storage/browser/_details/"
+                  "bkt/logs/to_maxtext.log"
+              ),
+          },
+      )
       self.assertEqual(stage_summary["weight_dtype"], "bfloat16")
       self.assertEqual(stage_summary["to_maxtext_save_dtype"], "bfloat16")
       # No `--gcs_cache_dir`: the dtype block still records the spec dtypes
@@ -813,6 +835,20 @@ class SafetensorsUtilTest(unittest.TestCase):
             report["log_links"]["safetensors_dynamic_log"],
             "gs://bkt/logs/safetensors_dynamic.log",
         )
+        # Only the `gs://` links get a console URL (the reference log of
+        # this test is a local file)
+        expected_urls = {
+            "safetensors_dynamic_log": (
+                "https://console.cloud.google.com/storage/browser/_details/"
+                "bkt/logs/safetensors_dynamic.log"
+            ),
+            "compare_log": (
+                "https://console.cloud.google.com/storage/browser/_details/"
+                "bkt/logs/compare_ckpts.log"
+            ),
+        }
+        self.assertEqual(report["log_urls"], expected_urls)
+        self.assertEqual(report["stage_timings"]["log_urls"], expected_urls)
         self.assertEqual(
             report["stage_timings"]["to_maxtext"]["hf_download_seconds"], 40.0
         )
@@ -838,6 +874,155 @@ class SafetensorsUtilTest(unittest.TestCase):
               "src/maxtext/configs/base.yml",
           ])
         self.assertEqual(ctx.exception.code, 1)
+
+  def test_gcs_console_url_and_log_urls(self):
+    self.assertEqual(
+        safetensors_util.gcs_console_url("gs://bkt/run/logs/to_maxtext.log"),
+        "https://console.cloud.google.com/storage/browser/_details/"
+        "bkt/run/logs/to_maxtext.log",
+    )
+    # A Jinja template in the path is kept as is, for Airflow to render
+    self.assertEqual(
+        safetensors_util.gcs_console_url(
+            "gs://bkt/{{ params.run_name }}/a.log"
+        ),
+        "https://console.cloud.google.com/storage/browser/_details/"
+        "bkt/{{ params.run_name }}/a.log",
+    )
+    # Anything that is not a `gs://` object has no console page
+    for not_gcs in ("", "gs://", "/tmp/to_maxtext.log", "s3://bkt/a.log"):
+      with self.subTest(not_gcs=not_gcs):
+        self.assertEqual(safetensors_util.gcs_console_url(not_gcs), "")
+    self.assertEqual(
+        safetensors_util.build_log_urls({
+            "compare_log": "gs://bkt/logs/compare_ckpts.log",
+            "local_log": "/tmp/local.log",
+            "empty": "",
+        }),
+        {
+            "compare_log": (
+                "https://console.cloud.google.com/storage/browser/_details/"
+                "bkt/logs/compare_ckpts.log"
+            )
+        },
+    )
+    self.assertEqual(safetensors_util.build_log_urls({}), {})
+
+  def test_upload_log_trap_prints_log_link_on_pass_and_fail(self):
+    expected_line = (
+        "[LogLinks] to_maxtext.log=https://console.cloud.google.com/storage/"
+        "browser/_details/bkt/run/logs/to_maxtext.log"
+    )
+    with tempfile.TemporaryDirectory() as tmpdir:
+      bin_dir = pathlib.Path(tmpdir) / "bin"
+      bin_dir.mkdir()
+      gsutil_script = bin_dir / "gsutil"
+      local_log = pathlib.Path(tmpdir) / "to_maxtext.log"
+      trap_cmd = safetensors_util.pod0_upload_log_trap_cmd(
+          str(local_log), "gs://bkt/run/logs/to_maxtext.log"
+      )
+      base_env = {
+          k: v
+          for k, v in os.environ.items()
+          if k not in ("MEGASCALE_SLICE_ID", "JOB_INDEX", "TPU_WORKER_ID")
+      }
+      pod0_env = {
+          **base_env,
+          "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+          "MEGASCALE_SLICE_ID": "0",
+          "JOB_COMPLETION_INDEX": "0",
+      }
+
+      def _run(exit_code, env, gsutil_exit=0):
+        gsutil_script.write_text(
+            f"#!/bin/bash\nexit {gsutil_exit}\n", encoding="utf-8"
+        )
+        gsutil_script.chmod(0o755)
+        return subprocess.run(
+            ["bash", "-c", f"{trap_cmd}; exit {exit_code}"],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+      # The link is printed once, whether the job passes, fails, or the upload
+      # itself fails, and the job's exit code is kept.
+      for exit_code, gsutil_exit in ((0, 0), (7, 0), (0, 1), (23, 1)):
+        with self.subTest(exit_code=exit_code, gsutil_exit=gsutil_exit):
+          proc = _run(exit_code, pod0_env, gsutil_exit)
+          self.assertEqual(proc.returncode, exit_code)
+          self.assertEqual(proc.stdout.splitlines(), [expected_line])
+          self.assertTrue(local_log.exists())
+
+      # Other pods upload nothing and print nothing
+      proc = _run(0, {**pod0_env, "MEGASCALE_SLICE_ID": "1"})
+      self.assertEqual(proc.returncode, 0)
+      self.assertEqual(proc.stdout, "")
+
+    # The stage summary of `safetensors-dyn` still runs before the upload
+    with_summary = safetensors_util.pod0_upload_log_trap_cmd(
+        "/tmp/dyn.log", "gs://bkt/run/logs/dyn.log", on_exit_cmd="echo summary"
+    )
+    self.assertIn(
+        "echo summary 2>/dev/null || true; gsutil -q cp", with_summary
+    )
+    self.assertIn('echo "[LogLinks] dyn.log=https://', with_summary)
+    # A log path that is not in GCS has no link to print
+    local_only = safetensors_util.pod0_upload_log_trap_cmd(
+        "/tmp/a.log", "/tmp/copy.log"
+    )
+    self.assertNotIn("[LogLinks]", local_only)
+    for cmd in (with_summary, local_only):
+      proc = subprocess.run(
+          ["bash", "-n"], input=cmd, text=True, capture_output=True, check=False
+      )
+      self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+
+  def test_workload_provision_timeout_for_every_job(self):
+    self.assertEqual(
+        safetensors_dag.WORKLOAD_PROVISION_TIMEOUT, datetime.timedelta(hours=4)
+    )
+    captured: dict[str, dict] = {}
+    real_get_gke_config = safetensors_dag.gke_config.get_gke_config
+
+    def _spy_get_gke_config(**kwargs):
+      captured[kwargs["test_name"]] = kwargs
+      return real_get_gke_config(**kwargs)
+
+    with mock.patch.object(
+        safetensors_dag.gke_config,
+        "get_gke_config",
+        side_effect=_spy_get_gke_config,
+    ):
+      with models.DAG(
+          dag_id="test_safetensors_provision_timeout",
+          schedule=None,
+          start_date=datetime.datetime(2026, 6, 10),
+      ) as test_dag:
+        safetensors_dag.create_safetensors_comparison_task_group(
+            safetensors_dag.SafetensorsComparisonSpec(
+                model_name="llama3.1-70b",
+                hf_repo="meta-llama/Llama-3.1-70B",
+                core_count=32,
+                num_slices=2,
+            )
+        )
+    self.assertEqual(set(captured), {"safetensors-dyn", "to-mt", "cmp-ckpt"})
+    for test_name, kwargs in captured.items():
+      with self.subTest(test_name=test_name):
+        self.assertEqual(
+            kwargs["workload_provision_timeout"], datetime.timedelta(hours=4)
+        )
+    # The timeout reaches the task that waits for the workload to start
+    start_tasks = [
+        t
+        for t in test_dag.tasks
+        if t.task_id.endswith("launch_workload.wait_for_workload_start")
+    ]
+    self.assertEqual(len(start_tasks), 3)
+    for start_task in start_tasks:
+      self.assertEqual(start_task.timeout, 4 * 3600)
 
   def test_tpu7x_device_name_and_dtype_spec(self):
     # TPU7x uses the `tpu7x-<cores>` device name; other TPU versions keep

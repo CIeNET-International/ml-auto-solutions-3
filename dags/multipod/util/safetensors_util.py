@@ -99,6 +99,10 @@ except ImportError:
   model_creation_utils = None
   train_utils = None
 
+GCS_CONSOLE_OBJECT_URL = (
+    "https://console.cloud.google.com/storage/browser/_details/"
+)
+
 POD0_CONDITION = (
     '[[ "${MEGASCALE_SLICE_ID:-${JOB_INDEX:-0}}" == "0" && '
     '"${TPU_WORKER_ID:-${JOB_COMPLETION_INDEX:-0}}" == "0" ]]'
@@ -178,16 +182,37 @@ def pod0_barrier_cmd(
   )
 
 
+def gcs_console_url(gcs_uri: str) -> str:
+  """Returns the Cloud Console page of a `gs://` object, or `''`.
+
+  Only the scheme is rewritten, so a Jinja template in the path still renders.
+  """
+  object_path = gcs_uri.removeprefix("gs://")
+  if object_path == gcs_uri or not object_path:
+    return ""
+  return GCS_CONSOLE_OBJECT_URL + object_path
+
+
 def pod0_upload_log_trap_cmd(
     local_log: str, gcs_log: str, on_exit_cmd: str = ""
 ) -> str:
-  """Registers an EXIT trap on Pod 0 to upload `local_log` on pass or fail."""
+  """Registers an EXIT trap on Pod 0 to upload `local_log` on pass or fail.
+
+  The trap also prints a `[LogLinks]` line with the Cloud Console URL of the
+  uploaded log, so a passed or failed job shows a link that opens.
+  """
   extra_trap = f"{on_exit_cmd} 2>/dev/null || true; " if on_exit_cmd else ""
+  log_url = gcs_console_url(gcs_log)
+  print_link = (
+      f'; echo "[LogLinks] {gcs_log.rsplit("/", 1)[-1]}={log_url}"'
+      if log_url
+      else ""
+  )
   return (
       f"if {POD0_CONDITION}; then "
       f": > {local_log}; "
       f"trap '{extra_trap}gsutil -q cp {local_log} {gcs_log} 2>/dev/null ||"
-      " true' EXIT; "
+      f" true{print_link}' EXIT; "
       "fi"
   )
 
@@ -846,6 +871,12 @@ def format_dtype_line(record: dict[str, Any]) -> str:
   )
 
 
+def build_log_urls(log_links: dict[str, str]) -> dict[str, str]:
+  """Maps each `gs://` log link to its Cloud Console URL."""
+  urls = {name: gcs_console_url(uri) for name, uri in log_links.items()}
+  return {name: url for name, url in urls.items() if url}
+
+
 def run_summarize_stages(args: argparse.Namespace) -> dict[str, Any]:
   """Parses `safetensors_dynamic` and optional `to_maxtext` stage timings."""
   prestage_info = _safe_read_json(getattr(args, "prestage_timing", ""))
@@ -893,6 +924,7 @@ def run_summarize_stages(args: argparse.Namespace) -> dict[str, Any]:
       "safetensors_dynamic": dyn_stages,
       "to_maxtext": to_mt_stages,
       "log_links": log_links,
+      "log_urls": build_log_urls(log_links),
   }
   _write_text(args.out, json.dumps(summary, indent=2, sort_keys=True))
   _log(format_dtype_line(dtype_record))
@@ -1295,8 +1327,10 @@ def run_compare(
     log_links["to_maxtext_log"] = args.ref_log_gcs
   if getattr(args, "cmp_log_gcs", None):
     log_links["compare_log"] = args.cmp_log_gcs
+  log_urls = build_log_urls(log_links)
   if stage_timings and log_links:
     stage_timings["log_links"] = log_links
+    stage_timings["log_urls"] = log_urls
 
   cfg_weight_dtype = str(getattr(config, "weight_dtype", ""))
   weight_dtype = getattr(args, "weight_dtype", "") or cfg_weight_dtype or None
@@ -1322,6 +1356,7 @@ def run_compare(
       "overall_result": "PASS" if overall_pass else "FAIL",
       "stage_timings": stage_timings,
       "log_links": log_links,
+      "log_urls": log_urls,
       "in_memory_safetensors_vs_to_maxtext": in_memory_summary,
       "step0_checkpoint_comparison": step0_summary,
       f"step{args.trained_step}_trained_checkpoint_comparison": (

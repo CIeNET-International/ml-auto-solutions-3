@@ -49,6 +49,11 @@ from xlml.apis.gke_cluster_config import GkeClusterConfig
 
 HF_TOKEN = safe_get_from_variable("HF_TOKEN", None)
 
+# The TPU7x queue has no TPU quota of its own and only uses chips that other
+# queues leave idle, so a job can wait for longer than the default 60 minutes
+# before it starts (a 2 x tpu7x-32 job has waited for hours).
+WORKLOAD_PROVISION_TIMEOUT = datetime.timedelta(hours=4)
+
 RUN_MODE_E2E_ONLY = "e2e_only"
 RUN_MODE_COMPARE = "compare"
 VALID_RUN_MODES = (RUN_MODE_E2E_ONLY, RUN_MODE_COMPARE)
@@ -311,6 +316,7 @@ def create_safetensors_comparison_task_group(
     safetensors_dynamic_task = gke_config.get_gke_config(
         time_out_in_min=spec.time_out_in_min,
         test_name="safetensors-dyn",
+        workload_provision_timeout=WORKLOAD_PROVISION_TIMEOUT,
         run_model_cmds=safetensors_dynamic_cmds,
         docker_image="{{ params.docker_image }}",
         cluster=cluster,
@@ -396,6 +402,7 @@ def create_safetensors_comparison_task_group(
       to_maxtext_task = gke_config.get_gke_config(
           time_out_in_min=spec.time_out_in_min,
           test_name="to-mt",
+          workload_provision_timeout=WORKLOAD_PROVISION_TIMEOUT,
           run_model_cmds=to_maxtext_cmds,
           docker_image="{{ params.docker_image }}",
           cluster=cluster,
@@ -453,6 +460,7 @@ def create_safetensors_comparison_task_group(
       compare_checkpoints_task = gke_config.get_gke_config(
           time_out_in_min=spec.time_out_in_min,
           test_name="cmp-ckpt",
+          workload_provision_timeout=WORKLOAD_PROVISION_TIMEOUT,
           run_model_cmds=compare_cmds,
           docker_image="{{ params.docker_image }}",
           cluster=cluster,
@@ -472,14 +480,6 @@ def create_safetensors_comparison_task_group(
   return model_group
 
 
-# Phase 1 of the v7x plan: four kinds of model (tiny, FP32 checkpoint, MoE,
-# large dense), each with 1 and 2 slices on `bodaborg-tpu7x-nap`. The small
-# models use one-host `tpu7x-8` slices; llama3.1-70b uses `tpu7x-32`.
-# Callers choose the workflow mode at trigger time via `run_mode`:
-# - `e2e_only`: standalone `safetensors-dyn` (`train.py`)
-# - `compare`: `to-mt` + `safetensors-dyn` + `cmp-ckpt` (weights/ckpts/losses)
-# Set `comparison_supported=False` on models that cannot run single-host CPU
-# `to_maxtext` (the >200B models of phase 3).
 TEST_SPECS: tuple[SafetensorsComparisonSpec, ...] = (
     SafetensorsComparisonSpec(
         model_name="qwen3-0.6b",
