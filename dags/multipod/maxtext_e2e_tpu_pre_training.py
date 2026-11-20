@@ -61,6 +61,21 @@ class ExternalTaskSensorWithBypass(ExternalTaskSensor):
     return super().poke(context, session=session)
 
 
+def _e2e_script(rel_path: str) -> str:
+  """Returns a shell command that runs a MaxText checkpoint conversion script.
+
+  MaxText is moving the conversion scripts from tests/end_to_end/tpu/ to
+  tests/end_to_end/cpu/. Until every image has the move, run the tpu/ copy
+  when the image still has it and the cpu/ copy otherwise.
+  """
+  tpu_path = f"tests/end_to_end/tpu/{rel_path}"
+  cpu_path = f"tests/end_to_end/cpu/{rel_path}"
+  return (
+      f'bash "$(if [ -f {tpu_path} ]; then echo {tpu_path};'
+      f' else echo {cpu_path}; fi)"'
+  )
+
+
 with models.DAG(
     dag_id="maxtext_e2e_tpu_pre_training",
     schedule=None,
@@ -102,7 +117,7 @@ with models.DAG(
               "command": "bash tests/end_to_end/tpu/gemma3/4b/test_gemma3.sh",
               "maxtext_ckpt_path": "gs://runner-maxtext-logs/gemma3-4b/train/{run_name}/checkpoints/1/items",
           },
-          "to_huggingface": "bash tests/end_to_end/tpu/gemma3/4b/test_gemma3_to_hf.sh",
+          "to_huggingface": _e2e_script("gemma3/4b/test_gemma3_to_hf.sh"),
       },
       "gemma4-26b": {
           "core_count": 32,
@@ -111,7 +126,7 @@ with models.DAG(
               "command": "bash tests/end_to_end/tpu/gemma4/26b/test_gemma4.sh",
               "maxtext_ckpt_path": "gs://runner-maxtext-logs/gemma4-26b/train/{run_name}/checkpoints/1/items",
           },
-          "to_huggingface": "bash tests/end_to_end/tpu/gemma4/26b/test_gemma4_to_hf.sh",
+          "to_huggingface": _e2e_script("gemma4/26b/test_gemma4_to_hf.sh"),
           # use_multimodal=false, scan_layers=true: pre-training saves a
           # scanned checkpoint.
           "to_hf_flags": "false true",
@@ -123,7 +138,9 @@ with models.DAG(
               "command": "bash tests/end_to_end/tpu/llama3.1/70b/test_llama3.1_70b.sh",
               "maxtext_ckpt_path": "gs://runner-maxtext-logs/llama3.1-70b/train/{run_name}/checkpoints/1/items",
           },
-          "to_huggingface": "bash tests/end_to_end/tpu/llama3.1/70b/test_llama3.1_70b_to_hf.sh",
+          "to_huggingface": _e2e_script(
+              "llama3.1/70b/test_llama3.1_70b_to_hf.sh"
+          ),
       },
       "qwen3-30b": {
           "core_count": 32,
@@ -132,7 +149,7 @@ with models.DAG(
               "command": "bash tests/end_to_end/tpu/qwen3/30b/test_qwen3.sh",
               "maxtext_ckpt_path": "gs://runner-maxtext-logs/qwen3-30b-a3b-base/train/{run_name}/checkpoints/1/items",
           },
-          "to_huggingface": "bash tests/end_to_end/tpu/qwen3/30b/test_qwen3_to_hf.sh",
+          "to_huggingface": _e2e_script("qwen3/30b/test_qwen3_to_hf.sh"),
           "to_hf_flags": "true",
       },
       "qwen3-4b": {
@@ -142,7 +159,7 @@ with models.DAG(
               "command": "bash tests/end_to_end/tpu/qwen3/4b/test_qwen3.sh",
               "maxtext_ckpt_path": "gs://runner-maxtext-logs/qwen3-4b/train/{run_name}/checkpoints/1/items",
           },
-          "to_huggingface": "bash tests/end_to_end/tpu/qwen3/4b/test_qwen3_to_hf.sh",
+          "to_huggingface": _e2e_script("qwen3/4b/test_qwen3_to_hf.sh"),
           "to_hf_flags": "true",
       },
       "gpt-oss-20b": {
@@ -152,7 +169,7 @@ with models.DAG(
               "command": "bash tests/end_to_end/tpu/gpt_oss/20b/test_gpt_oss.sh",
               "maxtext_ckpt_path": "gs://runner-maxtext-logs/gpt-oss-20b/train/{run_name}/checkpoints/1/items",
           },
-          "to_huggingface": "bash tests/end_to_end/tpu/gpt_oss/20b/test_gpt_oss_to_hf.sh",
+          "to_huggingface": _e2e_script("gpt_oss/20b/test_gpt_oss_to_hf.sh"),
       },
   }
   # pylint: enable=line-too-long
