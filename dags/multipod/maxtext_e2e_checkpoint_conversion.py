@@ -47,6 +47,8 @@ def post_training_enabled() -> bool:
   return scope != "pre-training"
 
 
+# TODO(KevinYenky): Use the tests/end_to_end/cpu/ paths directly and remove this
+# helper once all images the E2E DAGs run include AI-Hypercomputer/maxtext#6453.
 def _e2e_script(rel_path: str) -> str:
   """Returns a shell command that runs a MaxText checkpoint conversion script.
 

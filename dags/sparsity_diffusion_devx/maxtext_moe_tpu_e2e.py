@@ -188,6 +188,8 @@ with models.DAG(
         # MaxText is moving test_gpt_oss_to_mt.sh from tpu/ to cpu/, so run
         # whichever copy the image has. The sed below does not reach the cpu/
         # copy, which reads BASE_OUTPUT_PATH itself.
+        # TODO(KevinYenky): Call the cpu/ copy directly and drop this fallback
+        # once all images this DAG runs include AI-Hypercomputer/maxtext#6453.
         to_mt = "gpt_oss/20b/test_gpt_oss_to_mt.sh"
         script_cmd = (
             "sed -i"
