@@ -26,7 +26,8 @@ Coordinates the multi-stage MaxText end-to-end testing pipeline for GitHub CI:
    capacity on the other one.
 3. Callbacks & Reporting:
    Fires GitHub repository_dispatch events upon stage completion
-   for automated CI.
+   for automated CI. The post-training callback also sends the digests of the
+   Pathways server images that the workloads ran.
 """
 import datetime
 import enum
@@ -38,6 +39,7 @@ from airflow.models.param import Param
 from airflow.operators.python import get_current_context
 from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.utils.trigger_rule import TriggerRule
+from dags.multipod.util import pathways_images
 from xlml.utils.github import (
     trigger_github_repository_dispatch,
     validate_git_trigger,
@@ -54,6 +56,8 @@ CHECKPOINT_CONVERSION_DOCKER_IMAGE = (
     f"{POST_TRAINING_DOCKER_IMAGE}"
     f"{{% endif %}}"
 )
+# The run ID of the post-training DAG run that this run triggers.
+POST_TRAINING_RUN_ID = "{{ run_id }}__post_training"
 
 
 class TestScope(enum.IntFlag):
@@ -188,7 +192,7 @@ with models.DAG(
   trigger_post_training = TriggerDagRunOperator(
       task_id="trigger_tpu_post_training",
       trigger_dag_id="maxtext_e2e_tpu_post_training",
-      trigger_run_id="{{ run_id }}__post_training",
+      trigger_run_id=POST_TRAINING_RUN_ID,
       execution_date="{{ logical_date }}",
       conf={
           "docker_image": POST_TRAINING_DOCKER_IMAGE,
@@ -218,6 +222,12 @@ with models.DAG(
       },
   )
 
+  # The Pathways server images that the post-training workloads ran, so GitHub
+  # can tag the post-training image with them.
+  read_pathways_server_digests = pathways_images.read_pathways_server_digests(
+      run_name=shared_run_name, post_training_run_id=POST_TRAINING_RUN_ID
+  )
+
   github_callback_post_training = trigger_github_repository_dispatch.override(
       task_id="fire_github_callback_post_training",
       trigger_rule=TriggerRule.NONE_SKIPPED,
@@ -235,6 +245,10 @@ with models.DAG(
           "github_run_id": "{{ params.github_run_id }}",
           "test_type": "post_training",
           "docker_image": POST_TRAINING_DOCKER_IMAGE,
+          "pathways_server_digests": (
+              "{{ ti.xcom_pull(task_ids='read_pathways_server_digests')"
+              " or '' }}"
+          ),
       },
   )
 
@@ -258,5 +272,6 @@ with models.DAG(
           TestScope.POST_TRAINING.value
       ),
       trigger_post_training,
+      read_pathways_server_digests,
       github_callback_post_training,
   )
